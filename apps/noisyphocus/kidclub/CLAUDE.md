@@ -1,52 +1,77 @@
 # App: KidClub (Noisy Phocus)
 
-> **Context**: See root `../../../CLAUDE.md` for group architecture. Backend logic lives in `../../../functions/src/kidclub/`.
+> **Context**: See root `../../../CLAUDE.md` for group architecture. Backend logic lives in `../../../functions/src/`.
 
 ## Purpose
-Public-facing website for **KidClub**, owned by **Noisy Phocus**. This is the only Noisy Phocus app. IT and infrastructure are managed by NoisySource.
+Public-facing website for **KidClub** (Arco-Íris da Pequenada), owned by **Noisy Phocus**. Located in Coimbra — Avenida da Guarda Inglesa, Lote E.
 
 ## Visibility & Access
 - **Public** — fully internet-facing
-- No authentication required
-- No IAP
+- No authentication required for customers
+- Admin area protected by Firebase Auth (role-based)
 
 ## Status
-✅ Existing app — **migrated** into monorepo from standalone project
-⚠️ Code cleanup pending — structure and conventions to be revised post-migration
+✅ Live in production — refactor and feature work in progress.
 
 ---
 
 ## Stack
 | Layer | Technology |
 |---|---|
-| Frontend | React + Vite |
+| Frontend | React + Vite, TypeScript |
+| Styling | Tailwind CSS |
 | Backend | Firebase Cloud Functions (shared `/functions`) |
-| Database | Firestore |
-| Auth | None |
+| Database | Firestore (`kidclub` named database) |
+| Auth | Firebase Auth (admin users only) |
 | Hosting | Firebase Hosting |
+
+## Firebase
+- Dev project: `kidclub-dev` → site `kidclub-dev-arcoiris`
+- Prod project: `rainbow-prod-2454b` → site `rainbow-prod-2454b-arcoiris`
+- Firestore database name: `kidclub` (not `(default)`)
 
 ---
 
 ## Key Features
-> To be documented after code cleanup and migration.
-
----
+- **Party bookings** — customers book birthday parties (feature-flagged)
+- **Summer/Christmas camps** — camp sign-ups (feature-flagged)
+- **Study room** — after-school tutoring subscriptions (feature-flagged)
+- **Transportation** — school transport subscriptions (feature-flagged)
+- **Admin panel** — calendar, employees, expenses, HR, timesheets, email centre
+- **Client portal** — families view schedules, invoices, children profiles
+- Feature flags controlled via Firestore `config/featureFlags` document
 
 ## Firestore Collections
-> To be documented after code cleanup. Prefix all collections with `kidclub_`.
+All prefixed with `kidclub_` (or under the `kidclub` named database). Key collections:
+- `config/featureFlags` — feature toggles
+- `config/studyCenter` — study room pricing config
+- `events` / `eventModifications` — calendar events
+- `bookings` — party bookings
+- `families` / `children` — client family model
+- `employees` — staff records
+- `expenses` / `incomes` — financial tracking
+- `emailOutbox` — triggers `sendEmailFromOutbox` function
 
 ---
 
-## ⚠️ Post-Migration TODOs
-- [ ] Review and clean up existing component structure
-- [ ] Move any inline backend logic to `/functions/src/kidclub/`
+## Local Dev
+```bash
+pnpm dev:kidclub        # runs on http://localhost:5173
+pnpm dev:kidclub:prod   # dev server against prod Firebase
+```
+
+## Deploy
+```bash
+# Build + deploy to prod
+pnpm --filter kidclub build
+firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b
+```
+
+---
+
+## Post-Migration TODOs
+- [ ] Review and clean up component structure
+- [ ] Move any remaining inline backend logic to `/functions/src/`
 - [ ] Align naming conventions with monorepo standards
-- [ ] Document actual features and collections here
 - [ ] Review and update Firestore security rules
-
----
-
-## Notes
-- This was the original standalone project before the monorepo migration
-- Owned by Noisy Phocus but fully managed by NoisySource IT
-- Firebase Hosting configured for both prod and dev environments
+- [ ] Fix `SocialShare` placeholder URL in footer

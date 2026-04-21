@@ -51,17 +51,19 @@
 | **prod** | Live production | Public / IAP depending on app |
 | **dev** | Development & internal testing | IAP-protected or local only |
 
-Firebase projects:
-- `noisysource-prod`
-- `noisysource-dev`
+Firebase/GCP projects (actual IDs — rename planned when infra is refactored):
+- prod: `rainbow-prod-2454b`
+- dev: `kidclub-dev`
+
+GitHub: `github.com/noisysource/noisysource`
 
 ---
 
 ## App Summary
 | App | Company | Visibility | Auth | Status |
 |---|---|---|---|---|
-| KidClub | Noisy Phocus | Public | None | ✅ Existing (migrated) |
-| Finances | NoisySource | Private (IAP) | GCP IAP | 🆕 To build |
+| KidClub | Noisy Phocus | Public | None | ✅ Live — refactor in progress |
+| Finances | NoisySource | Private (IAP) | GCP IAP | ⚠️ Migrated, needs refactor |
 | Domotics | NoisySource | Private (IAP) | GCP IAP | 🆕 To build |
 | Tasks | NoisySource | Private (IAP) | GCP IAP | 🆕 To build |
 | Social | NoisySource | Public | Firebase Auth | 🆕 To build |

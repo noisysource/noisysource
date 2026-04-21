@@ -3,77 +3,73 @@
 > **Context**: See root `../CLAUDE.md` for full group architecture overview.
 
 ## Overview
-All infrastructure is owned and managed by **NoisySource** across two GCP projects, regardless of which company an app belongs to.
+All infrastructure is owned and managed by **NoisySource** across two active GCP projects.
 
 ---
 
-## GCP Projects
+## GCP Projects (actual IDs)
 | Project ID | Environment | Purpose |
 |---|---|---|
-| `noisysource-prod` | Production | All live apps |
-| `noisysource-dev` | Development | All dev/test apps |
+| `rainbow-prod-2454b` | Production | All live apps |
+| `kidclub-dev` | Development | All dev/test apps |
+
+> Project IDs retain legacy names from before the monorepo migration. Rename is planned as part of future infra cleanup.
+
+### Terraform state
+Stored in GCS bucket `rainbow-terraform-state`. Prefix per environment (`kidclub-dev`, `rainbow-prod-2454b`).
+
+### Authentication for Terraform
+Use `GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)` as env prefix when running terraform commands — ADC (application-default) has been unreliable on this machine.
 
 ---
 
-## Firebase Projects
-Firebase projects map 1:1 with GCP projects:
-- `noisysource-prod`
-- `noisysource-dev`
+## Firebase Hosting Targets
+Configured in `/firebase.json` and `/.firebaserc` at monorepo root.
 
-All apps share the same Firebase project per environment. Firestore collections are namespaced per app (e.g. `finances_`, `tasks_`, `kidclub_`).
+| Target | App | Firebase site ID (dev) | Firebase site ID (prod) |
+|---|---|---|---|
+| `kidclub` | KidClub | `kidclub-dev-arcoiris` | `rainbow-prod-2454b-arcoiris` |
+| `finances` | Finances | `kidclub-dev-finhub` | `rainbow-prod-2454b-finhub` |
+
+> Site IDs also retain legacy names. Rename via `firebase hosting:sites:create` when infra is cleaned up.
 
 ---
 
-## Hosting Configuration
-Each app has its own Firebase Hosting target defined in `firebase.json`.
+## CI/CD (GitHub Actions)
+Workflows in `/.github/workflows/`. Auth uses Workload Identity Federation (no long-lived keys).
 
-```
-/infra/firebase/
-├── firebase.json          ← multi-site hosting config
-└── .firebaserc            ← project aliases (prod / dev)
-```
-
-### Hosting Targets
-| Target name | App | URL pattern |
+| Workflow | Trigger | SA used |
 |---|---|---|
-| `kidclub` | KidClub | kidclub.noisyphocus.com |
-| `social` | Social | social.noisysource.com |
-| `finances` | Finances | finances.noisysource.dev (IAP) |
-| `domotics` | Domotics | domotics.noisysource.dev (IAP) |
-| `tasks` | Tasks | tasks.noisysource.dev (IAP) |
+| `build-and-deploy-kidclub.yml` | push to main/staging or manual | `gmail-sender-kidclub-dev` (dev), `github-action-1020915538` (prod) |
+| `deploy-finances.yml` | manual | same SAs |
+| `deploy-functions.yml` | manual | same SAs |
 
-> URLs above are placeholders — update with actual domains.
+WIF pool lives in `kidclub-dev` project (`projects/245453200769/locations/global/workloadIdentityPools/github-pool`). Both dev and prod SAs are bound to `noisysource/noisysource`.
 
 ---
 
-## GCP IAP (Identity-Aware Proxy)
-Private apps (Finances, Domotics, Tasks) are protected by GCP IAP.
+## Terraform (`/infra/gcp/terraform/`)
+Manages: APIs, Firebase project + hosting sites, Firestore database, Cloud Functions infrastructure, IAM, Workload Identity.
 
+```bash
+# Always prefix with token
+GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) terraform init -backend-config="prefix=kidclub-dev" -reconfigure
+GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) terraform apply -var-file="env/kidclub-dev.tfvars"
 ```
-/infra/gcp/
-├── iap-config.md          ← IAP setup steps and config per app
-└── environments.md        ← env-specific notes
-```
 
-### IAP-Protected Apps
-- `finances`
-- `domotics`
-- `tasks`
+---
 
-### How IAP Works Here
-- Firebase Hosting serves the app
-- GCP Load Balancer + IAP sits in front
-- Only authenticated Google accounts in the allowed list can access
-- No Firebase Auth needed in these apps — IAP handles identity
-
-### IAP Setup Reference
-> Document the actual IAP setup steps in `/infra/gcp/iap-config.md` during infra setup.
+## Firestore Databases
+| Project | Database name | Region |
+|---|---|---|
+| `kidclub-dev` | `kidclub` | `europe-west3` |
+| `rainbow-prod-2454b` | `(default)` | `eur3` |
 
 ---
 
 ## Cost Notes
 - Firebase Spark (free) plan covers most internal usage
-- Cloud Functions: 2M calls/month free — sufficient for all apps combined
+- Cloud Functions: 2M calls/month free
 - Firebase Hosting: 10GB storage / 360MB/day free
-- Firestore: 1GB storage / 50K reads / 20K writes per day free
-- Upgrade to Blaze (pay-as-you-go) only if free tier is exceeded — costs remain very low at this scale
+- Firestore: 1GB / 50K reads / 20K writes per day free
+- Upgrade to Blaze (pay-as-you-go) only if free tier is exceeded
