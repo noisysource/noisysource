@@ -1,0 +1,40 @@
+{
+  "folders": [
+    {
+      "name": "NoisySource (root)",
+      "path": "."
+    },
+    {
+      "name": "Functions (shared)",
+      "path": "functions"
+    },
+    {
+      "name": "KidClub — Noisy Phocus",
+      "path": "apps/noisyphocus/kidclub"
+    },
+    {
+      "name": "Finances",
+      "path": "apps/noisysource/finances"
+    },
+    {
+      "name": "Domotics",
+      "path": "apps/noisysource/domotics"
+    },
+    {
+      "name": "Tasks",
+      "path": "apps/noisysource/tasks"
+    },
+    {
+      "name": "Social",
+      "path": "apps/noisysource/social"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.git": true,
+      "**/node_modules": true,
+      "**/.firebase": true
+    },
+    "editor.formatOnSave": true
+  }
+}

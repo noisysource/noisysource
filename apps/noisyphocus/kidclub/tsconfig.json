@@ -1,0 +1,15 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@shared/*": ["../../../packages/shared/*"]
+    }
+  },
+  "include": ["src", "src/vite-env.d.ts"],
+  "references": [
+    { "path": "../../../packages/shared" }
+  ]
+}

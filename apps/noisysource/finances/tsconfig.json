@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist"
+  },
+  "include": ["src", "../../../packages/shared/Login.tsx"],
+  "exclude": [
+    "../../../functions/**"
+  ],
+  "references": [{ "path": "../../../packages/shared" }]
+}

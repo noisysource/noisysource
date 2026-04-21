@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+     "baseUrl": ".",
+    "paths": {
+      "@shared": ["../packages/shared/dist/index"],
+      "@shared/*": ["../packages/shared/dist/*"]
+    },
+    "outDir": "lib",
+    "rootDir": "src",
+    "module": "CommonJS",
+    "target": "ES2020",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}

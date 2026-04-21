@@ -1,0 +1,14 @@
+{
+  "name": "dummy-function",
+  "version": "1.0.0",
+  "description": "A dummy function for Terraform.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,79 @@
+name: Build and Deploy KidClub
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: 'Environment to deploy to'
+        required: true
+        options:
+          - dev
+          - prod
+
+jobs:
+  build:
+    name: 'Build KidClub'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install
+      - name: Build KidClub app
+        run: pnpm --filter kidclub build
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kidclub-build
+          path: apps/noisyphocus/kidclub/dist
+
+  deploy:
+    name: 'Deploy KidClub'
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: kidclub-build
+          path: apps/noisyphocus/kidclub/dist
+      - name: Authenticate to Google Cloud (Dev)
+        if: github.event.inputs.environment == 'dev'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com'
+      - name: Authenticate to Google Cloud (Prod)
+        if: github.event.inputs.environment == 'prod'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com'
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+      - name: Deploy KidClub App (Dev)
+        if: github.event.inputs.environment == 'dev'
+        run: firebase deploy --only hosting:kidclub --project=kidclub-dev --token "$(gcloud auth print-access-token)"
+      - name: Deploy KidClub App (Prod)
+        if: github.event.inputs.environment == 'prod'
+        run: firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b --token "$(gcloud auth print-access-token)"

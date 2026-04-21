@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "apps/arcoIris" },
+    { "path": "apps/finhub" },
+    { "path": "packages/shared" }
+  ]
+}

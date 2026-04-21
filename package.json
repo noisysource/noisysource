@@ -1,0 +1,51 @@
+{
+  "name": "noisysource-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:kidclub": "pnpm --filter kidclub dev",
+    "dev:kidclub:prod": "pnpm --filter kidclub dev:prod",
+    "dev:finances": "pnpm --filter finances dev",
+    "dev:finances:prod": "pnpm --filter finances dev:prod",
+    "build": "pnpm run -r build",
+    "lint": "pnpm -r lint",
+    "clean": "rm -rf dist apps/*/dist packages/*/dist && find . -name '*.tsbuildinfo' -delete && find . -name '*.js' -delete && find . -name '*.js.map' -delete && find . -name '*.d.ts' -delete && find . -name '*.d.ts.map' -delete",
+    "deploy": "firebase deploy --project=dev",
+    "deploy:prod": "firebase deploy --project=prod",
+    "deploy:dev": "firebase deploy --project=dev",
+    "terraform:init": "cd infra/gcp/terraform && terraform init",
+    "terraform:plan": "cd infra/gcp/terraform && terraform plan",
+    "terraform:apply": "cd infra/gcp/terraform && terraform apply"
+  },
+  "dependencies": {
+    "@heroicons/react": "^2.2.0",
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-switch": "^1.2.5",
+    "chartjs-plugin-zoom": "^2.2.0",
+    "class-variance-authority": "^0.7.1",
+    "date-fns": "^4.1.0",
+    "firebase": "^10.14.1",
+    "firebase-admin": "^13.4.0",
+    "lucide-react": "^0.525.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.7.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^20.19.11",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.0",
+    "esbuild": "^0.23.1",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3",
+    "vite": "^4.5.14"
+  }
+}

@@ -1,0 +1,266 @@
+/**
+ * EXAMPLE: Enhanced Family Dashboard
+ * This shows the proposed UI structure for the family-centric model
+ * 
+ * This file is for reference only - not meant to be compiled
+ */
+
+import { useState } from 'react';
+import { Family, Child, StudyRoomEntry, TransportationSubscription } from '@shared/models';
+
+/**
+ * PROPOSED: Family Dashboard View
+ * 
+ * Layout:
+ * ┌─────────────────────────────────────────────────────┐
+ * │ Family Overview                                    │
+ * │ ────────────────────────────────────────────────   │
+ * │ Total Monthly Cost: €240.00                        │
+ * │ 2 Children · 4 Active Subscriptions                │
+ * └─────────────────────────────────────────────────────┘
+ * 
+ * ┌──────────────────┐  ┌──────────────────┐
+ * │ Maria Silva      │  │ João Silva       │
+ * │ Age: 8           │  │ Age: 10          │
+ * │ ──────────────── │  │ ──────────────── │
+ * │ 📚 Study Room    │  │ 📚 Study Room    │
+ * │ 🚌 Transport     │  │ 🚌 Transport     │
+ * │ €120/month       │  │ €120/month       │
+ * │ [View] [Edit]    │  │ [View] [Edit]    │
+ * └──────────────────┘  └──────────────────┘
+ * 
+ * ┌─────────────────────────────────────────────────────┐
+ * │ Upcoming Events This Week                          │
+ * │ ────────────────────────────────────────────────   │
+ * │ Mon: Maria - Study (3pm)                        │
+ * │       João - Transport (8am)                        │
+ * │ ...                                                │
+ * └─────────────────────────────────────────────────────┘
+ */
+
+interface FamilyDashboardProps {
+  family: Family;
+  children: Child[];
+  studySubscriptions: StudyRoomEntry[];
+  transportSubscriptions: TransportationSubscription[];
+}
+
+export function FamilyDashboardExample({ 
+  family, 
+  children, 
+  studySubscriptions, 
+  transportSubscriptions 
+}: FamilyDashboardProps) {
+  const [selectedChild, setSelectedChild] = useState<string | null>(null);
+
+  // Group subscriptions by child
+  const subscriptionsByChild = children.reduce((acc, child) => {
+    acc[child.id] = {
+      child,
+      study: studySubscriptions.filter(s => s.childId === child.id),
+      transport: transportSubscriptions.filter(t => t.childId === child.id),
+    };
+    return acc;
+  }, {} as Record<string, { child: Child; study: StudyRoomEntry[]; transport: TransportationSubscription[] }>);
+
+  // Calculate totals
+  const totalMonthly = Object.values(subscriptionsByChild).reduce((sum, { study, transport }) => {
+    const studyTotal = study.reduce((s, sub) => s + sub.monthlyPrice, 0);
+    const transportTotal = transport.reduce((t, sub) => t + sub.monthlyFee, 0);
+    return sum + studyTotal + transportTotal;
+  }, 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Family Overview Card */}
+      <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-lg shadow-lg">
+        <h1 className="text-2xl font-bold mb-2">Family Dashboard</h1>
+        <div className="grid grid-cols-3 gap-4 mt-4">
+          <div>
+            <p className="text-sm opacity-90">Total Monthly Cost</p>
+            <p className="text-3xl font-bold">€{totalMonthly.toFixed(2)}</p>
+          </div>
+          <div>
+            <p className="text-sm opacity-90">Children</p>
+            <p className="text-3xl font-bold">{children.length}</p>
+          </div>
+          <div>
+            <p className="text-sm opacity-90">Active Subscriptions</p>
+            <p className="text-3xl font-bold">
+              {studySubscriptions.length + transportSubscriptions.length}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Children Cards */}
+      <div>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold">My Children</h2>
+          <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+            + Add Child
+          </button>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {children.map(child => {
+            const { study, transport } = subscriptionsByChild[child.id];
+            const childTotal = 
+              study.reduce((s, sub) => s + sub.monthlyPrice, 0) +
+              transport.reduce((t, sub) => t + sub.monthlyFee, 0);
+
+            return (
+              <div 
+                key={child.id} 
+                className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition-shadow"
+              >
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">
+                      {child.firstName} {child.lastName}
+                    </h3>
+                    <p className="text-sm text-gray-600">Age {child.age}</p>
+                    {child.schoolName && (
+                      <p className="text-xs text-gray-500">{child.schoolName} - {child.schoolYear}</p>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => setSelectedChild(selectedChild === child.id ? null : child.id)}
+                    className="text-blue-600 hover:underline text-sm"
+                  >
+                    {selectedChild === child.id ? 'Hide' : 'View Details'}
+                  </button>
+                </div>
+
+                {/* Services Summary */}
+                <div className="space-y-2 mb-4">
+                  {study.length > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <span>📚</span> Study Room ({study.length})
+                      </span>
+                      <span className="font-medium">
+                        €{study.reduce((s, sub) => s + sub.monthlyPrice, 0).toFixed(2)}/mo
+                      </span>
+                    </div>
+                  )}
+                  {transport.length > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <span>🚌</span> Transport ({transport.length})
+                      </span>
+                      <span className="font-medium">
+                        €{transport.reduce((t, sub) => t + sub.monthlyFee, 0).toFixed(2)}/mo
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-4 border-t flex justify-between items-center">
+                  <span className="font-bold text-lg">€{childTotal.toFixed(2)}/month</span>
+                  <div className="flex gap-2">
+                    <button className="text-blue-600 hover:underline text-sm">Manage</button>
+                    <button className="text-blue-600 hover:underline text-sm">Schedule</button>
+                  </div>
+                </div>
+
+                {/* Expanded Details */}
+                {selectedChild === child.id && (
+                  <div className="mt-4 pt-4 border-t space-y-3">
+                    {/* Study Room Details */}
+                    {study.map(sub => (
+                      <div key={sub.id} className="bg-gray-50 p-3 rounded">
+                        <p className="font-medium text-sm mb-1">Study Room Subscription</p>
+                        <p className="text-xs text-gray-600">
+                          Days: {sub.days.map(d => d.day).join(', ')} · 
+                          Time: {sub.days[0]?.hour || 'N/A'}
+                        </p>
+                      </div>
+                    ))}
+                    
+                    {/* Transport Details */}
+                    {transport.map(sub => (
+                      <div key={sub.id} className="bg-gray-50 p-3 rounded">
+                        <p className="font-medium text-sm mb-1">Transport Subscription</p>
+                        <p className="text-xs text-gray-600">
+                          {sub.schedule?.length || 0} scheduled trips per week
+                        </p>
+                      </div>
+                    ))}
+
+                    <button className="w-full bg-blue-50 text-blue-600 py-2 rounded text-sm hover:bg-blue-100">
+                      + Add Subscription
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <button className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 hover:shadow-md text-left">
+          <div className="text-2xl mb-2">📅</div>
+          <div className="font-semibold">View Family Schedule</div>
+          <div className="text-sm text-gray-600">See all events in one place</div>
+        </button>
+        
+        <button className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 hover:shadow-md text-left">
+          <div className="text-2xl mb-2">📄</div>
+          <div className="font-semibold">View Invoices</div>
+          <div className="text-sm text-gray-600">Single invoice for all services</div>
+        </button>
+        
+        <button className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 hover:shadow-md text-left">
+          <div className="text-2xl mb-2">⚙️</div>
+          <div className="font-semibold">Account Settings</div>
+          <div className="text-sm text-gray-600">Manage family profile</div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * PROPOSED: Enhanced Invoice Display
+ * 
+ * Invoice breakdown by child:
+ * 
+ * ┌────────────────────────────────────────────┐
+ * │ Invoice #INV-2024-001                     │
+ * │ January 2024                              │
+ * │ ────────────────────────────────────────  │
+ * │                                           │
+ * │ ▸ Maria Silva (Age 8)                    │
+ * │   Study Room Subscription: €80.00        │
+ * │   Transport Subscription: €40.00         │
+ * │   Subtotal: €120.00                       │
+ * │                                           │
+ * │ ▸ João Silva (Age 10)                    │
+ * │   Study Room Subscription: €80.00        │
+ * │   Transport Subscription: €40.00         │
+ * │   Subtotal: €120.00                       │
+ * │                                           │
+ * │ ────────────────────────────────────────  │
+ * │ Family Subtotal: €240.00                  │
+ * │ Tax (23%): €55.20                         │
+ * │ ────────────────────────────────────────  │
+ * │ Total Due: €295.20                        │
+ * │                                           │
+ * │ [Download PDF] [Pay Now]                 │
+ * └────────────────────────────────────────────┘
+ */
+
+
+
+
+
+
+
+
+
+
+
+
