@@ -227,6 +227,42 @@ export default function LandingPage() {
         <p className="text-gray-700">Coimbra – Avenida da Guarda Inglesa, Lote E</p>
       </section>
 
+      {/* Legal compliance */}
+      <section className="py-6 px-4 bg-blue-50 border-t border-blue-100 text-sm text-center">
+        <div className="max-w-2xl mx-auto space-y-4">
+          <div>
+            <a
+              href="https://www.livroreclamacoes.pt/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 font-semibold text-red-600 underline hover:text-red-800"
+            >
+              📋 {lang === 'pt' ? 'Livro de Reclamações' : 'Complaints Book'}
+            </a>
+            <p className="text-gray-600 mt-1 text-xs">
+              {lang === 'pt'
+                ? 'Nos termos do artigo 5.º-B do Decreto-Lei n.º 74/2017, disponibilizamos acesso ao Livro de Reclamações Eletrónico.'
+                : 'In accordance with Decree-Law No. 74/2017, we provide access to the Electronic Complaints Book.'}
+            </p>
+          </div>
+          <div>
+            <a
+              href="https://www.consumidor.gov.pt/parceiros/sistema-de-defesa-do-consumidor/entidades-de-resolucao-alternativa-de-litigios-ral.aspx"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 font-semibold text-blue-600 underline hover:text-blue-800"
+            >
+              ⚖️ {lang === 'pt' ? 'Resolução Alternativa de Litígios (RAL)' : 'Alternative Dispute Resolution (ADR)'}
+            </a>
+            <p className="text-gray-600 mt-1 text-xs">
+              {lang === 'pt'
+                ? 'Em caso de litígio, o consumidor pode recorrer a uma entidade de Resolução Alternativa de Litígios.'
+                : 'In case of dispute, consumers may contact an Alternative Dispute Resolution entity.'}
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Footer */}
       <footer className="text-center text-xs text-gray-500 py-6 bg-gray-100">
         <div className="flex flex-col items-center space-y-4">
