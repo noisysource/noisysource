@@ -1,5 +1,3 @@
-# /Users/renatolopes/dev/rainbow/terraform/env/prod.tfvars
-#
 # Variables for the 'prod' environment.
 
 gcp_project_id = "rainbow-prod-2454b"

@@ -1,5 +1,3 @@
-# /Users/renatolopes/dev/rainbow/terraform/env/dev.tfvars
-#
 # Variables for the 'dev' environment.
 
 gcp_project_id = "rainbow-78314"

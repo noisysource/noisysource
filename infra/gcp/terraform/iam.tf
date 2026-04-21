@@ -56,7 +56,7 @@ resource "google_iam_workload_identity_pool_provider" "github_provider" {
     "attribute.actor"      = "assertion.actor"
     "attribute.repository" = "assertion.repository"
   }
-  attribute_condition = "attribute.repository == 'noisysource/rainbow'"
+  attribute_condition = "attribute.repository == 'noisysource/noisysource'"
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
@@ -65,5 +65,5 @@ resource "google_iam_workload_identity_pool_provider" "github_provider" {
 resource "google_service_account_iam_member" "workload_identity_user" {
   service_account_id = google_service_account.gmail_sender.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/noisysource/rainbow"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/noisysource/noisysource"
 }
