@@ -3,8 +3,8 @@ import { getApp } from 'firebase/app';
 
 const fns = getFunctions(getApp(), 'europe-west3');
 
-// Emulator in dev — production callable functions require Cloud Run IAM (org policy constraint).
-if (import.meta.env.DEV) {
+// Only use emulator when running the local dev server (vite), not in any built/deployed mode.
+if (import.meta.env.MODE === 'development') {
   connectFunctionsEmulator(fns, 'localhost', 5001);
 }
 
