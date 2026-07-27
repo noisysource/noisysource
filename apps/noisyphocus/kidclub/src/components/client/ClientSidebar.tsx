@@ -33,6 +33,10 @@ export default function ClientSidebar() {
           <span>📋</span> Inscrições
         </Link>
 
+        <Link to="/client/parties" className={linkClass('/client/parties')}>
+          <span>🎈</span> Festas
+        </Link>
+
         <div className="pt-3 pb-1">
           <p className="text-xs text-gray-500 uppercase tracking-wider px-3">Financeiro</p>
         </div>

@@ -410,6 +410,79 @@ export const easypayWebhook = onRequest(
   }
 );
 
+// ── Create party deposit billing record ──────────────────────────────────────
+
+export const createPartyDeposit = onCall(
+  { region: "europe-west3", invoker: "public" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new Error("Unauthenticated");
+
+    const { bookingId } = request.data ?? {};
+    if (!bookingId) throw new Error("bookingId required");
+
+    const bookingSnap = await db.collection("bookings").doc(bookingId).get();
+    if (!bookingSnap.exists) throw new Error("Booking not found");
+    const booking = bookingSnap.data()!;
+
+    // Verify ownership — booking must have userId or familyId linked to caller
+    if (booking.userId !== uid) {
+      const famSnap = await db.collection("families")
+        .where("primaryContact.userId", "==", uid)
+        .limit(1)
+        .get();
+      if (famSnap.empty || famSnap.docs[0].id !== booking.familyId) {
+        throw new Error("Unauthorized");
+      }
+    }
+
+    if (booking.status !== "confirmed") {
+      throw new Error("A reserva ainda não foi confirmada.");
+    }
+
+    // Return existing deposit billing if already created
+    const existing = await db.collection("billing")
+      .where("bookingId", "==", bookingId)
+      .where("type", "==", "party_deposit")
+      .limit(1)
+      .get();
+    if (!existing.empty) {
+      return { billingId: existing.docs[0].id };
+    }
+
+    const depositAmount = Math.round(booking.total * 0.5 * 100) / 100;
+    const partyDate = new Date(booking.date);
+    const dateStr = partyDate.toLocaleDateString("pt-PT");
+    const now = admin.firestore.Timestamp.now();
+    const dueDate = admin.firestore.Timestamp.fromDate(
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    );
+
+    const billingRef = await db.collection("billing").add({
+      familyId: booking.familyId,
+      userId: uid,
+      bookingId,
+      type: "party_deposit",
+      periodLabel: `Sinal — Festa de ${booking.childName} — ${dateStr}`,
+      periodStart: now,
+      periodEnd: admin.firestore.Timestamp.fromDate(partyDate),
+      dueDate,
+      total: depositAmount,
+      lineItems: [
+        { title: `Sinal 50% — ${booking.partyType || "Festa"}`, amount: depositAmount },
+      ],
+      billingName: booking.parentName,
+      billingEmail: booking.email,
+      paymentMethod: "mbway",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return { billingId: billingRef.id };
+  }
+);
+
 // ── Set family payment method ─────────────────────────────────────────────────
 
 export const setPaymentMethod = onCall(

@@ -41,6 +41,9 @@ import InvoiceListPage from './pages/client/InvoiceListPage';
 import InvoiceDetailPage from './pages/client/InvoiceDetailPage';
 import StudyRoomEnrollPage from './pages/client/enrollment/StudyRoomEnrollPage';
 import TransportEnrollPage from './pages/client/enrollment/TransportEnrollPage';
+import PartyListPage from './pages/client/parties/PartyListPage';
+import PartyBookingPage from './pages/client/parties/PartyBookingPage';
+import PartyDetailPage from './pages/client/parties/PartyDetailPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import TermsPage from './pages/TermsPage';
 
@@ -112,6 +115,11 @@ export default function App() {
 
           {/* Account */}
           <Route path="account" element={<AccountPage />} />
+
+          {/* Parties */}
+          <Route path="parties" element={<PartyListPage />} />
+          <Route path="parties/new" element={<PartyBookingPage />} />
+          <Route path="parties/:id" element={<PartyDetailPage />} />
 
           {/* Legacy compat */}
           <Route path="family/schedule" element={<FamilySchedulePage />} />

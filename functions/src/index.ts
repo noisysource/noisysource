@@ -11,4 +11,4 @@ export { createRecurringExpenses } from "./recurringExpenses";
 export { impersonateUser } from "./impersonation";
 export { generateMonthlyInvoices, triggerInvoiceGeneration } from "./kidclub/generateMonthlyInvoices";
 export { syncVendusClient } from "./kidclub/syncVendusClient";
-export { sendBillingNotices, backfillBillingSchedules, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, onStudyroomConfirmed, onTransportConfirmed } from "./kidclub/billing";
+export { sendBillingNotices, backfillBillingSchedules, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, createPartyDeposit, onStudyroomConfirmed, onTransportConfirmed } from "./kidclub/billing";
