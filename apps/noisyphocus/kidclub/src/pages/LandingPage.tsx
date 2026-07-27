@@ -5,6 +5,7 @@ import { db } from '../lib/firebase';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { trackClick } from '../lib/analytics';
 import { FeatureFlags } from '@shared/models/FeatureFlags';
+import { useUser } from '@shared/hooks';
 import SocialShare from '../components/SocialShare';
 
 const BookingPanel = lazy(() => import('../components/BookingPanel'));
@@ -12,44 +13,86 @@ const StudyRoomForm = lazy(() => import('../components/StudyRoomForm'));
 const TransportationSubscriptionForm = lazy(() => import('../components/TransportationSubscriptionForm'));
 const ChristmasCampSignup = lazy(() => import('../components/ChristmasCampSignup'));
 
+type ActiveService = 'booking' | 'study' | 'transport' | 'camp' | null;
+
+function AuthGate({ service, isLoggedIn }: { service: 'study' | 'transport'; isLoggedIn: boolean }) {
+  const enrollPath = service === 'study' ? '/client/enroll/study' : '/client/enroll/transport';
+
+  return (
+    <div className="max-w-2xl mx-auto mt-6 mb-2 border border-indigo-200 bg-indigo-50 rounded-xl p-5 text-center space-y-3">
+      {isLoggedIn ? (
+        <>
+          <p className="text-sm font-medium text-indigo-700">
+            ✅ Já tem conta. Pronto para se inscrever?
+          </p>
+          <Link
+            to={enrollPath}
+            className="inline-block bg-indigo-600 text-white font-semibold px-6 py-2.5 rounded-lg hover:bg-indigo-700 transition text-sm"
+          >
+            Ir para inscrição →
+          </Link>
+        </>
+      ) : (
+        <>
+          <p className="text-sm font-semibold text-indigo-800">
+            💡 Gosta do que vê? Crie uma conta gratuita para se inscrever.
+          </p>
+          <p className="text-xs text-indigo-600">
+            Os preços acima são a simulação real com base na sua configuração.
+          </p>
+          <div className="flex justify-center gap-3 flex-wrap">
+            <Link
+              to="/login"
+              className="bg-indigo-600 text-white font-semibold px-5 py-2 rounded-lg hover:bg-indigo-700 transition text-sm"
+            >
+              👤 Criar conta grátis
+            </Link>
+            <Link
+              to="/login"
+              className="border border-indigo-300 text-indigo-700 font-medium px-5 py-2 rounded-lg hover:bg-indigo-100 transition text-sm"
+            >
+              Já tenho conta — Entrar
+            </Link>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function LandingPage() {
+  const user = useUser();
+  const isLoggedIn = !!user;
+
   const [lang, setLang] = useState<'pt' | 'en'>('pt');
-  const [showBooking, setShowBooking] = useState(false);
-  const [showStudy, setShowStudy] = useState(false);
-  const [showTransportation, setShowTransportation] = useState(false);
-  const [showCamp, setShowCamp] = useState(false);
+  const [activeService, setActiveService] = useState<ActiveService>(null);
   const [studyConfig, setStudyConfig] = useState<StudyCenterConfig | null>(null);
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags>({});
 
   useEffect(() => {
-    const featureFlagsDocRef = doc(db, 'config', 'featureFlags');
-    const unsubscribe = onSnapshot(featureFlagsDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setFeatureFlags(docSnap.data() as FeatureFlags);
-      }
+    const unsubscribe = onSnapshot(doc(db, 'config', 'featureFlags'), (snap) => {
+      if (snap.exists()) setFeatureFlags(snap.data() as FeatureFlags);
     });
-
-    if (showStudy && !studyConfig) {
-      setIsLoadingConfig(true);
-      const fetchConfig = async () => {
-        try {
-          const configDocRef = doc(db, 'config', 'studyCenter');
-          const docSnap = await getDoc(configDocRef);
-          if (docSnap.exists()) {
-            setStudyConfig(docSnap.data() as StudyCenterConfig);
-          }
-        } catch (error) {
-          console.error("Error fetching study center config:", error);
-        } finally {
-          setIsLoadingConfig(false);
-        }
-      };
-      fetchConfig();
-    }
-
     return () => unsubscribe();
-  }, [showStudy, studyConfig]);
+  }, []);
+
+  useEffect(() => {
+    if (activeService === 'study' && !studyConfig) {
+      setIsLoadingConfig(true);
+      getDoc(doc(db, 'config', 'studyCenter'))
+        .then(snap => { if (snap.exists()) setStudyConfig(snap.data() as StudyCenterConfig); })
+        .catch(err => console.error('Error fetching study config:', err))
+        .finally(() => setIsLoadingConfig(false));
+    }
+  }, [activeService, studyConfig]);
+
+  const openService = (service: ActiveService, featureFlag: boolean, analyticsName: string) => {
+    if (!featureFlag) return;
+    trackClick('service_click', { service_name: analyticsName });
+    setActiveService(prev => prev === service ? null : service);
+    setTimeout(() => document.getElementById(service ?? '')?.scrollIntoView({ behavior: 'smooth' }), 50);
+  };
 
   const t = {
     pt: {
@@ -67,6 +110,38 @@ export default function LandingPage() {
       contactTitle: 'Contact',
     },
   };
+
+  const serviceCard = (
+    id: ActiveService,
+    flag: boolean,
+    analyticsName: string,
+    colorClass: string,
+    emoji: string,
+    titlePt: string,
+    titleEn: string,
+    descPt: string,
+    descEn: string,
+  ) => (
+    <div
+      className={`p-4 border rounded-xl shadow-sm text-sm relative transition-all ${
+        flag ? `${colorClass} cursor-pointer ${activeService === id ? 'ring-2 ring-indigo-400' : ''}` : 'bg-gray-200 text-gray-500'
+      }`}
+      onClick={() => openService(id, flag, analyticsName)}
+    >
+      {!flag && (
+        <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-800 text-xs font-bold px-2 py-1 rounded-bl-lg">
+          Coming Soon
+        </div>
+      )}
+      <h3 className="text-lg font-bold mb-1">{emoji} {lang === 'pt' ? titlePt : titleEn}</h3>
+      <p>{lang === 'pt' ? descPt : descEn}</p>
+      {flag && (
+        <p className="mt-2 text-xs font-medium text-indigo-600">
+          {activeService === id ? '▲ Fechar' : '▼ Ver preços e simular'}
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <div className="font-fredoka bg-white text-gray-800">
@@ -99,126 +174,64 @@ export default function LandingPage() {
         </Link>
       </section>
 
-      {/* Services */}
+      {/* Service cards */}
       <section id="services" className="py-8 px-4 text-center">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 max-w-6xl mx-auto">
-          <div
-            className={`p-4 border rounded-xl shadow-sm text-sm relative ${featureFlags.party
-              ? 'bg-pink-50 cursor-pointer'
-              : 'bg-gray-200 text-gray-500'
-              }`}
-            onClick={() => {
-              if (featureFlags.party) {
-                trackClick('service_click', { service_name: 'Parties' });
-                setShowStudy(false)
-                setShowBooking(true);
-                setShowTransportation(false);
-                document.getElementById('booking')?.scrollIntoView({ behavior: 'smooth' });
-              }
-            }}>
-            {!featureFlags.party && (
-              <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-800 text-xs font-bold px-2 py-1 rounded-bl-lg">
-                Coming Soon
-              </div>
-            )}
-            <h3 className="text-lg font-bold mb-1">🎈 {lang === 'pt' ? 'Festas' : 'Parties'}</h3>
-            <p>{lang === 'pt' ? 'Festas únicas com muita animação.' : 'Unique and fun birthday parties.'}</p>
-          </div>
-          <div
-            className={`p-4 border rounded-xl shadow-sm text-sm relative ${featureFlags.summerCamps
-              ? 'bg-yellow-50 cursor-pointer'
-              : 'bg-gray-200 text-gray-500'
-              }`}
-            onClick={() => {
-              if (featureFlags.summerCamps) {
-                trackClick('service_click', { service_name: 'Christmas Camp' });
-                setShowBooking(false);
-                setShowStudy(false);
-                setShowTransportation(false);
-                setShowCamp(true);
-                document.getElementById('camp')?.scrollIntoView({ behavior: 'smooth' });
-              }
-            }}
-          >
-            {!featureFlags.summerCamps && (
-              <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-800 text-xs font-bold px-2 py-1 rounded-bl-lg">
-                Coming Soon
-              </div>
-            )}
-            <h3 className="text-lg font-bold mb-1">🎄 {lang === 'pt' ? 'Actividades de natal 2025' : 'Christmas Camp'}</h3>
-            <p>{lang === 'pt' ? 'Magia e diversão garantida!' : 'Christmas Camp 2025 - 9 days of fun!'}</p>
-          </div>
-          <div
-            className={`p-4 border rounded-xl shadow-sm text-sm relative ${featureFlags.studyRoom
-              ? 'bg-blue-50 cursor-pointer'
-              : 'bg-gray-200 text-gray-500'
-              }`}
-            onClick={() => {
-              if (featureFlags.studyRoom) {
-                trackClick('service_click', { service_name: 'Study Room' });
-                setShowBooking(false);
-                setShowStudy(true)
-                setShowTransportation(false);
-                document.getElementById('study')?.scrollIntoView({ behavior: 'smooth' });
-              }
-            }}>
-            {!featureFlags.studyRoom && (
-              <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-800 text-xs font-bold px-2 py-1 rounded-bl-lg">
-                Coming Soon
-              </div>
-            )}
-            <h3 className="text-lg font-bold mb-1">📚 Sala de Estudo</h3>
-            <p>{lang === 'pt' ? 'Apoio escolar com método e carinho.' : 'Tutoring with care and structure.'}</p>
-          </div>
-          <div
-            className={`p-4 border rounded-xl shadow-sm text-sm relative ${featureFlags.transportation
-              ? 'bg-purple-50 cursor-pointer'
-              : 'bg-gray-200 text-gray-500'
-              }`}
-            onClick={() => {
-              if (featureFlags.transportation) {
-                trackClick('service_click', { service_name: 'Transportation' });
-                setShowBooking(false);
-                setShowStudy(false);
-                setShowTransportation(true);
-                document.getElementById('transportation')?.scrollIntoView({ behavior: 'smooth' });
-              }
-            }}
-          >
-            {!featureFlags.transportation && (
-              <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-800 text-xs font-bold px-2 py-1 rounded-bl-lg">
-                Coming Soon
-              </div>
-            )}
-            <h3 className="text-lg font-bold mb-1">🚌 {lang === 'pt' ? 'Transporte' : 'Transportation'}</h3>
-            <p>{lang === 'pt' ? 'Serviço de transporte.' : 'Transportation service to and from school.'}</p>
-          </div>
+          {serviceCard('booking', featureFlags.party ?? false, 'Parties', 'bg-pink-50', '🎈',
+            'Festas', 'Parties', 'Festas únicas com muita animação.', 'Unique and fun birthday parties.')}
+          {serviceCard('camp', featureFlags.summerCamps ?? false, 'Christmas Camp', 'bg-yellow-50', '🎄',
+            'Actividades de natal 2025', 'Christmas Camp',
+            'Magia e diversão garantida!', 'Christmas Camp 2025 - 9 days of fun!')}
+          {serviceCard('study', featureFlags.studyRoom ?? false, 'Study Room', 'bg-blue-50', '📚',
+            'Sala de Estudo', 'Study Room',
+            'Apoio escolar com método e carinho.', 'Tutoring with care and structure.')}
+          {serviceCard('transport', featureFlags.transportation ?? false, 'Transportation', 'bg-purple-50', '🚌',
+            'Transporte', 'Transportation',
+            'Serviço de transporte.', 'Transportation service to and from school.')}
         </div>
       </section>
 
+      {/* Booking */}
       <section id="booking">
         <Suspense fallback={<div className="text-center p-4">A carregar...</div>}>
-          {showBooking && <BookingPanel />}
+          {activeService === 'booking' && <BookingPanel />}
         </Suspense>
       </section>
 
+      {/* Camp */}
+      <section id="camp">
+        <Suspense fallback={<div className="text-center p-4">A carregar...</div>}>
+          {activeService === 'camp' && <ChristmasCampSignup />}
+        </Suspense>
+      </section>
+
+      {/* Study room — simulation mode */}
       <section id="study">
         <Suspense fallback={<div className="text-center p-4">A carregar...</div>}>
-          {showStudy && (
-            isLoadingConfig ? <p>A carregar...</p> : (studyConfig ? <StudyRoomForm priceConfig={studyConfig} /> : <p>Não foi possível carregar o formulário.</p>)
+          {activeService === 'study' && (
+            <>
+              {isLoadingConfig && <p className="text-center p-4">A carregar...</p>}
+              {!isLoadingConfig && !studyConfig && <p className="text-center p-4 text-red-500">Não foi possível carregar o formulário.</p>}
+              {!isLoadingConfig && studyConfig && (
+                <>
+                  <StudyRoomForm priceConfig={studyConfig} isSimulation />
+                  <AuthGate service="study" isLoggedIn={isLoggedIn} />
+                </>
+              )}
+            </>
           )}
         </Suspense>
       </section>
 
-      <section id="transportation">
+      {/* Transportation — simulation mode */}
+      <section id="transport">
         <Suspense fallback={<div className="text-center p-4">A carregar...</div>}>
-          {showTransportation && <TransportationSubscriptionForm />}
-        </Suspense>
-      </section>
-
-      <section id="camp">
-        <Suspense fallback={<div className="text-center p-4">A carregar...</div>}>
-          {showCamp && <ChristmasCampSignup />}
+          {activeService === 'transport' && (
+            <>
+              <TransportationSubscriptionForm isSimulation />
+              <AuthGate service="transport" isLoggedIn={isLoggedIn} />
+            </>
+          )}
         </Suspense>
       </section>
 
@@ -285,5 +298,4 @@ export default function LandingPage() {
       </footer>
     </div>
   );
-
 }

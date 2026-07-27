@@ -29,7 +29,7 @@ interface LegacyFormData {
 
 // --- MAIN COMPONENT ---
 
-export default function TransportationSubscriptionForm() {
+export default function TransportationSubscriptionForm({ isSimulation = false }: { isSimulation?: boolean }) {
   const user = useUser();
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<LegacyFormData>({
@@ -266,7 +266,7 @@ export default function TransportationSubscriptionForm() {
                 <form onSubmit={handleSubmit}>
                     {step === 1 && <Step2 nextStep={nextStep} prevStep={prevStep} />}
                     {step === 2 && <Step3 nextStep={nextStep} prevStep={prevStep} mainPickup={mainPickup} setMainPickup={setMainPickup} mainDropoff={mainDropoff} setMainDropoff={setMainDropoff} tripDays={tripDays} setTripDays={setTripDays} tripTime={tripTime} setTripTime={setTripTime} handleAddTrips={handleAddTrips} removeScheduleItem={removeScheduleItem} />}
-                    {step === 3 && <Step4 prevStep={prevStep} loading={loading} handleSubmit={() => handleSubmit({} as React.FormEvent)} />}
+                    {step === 3 && <Step4 prevStep={prevStep} loading={loading} handleSubmit={() => handleSubmit({} as React.FormEvent)} isSimulation={isSimulation} isLoggedIn={!!user} />}
                 </form>
                 </div>
                 <div className="lg:col-span-1">
