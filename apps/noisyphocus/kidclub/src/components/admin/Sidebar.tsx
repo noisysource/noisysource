@@ -44,7 +44,6 @@ export default function Sidebar() {
         <SidebarSection title="⚙️ Operações">
           <SidebarNavLink to="/admin/calendar">📅 Calendário</SidebarNavLink>
           <SidebarNavLink to="/admin/billing">💶 Cobranças</SidebarNavLink>
-          <SidebarNavLink to="/admin/invoices">🧾 Faturas (legado)</SidebarNavLink>
           <SidebarNavLink to="/admin/email-center">✉️ Email Center</SidebarNavLink>
         </SidebarSection>
 

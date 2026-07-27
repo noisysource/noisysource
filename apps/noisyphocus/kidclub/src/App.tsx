@@ -15,14 +15,12 @@ import StudyPricingPage from './pages/admin/StudyPricingPage';
 import CalendarPage from './pages/admin/CalendarPage';
 import EmailCenterPage from './pages/admin/EmailCenterPage';
 import TransportationConfigPage from './pages/admin/transport/TransportationConfigPage';
-import FeatureFlagsPage from './pages/admin/FeatureFlagsPage';
 import CampAdminPage from './pages/admin/CampAdminPage';
 import EditEmployeePage from './pages/admin/EditEmployeePage';
 import TimesheetsPage from './pages/admin/TimesheetsPage';
 import DataManagementPage from './pages/admin/DataManagementPage';
 import HRPage from './pages/admin/HRPage';
 import SubscriptionsAdminPage from './pages/admin/SubscriptionsAdminPage';
-import InvoicesAdminPage from './pages/admin/InvoicesAdminPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
 import FamiliesAdminPage from './pages/admin/FamiliesAdminPage';
 import PaymentsPage from './pages/client/PaymentsPage';
@@ -43,6 +41,8 @@ import InvoiceListPage from './pages/client/InvoiceListPage';
 import InvoiceDetailPage from './pages/client/InvoiceDetailPage';
 import StudyRoomEnrollPage from './pages/client/enrollment/StudyRoomEnrollPage';
 import TransportEnrollPage from './pages/client/enrollment/TransportEnrollPage';
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
+import TermsPage from './pages/TermsPage';
 
 export default function App() {
   return (
@@ -69,9 +69,7 @@ export default function App() {
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="email-center" element={<EmailCenterPage />} />
           <Route path="transport-config" element={<TransportationConfigPage />} />
-          <Route path="feature-flags" element={<FeatureFlagsPage />} />
           <Route path="camp" element={<CampAdminPage />} />
-          <Route path="invoices" element={<InvoicesAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
           <Route path="families" element={<FamiliesAdminPage />} />
           {/* Legacy redirects */}
@@ -122,6 +120,8 @@ export default function App() {
           <Route path="transport/:id" element={<TransportSubscriptionDetailPage />} />
         </Route>
 
+        <Route path="/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
         <Route path="/not-authorized" element={<NotAuthorizedPage />} />
         <Route path="*" element={<div className="p-8 text-center text-gray-500">Página não encontrada</div>} />
       </Routes>

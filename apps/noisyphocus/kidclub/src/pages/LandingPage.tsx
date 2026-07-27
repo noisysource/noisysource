@@ -181,9 +181,17 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="text-center text-xs text-gray-500 py-6 bg-gray-100">
-        <div className="flex flex-col items-center space-y-4">
+        <div className="flex flex-col items-center space-y-3">
           <SocialShare url="https://your-website-url.com" title="Arco-Íris da Pequenada" />
-          <p>© {new Date().getFullYear()} Arco-Íris da Pequenada</p>
+          <div className="flex gap-4">
+            <Link to="/privacy" className="underline hover:text-gray-700">
+              {pt ? 'Política de Privacidade' : 'Privacy Policy'}
+            </Link>
+            <Link to="/terms" className="underline hover:text-gray-700">
+              {pt ? 'Termos e Condições' : 'Terms & Conditions'}
+            </Link>
+          </div>
+          <p>© {new Date().getFullYear()} Arco-Íris da Pequenada · NIF 518942120</p>
         </div>
       </footer>
     </div>
