@@ -155,17 +155,17 @@ export default function StudyRoomAdminPanel() {
 
     const changes: EntryChangeHistory[] = [];
     const fieldsToCompare: (keyof StudyRoomEntry)[] = [
-      "studentName", "guardianName", "email", "phone", "schoolYear", "schoolName", "note", "days", "needsTransport",
-      "basePrice", "registration", "insurance", "total", "transportFee"
+      "childName", "childAge", "schoolYear", "schoolName", "note", "days", "needsTransport",
+      "monthlyPrice", "basePrice", "total", "transportFee"
     ];
 
     fieldsToCompare.forEach(field => {
-      let oldValue = entryToEdit[field];
-      let newValue = updatedEntry[field];
+      let oldValue: any = entryToEdit[field];
+      let newValue: any = updatedEntry[field];
 
       // Handle undefined values for Firestore
       if (newValue === undefined || newValue === "") {
-        newValue = null; // Convert undefined or empty string to null for Firestore
+        newValue = null;
       }
       if (oldValue === undefined || oldValue === "") {
         oldValue = null;

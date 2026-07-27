@@ -1,8 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { addDoc, collection } from 'firebase/firestore';
 import { Booking } from '@shared/models/Booking';
 import { PartyConfig } from '@shared/models/PartyConfig';
-import { db } from '../lib/firebase';
+import { partyService } from '../services/partyService';
 
 interface PartyBookingFormProps {
   initialData?: Booking;
@@ -22,7 +21,7 @@ const stripEmptyStringsToNull = <T extends Record<string, any>>(obj: T): T => {
 };
 
 export default function PartyBookingForm({ initialData, onSave, partyConfig, isSimulation = false }: PartyBookingFormProps) {
-  const [formData, setFormData] = useState<Booking | null>(initialData);
+  const [formData, setFormData] = useState<Booking | null>(initialData ?? null);
   const [changeReason, setChangeReason] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
@@ -82,13 +81,7 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
     } else {
       if (isSimulation) return;
 
-      const newBooking: Omit<Booking, 'id'> = {
-        ...dataToSave,
-        createdAt: new Date(),
-        status: 'pending',
-      };
-
-      await addDoc(collection(db, 'bookings'), newBooking);
+      await partyService.createBooking({ ...dataToSave, createdAt: new Date(), status: 'pending' });
       setSubmitted(true);
     }
   };

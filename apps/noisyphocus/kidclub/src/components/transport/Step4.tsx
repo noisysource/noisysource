@@ -2,7 +2,7 @@ import React from 'react';
 import { Card, Button } from './common';
 import { ChevronLeft } from 'lucide-react';
 
-export const Step4 = ({ prevStep, loading, handleSubmit }: { prevStep: () => void, loading: boolean, handleSubmit: (e: React.FormEvent) => void }) => (
+export const Step4 = ({ prevStep, loading, handleSubmit }: { prevStep: () => void, loading: boolean, handleSubmit: () => void }) => (
   <Card className="text-center">
     <h3 className="text-2xl font-bold text-gray-800 mb-4">Confirmação</h3>
     <p className="text-gray-600 mb-6">Por favor, reveja todos os detalhes antes de submeter o seu pedido. Após a submissão, a nossa equipa entrará em contacto para confirmar.</p>

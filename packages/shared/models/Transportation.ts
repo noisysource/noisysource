@@ -23,25 +23,27 @@ export interface SubscriptionSchedule {
   dropoffLocation: string;
 }
 
+export type SubscriptionStatus = 'active' | 'inactive' | 'cancelled' | 'pending';
+
 export interface TransportationSubscription {
   id: string;
   familyId: string; // Required - links to Family
   childId: string; // Required - links to Child
-  
+
   // Child information (denormalized)
   childName: string;
   childAge: number;
-  
+
   // Contact information (from family, but can be overridden)
   contactMobile: string;
   contactEmail: string;
-  
+
   // Subscription dates
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD
-  
+
   // Status
-  status: 'active' | 'inactive' | 'cancelled' | 'pending';
+  status: SubscriptionStatus;
   
   // Pricing
   monthlyFee: number;

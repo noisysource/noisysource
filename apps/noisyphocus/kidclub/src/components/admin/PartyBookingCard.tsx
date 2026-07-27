@@ -92,7 +92,7 @@ export default function PartyBookingCard({
               <div>
                 <p><strong>Data:</strong> {booking.date} às {booking.time}</p>
                 <p><strong>Nº de Crianças:</strong> {booking.numKids}</p>
-                <p><strong>Tema:</strong> {booking.theme}</p>
+                <p><strong>Tema:</strong> {(booking as any).theme}</p>
               </div>
               <div>
                 <p><strong>Total:</strong> €{booking.total.toFixed(2)}</p>

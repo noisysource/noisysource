@@ -1,6 +1,6 @@
 // apps/finhub/src/components/accounts/AccountForm.tsx
 import { useEffect, useMemo, useState } from "react";
-import type { Account, AccountType, OwnerType } from "@shared/models/Account";
+import type { Account, AccountType, OwnerType, VoucherType } from "@shared/models/Account";
 import { cleanUndefined } from "@shared/lib/clean";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -36,6 +36,7 @@ export function AccountForm({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [ownerType, setOwnerType] = useState<OwnerType | "">("");
   const [ownerId, setOwnerId] = useState("");
+  const [jointOwnerIds, setJointOwnerIds] = useState<string[]>([]);
   const [type, setType] = useState<AccountType>("bank");
   const [name, setName] = useState("");
   const [currency, setCurrency] = useState<"EUR">("EUR");
@@ -49,14 +50,21 @@ export function AccountForm({
   const [issuer, setIssuer] = useState("");
   const [last4, setLast4] = useState("");
 
-  // virtual
-  const [provider, setProvider] = useState("Edenred");
+  // voucher
+  const [voucherType, setVoucherType] = useState<VoucherType>("meal");
+  const [voucherProvider, setVoucherProvider] = useState("Edenred");
+  const [issuingEmployer, setIssuingEmployer] = useState("");
+  const [monthlyTopUp, setMonthlyTopUp] = useState("");
+
+  // bonds
+  const [bondsProvider, setBondsProvider] = useState("CTT");
 
   useEffect(() => {
     if (!initial) {
       setEditingId(null);
       setOwnerType("");
       setOwnerId("");
+      setJointOwnerIds([]);
       setType("bank");
       setName("");
       setCurrency("EUR");
@@ -65,12 +73,17 @@ export function AccountForm({
       setBic("");
       setIssuer("");
       setLast4("");
-      setProvider("Edenred");
+      setVoucherType("meal");
+      setVoucherProvider("Edenred");
+      setIssuingEmployer("");
+      setMonthlyTopUp("");
+      setBondsProvider("CTT");
       return;
     }
     setEditingId(initial.id);
     setOwnerType((initial as any).ownerType || "");
     setOwnerId((initial as any).ownerId || "");
+    setJointOwnerIds((initial as any).jointOwnerIds || []);
     setType(initial.type);
     setName(initial.name || "");
     setCurrency(((initial as any).currency as "EUR") || "EUR");
@@ -79,7 +92,11 @@ export function AccountForm({
     setBic((initial as any).bic || "");
     setIssuer((initial as any).issuer || "");
     setLast4((initial as any).last4 || "");
-    setProvider((initial as any).provider || "Edenred");
+    setVoucherType((initial as any).voucherType || "meal");
+    setVoucherProvider((initial as any).provider || "Edenred");
+    setIssuingEmployer((initial as any).issuingEmployer || "");
+    setMonthlyTopUp((initial as any).monthlyTopUpCents ? String((initial as any).monthlyTopUpCents / 100) : "");
+    setBondsProvider((initial as any).provider || "CTT");
   }, [initial]);
 
   // owner token → lower-case; company prefers shortCode, person uses initials
@@ -108,27 +125,32 @@ export function AccountForm({
 
     const base = cleanUndefined({
       id: editingId || undefined,
-      code: codePreview, // <-- new format
+      code: codePreview,
       name: name.trim() || `${type.toUpperCase()} Account`,
       type,
       ownerType,
       ownerId,
+      jointOwnerIds: jointOwnerIds.length ? jointOwnerIds : undefined,
       currency,
       createdAt: new Date(),
     });
 
+    const topUpCents = monthlyTopUp ? Math.round(parseFloat(monthlyTopUp) * 100) : undefined;
     const payload =
       type === "bank"
-        ? cleanUndefined({
-            ...base,
-            bankName: bankName || undefined,
-            iban: iban || undefined,
-            bic: bic || undefined,
-          })
+        ? cleanUndefined({ ...base, bankName: bankName || undefined, iban: iban || undefined, bic: bic || undefined })
         : type === "credit"
         ? cleanUndefined({ ...base, issuer: issuer || undefined, last4: last4 || undefined })
-        : type === "virtual"
-        ? cleanUndefined({ ...base, provider: provider || undefined })
+        : type === "voucher"
+        ? cleanUndefined({
+            ...base,
+            voucherType,
+            provider: voucherProvider || undefined,
+            issuingEmployer: issuingEmployer || undefined,
+            monthlyTopUpCents: topUpCents,
+          })
+        : type === "bonds"
+        ? cleanUndefined({ ...base, provider: bondsProvider || undefined })
         : base;
 
     await api.accounts.save(payload as any);
@@ -180,6 +202,27 @@ export function AccountForm({
         </div>
       </div>
 
+      {ownerType === "person" && ownerId && (
+        <div>
+          <div className="text-xs text-zinc-400 mb-1">Joint holders (optional)</div>
+          <div className="space-y-1">
+            {people.filter(p => p.id !== ownerId).map(p => (
+              <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={jointOwnerIds.includes(p.id)}
+                  onChange={e => setJointOwnerIds(prev =>
+                    e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id)
+                  )}
+                  className="accent-emerald-500"
+                />
+                {p.name}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-2">
         <div>
           <div className="text-xs text-zinc-400 mb-1">Type</div>
@@ -190,7 +233,8 @@ export function AccountForm({
           >
             <option value="bank">Bank</option>
             <option value="credit">Credit card</option>
-            <option value="virtual">Voucher / Virtual</option>
+            <option value="voucher">Voucher</option>
+            <option value="bonds">Bonds / CTT</option>
             <option value="wallet">Wallet</option>
             <option value="cash">Cash</option>
           </select>
@@ -251,18 +295,57 @@ export function AccountForm({
         </div>
       )}
 
-      {type === "virtual" && (
+      {type === "voucher" && (
+        <div className="space-y-2">
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Voucher type</div>
+            <select
+              value={voucherType}
+              onChange={(e) => setVoucherType(e.target.value as VoucherType)}
+              className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
+            >
+              <option value="meal">Meal</option>
+              <option value="childcare">Childcare</option>
+              <option value="education">Education</option>
+            </select>
+          </div>
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Provider</div>
+            <Input
+              placeholder="Edenred / Coverflex / …"
+              value={voucherProvider}
+              onChange={(e) => setVoucherProvider(e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Issuing employer</div>
+            <Input
+              placeholder="NoisySource / Exquisite Talent / …"
+              value={issuingEmployer}
+              onChange={(e) => setIssuingEmployer(e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Monthly top-up (€)</div>
+            <Input
+              type="number"
+              placeholder="0.00"
+              step="0.01"
+              value={monthlyTopUp}
+              onChange={(e) => setMonthlyTopUp(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      {type === "bonds" && (
         <div>
           <div className="text-xs text-zinc-400 mb-1">Provider</div>
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-          >
-            <option value="Edenred">Edenred</option>
-            <option value="Sodexo">Sodexo</option>
-            <option value="Other">Other</option>
-          </select>
+          <Input
+            placeholder="CTT"
+            value={bondsProvider}
+            onChange={(e) => setBondsProvider(e.target.value)}
+          />
         </div>
       )}
 

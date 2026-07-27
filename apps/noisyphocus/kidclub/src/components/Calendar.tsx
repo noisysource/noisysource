@@ -160,7 +160,7 @@ export default function Calendar({ summaryData, detailData, year: initialYear, m
     return acc;
   }, {} as { [key: string]: { date: string; incomes: { [key: string]: number }; expenses: { [key: string]: number } } });
 
-  const calendarDays: (Date | null)[] = Array.from({ length: adjustedFirstDay }, () => null).concat(
+  const calendarDays: (Date | null)[] = (Array.from({ length: adjustedFirstDay }, () => null) as (Date | null)[]).concat(
     Array.from({ length: daysInMonth }, (_, i) => new Date(year, month, i + 1))
   );
 

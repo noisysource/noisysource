@@ -1,4 +1,3 @@
-import { Timestamp } from 'firebase/firestore';
 
 /**
  * Represents a modification to a single occurrence of a subscription-based event

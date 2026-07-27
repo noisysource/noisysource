@@ -1,5 +1,6 @@
 export type OwnerType = "company" | "person";
-export type AccountType = "bank" | "wallet" | "cash" | "credit" | "virtual";
+export type AccountType = "bank" | "wallet" | "cash" | "credit" | "voucher" | "bonds";
+export type VoucherType = "meal" | "childcare" | "education";
 
 interface BaseAccount {
   id: string;            // doc id
@@ -8,8 +9,11 @@ interface BaseAccount {
   type: AccountType;
   ownerType: OwnerType;  // REQUIRED now
   ownerId: string;       // REQUIRED now (FK to orgs/{org}/companies|people/{id})
+  jointOwnerIds?: string[]; // additional co-owners (e.g. joint bank accounts)
   currency: "EUR";       // fix for now
   createdAt: Date | any;
+  balanceCents?: number;   // current real balance — set manually by user
+  balanceAsOf?: string;    // ISO date "YYYY-MM-DD" when balance was recorded
 }
 
 /** Bank accounts MUST include full banking details */
@@ -29,14 +33,26 @@ export interface CreditAccount extends BaseAccount {
   issuer?: string;       // e.g. "AMEX"
   last4?: string;        // UI nicety
 }
-export interface VirtualAccount extends BaseAccount { type: "virtual"; }
+export interface VoucherAccount extends BaseAccount {
+  type: "voucher";
+  voucherType: VoucherType;
+  provider: string;           // e.g. "Edenred", "Coverflex"
+  issuingEmployer: string;    // company name or id reference
+  monthlyTopUpCents?: number; // expected monthly credit
+}
+
+export interface BondsAccount extends BaseAccount {
+  type: "bonds";
+  provider: string;           // e.g. "CTT"
+}
 
 export type Account =
   | BankAccount
   | WalletAccount
   | CashAccount
   | CreditAccount
-  | VirtualAccount;
+  | VoucherAccount
+  | BondsAccount;
 
 export const isCashLike = (t: AccountType) =>
   t === "bank" || t === "wallet" || t === "cash" || t === "credit";

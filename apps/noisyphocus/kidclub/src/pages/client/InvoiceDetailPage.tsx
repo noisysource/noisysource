@@ -115,7 +115,11 @@ export default function InvoiceDetailPage() {
   };
 
   const getSubscriptionLabel = (invoice: Invoice) => {
-    return invoice.subscriptionType === 'study' ? 'Study Room' : 'Transport';
+    const types = invoice.subscriptionItems?.map(i => i.subscriptionType) ?? [];
+    if (types.includes('study') && types.includes('transport')) return 'Study Room & Transport';
+    if (types.includes('study')) return 'Study Room';
+    if (types.includes('transport')) return 'Transport';
+    return 'Services';
   };
 
   const isOverdue = invoice.status === 'pending' && new Date() > invoice.dueDate;

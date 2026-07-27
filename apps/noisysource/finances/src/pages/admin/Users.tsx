@@ -1,7 +1,7 @@
 // apps/finhub/src/pages/admin/Users.tsx
 import { useEffect, useState } from 'react';
 import { collection, getDocs, updateDoc, doc } from 'firebase/firestore';
-import { AppUser } from '@shared/models/AppUser';
+import type { AppUser } from '@shared/models/AppUser';
 import { db } from '../../lib/firebase';
 import { Card, CardContent } from '../../components/ui/card';
 import { Switch } from '../../components/ui/switch';

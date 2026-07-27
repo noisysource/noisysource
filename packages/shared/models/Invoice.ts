@@ -1,4 +1,3 @@
-import { Timestamp } from 'firebase/firestore';
 
 /**
  * Invoice status types

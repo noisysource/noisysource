@@ -16,16 +16,27 @@ import { Stepper } from './transport/Stepper';
 import Notification from './Notification'; // Import Notification
 import { trackClick } from '../lib/analytics';
 
+// Legacy form data shape — old field names kept for backwards compatibility with Firestore documents
+interface LegacyFormData {
+  parentName: string;
+  studentName: string;
+  studentAge: number;
+  contactMobile: string;
+  contactEmail: string;
+  startDate: string;
+  [key: string]: any;
+}
+
 // --- MAIN COMPONENT ---
 
 export default function TransportationSubscriptionForm() {
   const user = useUser();
   const [step, setStep] = useState(1);
-  const [formData, setFormData] = useState<Partial<TransportationSubscription>>({
-    parentName: user?.displayName || '',
+  const [formData, setFormData] = useState<LegacyFormData>({
+    parentName: user?.name || '',
     studentName: '',
     studentAge: 0,
-    contactMobile: user?.phoneNumber || '',
+    contactMobile: '',
     contactEmail: user?.email || '',
     startDate: new Date().toISOString().split('T')[0],
   });
@@ -99,8 +110,8 @@ export default function TransportationSubscriptionForm() {
       const isDuplicate = schedule.some(trip => 
         trip.dayOfWeek === day && 
         trip.pickupTime === tripTime && 
-        trip.pickupLocation?.address === mainPickup.address && 
-        trip.dropoffLocation?.address === mainDropoff.address
+        trip.pickupLocation === mainPickup.address &&
+        trip.dropoffLocation === mainDropoff.address
       );
 
       if (isDuplicate) {
@@ -109,16 +120,16 @@ export default function TransportationSubscriptionForm() {
       }
     }
 
-    const newTrips = tripDays.map((day, index) => ({
+    const newTrips: Partial<StableSubscriptionSchedule>[] = tripDays.map((day, index) => ({
         id: `trip_${tripIdCounter + index}`,
-        dayOfWeek: day,
+        dayOfWeek: day as SubscriptionSchedule['dayOfWeek'],
         pickupTime: tripTime,
-        pickupLocation: mainPickup,
-        dropoffLocation: mainDropoff,
+        pickupLocation: mainPickup?.address ?? '',
+        dropoffLocation: mainDropoff?.address ?? '',
     }));
 
     setTripIdCounter(prev => prev + tripDays.length);
-    const newSchedule = [...schedule, ...newTrips];
+    const newSchedule: Partial<StableSubscriptionSchedule>[] = [...schedule, ...newTrips];
     setSchedule(newSchedule);
     calculatePrice(newSchedule);
     setTripDays([]); // Reset for next entry
@@ -179,17 +190,22 @@ export default function TransportationSubscriptionForm() {
         return;
       }
       const finalSchedule = schedule.map(({ id, ...rest }) => rest) as SubscriptionSchedule[];
-      const newSubscription: Omit<TransportationSubscription, 'id'> = {
-        userId: user?.id || 'guest',
+      // Written with legacy fields for backwards compat — admin panel reads these
+      const newSubscription = {
+        userId: user?.uid || 'guest',
         parentName, studentName, studentAge, contactMobile, contactEmail, startDate,
+        familyId: '',
+        childId: '',
+        childName: studentName,
+        childAge: Number(studentAge),
         schedule: finalSchedule,
-        status: 'pending',
+        status: 'pending' as const,
         monthlyFee: subtotal,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      await addDoc(collection(db, 'transportationSubscriptions'), newSubscription);
-      logEvent(analytics, 'purchase', {
+      await addDoc(collection(db, 'transportationSubscriptions'), newSubscription as any);
+      (logEvent as any)(analytics, 'purchase', {
         currency: 'EUR',
         value: subtotal,
         items: finalSchedule.map(item => ({
@@ -198,7 +214,7 @@ export default function TransportationSubscriptionForm() {
           price: transportationConfig?.flatRatePerTrip || 0,
           quantity: 1,
         })),
-      });
+      } as any);
       setSubmitted(true);
     } catch (err) {
       console.error("Error submitting request:", err);
@@ -209,7 +225,8 @@ export default function TransportationSubscriptionForm() {
   };
 
   const formState: FormContextProps = {
-    formData, handleChange,
+    formData: formData as Partial<TransportationSubscription>,
+    handleChange,
     handleLocationChange,
     schedule, setSchedule,
     transportationConfig,
@@ -242,14 +259,14 @@ export default function TransportationSubscriptionForm() {
 
             {error && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded-md shadow-sm" role="alert"><p>{error}</p></div>}
 
-            <Stepper currentStep={step} totalSteps={3} />
+            <Stepper currentStep={step} />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2">
                 <form onSubmit={handleSubmit}>
-                    {step === 1 && <Step2 nextStep={nextStep} />}
+                    {step === 1 && <Step2 nextStep={nextStep} prevStep={prevStep} />}
                     {step === 2 && <Step3 nextStep={nextStep} prevStep={prevStep} mainPickup={mainPickup} setMainPickup={setMainPickup} mainDropoff={mainDropoff} setMainDropoff={setMainDropoff} tripDays={tripDays} setTripDays={setTripDays} tripTime={tripTime} setTripTime={setTripTime} handleAddTrips={handleAddTrips} removeScheduleItem={removeScheduleItem} />}
-                    {step === 3 && <Step4 prevStep={prevStep} loading={loading} handleSubmit={handleSubmit} />}
+                    {step === 3 && <Step4 prevStep={prevStep} loading={loading} handleSubmit={() => handleSubmit({} as React.FormEvent)} />}
                 </form>
                 </div>
                 <div className="lg:col-span-1">

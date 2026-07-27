@@ -1,4 +1,3 @@
-import { Timestamp } from 'firebase/firestore';
 
 /**
  * Represents a family/account that groups all children and their subscriptions
@@ -6,7 +5,7 @@ import { Timestamp } from 'firebase/firestore';
  */
 export interface Family {
   id: string;
-  
+
   // Primary contact (parent/guardian)
   primaryContact: {
     name: string;
@@ -14,22 +13,26 @@ export interface Family {
     phone: string;
     userId: string; // Links to Firebase Auth user
   };
-  
+
   // Billing information
+  nif?: string; // Portuguese tax ID
   billingAddress?: {
     street: string;
     city: string;
     postalCode: string;
     country?: string;
   };
-  
+
+  // Whether the family has completed the onboarding profile setup
+  profileComplete?: boolean;
+
   // Payment preferences
-  defaultPaymentMethod?: string;
+  defaultPaymentMethod?: 'bank_transfer' | 'mbway';
   paymentTerms?: 'monthly' | 'quarterly' | 'annual';
-  
+
   // Account status
   status: 'active' | 'inactive' | 'suspended';
-  
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;

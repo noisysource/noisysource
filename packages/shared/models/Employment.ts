@@ -16,10 +16,11 @@ export interface BenefitConfig {
 
 export interface EmploymentContractDoc {
   id: string;
-  orgId: string;
+  orgId?: string;
   companyId: string;
   personId: string;
   active: boolean;
+  paymentType?: 'salary' | 'hourly';
   grossMonthlyCents?: number | null;
   hourlyRateCents?: number | null;
   irsRatePct: number;
@@ -30,4 +31,5 @@ export interface EmploymentContractDoc {
   endDate?: Timestamp;
   benefits: BenefitConfig[];
   netPayAccountId: string;
+  flowToPrivate?: boolean;  // true → net salary auto-synced as income in Private entity
 }

@@ -118,11 +118,11 @@ async function findOrCreateChild(
   db: admin.firestore.Firestore,
   familyId: string,
   studentName: string,
+  dryRun: boolean,
+  stats: MigrationStats,
   schoolName?: string,
   schoolYear?: string,
   studentAge?: number,
-  dryRun: boolean,
-  stats: MigrationStats
 ): Promise<string | null> {
   try {
     const { firstName, lastName } = parseName(studentName);

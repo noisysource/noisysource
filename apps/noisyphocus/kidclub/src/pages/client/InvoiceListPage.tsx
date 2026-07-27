@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { Invoice } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -19,7 +19,6 @@ export default function InvoiceListPage() {
         const invoicesQuery = query(
           collection(db, 'invoices'),
           where('userId', '==', user.uid),
-          orderBy('issueDate', 'desc')
         );
         const snapshot = await getDocs(invoicesQuery);
         const invoicesData = snapshot.docs.map(doc => {
@@ -36,6 +35,7 @@ export default function InvoiceListPage() {
             updatedAt: data.updatedAt?.toDate?.() || new Date(data.updatedAt),
           } as Invoice;
         });
+        invoicesData.sort((a, b) => b.issueDate.getTime() - a.issueDate.getTime());
         setInvoices(invoicesData);
         setIsLoading(false);
       };
@@ -64,7 +64,11 @@ export default function InvoiceListPage() {
   };
 
   const getSubscriptionLabel = (invoice: Invoice) => {
-    return invoice.subscriptionType === 'study' ? 'Study Room' : 'Transport';
+    const types = invoice.subscriptionItems?.map(i => i.subscriptionType) ?? [];
+    if (types.includes('study') && types.includes('transport')) return 'Study Room & Transport';
+    if (types.includes('study')) return 'Study Room';
+    if (types.includes('transport')) return 'Transport';
+    return 'Services';
   };
 
   if (isLoading) {

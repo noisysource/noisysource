@@ -1,24 +1,23 @@
-
 import { stripUndefined } from "../crud";
-import { makeOrgCRUD } from "./base";
+import { makeGlobalCRUD } from "./base";
 
-export type Person = { id: string; name: string };
+export type Person = { id: string; name: string; email?: string };
 
 const from = (raw: any, id: string): Person => ({
   id,
   name: String(raw?.name ?? id),
+  email: raw?.email || undefined,
 });
 
-const to = (input: Omit<Person, "id"> | Partial<Person>) =>
+const to = (input: Partial<Person>) =>
   stripUndefined({
     name: (input as any).name?.trim(),
+    email: (input as any).email?.trim() || undefined,
   });
 
-export function makePeopleDomain(getOrgId: () => string) {
-  return makeOrgCRUD<Omit<Person, "id"> & { id?: string }, Person>(getOrgId, {
-    collectionPath: "people",
-    from,
-    to,
-    sort: (a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id),
-  });
+export function makePeopleDomain() {
+  return makeGlobalCRUD<Omit<Person, "id"> & { id?: string }, Person>(
+    "finances_people",
+    { from, to, sort: (a, b) => a.name.localeCompare(b.name) }
+  );
 }

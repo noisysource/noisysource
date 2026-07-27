@@ -27,32 +27,25 @@ export default function Sidebar() {
         <p className="text-sm text-gray-500">Painel de Administração</p>
       </div>
       <nav className="space-y-4">
-        <SidebarSection title="🎉 Festas" defaultOpen>
-          <SidebarNavLink to="/admin/parties">🎈 Festas</SidebarNavLink>
-          <SidebarNavLink to="/admin/party-config">🛠️ Configurador Festas</SidebarNavLink>
+        <SidebarSection title="📋 Inscrições" defaultOpen>
+          <SidebarNavLink to="/admin/subscriptions">📋 Todas as inscrições</SidebarNavLink>
         </SidebarSection>
 
-        <SidebarSection title="📚 Sala de Estudo">
-          <SidebarNavLink to="/admin/study-room">📘 Sala de Estudo</SidebarNavLink>
-          <SidebarNavLink to="/admin/study-pricing">💰 Preços Sala de Estudo</SidebarNavLink>
+        <SidebarSection title="🎉 Festas">
+          <SidebarNavLink to="/admin/parties">🎈 Reservas</SidebarNavLink>
+          <SidebarNavLink to="/admin/party-config">🛠️ Configuração</SidebarNavLink>
         </SidebarSection>
 
-        <SidebarSection title="🚌 Transporte">
-          <SidebarNavLink to="/admin/transport">🚌 Transporte</SidebarNavLink>
-          <SidebarNavLink to="/admin/transport-config">🛠️ Configuração Transporte</SidebarNavLink>
+        <SidebarSection title="⚙️ Configuração">
+          <SidebarNavLink to="/admin/study-pricing">📚 Sala de Estudo</SidebarNavLink>
+          <SidebarNavLink to="/admin/transport-config">🚌 Transporte</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="⚙️ Operações">
           <SidebarNavLink to="/admin/calendar">📅 Calendário</SidebarNavLink>
+          <SidebarNavLink to="/admin/billing">💶 Cobranças</SidebarNavLink>
+          <SidebarNavLink to="/admin/invoices">🧾 Faturas (legado)</SidebarNavLink>
           <SidebarNavLink to="/admin/email-center">✉️ Email Center</SidebarNavLink>
-          <SidebarNavLink to="/admin/camp">🎄 Actividades de natal 2025</SidebarNavLink>
-        </SidebarSection>
-
-        {/* Financial Management Section */}
-        <SidebarSection title="💰 Gestão Financeira">
-          <SidebarNavLink to="/admin/dashboard">📊 Dashboard</SidebarNavLink>
-          <SidebarNavLink to="/admin/incomes">💰 Rendimentos</SidebarNavLink>
-          <SidebarNavLink to="/admin/expenses">💸 Despesas</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="👥 Recursos Humanos">
@@ -60,8 +53,11 @@ export default function Sidebar() {
           <SidebarNavLink to="/admin/timesheets">⏰ Registo de Horas</SidebarNavLink>
         </SidebarSection>
 
+        <SidebarSection title="👨‍👩‍👧 Famílias">
+          <SidebarNavLink to="/admin/families">👨‍👩‍👧 Famílias e Crianças</SidebarNavLink>
+        </SidebarSection>
+
         <SidebarSection title="🛠️ Admin">
-          <SidebarNavLink to="/admin/feature-flags">🚩 Feature Flags</SidebarNavLink>
           <SidebarNavLink to="/admin/data-management">🗄️ Gestão de Dados</SidebarNavLink>
         </SidebarSection>
       </nav>

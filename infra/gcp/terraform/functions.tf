@@ -80,7 +80,8 @@ locals {
     "exportOrgData",
     "importOrgData",
     "wipeOrgData",
-    "getAnalyticsData"
+    "getAnalyticsData",
+    "triggerInvoiceGeneration",
   ])
 }
 

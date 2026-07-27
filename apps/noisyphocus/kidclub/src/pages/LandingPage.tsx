@@ -1,5 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
 import { db } from '../lib/firebase';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { trackClick } from '../lib/analytics';
@@ -69,21 +70,33 @@ export default function LandingPage() {
 
   return (
     <div className="font-fredoka bg-white text-gray-800">
-      {/* Language toggle */}
-      <div className="flex justify-end p-2 pr-4">
+      {/* Top bar */}
+      <div className="flex justify-between items-center p-2 px-4">
         <button
           className="text-xs text-pink-600 underline hover:text-pink-800 transition"
           onClick={() => setLang(lang === 'pt' ? 'en' : 'pt')}
         >
           {lang === 'pt' ? 'EN' : 'PT'}
         </button>
+        <Link
+          to="/login"
+          className="text-sm font-medium text-blue-600 hover:text-blue-800 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50 transition"
+        >
+          {lang === 'pt' ? 'Área de Clientes' : 'Client Area'}
+        </Link>
       </div>
 
       {/* Hero */}
       <section className="text-center py-8 px-4 bg-gradient-to-r from-pink-100 to-blue-100">
         <img src="/logo.png" alt="Logo" className="h-16 mx-auto mb-4 object-contain" />
         <h1 className="text-3xl font-bold mb-2 text-pink-600">{t[lang].heroTitle}</h1>
-        <p className="text-base text-gray-700 mb-4">{t[lang].heroSubtitle}</p>
+        <p className="text-base text-gray-700 mb-6">{t[lang].heroSubtitle}</p>
+        <Link
+          to="/login"
+          className="inline-block bg-blue-600 text-white font-semibold px-6 py-3 rounded-xl hover:bg-blue-700 transition shadow-sm"
+        >
+          {lang === 'pt' ? '👤 Área de Clientes — Entrar / Registar' : '👤 Client Area — Sign in / Register'}
+        </Link>
       </section>
 
       {/* Services */}

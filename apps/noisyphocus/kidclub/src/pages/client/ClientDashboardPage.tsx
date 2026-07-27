@@ -198,7 +198,7 @@ export default function ClientDashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {studySubscriptions.map(sub => (
               <div key={sub.id} className="p-4 border rounded-lg shadow-sm">
-                <p className="font-bold">{sub.studentName}</p>
+                <p className="font-bold">{sub.childName}</p>
                 <p>Status: {sub.status}</p>
                 <p>Price: €{sub.monthlyPrice.toFixed(2)}</p>
                 <Link to={`/client/study/${sub.id}`} className="text-blue-500 hover:underline">View Details</Link>
@@ -216,7 +216,7 @@ export default function ClientDashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {transportSubscriptions.map(sub => (
               <div key={sub.id} className="p-4 bg-white border rounded-lg shadow-sm hover:shadow-md transition-shadow">
-                <p className="font-bold">{sub.studentName}</p>
+                <p className="font-bold">{sub.childName}</p>
                 <p className="text-sm text-gray-600">Status: <span className="capitalize">{sub.status}</span></p>
                 <p className="text-lg font-semibold mt-2">€{sub.monthlyFee.toFixed(2)}/month</p>
                 <Link to={`/client/transport/${sub.id}`} className="text-blue-500 hover:underline text-sm mt-2 inline-block">View Details</Link>

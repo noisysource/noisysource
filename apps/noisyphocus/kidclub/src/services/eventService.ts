@@ -6,7 +6,7 @@ import { FinancialEvent } from '@shared/models/FinancialEvent';
 import { EventModification, StudyRoomEntry, Booking, TransportationSubscription } from '@shared/models';
 import { startOfMonth, endOfMonth, format, eachDayOfInterval, isSameDay } from 'date-fns';
 import { safeDate } from '@shared/lib/dates';
-import { transportService } from './transportService';
+import { getTransportBooking } from './transportationService';
 import { centsToEuros } from '@shared/lib/money';
 import { employeeService } from './employeeService';
 
@@ -192,7 +192,7 @@ const studyRoomIncomeMapper = (month: Date) => (entry: StudyRoomEntry) => {
     const studyEvent = {
       id: `studyroom-${entry.id}-${year}-${monthNumber}`,
       event: {
-        label: `Mensalidade Sala de Estudo - ${entry.studentName}`,
+        label: `Mensalidade Sala de Estudo - ${entry.childName}`,
         amount: entry.basePrice,
         date: Timestamp.fromDate(startDate),
         category: 'Sala de Estudo',
@@ -204,7 +204,7 @@ const studyRoomIncomeMapper = (month: Date) => (entry: StudyRoomEntry) => {
       const transportEvent = {
         id: `transport_study-${entry.id}-${year}-${monthNumber}`,
         event: {
-          label: `Transporte (Estudo) - ${entry.studentName}`,
+          label: `Transporte (Estudo) - ${entry.childName}`,
           amount: entry.transportFee,
           date: Timestamp.fromDate(startDate),
           category: 'Transporte (Estudo)',
@@ -230,7 +230,7 @@ const transportSubIncomeMapper = (month: Date) => (sub: TransportationSubscripti
     return {
       id: `transport_sub-${sub.id}-${year}-${monthNumber}`,
       event: {
-        label: `Mensalidade Transporte - ${sub.studentName}`,
+        label: `Mensalidade Transporte - ${sub.childName}`,
         amount: sub.monthlyFee,
         date: Timestamp.fromDate(startDate),
         category: 'Transporte (Subscrição)',
@@ -283,7 +283,7 @@ export const eventService = {
       const event = { id: doc.id, ...doc.data() } as Event;
       let booking = null;
       if (event.type === 'transport' && event.bookingId && event.transportType) {
-        booking = await transportService.getTransportBooking(event.bookingId, event.transportType);
+        booking = await getTransportBooking(event.bookingId, event.transportType);
       }
       return { ...event, booking };
     });
@@ -460,7 +460,7 @@ export const eventService = {
             // Only create if: doesn't exist AND not cancelled
             if (!eventExists && !isCancelled) {
             const studyEvent: Omit<Event, 'id'> = {
-              title: `Sala de Estudo - ${entry.studentName}`,
+              title: `Sala de Estudo - ${entry.childName}`,
               start: Timestamp.fromDate(new Date(`${dateString}T${daySelection.hour}`)),
               end: Timestamp.fromDate(new Date(`${dateString}T19:00`)), // Assuming a fixed end time
               type: 'study',
@@ -490,7 +490,7 @@ export const eventService = {
               // Only create if: doesn't exist AND not cancelled
               if (!eventExists && !isCancelled) {
                 const transportEvent: Omit<Event, 'id'> = {
-                  title: `Transporte (Estudo) - ${entry.studentName}`,
+                  title: `Transporte (Estudo) - ${entry.childName}`,
                   start: Timestamp.fromDate(new Date(`${dateString}T${daySelection.hour}`)), // Adjust time as needed
                   end: Timestamp.fromDate(new Date(`${dateString}T${daySelection.hour}`)), // Adjust time as needed
                   type: 'transport',
@@ -556,7 +556,7 @@ export const eventService = {
               // Only create if: doesn't exist AND not cancelled
               if (!eventExists && !isCancelled) {
                 const event: Omit<Event, 'id'> = {
-                  title: `Transporte - ${sub.studentName}`,
+                  title: `Transporte - ${sub.childName}`,
                   start: Timestamp.fromDate(new Date(`${dateString}T${schedule.pickupTime}`)),
                   end: Timestamp.fromDate(new Date(`${dateString}T${schedule.pickupTime}`)), // Adjust end time as needed
                   type: 'transport',

@@ -1,0 +1,135 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isRainbowAdmin() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.rainbowAdmin == true;
+    }
+
+    function isFinhubAdmin() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.finhubAdmin == true;
+    }
+
+    function isOwner() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.owner == true;
+    }
+
+    // ── Users ────────────────────────────────────────────────────────────────
+    // Every app shares this collection in the default database.
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isOwner() || isRainbowAdmin() || isFinhubAdmin());
+      // Users can create their own doc on first sign-in (ensureUserDoc); only owners can update/delete
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update, delete: if isOwner();
+    }
+
+    // ── KidClub ──────────────────────────────────────────────────────────────
+
+    // Families: each family belongs to one primary user.
+    match /families/{familyId} {
+      allow read: if isAuthenticated() &&
+        (resource.data.primaryContact.userId == request.auth.uid || isRainbowAdmin());
+      // Allow creating a new family (first sign-in)
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() &&
+        (resource.data.primaryContact.userId == request.auth.uid || isRainbowAdmin());
+    }
+
+    // Children: userId field is stored on the document for query-compatible rules
+    match /children/{childId} {
+      allow read, write: if isRainbowAdmin();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Study room subscriptions
+    match /studyroom/{entryId} {
+      allow read, write: if isRainbowAdmin();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Transportation subscriptions
+    match /transportationSubscriptions/{subId} {
+      allow read, write: if isRainbowAdmin();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Party bookings
+    match /bookings/{bookingId} {
+      allow read, write: if isRainbowAdmin();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Billing records — created by Cloud Functions, read by clients
+    match /billing/{id} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Invoices (read-only for clients)
+    match /invoices/{invoiceId} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Payments (read-only for clients)
+    match /payments/{paymentId} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Config (read for all authenticated, write for admin)
+    match /config/{configId} {
+      allow read: if isAuthenticated();
+      allow write: if isRainbowAdmin() || isOwner();
+    }
+
+    // Legacy KidClub collections (admin-only)
+    match /employees/{doc} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+    }
+    match /expenses/{doc} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+    }
+    match /incomes/{doc} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+    }
+    match /events/{doc} {
+      allow read: if isAuthenticated();
+      allow write: if isRainbowAdmin();
+    }
+    match /eventModifications/{doc} {
+      allow read: if isAuthenticated();
+      allow write: if isRainbowAdmin();
+    }
+    match /emailOutbox/{doc} {
+      allow read, write: if isRainbowAdmin() || isOwner();
+    }
+    match /plannedInstances/{doc} {
+      allow read: if isAuthenticated();
+      allow write: if isRainbowAdmin();
+    }
+
+    // ── Finances app ─────────────────────────────────────────────────────────
+    match /finances_entities/{entityId} {
+      allow read, write: if isFinhubAdmin();
+
+      match /{collection}/{docId} {
+        allow read, write: if isFinhubAdmin();
+      }
+    }
+  }
+}

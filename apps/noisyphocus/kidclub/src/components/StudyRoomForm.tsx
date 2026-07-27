@@ -1,10 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
-import { addDoc, collection } from 'firebase/firestore';
 import { DaySelection, StudyRoomEntry } from '@shared/models/StudyRoomEntry';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
-import { db } from '../lib/firebase';
 import StudyRoomFormFields from "./StudyRoomFormFields";
 import { useUser } from '@shared/hooks';
+import { studyRoomService } from '../services/studyRoomService';
 
 const WEEKDAYS = [
   { label: 'Segunda-feira', value: 'monday' },
@@ -40,25 +39,24 @@ export default function StudyRoomForm({ priceConfig, isSimulation = false, initi
 
     return {
       id: '',
-      studentName: '',
+      familyId: '',
+      childId: '',
+      childName: '',
       schoolName: '',
       schoolYear: '',
-      guardianName: '',
-      email: '',
-      phone: '',
       days: [],
-      note: null, // Initialize note as null
-      monthlyPrice: 0, // New field
-      startDate: today, // New field
-      endDate: nextJuly, // New field
+      note: undefined,
+      monthlyPrice: 0,
+      startDate: today,
+      endDate: nextJuly,
       createdAt: new Date(),
-      canceled: false,
+      updatedAt: new Date(),
       needsTransport: false,
       status: 'pending',
       uploadedFiles: [],
       statusHistory: [],
       entryHistory: [],
-    };
+    } as StudyRoomEntry;
   })());
   const [changeReason, setChangeReason] = useState(''); // For edit mode
   const [submitted, setSubmitted] = useState(false);
@@ -105,17 +103,15 @@ export default function StudyRoomForm({ priceConfig, isSimulation = false, initi
     } else { // New entry mode
       if (isSimulation) return;
 
-      const newEntry: Omit<StudyRoomEntry, 'id'> = {
+      await studyRoomService.createEntry({
         ...dataToSave,
-        userId: user?.uid,
         monthlyPrice,
         startDate: dataToSave.startDate,
         endDate: dataToSave.endDate,
         createdAt: new Date(),
+        updatedAt: new Date(),
         status: 'pending',
-      };
-
-      await addDoc(collection(db, 'studyroom'), newEntry);
+      });
       setSubmitted(true);
     }
   };
@@ -134,7 +130,7 @@ export default function StudyRoomForm({ priceConfig, isSimulation = false, initi
     <form onSubmit={handleSubmit} className={`${isSimulation ? '' : 'bg-white p-6 rounded shadow'} max-w-4xl mx-auto`}>
       <h2 className={`text-2xl font-bold text-center mb-6 ${isSimulation ? 'text-white' : ''}`}>🧮 Inscrição - Sala de Estudo</h2>
 
-      <StudyRoomFormFields formData={formData} setFormData={setFormData} isSimulation={isSimulation} priceConfig={priceConfig} needsTransport={needsTransport} />
+      <StudyRoomFormFields formData={formData} setFormData={setFormData} isSimulation={isSimulation} priceConfig={priceConfig} needsTransport={needsTransport} currentUser={user} />
 
       {onSave && ( // Only show reason input and buttons in edit mode
         <div className="mt-4 pt-4 border-t border-gray-200">

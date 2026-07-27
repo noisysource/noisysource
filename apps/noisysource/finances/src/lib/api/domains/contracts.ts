@@ -1,7 +1,6 @@
 import { where } from "firebase/firestore";
 import { makeOrgCRUD } from "./base";
 import type { EmploymentContractDoc, BenefitConfig } from "@shared/models/Employment";
-import { toDate } from "../utils";
 import { stripUndefined } from "../crud";
 
 /** ----- mappers ----- */
@@ -43,8 +42,8 @@ const from = (raw: any, id: string): EmploymentContractDoc => ({
 
   payDay: typeof raw?.payDay === "number" ? raw.payDay : 25,
 
-  startDate: toDate(raw?.startDate),
-  endDate: toDate(raw?.endDate),
+  startDate: raw?.startDate ?? undefined,
+  endDate: raw?.endDate ?? undefined,
 
   benefits: mapBenefitsFrom(raw?.benefits),
   netPayAccountId: raw?.netPayAccountId || "",

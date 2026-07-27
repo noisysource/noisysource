@@ -1,24 +1,19 @@
-import { useOrgs } from '../../hooks/OrgContext';
+import { useEntity } from '../../hooks/EntityContext';
 
 export function OrgSelector() {
-  const { orgs, selectedOrgId, setSelectedOrgId, loading } = useOrgs();
-
-  if (loading) {
-    return <div className="text-sm text-zinc-400">Loading orgs...</div>;
-  }
+  const { entities, selectedEntity, setSelectedEntityId } = useEntity();
 
   return (
-    <div className="flex items-center gap-2">
-      <label htmlFor="org-selector" className="text-sm font-medium text-zinc-400">Organization:</label>
+    <div className="flex flex-col gap-1">
+      <label className="text-xs text-zinc-500">Context</label>
       <select
-        id="org-selector"
-        value={selectedOrgId}
-        onChange={(e) => setSelectedOrgId(e.target.value)}
+        value={selectedEntity.id}
+        onChange={(e) => setSelectedEntityId(e.target.value)}
         className="bg-zinc-800 border border-zinc-700 text-white rounded px-2 py-1 text-sm"
       >
-        {orgs.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.name}
+        {entities.map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.name}
           </option>
         ))}
       </select>

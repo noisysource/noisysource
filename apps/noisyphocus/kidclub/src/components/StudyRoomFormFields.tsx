@@ -122,7 +122,7 @@ export default function StudyRoomFormFields({
           <>
             <div>
               <label className="block font-medium">👧 Nome do Aluno</label>
-              <input type="text" name="studentName" value={formData.studentName} onChange={handleChange} className="w-full border rounded px-3 py-2 mt-1" required />
+              <input type="text" name="childName" value={formData.childName} onChange={handleChange} className="w-full border rounded px-3 py-2 mt-1" required />
             </div>
 
             <div>
@@ -133,21 +133,6 @@ export default function StudyRoomFormFields({
             <div>
               <label className="block font-medium">📚 Ano Escolar (1º ao 6º)</label>
               <input type="text" name="schoolYear" value={formData.schoolYear} onChange={handleChange} className="w-full border rounded px-3 py-2 mt-1" required />
-            </div>
-
-            <div>
-              <label className="block font-medium">👨‍👩‍👧 Nome do Responsável</label>
-              <input type="text" name="guardianName" value={formData.guardianName} onChange={handleChange} className="w-full border rounded px-3 py-2 mt-1" required />
-            </div>
-
-            <div>
-              <label className="block font-medium">📧 Email</label>
-              <input type="email" name="email" value={formData.email} onChange={handleChange} className="w-full border rounded px-3 py-2 mt-1" required />
-            </div>
-
-            <div>
-              <label className="block font-medium">📞 Telemóvel</label>
-              <input type="tel" name="phone" value={formData.phone} onChange={handleChange} className="w-full border rounded px-3 py-2 mt-1" required />
             </div>
           </>
         )}

@@ -34,8 +34,8 @@ const ScheduleDetails = ({ schedule }: { schedule: SubscriptionSchedule[] }) => 
             {groupedSchedule[day].map((trip, index) => (
               <div key={index} className="grid grid-cols-10 gap-x-4 text-xs p-2 rounded-md even:bg-gray-50 items-center">
                 <div className="col-span-2 font-medium">{trip.pickupTime}</div>
-                <div className="col-span-4">{trip.pickupLocation?.address}</div>
-                <div className="col-span-4">{trip.dropoffLocation?.address}</div>
+                <div className="col-span-4">{trip.pickupLocation}</div>
+                <div className="col-span-4">{trip.dropoffLocation}</div>
               </div>
             ))}
           </div>
@@ -68,8 +68,8 @@ export default function AdminTransportationSubscriptions() {
       try {
         const subsSnapshot = await getDocs(collection(db, 'transportationSubscriptions'));
         const subsList: Editable<TransportationSubscription>[] = subsSnapshot.docs.map(d => ({
-          id: d.id,
           ...d.data() as TransportationSubscription,
+          id: d.id,
         }));
         setSubscriptions(subsList);
       } catch (err) {
@@ -127,8 +127,8 @@ export default function AdminTransportationSubscriptions() {
   const filteredSubscriptions = subscriptions
     .filter(sub => sub.status === activeTab)
     .filter(sub =>
-        sub.parentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        sub.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ((sub as any).parentName || sub.childName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ((sub as any).studentName || sub.childName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         sub.contactEmail.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -185,8 +185,8 @@ export default function AdminTransportationSubscriptions() {
             {currentPageData.map(sub => (
               <React.Fragment key={sub.id}>
                 <tr className="border-b border-gray-200 hover:bg-gray-100 cursor-pointer" onClick={() => setExpandedRow(expandedRow === sub.id ? null : sub.id)}>
-                  <td className="py-3 px-6 text-left">{sub.parentName}</td>
-                  <td className="py-3 px-6 text-left">{sub.studentName}</td>
+                  <td className="py-3 px-6 text-left">{(sub as any).parentName || sub.childName}</td>
+                  <td className="py-3 px-6 text-left">{(sub as any).studentName || sub.childName}</td>
                   <td className="py-3 px-6 text-left">{sub.contactEmail}<br/>{sub.contactMobile}</td>
                   <td className="py-3 px-6 text-left">{sub.startDate}</td>
                   <td className="py-3 px-6 text-left">€{sub.monthlyFee.toFixed(2)}</td>

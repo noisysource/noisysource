@@ -1,6 +1,107 @@
 import { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+
+const FRESH_START_COLLECTIONS = [
+  'families',
+  'children',
+  'studyroom',
+  'transportationSubscriptions',
+  'bookings',
+  'billing',
+  'invoices',
+  'payments',
+] as const;
+
+function FreshStartPanel() {
+  const [confirm, setConfirm] = useState('');
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState<string[]>([]);
+  const [done, setDone] = useState(false);
+
+  const handleReset = async () => {
+    if (confirm !== 'RESET') return;
+    setRunning(true);
+    setLog([]);
+    setDone(false);
+
+    for (const col of FRESH_START_COLLECTIONS) {
+      setLog(prev => [...prev, `A limpar ${col}...`]);
+      try {
+        const snap = await getDocs(collection(db, col));
+        for (const d of snap.docs) {
+          await deleteDoc(doc(db, col, d.id));
+        }
+        setLog(prev => [...prev, `  ✓ ${snap.docs.length} documentos eliminados de ${col}`]);
+      } catch (e: any) {
+        setLog(prev => [...prev, `  ✗ Erro em ${col}: ${e.message}`]);
+      }
+    }
+
+    setLog(prev => [...prev, '', 'Limpeza concluída.']);
+    setDone(true);
+    setRunning(false);
+    setConfirm('');
+  };
+
+  return (
+    <div className="bg-red-50 border border-red-200 rounded-lg p-6 mb-10">
+      <h2 className="text-lg font-bold text-red-900 mb-1">Limpeza Total — Fresh Start</h2>
+      <p className="text-sm text-red-700 mb-4">
+        Elimina <strong>todos os dados de clientes</strong> — famílias, crianças, inscrições, faturas e pagamentos.
+        Configurações, colaboradores e calendário <strong>não são afetados</strong>.
+      </p>
+
+      <div className="bg-white rounded border border-red-200 p-4 mb-4 text-sm">
+        <p className="font-medium text-gray-700 mb-2">Coleções que serão limpas:</p>
+        <ul className="space-y-1">
+          {FRESH_START_COLLECTIONS.map(col => (
+            <li key={col} className="text-gray-600 flex items-center gap-2">
+              <span className="text-red-400">✕</span> {col}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {!done && (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-red-800 mb-1">
+              Para confirmar, escreva <strong>RESET</strong>:
+            </label>
+            <input
+              type="text"
+              value={confirm}
+              onChange={e => setConfirm(e.target.value)}
+              disabled={running}
+              placeholder="RESET"
+              className="w-full px-3 py-2 border border-red-300 rounded-lg focus:ring-2 focus:ring-red-400 text-sm font-mono"
+            />
+          </div>
+          <button
+            onClick={handleReset}
+            disabled={confirm !== 'RESET' || running}
+            className="bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700 disabled:opacity-40 text-sm font-medium"
+          >
+            {running ? 'A limpar...' : 'Executar Fresh Start'}
+          </button>
+        </div>
+      )}
+
+      {log.length > 0 && (
+        <pre className="mt-4 bg-gray-900 text-green-400 text-xs p-4 rounded-lg overflow-auto max-h-48 font-mono">
+          {log.join('\n')}
+        </pre>
+      )}
+
+      {done && (
+        <p className="mt-3 text-sm text-green-700 font-medium">
+          Base de dados limpa. Pode agora iniciar com dados frescos.
+        </p>
+      )}
+    </div>
+  );
+}
 import { StudyRoomEntry } from '@shared/models'; // Assuming StudyRoomEntry is now in @shared/models
 
 const SAMPLE_STUDY_ROOM_DATA = [
@@ -208,7 +309,9 @@ export default function DataManagementPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Gestão de Dados</h1>
+      <h1 className="text-2xl font-bold mb-6">Gestão de Dados</h1>
+
+      <FreshStartPanel />
 
       <div className="mb-8">
         <h2 className="text-xl font-bold mb-2">Coleção Firestore</h2>

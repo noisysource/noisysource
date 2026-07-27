@@ -1,8 +1,8 @@
 // shared/components/auth/ProtectRoute.tsx
 import { Navigate } from 'react-router-dom';
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useUser } from './hooks';
-import { AppUser } from '@shared/dist/models';
+import type { AppUser } from '@shared/dist/models';
 
 type Role = keyof NonNullable<AppUser['roles']>;
 

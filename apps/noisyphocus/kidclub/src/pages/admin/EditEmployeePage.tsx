@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Timestamp } from 'firebase/firestore';
 import { Role } from '@shared/models';
 import { employeeService } from '../../services/employeeService';
 import { eurosToCents, centsToEuros } from '@shared/lib/money';
@@ -37,7 +38,7 @@ export default function EditEmployeePage() {
 
       if (contract) {
         setPaymentType(contract.hourlyRateCents ? 'hourly' : 'salary');
-        setGrossMonthlyEUR(String(centsToEuros(contract.grossMonthlyCents)));
+        setGrossMonthlyEUR(String(centsToEuros(contract.grossMonthlyCents ?? 0)));
         setHourlyRateEUR(String(centsToEuros(contract.hourlyRateCents || 0)));
         setIrsRatePct(contract.irsRatePct);
         setSsEmpPct(contract.ssEmpPct);
@@ -67,9 +68,9 @@ export default function EditEmployeePage() {
           ssEmpPct,
           ssErPct,
           payDay,
-          startDate,
+          startDate: Timestamp.fromDate(startDate),
           active: true,
-        }
+        } as any
       );
       navigate('/admin/hr');
     } catch (error) {

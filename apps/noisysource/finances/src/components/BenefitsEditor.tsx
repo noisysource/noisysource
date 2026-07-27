@@ -1,4 +1,3 @@
-import React from "react";
 import type { BenefitConfig } from "@shared/models/Employment";
 
 type Account = {
@@ -123,11 +122,12 @@ export function BenefitsEditor({
                   className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
                 >
                   <option value="">— pick —</option>
-                  <option value="MEAL">Meal voucher</option>
                   <option value="MEAL_CARD">Meal card</option>
+                  <option value="MEAL">Meal voucher</option>
                   <option value="MEAL_VOUCHER">Meal voucher (generic)</option>
                   <option value="CHILDCARE">Childcare voucher</option>
-                  <option value="INFANCIA">Infância voucher</option>
+                  <option value="EDUCATION">Education voucher</option>
+                  <option value="EXPENSE_ALLOWANCE">Expense allowance (ajudas de custo)</option>
                   <option value="OTHER">Other</option>
                 </select>
               </div>

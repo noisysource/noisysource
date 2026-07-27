@@ -1,5 +1,5 @@
 {
-  "firestore": { "indexes": "firestore.indexes.json" },
+  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
   "functions": {
     "source": "functions",
     "runtime": "nodejs22",
@@ -14,6 +14,12 @@
       "public": "apps/noisyphocus/kidclub/dist",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
+        { "source": "/callable/backfillBillingSchedules",  "run": { "serviceId": "backfillbillingschedules",    "region": "europe-west3" } },
+        { "source": "/callable/sendBillingNotices",        "run": { "serviceId": "sendbillingnotices",          "region": "europe-west3" } },
+        { "source": "/callable/initiateMbwayPayment",      "run": { "serviceId": "initiatembwaypayment",        "region": "europe-west3" } },
+        { "source": "/callable/initiateMultibancoPayment", "run": { "serviceId": "initiatemultibancopayment",   "region": "europe-west3" } },
+        { "source": "/callable/initiateCardPayment",       "run": { "serviceId": "initiatecardpayment",         "region": "europe-west3" } },
+        { "source": "/callable/setPaymentMethod",          "run": { "serviceId": "setpaymentmethod",            "region": "europe-west3" } },
         {
           "source": "**",
           "destination": "/index.html"

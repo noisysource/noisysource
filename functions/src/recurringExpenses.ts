@@ -1,7 +1,20 @@
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as admin from 'firebase-admin';
-import { Expense } from '@shared/models'; // Assuming Expense model is accessible
-import { Timestamp } from 'firebase-admin/firestore'; // Import Timestamp
+import { Timestamp } from 'firebase-admin/firestore';
+
+// Inlined from @shared/models to avoid runtime module resolution issues in Cloud Functions
+interface Expense {
+  id?: string;
+  description: string;
+  amount: number;
+  category: string;
+  notes?: string;
+  date: Timestamp | Date;
+  createdAt: Timestamp | Date;
+  isRecurring?: boolean;
+  recurrenceFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  recurrenceEndDate?: Timestamp | Date;
+}
 
 export const createRecurringExpenses = onSchedule('every 24 hours', async (context) => {
   const db = admin.firestore();

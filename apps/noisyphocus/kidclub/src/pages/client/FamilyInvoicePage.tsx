@@ -21,6 +21,7 @@ export default function FamilyInvoicePage() {
   }, [user]);
 
   const fetchFamilyInvoices = async () => {
+    if (!user) return;
     setIsLoading(true);
     try {
       const familiesQuery = query(

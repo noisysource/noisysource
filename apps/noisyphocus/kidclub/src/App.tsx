@@ -7,39 +7,42 @@ import LoginPage from '@shared/Login';
 import { auth, db } from './lib/firebase';
 import { Analytics } from './components/Analytics';
 
-// New Admin Layout and Pages
+// Admin pages
 import AdminLayout from './pages/admin/AdminLayout';
 import PartyAdminPage from './pages/admin/PartyAdminPage';
 import PartyConfigPage from './pages/admin/PartyConfigPage';
-import StudyRoomPage from './pages/admin/StudyRoomPage';
 import StudyPricingPage from './pages/admin/StudyPricingPage';
 import CalendarPage from './pages/admin/CalendarPage';
 import EmailCenterPage from './pages/admin/EmailCenterPage';
-import TransportationPage from './pages/admin/transport/TransportationPage';
 import TransportationConfigPage from './pages/admin/transport/TransportationConfigPage';
 import FeatureFlagsPage from './pages/admin/FeatureFlagsPage';
 import CampAdminPage from './pages/admin/CampAdminPage';
-import DashboardPage from './pages/admin/DashboardPage';
-import IncomesPage from './pages/admin/IncomesPage';
-import ExpensesPage from './pages/admin/ExpensesPage';
 import EditEmployeePage from './pages/admin/EditEmployeePage';
 import TimesheetsPage from './pages/admin/TimesheetsPage';
 import DataManagementPage from './pages/admin/DataManagementPage';
 import HRPage from './pages/admin/HRPage';
+import SubscriptionsAdminPage from './pages/admin/SubscriptionsAdminPage';
+import InvoicesAdminPage from './pages/admin/InvoicesAdminPage';
+import BillingAdminPage from './pages/admin/BillingAdminPage';
+import FamiliesAdminPage from './pages/admin/FamiliesAdminPage';
+import PaymentsPage from './pages/client/PaymentsPage';
 
+// Client pages
 import ClientLayout from './pages/client/ClientLayout';
 import FamilyDashboardPage from './pages/client/FamilyDashboardPage';
 import ChildManagementPage from './pages/client/ChildManagementPage';
 import ChildDetailPage from './pages/client/ChildDetailPage';
 import EventCalendarPage from './pages/client/EventCalendarPage';
 import FamilySchedulePage from './pages/client/FamilySchedulePage';
-import FamilyInvoicePage from './pages/client/FamilyInvoicePage';
 import StudySubscriptionDetailPage from './pages/client/StudySubscriptionDetailPage';
 import TransportSubscriptionDetailPage from './pages/client/TransportSubscriptionDetailPage';
 import ClientSchedulePage from './pages/client/ClientSchedulePage';
+import MySubscriptionsPage from './pages/client/MySubscriptionsPage';
+import AccountPage from './pages/client/AccountPage';
 import InvoiceListPage from './pages/client/InvoiceListPage';
 import InvoiceDetailPage from './pages/client/InvoiceDetailPage';
-import PaymentHistoryPage from './pages/client/PaymentHistoryPage';
+import StudyRoomEnrollPage from './pages/client/enrollment/StudyRoomEnrollPage';
+import TransportEnrollPage from './pages/client/enrollment/TransportEnrollPage';
 
 export default function App() {
   return (
@@ -49,7 +52,7 @@ export default function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage auth={auth} db={db} />} />
 
-        {/* New Admin Route Structure */}
+        {/* Admin */}
         <Route
           path="/admin"
           element={
@@ -58,29 +61,32 @@ export default function App() {
             </ProtectRoute>
           }
         >
-          <Route index element={<Navigate to="/admin/parties" replace />} />
+          <Route index element={<Navigate to="/admin/subscriptions" replace />} />
+          <Route path="subscriptions" element={<SubscriptionsAdminPage />} />
           <Route path="parties" element={<PartyAdminPage />} />
           <Route path="party-config" element={<PartyConfigPage />} />
-          <Route path="study-room" element={<StudyRoomPage />} />
           <Route path="study-pricing" element={<StudyPricingPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="email-center" element={<EmailCenterPage />} />
-          <Route path="transport" element={<TransportationPage />} />
           <Route path="transport-config" element={<TransportationConfigPage />} />
           <Route path="feature-flags" element={<FeatureFlagsPage />} />
           <Route path="camp" element={<CampAdminPage />} />
-          
-          {/* Owner-only routes */}
-          <Route path="dashboard" element={<ProtectRoute requiredRole={Role.Owner}><DashboardPage /></ProtectRoute>} />
-          <Route path="incomes" element={<ProtectRoute requiredRole={Role.Owner}><IncomesPage /></ProtectRoute>} />
-          <Route path="expenses" element={<ProtectRoute requiredRole={Role.Owner}><ExpensesPage /></ProtectRoute>} />
+          <Route path="invoices" element={<InvoicesAdminPage />} />
+          <Route path="billing" element={<BillingAdminPage />} />
+          <Route path="families" element={<FamiliesAdminPage />} />
+          {/* Legacy redirects */}
+          <Route path="study-room" element={<Navigate to="/admin/subscriptions" replace />} />
+          <Route path="transport" element={<Navigate to="/admin/subscriptions" replace />} />
+          <Route path="enrollments" element={<Navigate to="/admin/subscriptions" replace />} />
+
+          {/* Owner-only */}
           <Route path="hr" element={<ProtectRoute requiredRole={Role.Owner}><HRPage /></ProtectRoute>} />
           <Route path="hr/edit/:employeeId" element={<ProtectRoute requiredRole={Role.Owner}><EditEmployeePage /></ProtectRoute>} />
           <Route path="timesheets" element={<ProtectRoute requiredRole={Role.Owner}><TimesheetsPage /></ProtectRoute>} />
-          <Route path="data-management" element={<ProtectRoute requiredRole={Role.Owner}><DataManagementPage /></ProtectRoute>} />
+          <Route path="data-management" element={<DataManagementPage />} />
         </Route>
 
-        {/* Client Area - Family-Centric */}
+        {/* Client portal */}
         <Route
           path="/client"
           element={
@@ -89,29 +95,35 @@ export default function App() {
             </ProtectRoute>
           }
         >
-          {/* New Family Dashboard */}
           <Route index element={<FamilyDashboardPage />} />
-          
-          {/* Family Management */}
-          <Route path="family/schedule" element={<FamilySchedulePage />} />
-          <Route path="family/invoices" element={<FamilyInvoicePage />} />
-          <Route path="family/payments" element={<PaymentHistoryPage />} />
-          
-          {/* Children Management */}
+
+          {/* Children */}
           <Route path="children" element={<ChildManagementPage />} />
           <Route path="children/:childId" element={<ChildDetailPage />} />
           <Route path="children/:childId/calendar" element={<EventCalendarPage />} />
-          
-          {/* Legacy/Individual Routes (for backwards compatibility during migration) */}
+
+          {/* Subscriptions */}
+          <Route path="subscriptions" element={<MySubscriptionsPage />} />
+          <Route path="enroll/study" element={<StudyRoomEnrollPage />} />
+          <Route path="enroll/transport" element={<TransportEnrollPage />} />
+
+          {/* Invoices & payments */}
+          <Route path="invoices" element={<InvoiceListPage />} />
+          <Route path="invoices/:id" element={<InvoiceDetailPage />} />
+          <Route path="payments" element={<PaymentsPage />} />
+
+          {/* Account */}
+          <Route path="account" element={<AccountPage />} />
+
+          {/* Legacy compat */}
+          <Route path="family/schedule" element={<FamilySchedulePage />} />
           <Route path="schedule" element={<ClientSchedulePage />} />
           <Route path="study/:id" element={<StudySubscriptionDetailPage />} />
           <Route path="transport/:id" element={<TransportSubscriptionDetailPage />} />
-          <Route path="invoices" element={<InvoiceListPage />} />
-          <Route path="invoices/:id" element={<InvoiceDetailPage />} />
         </Route>
 
         <Route path="/not-authorized" element={<NotAuthorizedPage />} />
-        <Route path="*" element={<div>Not found</div>} />
+        <Route path="*" element={<div className="p-8 text-center text-gray-500">Página não encontrada</div>} />
       </Routes>
     </BrowserRouter>
   );

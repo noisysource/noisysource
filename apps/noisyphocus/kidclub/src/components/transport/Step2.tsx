@@ -4,7 +4,9 @@ import { Card, Button, Input, Label } from './common';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 export const Step2 = ({ nextStep, prevStep }: { nextStep: () => void, prevStep: () => void }) => {
-  const { formData, handleChange } = useFormContext();
+  const { formData: rawFormData, handleChange } = useFormContext();
+  // Legacy form uses old field names not in TransportationSubscription
+  const formData = rawFormData as any;
   return (
     <Card>
       <h3 className="text-xl font-semibold mb-6 text-center">Informações de Contacto e do Aluno</h3>

@@ -3,7 +3,7 @@ import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { api } from "../lib/api";
-import { useOrgs } from "../hooks/OrgContext";
+import { useEntity } from "../hooks/EntityContext";
 import { CategoryForm } from "../components/forms/CategoryForm";
 
 type CategoryDoc = {
@@ -17,7 +17,7 @@ type CategoryDoc = {
 };
 
 export default function CategoriesPage() {
-  const { orgs, selectedOrgId } = useOrgs();
+  const { selectedEntity } = useEntity();
 
   const [rows, setRows] = useState<CategoryDoc[]>([]);
   const [q, setQ] = useState("");
@@ -29,7 +29,7 @@ export default function CategoriesPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
 
   async function load() {
-    if (!selectedOrgId) return;
+    if (!selectedEntity.id) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -54,7 +54,7 @@ export default function CategoriesPage() {
 
   useEffect(() => {
     void load();
-  }, [selectedOrgId]);
+  }, [selectedEntity.id]);
 
   const types = useMemo(() => {
     const s = new Set<string>();
@@ -91,10 +91,6 @@ export default function CategoriesPage() {
     filtered.every((r) => !!selected[r.id]) &&
     filtered.some(Boolean);
 
-  const anySelected = Object.values(selected).some(Boolean);
-  const selectedIds = Object.entries(selected)
-    .filter(([, v]) => !!v)
-    .map(([k]) => k);
 
   const toggleAllFiltered = (on: boolean) => {
     const map: Record<string, boolean> = {};
@@ -127,25 +123,6 @@ export default function CategoriesPage() {
     }
   }
 
-  async function deleteSelected() {
-    if (!selectedIds.length) return;
-    if (
-      !confirm(`Delete ${selectedIds.length} selected category(ies)? This cannot be undone.`)
-    )
-      return;
-    setBusy(true);
-    setMsg(null);
-    try {
-      await Promise.all(selectedIds.map((id) => api.categories.delete(id)));
-      await load();
-      setSelected({});
-      setMsg("Deleted selected ✔");
-    } catch (e: any) {
-      setMsg(e?.message ?? "Bulk delete failed");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-6">
@@ -210,11 +187,11 @@ export default function CategoriesPage() {
                   <td className="px-3 py-2">{x.name || x.code || x.id}</td>
                   <td className="px-3 py-2">{x.code || "—"}</td>
                   <td className="px-3 py-2">{x.type || "—"}</td>
-                  <td className="px-3 py-2">{byId.get(x.parentId)?.name || x.parentId || "—"}</td>
+                  <td className="px-3 py-2">{x.parentId ? (byId.get(x.parentId)?.name || x.parentId) : "—"}</td>
                   <td className="px-3 py-2">{x.systemRole || "—"}</td>
                   <td className="px-3 py-2 space-x-2">
-                    <Button variant="outline" size="sm" onClick={() => startEdit(x.id as string)} disabled={busy}>Edit</Button>
-                    <Button variant="destructive" size="sm" onClick={() => deleteOne(x.id as string)} disabled={busy}>Delete</Button>
+                    <Button variant="outline" size="sm" onClick={() => startEdit(x.id)} disabled={busy}>Edit</Button>
+                    <Button variant="destructive" size="sm" onClick={() => deleteOne(x.id)} disabled={busy}>Delete</Button>
                   </td>
                 </tr>
               ))}
@@ -233,7 +210,7 @@ export default function CategoriesPage() {
       {isFormOpen && (
         <div className="xl:sticky xl:top-4 h-fit space-y-3">
           <CategoryForm
-            initial={editing}
+            initial={editing as any}
             onSaved={() => { setEditingId(null); setIsFormOpen(false); load(); }}
             onCancel={() => { setEditingId(null); setIsFormOpen(false); }}
           />

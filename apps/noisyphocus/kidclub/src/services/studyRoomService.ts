@@ -1,40 +1,39 @@
-import { getDocs, collection, doc, getDoc, setDoc, updateDoc, arrayUnion, Timestamp } from 'firebase/firestore';
+import { getDocs, collection, doc, getDoc, setDoc, updateDoc, arrayUnion, Timestamp, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db } from '../lib/firebase';
-import { StudyRoomEntry, StudyCenterConfig, EntryChangeHistory } from '@shared/models';
+import { StudyRoomEntry, StudyCenterConfig, EntryChangeHistory, StudyStatus, normalizeStatus } from '@shared/models';
 import { safeDate } from '@shared/lib/dates';
-
-type Status = "pending" | "confirmed" | "canceled" | "archived";
 
 export const studyRoomService = {
   async getStudyRoomEntries(): Promise<StudyRoomEntry[]> {
     const entriesSnap = await getDocs(collection(db, "studyroom"));
     const list: StudyRoomEntry[] = entriesSnap.docs.map((d) => {
       const x: any = d.data();
-      const s: Status = (x.status as Status) ?? (x.canceled ? "canceled" : "pending");
+      const s: StudyStatus = normalizeStatus(x);
 
       return {
         id: d.id,
-        studentName: String(x.studentName ?? ""),
-        guardianName: String(x.guardianName ?? ""),
-        email: String(x.email ?? ""),
-        phone: String(x.phone ?? ""),
+        familyId: String(x.familyId ?? ""),
+        childId: String(x.childId ?? ""),
+        // Support both old (studentName) and new (childName) field names
+        childName: String(x.childName ?? x.studentName ?? ""),
+        childAge: x.childAge ? Number(x.childAge) : undefined,
         schoolYear: String(x.schoolYear ?? ""),
         schoolName: String(x.schoolName ?? ""),
         days: x.days || [],
         note: x.note ? String(x.note) : undefined,
-        basePrice: Number(x.basePrice ?? 0),
-        registration: Number(x.registration ?? 0),
-        insurance: Number(x.insurance ?? 0),
-        total: Number(x.total ?? 0),
-        transportFee: Number(x.transportFee ?? 0),
-        createdAt: safeDate(x.createdAt),
+        monthlyPrice: Number(x.monthlyPrice ?? x.total ?? x.basePrice ?? 0),
+        basePrice: x.basePrice !== undefined ? Number(x.basePrice) : undefined,
+        transportFee: x.transportFee !== undefined ? Number(x.transportFee) : undefined,
+        total: x.total !== undefined ? Number(x.total) : undefined,
         startDate: safeDate(x.startDate),
         endDate: safeDate(x.endDate),
-        canceled: Boolean(x.canceled),
+        createdAt: safeDate(x.createdAt),
+        updatedAt: safeDate(x.updatedAt ?? x.createdAt),
         needsTransport: Boolean(x.needsTransport),
         status: s,
         statusReason: x.statusReason ? String(x.statusReason) : undefined,
+        history: x.history || [],
         uploadedFiles: x.uploadedFiles || [],
         statusHistory: x.statusHistory || [],
         entryHistory: x.entryHistory || [],
@@ -55,7 +54,7 @@ export const studyRoomService = {
     await setDoc(configDocRef, config);
   },
 
-  async updateStudyRoomEntryStatus(id: string, status: Status, reason?: string): Promise<void> {
+  async updateStudyRoomEntryStatus(id: string, status: StudyStatus, reason?: string): Promise<void> {
     const newHistoryEntry = {
       status: status,
       reason: reason,
@@ -81,6 +80,10 @@ export const studyRoomService = {
         entryHistory: arrayUnion(...changes),
       });
     }
+  },
+
+  async createEntry(entry: Omit<StudyRoomEntry, 'id'>): Promise<void> {
+    await addDoc(collection(db, 'studyroom'), entry);
   },
 
   async uploadFile(entryId: string, file: File): Promise<any> {

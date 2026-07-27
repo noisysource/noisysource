@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Person } from "@shared/models/Entities"; // or your Person type
+import type { Person } from "@shared/models/Entities";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";

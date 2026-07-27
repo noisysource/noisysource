@@ -210,7 +210,7 @@ export default function ClientSchedulePage() {
         if (dayKey && weeklySchedule[dayKey]) {
           weeklySchedule[dayKey].push({
             type: 'study',
-            title: `${sub.studentName} - Study Room`,
+            title: `${sub.childName} - Study Room`,
             time: day.hour,
             link: `/client/study/${sub.id}`,
           });
@@ -229,7 +229,7 @@ export default function ClientSchedulePage() {
           if (dayKey && weeklySchedule[dayKey]) {
             weeklySchedule[dayKey].push({
               type: 'transport',
-              title: `${sub.studentName} - Transport`,
+              title: `${sub.childName} - Transport`,
               time: item.pickupTime || 'N/A',
               link: `/client/transport/${sub.id}`,
             });
@@ -492,7 +492,7 @@ export default function ClientSchedulePage() {
                     >
                       <div className="flex justify-between items-start">
                         <div>
-                          <p className="font-medium">{sub.studentName}</p>
+                          <p className="font-medium">{sub.childName}</p>
                           <p className="text-sm text-gray-600">
                             {sub.days?.length || 0} day(s) per week · €{sub.monthlyPrice.toFixed(2)}/month
                           </p>
@@ -531,7 +531,7 @@ export default function ClientSchedulePage() {
                       >
                         <div className="flex justify-between items-start">
                           <div className="flex-1">
-                            <p className="font-medium">{sub.studentName}</p>
+                            <p className="font-medium">{sub.childName}</p>
                             <p className="text-sm text-gray-600">
                               {scheduleCount > 0 ? `${scheduleCount} trip(s) per week` : 'No schedule set'} · €{sub.monthlyFee.toFixed(2)}/month
                             </p>

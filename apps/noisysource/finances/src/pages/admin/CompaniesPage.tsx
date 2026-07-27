@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Company } from "@shared/models/Entities"; // or your Company type
+import type { Company } from "@shared/models/Entities";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";

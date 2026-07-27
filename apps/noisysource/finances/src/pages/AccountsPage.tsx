@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import type { Account } from "@shared/models/Account";
 import { formatEUR } from "@shared/lib/money";
 import { Card } from "../components/ui/card";
@@ -6,13 +7,13 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { api } from "../lib/api";
 import { AccountForm } from "../components/forms/AccountsForm";
-import { useOrgs } from "../hooks/OrgContext";
+import { useEntity } from "../hooks/EntityContext";
 
 type Company = { id: string; name: string };
 type Person  = { id: string; name: string };
 
 export default function AccountsPage() {
-  const { selectedOrgId } = useOrgs();
+  const { selectedEntity } = useEntity();
 
   // data
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -31,10 +32,10 @@ export default function AccountsPage() {
 
   // load
   async function reload() {
-    if (!selectedOrgId) return;
+    if (!selectedEntity.id) return;
     setBusy(true); setMsg(null);
     try {
-      // API calls are now automatically scoped to the selectedOrgId via the api object
+      // API calls are now automatically scoped to the selectedEntity.id via the api object
       const [as, cs, ps] = await Promise.all([
         api.accounts.list(),
         api.companies.list(),
@@ -49,7 +50,7 @@ export default function AccountsPage() {
       setBusy(false);
     }
   }
-  useEffect(() => { void reload(); }, [selectedOrgId]);
+  useEffect(() => { void reload(); }, [selectedEntity.id]);
 
   // helpers
   const ownerName = (ot?: string, oid?: string) =>
@@ -142,6 +143,8 @@ export default function AccountsPage() {
     [accounts, editingId]
   );
 
+  const noOwners = !busy && companies.length === 0 && people.length === 0;
+
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
       {/* LEFT: list */}
@@ -164,6 +167,19 @@ export default function AccountsPage() {
         </div>
 
         {msg && <div className="text-sm text-emerald-400">{msg}</div>}
+
+        {noOwners && (
+          <Card className="p-6 text-center space-y-2">
+            <div className="text-zinc-400 text-sm">No people or companies found in this entity.</div>
+            <div className="text-zinc-500 text-xs">
+              Accounts need an owner. Go to{" "}
+              <Link to="/setup/people" className="text-blue-400 underline">Setup → People</Link>
+              {" "}or{" "}
+              <Link to="/setup/companies" className="text-blue-400 underline">Setup → Companies</Link>
+              {" "}to create them first.
+            </div>
+          </Card>
+        )}
 
         <Card className="overflow-x-auto">
           <table className="min-w-full text-sm text-left">
@@ -201,7 +217,11 @@ export default function AccountsPage() {
                     </td>
                     <td className="px-3 py-2">{code || "—"}</td>
                     <td className="px-3 py-2">{a.name}</td>
-                    <td className="px-3 py-2 capitalize">{a.type}</td>
+                    <td className="px-3 py-2 capitalize">
+                      {a.type === "voucher"
+                        ? `voucher · ${(a as any).voucherType ?? ""}`
+                        : a.type}
+                    </td>
                     <td className="px-3 py-2">{ownerName((a as any).ownerType, (a as any).ownerId)}</td>
                     <td className="px-3 py-2">{a.currency || "EUR"}</td>
                     <td className="px-3 py-2">{bal != null ? formatEUR(bal) : "—"}</td>

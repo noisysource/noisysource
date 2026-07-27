@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { Timestamp } from 'firebase/firestore';
 
 export const ExpenseSchema = z.object({
   id: z.string().optional(),

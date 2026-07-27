@@ -28,7 +28,7 @@ export default function PartyConfigAdmin() {
       ...config,
       partyTypes: partyTypes.map(({ id, isEditing, ...pt }) => pt),
       extras: extras.map(({ id, isEditing, ...ex }) => ex),
-    };
+    } as PartyConfig;
     await partyService.savePartyConfig(newConfig);
     setConfig(newConfig);
     alert('Configurações guardadas com sucesso ✅');

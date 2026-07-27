@@ -1,7 +1,5 @@
 import * as admin from 'firebase-admin';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { Role } from '@shared/models/Roles';
-
 if (!admin.apps.length) {
   admin.initializeApp();
 }
@@ -11,7 +9,7 @@ export const impersonateUser = onCall(async (request) => {
     throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
   }
 
-  const isAdmin = request.auth.token.roles?.includes(Role.RainbowAdmin) || request.auth.token.roles?.includes(Role.Owner);
+  const isAdmin = request.auth.token.roles?.includes('rainbowAdmin') || request.auth.token.roles?.includes('owner');
 
   if (!isAdmin) {
     throw new HttpsError('permission-denied', 'Only admins can impersonate users.');

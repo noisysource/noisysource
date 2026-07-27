@@ -32,7 +32,9 @@ export function AccountsTable({
         return [a.bankName, (a as any).iban, (a as any).bic].filter(Boolean).join(" · ");
       case "credit":
         return [(a as any).issuer, (a as any).last4 ? `•••• ${(a as any).last4}` : ""].filter(Boolean).join(" · ");
-      case "virtual":
+      case "voucher":
+        return [(a as any).voucherType, (a as any).issuingEmployer].filter(Boolean).join(" · ");
+      case "bonds":
         return (a as any).provider || "";
       default:
         return "";

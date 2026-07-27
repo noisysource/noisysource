@@ -1,6 +1,7 @@
 import { doc, getDoc, collection, getDocs, query, where, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { TransportationConfig, TransportationSubscription } from '@shared/models/Transportation';
+import { StudyRoomEntry } from '@shared/models';
 
 const CONFIG_ID = 'transportation';
 
@@ -22,4 +23,16 @@ export const getActiveTransportationSubscriptions = async (): Promise<Transporta
   const q = query(collection(db, 'transportationSubscriptions'), where('status', '==', 'active'));
   const snapshot = await getDocs(q);
   return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TransportationSubscription));
+};
+
+export const getTransportBooking = async (
+  bookingId: string,
+  type: 'study' | 'subscription'
+): Promise<StudyRoomEntry | TransportationSubscription | null> => {
+  const collectionName = type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+  const docSnap = await getDoc(doc(db, collectionName, bookingId));
+  if (docSnap.exists()) {
+    return { id: docSnap.id, ...docSnap.data() } as StudyRoomEntry | TransportationSubscription;
+  }
+  return null;
 };

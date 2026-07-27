@@ -44,6 +44,8 @@ export default function BookingPanel() {
                 partyConfig={partyConfig}
                 initialData={{
                   id: '',
+                  familyId: '',
+                  childId: '',
                   parentName: '',
                   childName: '',
                   childAge: 0,

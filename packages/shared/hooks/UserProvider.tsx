@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, Timestamp, Firestore } from 'firebase/firestore';
+import { doc, getDoc, Timestamp, type Firestore } from 'firebase/firestore';
 import type { Auth } from 'firebase/auth';
 import type { AppUser } from '@shared/models';
 import { UserContext } from './UserContext';

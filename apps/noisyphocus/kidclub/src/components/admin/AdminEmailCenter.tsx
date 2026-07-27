@@ -54,10 +54,10 @@ Obrigado!`
     return entries
       .map((e) => ({
         id: e.id,
-        email: e.email,
-        studentName: e.studentName,
-        guardianName: e.guardianName,
-        status: (e as any).status || "",
+        email: (e as any).email || "",
+        studentName: e.childName,
+        guardianName: (e as any).guardianName || "",
+        status: e.status || "",
         schoolName: e.schoolName,
       }))
       .filter((r) => r.email && r.email.includes("@"));

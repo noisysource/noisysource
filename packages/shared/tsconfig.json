@@ -8,7 +8,6 @@
     "rootDir": ".",
     "module": "CommonJS",
     "target": "ES2020",
-    "moduleResolution": "Node",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true

@@ -78,7 +78,7 @@ export function makeBackupDomain(getOrgId: () => string) {
         for (const [id, raw] of group) {
           const payload = revive ? deepReviveDates(raw) : raw;
           const pathSegments = path.replace(/^root\//, '').split('/');
-          const docRef = doc(db, ...pathSegments, id);
+          const docRef = doc(db, pathSegments[0], ...pathSegments.slice(1), id);
           batch.set(docRef, payload, { merge });
           written++;
         }

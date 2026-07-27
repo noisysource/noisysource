@@ -1,5 +1,5 @@
 // @shared/lib/payroll.ts
-import { BenefitConfig, EmploymentContractDoc } from "../models/Employment";
+import type { BenefitConfig, EmploymentContractDoc } from "../models/Employment";
 
 /** Public shape returned to UIs */
 export type PayrollBenefit = {
@@ -121,9 +121,6 @@ export function computeMonthlyPayroll(
     (s, b) => s + (b.subjectToSS ? b.totalCents : 0),
     0
   );
-
-  console.log('here');
-
 
   const irsBase = gross + taxableFromBenefitsIRS;
   const ssBase = gross + taxableFromBenefitsSS;

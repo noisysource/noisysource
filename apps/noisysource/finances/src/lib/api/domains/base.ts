@@ -54,11 +54,50 @@ export interface OrgCrudOptions<TSave, TModel> {
   sort?: (a: TModel, b: TModel) => number;
 }
 
-export function orgCol(orgId: string, path: string) {
-  return collection(db, "orgs", orgId, path);
+export function orgCol(entityId: string, path: string) {
+  return collection(db, "finances_entities", entityId, path);
 }
-export function orgDoc(orgId: string, path: string, id: string) {
-  return doc(db, "orgs", orgId, path, id);
+export function orgDoc(entityId: string, path: string, id: string) {
+  return doc(db, "finances_entities", entityId, path, id);
+}
+
+export function makeGlobalCRUD<TSave extends { id?: string }, TModel>(
+  collectionPath: string,
+  opts: Omit<OrgCrudOptions<TSave, TModel>, "collectionPath">
+) {
+  const to = opts.to ?? ((x: TSave) => x);
+  const col = () => collection(db, collectionPath);
+  const docRef = (id: string) => doc(db, collectionPath, id);
+
+  async function list(constraints?: QueryConstraint[]): Promise<TModel[]> {
+    const q = constraints?.length ? fq(col(), ...constraints) : col();
+    const snap = await getDocs(q as any);
+    const rows = snap.docs.map(d => opts.from(d.data(), d.id));
+    return opts.sort ? rows.sort(opts.sort) : rows;
+  }
+
+  async function get(id: string): Promise<TModel | undefined> {
+    const d = await getDoc(docRef(id));
+    if (!d.exists()) return undefined;
+    return opts.from(d.data(), d.id);
+  }
+
+  async function save(input: TSave): Promise<string> {
+    const mapped = to({ ...(input as any), id: undefined });
+    const payload = stripUndefinedDeep(nullsToUndefinedDeep(mapped));
+    if (input.id) {
+      await updateDoc(docRef(input.id), payload);
+      return input.id;
+    }
+    const ref = await addDoc(col(), { createdAt: serverTimestamp(), ...payload });
+    return ref.id;
+  }
+
+  async function remove(id: string): Promise<void> {
+    await deleteDoc(docRef(id));
+  }
+
+  return { list, get, save, delete: remove };
 }
 
 /**

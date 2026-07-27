@@ -1,4 +1,4 @@
-import { getDocs, collection, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { getDocs, collection, doc, getDoc, setDoc, updateDoc, addDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Booking, PartyConfig } from '@shared/models';
 import { safeDate } from '@shared/lib/dates';
@@ -14,6 +14,8 @@ export const partyService = {
 
       return {
         id: d.id,
+        familyId: String(x.familyId ?? ""),
+        childId: String(x.childId ?? ""),
         parentName: String(x.parentName ?? ""),
         email: String(x.email ?? ""),
         phone: String(x.phone ?? ""),
@@ -23,7 +25,6 @@ export const partyService = {
         date: String(x.date ?? ""),
         time: String(x.time ?? ""),
         numKids: Number(x.numKids ?? 0),
-        theme: String(x.theme ?? ""),
         extras: x.extras || [],
         extrasDetail: x.extrasDetail || {},
         total: Number(x.total ?? 0),
@@ -58,5 +59,9 @@ export const partyService = {
 
   async updateBooking(booking: Booking): Promise<void> {
     await updateDoc(doc(db, "bookings", booking.id), { ...booking });
+  },
+
+  async createBooking(booking: Omit<Booking, 'id'>): Promise<void> {
+    await addDoc(collection(db, 'bookings'), booking);
   },
 };

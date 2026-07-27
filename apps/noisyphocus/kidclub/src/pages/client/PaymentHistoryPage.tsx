@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, orderBy, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
 import { Payment, Invoice } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -20,7 +20,6 @@ export default function PaymentHistoryPage() {
         const paymentsQuery = query(
           collection(db, 'payments'),
           where('userId', '==', user.uid),
-          orderBy('paymentDate', 'desc')
         );
         const paymentsSnap = await getDocs(paymentsQuery);
         
@@ -67,6 +66,7 @@ export default function PaymentHistoryPage() {
           })
         );
         
+        paymentsWithInvoices.sort((a, b) => b.paymentDate.getTime() - a.paymentDate.getTime());
         setPayments(paymentsWithInvoices);
         setIsLoading(false);
       };

@@ -31,7 +31,7 @@ const ExpenseCard = ({ expense, onEdit, onDelete }: ExpenseCardProps) => {
           Editar
         </button>
         <button
-          onClick={() => onDelete(expense.id)}
+          onClick={() => onDelete(expense.id ?? '')}
           className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600 text-sm"
         >
           Eliminar

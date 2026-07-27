@@ -14,8 +14,23 @@ const WEEKDAYS = [
   { label: "Sexta", value: "friday" },
 ];
 
-export const Step3 = ({ nextStep, prevStep, mainPickup, setMainPickup, mainDropoff, setMainDropoff, tripDays, setTripDays, tripTime, setTripTime, handleAddTrips, removeScheduleItem }) => {
-  const { requestType, formData, handleLocationChange, schedule, handleChange } = useFormContext();
+interface Step3Props {
+  nextStep: () => void;
+  prevStep: () => void;
+  mainPickup: Location | null;
+  setMainPickup: (loc: Location) => void;
+  mainDropoff: Location | null;
+  setMainDropoff: (loc: Location) => void;
+  tripDays: string[];
+  setTripDays: React.Dispatch<React.SetStateAction<string[]>>;
+  tripTime: string;
+  setTripTime: React.Dispatch<React.SetStateAction<string>>;
+  handleAddTrips: () => void;
+  removeScheduleItem: (id: string) => void;
+}
+
+export const Step3 = ({ nextStep, prevStep, mainPickup, setMainPickup, mainDropoff, setMainDropoff, tripDays, setTripDays, tripTime, setTripTime, handleAddTrips, removeScheduleItem }: Step3Props) => {
+  const { formData, schedule, handleChange } = useFormContext();
   const autocompleteRefs = React.useRef<{[key: string]: google.maps.places.Autocomplete}>({});
   
   const onPlaceChanged = (locationSetter: (loc: Location) => void, autocompleteKey: string) => {
@@ -48,34 +63,6 @@ export const Step3 = ({ nextStep, prevStep, mainPickup, setMainPickup, mainDropo
   return (
     <Card>
       <h3 className="text-xl font-semibold mb-6 text-center">Detalhes da Viagem</h3>
-      {requestType === 'one-time' ? (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-                <Label>Local de Partida</Label>
-                <Autocomplete
-                    onLoad={(ac) => autocompleteRefs.current['onetime_pickup'] = ac}
-                    onPlaceChanged={() => onPlaceChanged((loc) => handleLocationChange('pickupLocation', loc), 'onetime_pickup')}
-                >
-                    <Input type="text" name="pickupLocation" required />
-                </Autocomplete>
-            </div>
-            <div>
-                <Label>Local de Destino</Label>
-                <Autocomplete
-                    onLoad={(ac) => autocompleteRefs.current['onetime_dropoff'] = ac}
-                    onPlaceChanged={() => onPlaceChanged((loc) => handleLocationChange('dropoffLocation', loc), 'onetime_dropoff')}
-                >
-                    <Input type="text" name="dropoffLocation" required />
-                </Autocomplete>
-            </div>
-            <div><Label>Data</Label><Input type="date" name="requestDate" value={formData.requestDate || ''} onChange={handleChange} required /></div>
-            <div><Label>Hora</Label><Input type="time" name="requestTime" value={formData.requestTime || ''} onChange={handleChange} required /></div>
-          </div>
-          <div><Label>Número de Passageiros</Label><Input type="number" name="numberOfPassengers" value={formData.numberOfPassengers || 1} onChange={handleChange} min="1" /></div>
-          <div><Label>Notas Especiais (opcional)</Label><textarea name="specialNotes" value={formData.specialNotes || ''} onChange={handleChange} rows={3} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"></textarea></div>
-        </div>
-      ) : (
         <div className="space-y-6">
           <div>
             <Label>Data de Início da Subscrição</Label>
@@ -131,7 +118,7 @@ export const Step3 = ({ nextStep, prevStep, mainPickup, setMainPickup, mainDropo
                             <ul className="mt-1 space-y-1 list-disc list-inside pl-2">
                                 {groupedSchedule[day].map(trip => (
                                     <li key={trip.id} className="text-sm text-gray-800 flex items-center justify-between">
-                                        <span>{trip.pickupTime} de <strong>{trip.pickupLocation?.address}</strong> para <strong>{trip.dropoffLocation?.address}</strong></span>
+                                        <span>{trip.pickupTime} de <strong>{trip.pickupLocation}</strong> para <strong>{trip.dropoffLocation}</strong></span>
                                         <Button onClick={() => removeScheduleItem(trip.id!)} variant='ghost'><X size={16} className="text-red-500"/></Button>
                                     </li>
                                 ))}
@@ -142,7 +129,6 @@ export const Step3 = ({ nextStep, prevStep, mainPickup, setMainPickup, mainDropo
             )}
           </div>
         </div>
-      )}
       <div className="flex justify-between mt-8">
         <Button onClick={() => { trackClick('step3_prev_click'); prevStep(); }} variant="secondary"><ChevronLeft size={18} /> Anterior</Button>
         <Button onClick={() => { trackClick('step3_next_click'); nextStep(); }}>Próximo <ChevronRight size={18} /></Button>

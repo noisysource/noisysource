@@ -7,11 +7,10 @@
     "strict": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
-    "moduleResolution": "Node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["apps/noisyphocus/*/src", "apps/noisysource/*/src"],
       "@shared/*": ["packages/shared/*"]

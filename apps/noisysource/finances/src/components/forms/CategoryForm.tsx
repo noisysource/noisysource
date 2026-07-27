@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { api } from "../../lib/api";
-import { CategoryDoc, CATEGORY_SYSTEM_ROLE_OPTIONS, CategoryType } from "@shared/models/Category";
+import type { CategoryDoc, CategoryType } from "@shared/models/Category";
+import { CATEGORY_SYSTEM_ROLE_OPTIONS } from "@shared/models/Category";
 
 type Props = {
   initial?: CategoryDoc | null;

@@ -2,30 +2,33 @@ import { makeCompaniesDomain, type Company } from "./domains/companies";
 import { makePeopleDomain, type Person } from "./domains/people";
 import { makeAccountsDomain } from "./domains/accounts";
 import { makeContractsDomain } from "./domains/contracts";
-import { makePlannedDomain } from "./domains/planned";
 import { makeCategoriesDomain } from "./domains/categories";
-import { makeTemplatesDomain } from "./domains/templates";
-import { makeFunctionsDomain } from "./domains/functions";
 import { makeBackupDomain } from "./domains/backups";
-
+import { makeEcContractsDomain } from "./domains/ecContracts";
+import { makePayrollRunsDomain } from "./domains/payrollRuns";
+import { makeRecurringDomain } from "./domains/recurring";
+import { makeForecastEventsDomain } from "./domains/forecastEvents";
+import { makeIRSConfigDomain } from "./domains/irsConfig";
 
 export const api = (() => {
-  let _orgId = "personal";
-  const getOrgId = () => _orgId;
+  let _entityId = "private";
+  const getEntityId = () => _entityId;
 
   return {
-    get orgId() { return _orgId; },
-    setOrg(orgId: string) { _orgId = orgId; },
+    get entityId() { return _entityId; },
+    setEntity(entityId: string) { _entityId = entityId; },
 
-    companies: makeCompaniesDomain(getOrgId),
-    people: makePeopleDomain(getOrgId),
-    accounts: makeAccountsDomain(getOrgId),
-    contracts: makeContractsDomain(getOrgId),
-    planned: makePlannedDomain(getOrgId),
-    categories: makeCategoriesDomain(getOrgId),
-    templates: makeTemplatesDomain(getOrgId),
-    functions: makeFunctionsDomain(getOrgId),
-    backup: makeBackupDomain(getOrgId),
+    companies: makeCompaniesDomain(),
+    people: makePeopleDomain(),
+    accounts: makeAccountsDomain(getEntityId),
+    contracts: makeContractsDomain(getEntityId),
+    categories: makeCategoriesDomain(getEntityId),
+    backup: makeBackupDomain(getEntityId),
+    ecContracts: makeEcContractsDomain(getEntityId),
+    payrollRuns: makePayrollRunsDomain(getEntityId),
+    recurring: makeRecurringDomain(getEntityId),
+    forecastEvents: makeForecastEventsDomain(getEntityId),
+    irsConfig: makeIRSConfigDomain(getEntityId),
   };
 })();
 

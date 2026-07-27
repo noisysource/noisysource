@@ -51,10 +51,10 @@ export function makeOrgPaths(db: Firestore, orgId?: string): OrgPaths {
     settingsDoc: () => d("settings", "globals"),
     docAccount: (id) => d("accounts", id),
     docCompany: (id) => d("companies", id),
-    docPerson: (id) => d("people"),
-    docTemplate: (id) => d("templates"),
-    docPlannedInstance: (id) => d("plannedInstances"),
-    docLedger: (id) => d("ledgerTransactions"),
+    docPerson: (id: string) => d("people", id),
+    docTemplate: (id: string) => d("templates", id),
+    docPlannedInstance: (id: string) => d("plannedInstances", id),
+    docLedger: (id: string) => d("ledgerTransactions", id),
     docCategory: (id) => d("categories", id),
   };
 }

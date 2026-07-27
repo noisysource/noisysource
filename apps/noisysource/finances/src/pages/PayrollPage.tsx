@@ -1,4 +1,3 @@
-// apps/finhub/src/pages/PayrollPage.tsx
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -13,8 +12,8 @@ import {
   buildPayrollPreview,
   type PayrollRow as PreviewRow,
 } from "@shared/lib/payroll";
-import { stripUndefined } from "../lib/api/crud";
 import { where } from "firebase/firestore";
+import { useEntity } from "../hooks/EntityContext";
 
 type Company = { id: string; name: string };
 
@@ -40,8 +39,8 @@ function Money({
   );
 }
 
-// Load companies, people names, and all accounts once
-function usePayrollBase() {
+// Load companies, people names, and all accounts once; reload on entity change
+function usePayrollBase(entityId: string) {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [peopleById, setPeopleById] = useState<Record<string, string>>({});
   const [accountsById, setAccountsById] = useState<Record<string, Account>>({});
@@ -65,13 +64,14 @@ function usePayrollBase() {
       (as || []).forEach((a: Account) => (accMap[a.id] = a));
       setAccountsById(accMap);
     })();
-  }, []);
+  }, [entityId]);
 
   return { companies, peopleById, accountsById };
 }
 
 export default function PayrollPage() {
-  const { companies, peopleById, accountsById } = usePayrollBase();
+  const { selectedEntity } = useEntity();
+  const { companies, peopleById, accountsById } = usePayrollBase(selectedEntity.id);
 
   const [companyId, setCompanyId] = useState<string>("");
   const [month, setMonth] = useState<string>(() => {
@@ -141,136 +141,41 @@ export default function PayrollPage() {
       return next;
     });
 
-  // Create draft planned instances from the preview (net salary + benefits)
-  const toOptId = (v: string | null | undefined): string | undefined => v ?? undefined;
-
-  async function createPlannedFromPreview() {
+  async function confirmPayroll() {
     if (!rows.length || !companyId) {
       setMsg("Load payroll for a company first.");
       return;
     }
+    if (!confirm(`Confirm ${rows.length} payroll row(s) for ${month}? This saves them as payroll run records.`)) return;
+
     setBusy(true);
     setMsg(null);
     try {
-      // 1. Fetch all payroll-related categories for the company
-      const categories = await api.categories.list([
-        where("ownerId", "==", companyId),
-        where("systemRole", ">=", "PAYROLL_"),
-        where("systemRole", "<=", "PAYROLL_~~"),
-      ]);
-
-      const rolesToCids: Record<string, string> = {};
-      for (const cat of categories) {
-        if (cat.systemRole) rolesToCids[cat.systemRole] = cat.id;
-      }
-
-      // 2. Define a helper to create events
-      let created = 0;
-      const createEvent = async (payload: object) => {
-        await api.planned.create(stripUndefined(payload));
-        created++;
-      };
-
-      // 3. Create all events for each payroll row
-      for (const r of rows) {
-        const payDate = new Date(r.payDateISO);
-        const personName = peopleById[r.personId] || r.personId;
-        const baseMeta = {
-          contractId: r.contractId,
-          personId: r.personId,
-          companyId: r.companyId,
-          month: r.monthLabel,
-        };
-
-        // --- Net Salary (Transfer) ---
-        const netFlow = r.flows.find((f) => f.label === "Net salary");
-        if (r.netCents > 0) {
-          await createEvent({
-            label: `Net salary — ${personName} (${r.monthLabel})`,
-            kind: "transfer",
-            currency: "EUR",
-            date: payDate,
-            status: "draft",
-            amountCents: r.netCents,
-            fromAccountId: sourceAccountId || undefined,
-            toAccountId: toOptId(netFlow?.toAccountId),
-            categoryId: rolesToCids["PAYROLL_NET_PAYABLE"],
-            meta: { ...baseMeta, type: "net-salary" },
-          });
-        }
-
-        // --- IRS (Expense) ---
-        if (r.irsCents > 0) {
-          await createEvent({
-            label: `IRS withholding — ${personName} (${r.monthLabel})`,
-            kind: "expense",
-            currency: "EUR",
-            date: payDate, // Note: due date is next month, but we tie it to pay date for now
-            status: "draft",
-            amountCents: r.irsCents,
-            fromAccountId: sourceAccountId || undefined,
-            categoryId: rolesToCids["PAYROLL_IRS_PAYABLE"],
-            meta: { ...baseMeta, type: "irs-payment" },
-          });
-        }
-
-        // --- Employee SS (Expense) ---
-        if (r.ssEmpCents > 0) {
-          await createEvent({
-            label: `SS (employee) — ${personName} (${r.monthLabel})`,
-            kind: "expense",
-            currency: "EUR",
-            date: payDate,
-            status: "draft",
-            amountCents: r.ssEmpCents,
-            fromAccountId: sourceAccountId || undefined,
-            categoryId: rolesToCids["PAYROLL_SS_EMPLOYEE_PAYABLE"],
-            meta: { ...baseMeta, type: "ss-employee-payment" },
-          });
-        }
-
-        // --- Employer SS (Expense) ---
-        if (r.ssErCents > 0) {
-          await createEvent({
-            label: `SS (employer) — ${personName} (${r.monthLabel})`,
-            kind: "expense",
-            currency: "EUR",
-            date: payDate,
-            status: "draft",
-            amountCents: r.ssErCents,
-            fromAccountId: sourceAccountId || undefined,
-            categoryId: rolesToCids["PAYROLL_SS_EMPLOYER_PAYABLE"],
-            meta: { ...baseMeta, type: "ss-employer-payment" },
-          });
-        }
-
-        // --- Benefits (Transfers) ---
-        for (const b of r.benefits) {
-          if (b.totalCents > 0) {
-            let catId = "";
-            if (b.type === "MEAL") catId = rolesToCids["PAYROLL_MEAL_ALLOWANCE_EXPENSE"];
-            if (b.type === "CHILDCARE") catId = rolesToCids["PAYROLL_CHILDCARE_EXPENSE"];
-
-            await createEvent({
-              label: `Benefit: ${b.type || "voucher"} — ${personName} (${r.monthLabel})`,
-              kind: "transfer",
-              currency: "EUR",
-              date: payDate,
-              status: "draft",
-              amountCents: b.totalCents,
-              fromAccountId: sourceAccountId || undefined,
-              toAccountId: toOptId(b.benefitAccountId),
-              categoryId: catId || undefined,
-              meta: { ...baseMeta, type: "benefit", benefitType: b.type },
-            });
-          }
-        }
-      }
-
-      setMsg(`Successfully created ${created} planned event(s).`);
+      const [yy, mm] = month.split("-").map(Number);
+      await Promise.all(
+        rows.map(r =>
+          api.payrollRuns.save({
+            contractId: r.contractId,
+            companyId: r.companyId,
+            personId: r.personId,
+            year: yy,
+            month: mm,
+            grossCents: r.grossCents,
+            irsCents: r.irsCents,
+            ssEmpCents: r.ssEmpCents,
+            ssErCents: r.ssErCents,
+            netCents: r.netCents,
+            benefitsCents: r.totals.benefitsCents,
+            costToEmployerCents: r.totals.costToEmployerCents,
+            cashOutCents: r.totals.cashOutCents,
+            confirmedAt: new Date(),
+            sourceAccountId: sourceAccountId || undefined,
+          })
+        )
+      );
+      setMsg(`Confirmed ${rows.length} payroll run(s) for ${month} ✔`);
     } catch (e: any) {
-      console.error(e);
-      setMsg(e?.message ?? "Failed to create planned items");
+      setMsg(e?.message ?? "Failed to confirm payroll");
     } finally {
       setBusy(false);
     }
@@ -332,8 +237,8 @@ export default function PayrollPage() {
         <Button onClick={loadPreview} disabled={busy}>
           Load payroll
         </Button>
-        <Button onClick={createPlannedFromPreview} disabled={busy || !rows.length} variant="secondary">
-          Create planned instances
+        <Button onClick={confirmPayroll} disabled={busy || !rows.length} variant="secondary">
+          Confirm payroll
         </Button>
       </div>
 

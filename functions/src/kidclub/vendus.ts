@@ -1,0 +1,124 @@
+const BASE_URL = "https://www.vendus.pt/ws/v1.1";
+
+// Stable Vendus product IDs for KidClub services
+export const PRODUCT_STUDY = 286916222;    // Serviço de apoio ao ensino (NOR 23%)
+export const PRODUCT_TRANSPORT = 286916284; // Serviço Transporte (RED 6%)
+
+function apiKey(): string {
+  const key = process.env.VENDUS_API_KEY;
+  if (!key) throw new Error("VENDUS_API_KEY environment variable is not set");
+  return key;
+}
+
+function registerId(): number {
+  const id = process.env.VENDUS_REGISTER_ID;
+  if (!id) throw new Error("VENDUS_REGISTER_ID environment variable is not set");
+  return parseInt(id, 10);
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method,
+    headers: {
+      "Authorization": `Bearer ${apiKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json() as T;
+  return data;
+}
+
+export interface VendusLineItem {
+  id: number;       // Vendus product ID
+  title: string;    // description override
+  qty: number;
+  gross_price: number;
+}
+
+export interface VendusClient {
+  id?: number;      // use existing Vendus client ID
+  name?: string;
+  email?: string;
+  fiscal_id?: string;
+}
+
+export interface VendusDocument {
+  id: number;
+  number: string;
+  date: string;
+  amount_gross?: string;
+  amount_net?: string;
+  hash?: string;
+  atcud?: string;
+  errors?: Array<{ code: string; message: string }>;
+}
+
+export interface VendusClientPayload {
+  name: string;
+  email?: string;
+  fiscal_id?: string;
+  phone?: string;
+  address?: string;
+  postalcode?: string;
+  city?: string;
+  external_reference?: string;
+}
+
+export interface VendusClientRecord {
+  id: number;
+  name: string;
+  email: string;
+  fiscal_id: string;
+  external_reference: string;
+}
+
+/** Find client by external_reference (Firebase family ID). Returns null if not found. */
+export async function findClientByRef(externalRef: string): Promise<VendusClientRecord | null> {
+  const results = await request<VendusClientRecord[] | { errors: unknown[] }>(
+    "GET", `/clients/?external_reference=${encodeURIComponent(externalRef)}`
+  );
+  if (!Array.isArray(results) || results.length === 0) return null;
+  return results[0];
+}
+
+/** Create a new Vendus client. */
+export async function createClient(payload: VendusClientPayload): Promise<VendusClientRecord> {
+  return request<VendusClientRecord>("POST", "/clients/", payload);
+}
+
+/** Update an existing Vendus client. */
+export async function updateClient(id: number, payload: Partial<VendusClientPayload>): Promise<VendusClientRecord> {
+  return request<VendusClientRecord>("PATCH", `/clients/${id}/`, payload);
+}
+
+/**
+ * Create or update a Vendus client by Firebase family ID.
+ * Returns the Vendus client ID.
+ */
+export async function createOrUpdateClient(familyId: string, payload: VendusClientPayload): Promise<number> {
+  const ref = `family:${familyId}`;
+  const existing = await findClientByRef(ref);
+  if (existing) {
+    await updateClient(existing.id, payload);
+    return existing.id;
+  }
+  const created = await createClient({ ...payload, external_reference: ref });
+  return created.id;
+}
+
+export async function createInvoice(
+  client: VendusClient,
+  items: VendusLineItem[],
+  date: string,
+  notes?: string,
+): Promise<VendusDocument> {
+  return request<VendusDocument>("POST", "/documents/", {
+    type: "FT",
+    date,
+    register_id: registerId(),
+    client,
+    items,
+    ...(notes ? { notes } : {}),
+  });
+}

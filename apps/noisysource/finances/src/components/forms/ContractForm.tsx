@@ -155,7 +155,7 @@ export function ContractForm({
                 placeholder="e.g. 2.000,00"
                 disabled={!roleEnabled}
               />
-              <div className="text-xs text-zinc-500 mt-1">{formatEUR(eurosToCents(roleSalaryEUR))}</div>
+              <div className="text-xs text-zinc-500 mt-1">{formatEUR(eurosToCents(parseFloat(roleSalaryEUR) || 0))}</div>
             </div>
             <div>
               <div className="text-xs text-zinc-400 mb-1">Currency</div>
@@ -190,7 +190,7 @@ export function ContractForm({
             <div>
               <div className="text-xs text-zinc-400 mb-1">Gross monthly (EUR)</div>
               <Input value={grossEUR} onChange={e=>setGrossEUR(e.target.value)} placeholder="e.g. 2.000,00" />
-              <div className="text-xs text-zinc-500 mt-1">{formatEUR(eurosToCents(grossEUR))}</div>
+              <div className="text-xs text-zinc-500 mt-1">{formatEUR(eurosToCents(parseFloat(grossEUR) || 0))}</div>
             </div>
             <div><div className="text-xs text-zinc-400 mb-1">IRS %</div><Input value={irsPct} onChange={e=>setIrsPct(e.target.value)} /></div>
             <div><div className="text-xs text-zinc-400 mb-1">SS Employee %</div><Input value={ssEmpPct} onChange={e=>setSsEmpPct(e.target.value)} /></div>

@@ -24,7 +24,7 @@ const normalizeDays = (days: DaySelection[]): DaySelection[] => {
   if (!Array.isArray(days)) return [];
   return days.map((d: any) => ({
     day: String(d.day),
-    hour: d.hour ? String(d.hour) : undefined,
+    hour: d.hour ? String(d.hour) : '',
     transport: Boolean(d.transport),
   }));
 };
@@ -110,7 +110,7 @@ export default function StudyRoomEntryCard({
             <span className={`px-3 py-1 text-sm font-semibold rounded-full border ${statusBadge(entry.status)}`}>
               {statusLabel(entry.status)}
             </span>
-            <h3 className="text-xl font-bold text-gray-900">{entry.studentName}</h3>
+            <h3 className="text-xl font-bold text-gray-900">{entry.childName}</h3>
           </div>
 
           <div className="mb-4 border-b border-gray-200">
@@ -220,9 +220,8 @@ export default function StudyRoomEntryCard({
 
             {activeCardTab === "parent" && (
               <div className="space-y-2">
-                <p className="text-gray-600">👨‍👩‍👧 Encarregado: {entry.guardianName}</p>
-                <p className="text-gray-600">📧 Email: {entry.email}</p>
-                <p className="text-gray-600">📞 Telemóvel: {entry.phone}</p>
+                <p className="text-gray-600">👶 Criança: {entry.childName}</p>
+                <p className="text-gray-600">🏫 {entry.schoolName} · {entry.schoolYear}</p>
               </div>
             )}
 
@@ -359,9 +358,9 @@ export default function StudyRoomEntryCard({
             {isOwner && activeCardTab === "monthlyPrice" && (
               <div className="space-y-2">
                 <h4 className="text-lg font-semibold text-gray-800 mb-2">Preço Mensal</h4>
-                <p className="text-gray-600">Estudo: €{entry.basePrice?.toFixed(2)}</p>
-                <p className="text-gray-600">Transporte: €{entry.transportFee?.toFixed(2)}</p>
-                <p className="text-gray-600 font-bold">Total: €{(entry.basePrice + entry.transportFee)?.toFixed(2)}</p>
+                <p className="text-gray-600">Estudo: €{(entry.basePrice ?? 0).toFixed(2)}</p>
+                <p className="text-gray-600">Transporte: €{(entry.transportFee ?? 0).toFixed(2)}</p>
+                <p className="text-gray-600 font-bold">Total: €{((entry.basePrice ?? 0) + (entry.transportFee ?? 0)).toFixed(2)}</p>
               </div>
             )}
           </div>

@@ -1,9 +1,8 @@
-// apps/finhub/src/components/layout/DashboardLayout.tsx
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
-  Banknote, ShieldCheck, User, Building2, UserCog,
-  CalendarCheck, ListChecks, ListTree, ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator
+  Banknote, ShieldCheck, User, Building2,
+  ExternalLink, LogOut, FolderTree,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt,
 } from 'lucide-react';
 import { Role } from '@shared/models/Roles';
 import { auth } from '@shared/firebase';
@@ -11,8 +10,15 @@ import { useEffect, useState } from 'react';
 import { useUser } from '@shared/hooks';
 import { logout } from '@shared/firebase/auth';
 import { OrgSelector } from './OrgSelector';
+import { useEntity } from '../../hooks/EntityContext';
 
-type NavItem = { path: string; label: string; icon: JSX.Element; requiredRole?: Role };
+type NavItem = {
+  path: string;
+  label: string;
+  icon: JSX.Element;
+  requiredRole?: Role;
+  entities?: string[]; // if set, only show for these entity IDs
+};
 
 function usePersistedToggle(key: string, def = true) {
   const [open, setOpen] = useState<boolean>(() => {
@@ -46,8 +52,9 @@ function NavLink({ to, icon, label, active }: { to: string; icon: JSX.Element; l
   return (
     <Link
       to={to}
-      className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-zinc-800 ${active ? 'bg-zinc-800 text-white' : 'text-zinc-400'
-        }`}
+      className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-zinc-800 ${
+        active ? 'bg-zinc-800 text-white' : 'text-zinc-400'
+      }`}
     >
       {icon} {label}
     </Link>
@@ -57,33 +64,37 @@ function NavLink({ to, icon, label, active }: { to: string; icon: JSX.Element; l
 export default function DashboardLayout() {
   const location = useLocation();
   const user = useUser();
+  const { selectedEntity } = useEntity();
   if (!user) return null;
 
-  // Finance (core)
+  const setupItems: NavItem[] = [
+    { path: '/setup/people',       label: 'People',               icon: <User size={18} />,       requiredRole: Role.FinhubAdmin },
+    { path: '/setup/companies',    label: 'Companies',            icon: <Building2 size={18} />,  requiredRole: Role.FinhubAdmin },
+    { path: '/setup/accounts',     label: 'Accounts',             icon: <Banknote size={18} />,   requiredRole: Role.FinhubAdmin },
+    { path: '/setup/contracts',    label: 'Employment Contracts', icon: <FileText size={18} />,   requiredRole: Role.FinhubAdmin, entities: ['noisysource'] },
+    { path: '/setup/ec-contracts', label: 'EC Contracts',         icon: <TrendingUp size={18} />, requiredRole: Role.FinhubAdmin, entities: ['noisysource'] },
+  ];
+
   const financeItems: NavItem[] = [
-    { path: '/accounts', label: 'Accounts', icon: <Banknote size={18} />, requiredRole: Role.FinhubAdmin },
-    { path: '/categories', label: 'Categories', icon: <FolderTree size={18} />, requiredRole: Role.FinhubAdmin },
-    { path: '/templates', label: 'Template Manager', icon: <ListChecks size={18} />, requiredRole: Role.FinhubAdmin },
-    { path: '/planned', label: 'Planned Instances', icon: <CalendarCheck size={18} />, requiredRole: Role.FinhubAdmin },
-    { path: '/ledger', label: 'Transactions', icon: <ListTree size={18} />, requiredRole: Role.FinhubAdmin },
-    { path: '/balances', label: 'Balances', icon: <Banknote size={18} />, requiredRole: Role.FinhubAdmin },
+    { path: '/recurring',  label: 'Recurring',     icon: <RefreshCw size={18} />,  requiredRole: Role.FinhubAdmin },
+    { path: '/forecast',   label: 'Forecast',      icon: <BarChart2 size={18} />,  requiredRole: Role.FinhubAdmin },
+    { path: '/cashflow',   label: 'Cash Flow',     icon: <Waves size={18} />,      requiredRole: Role.FinhubAdmin },
+    { path: '/payroll',    label: 'Payroll',       icon: <Calculator size={18} />, requiredRole: Role.FinhubAdmin, entities: ['noisysource', 'noisyphocus'] },
+    { path: '/irs',        label: 'IRS Simulator', icon: <Receipt size={18} />,    requiredRole: Role.FinhubAdmin, entities: ['private'] },
+    { path: '/categories', label: 'Categories',    icon: <FolderTree size={18} />, requiredRole: Role.FinhubAdmin },
   ];
 
-  // Employment (own collapsible)
-  const employmentItems: NavItem[] = [
-    { path: '/employment/contracts', label: 'Contracts', icon: <FileText size={18} />, requiredRole: Role.FinhubAdmin },
-    { path: '/employment/payroll', label: 'Payroll', icon: <Calculator size={18} />, requiredRole: Role.FinhubAdmin },
-  ];
-
-  // Admin
   const adminItems: NavItem[] = [
-    { path: '/admin/people', label: 'People', icon: <User size={18} />, requiredRole: Role.Owner },
-    { path: '/admin/companies', label: 'Companies', icon: <Building2 size={18} />, requiredRole: Role.Owner },
     { path: '/admin/access', label: 'Manage Access', icon: <ShieldCheck size={18} />, requiredRole: Role.Owner },
-    { path: '/admin/dev', label: 'Dev Tools', icon: <Wrench size={18} />, requiredRole: Role.Owner },
+    { path: '/admin/dev',    label: 'Dev Tools',     icon: <Wrench size={18} />,      requiredRole: Role.Owner },
   ];
 
-  const canSee = (item: NavItem) => !item.requiredRole || user.roles?.[item.requiredRole];
+  const canSee = (item: NavItem) => {
+    if (item.requiredRole && !user.roles?.[item.requiredRole]) return false;
+    if (item.entities && !item.entities.includes(selectedEntity.id)) return false;
+    return true;
+  };
+
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -95,7 +106,7 @@ export default function DashboardLayout() {
 
   return (
     <div className="h-screen flex text-white">
-      <aside className="w-64 bg-zinc-900 p-4 flex flex-col justify-between">
+      <aside className="w-64 bg-zinc-900 p-4 flex flex-col justify-between overflow-y-auto">
         <div>
           <div className="mb-4">
             <h1 className="text-xl font-bold flex items-center gap-2">
@@ -107,14 +118,14 @@ export default function DashboardLayout() {
           </div>
 
           <nav>
-            <Section title="Finance" storeKey="finance" defaultOpen>
-              {financeItems.filter(canSee).map(i => (
+            <Section title="Setup" storeKey="setup" defaultOpen={false}>
+              {setupItems.filter(canSee).map(i => (
                 <NavLink key={i.path} to={i.path} label={i.label} icon={i.icon} active={isActive(i.path)} />
               ))}
             </Section>
 
-            <Section title="Employment" storeKey="employment" defaultOpen={false}>
-              {employmentItems.filter(canSee).map(i => (
+            <Section title="Finance" storeKey="finance" defaultOpen>
+              {financeItems.filter(canSee).map(i => (
                 <NavLink key={i.path} to={i.path} label={i.label} icon={i.icon} active={isActive(i.path)} />
               ))}
             </Section>
@@ -134,15 +145,7 @@ export default function DashboardLayout() {
             rel="noopener noreferrer"
             className="flex items-center gap-2 px-3 py-2 rounded-md text-zinc-400 hover:bg-zinc-800"
           >
-            <ExternalLink size={16} /> ArcoÍris Landing
-          </a>
-          <a
-            href="https://kidclub.pt/admin"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-zinc-400 hover:bg-zinc-800"
-          >
-            <ExternalLink size={16} /> ArcoÍris Backoffice
+            <ExternalLink size={16} /> KidClub
           </a>
           <button
             onClick={handleLogout}

@@ -8,7 +8,9 @@ import type {
   WalletAccount,
   CashAccount,
   CreditAccount,
-  VirtualAccount,
+  VoucherAccount,
+  BondsAccount,
+  VoucherType,
 } from "@shared/models/Account";
 import { isCashLike } from "@shared/models/Account";
 import { toDate } from "../utils";
@@ -22,18 +24,22 @@ type BaseSave = {
   name: string;
   ownerType: OwnerType;
   ownerId: string;
+  jointOwnerIds?: string[];
   currency?: "EUR";
   active?: boolean;
   createdAt?: Date; // ignored on update; auto-set on create in base
+  balanceCents?: number;
+  balanceAsOf?: string;
 };
 
 export type BankSave    = BaseSave & { type: "bank";    bankName?: string; iban?: string; bic?: string; nib?: string };
 export type WalletSave  = BaseSave & { type: "wallet" };
 export type CashSave    = BaseSave & { type: "cash" };
 export type CreditSave  = BaseSave & { type: "credit";  issuer?: string; last4?: string };
-export type VirtualSave = BaseSave & { type: "virtual"; provider?: string };
+export type VoucherSave = BaseSave & { type: "voucher"; voucherType: VoucherType; provider?: string; issuingEmployer?: string; monthlyTopUpCents?: number };
+export type BondsSave   = BaseSave & { type: "bonds";   provider?: string };
 
-export type AccountSaveInput = BankSave | WalletSave | CashSave | CreditSave | VirtualSave;
+export type AccountSaveInput = BankSave | WalletSave | CashSave | CreditSave | VoucherSave | BondsSave;
 
 /** ----- mappers ----- */
 const from = (raw: any, id: string): Account => {
@@ -44,9 +50,12 @@ const from = (raw: any, id: string): Account => {
     name: raw?.name,
     ownerType: raw?.ownerType,
     ownerId: raw?.ownerId,
+    jointOwnerIds: Array.isArray(raw?.jointOwnerIds) ? raw.jointOwnerIds : undefined,
     currency: "EUR" as const,
     createdAt,
     type: raw?.type as AccountType,
+    balanceCents: raw?.balanceCents ?? undefined,
+    balanceAsOf: raw?.balanceAsOf ?? undefined,
   };
 
   switch (raw?.type as AccountType) {
@@ -70,13 +79,23 @@ const from = (raw: any, id: string): Account => {
         issuer: raw?.issuer,
         last4: raw?.last4,
       } as CreditAccount;
-    case "virtual":
-    default:
+    case "voucher":
       return {
         ...base,
-        type: "virtual",
+        type: "voucher",
+        voucherType: raw?.voucherType,
         provider: raw?.provider,
-      } as VirtualAccount;
+        issuingEmployer: raw?.issuingEmployer,
+        monthlyTopUpCents: raw?.monthlyTopUpCents,
+      } as VoucherAccount;
+    case "bonds":
+      return {
+        ...base,
+        type: "bonds",
+        provider: raw?.provider,
+      } as BondsAccount;
+    default:
+      return { ...base, type: "bank", bankName: raw?.bankName ?? "", iban: raw?.iban ?? "", bic: raw?.bic ?? "" } as BankAccount;
   }
 };
 
@@ -87,8 +106,11 @@ const to = (input: AccountSaveInput) => {
     type: input.type,
     ownerType: input.ownerType,
     ownerId: input.ownerId,
+    jointOwnerIds: input.jointOwnerIds?.length ? input.jointOwnerIds : undefined,
     currency: input.currency ?? "EUR",
     active: input.active ?? true,
+    balanceCents: input.balanceCents ?? undefined,
+    balanceAsOf: input.balanceAsOf ?? undefined,
   };
 
   const payload =
@@ -96,7 +118,9 @@ const to = (input: AccountSaveInput) => {
       ? { ...common, bankName: input.bankName || undefined, iban: input.iban || undefined, bic: input.bic || undefined, nib: input.nib || undefined }
       : input.type === "credit"
       ? { ...common, issuer: input.issuer || undefined, last4: input.last4 || undefined }
-      : input.type === "virtual"
+      : input.type === "voucher"
+      ? { ...common, voucherType: input.voucherType, provider: input.provider || undefined, issuingEmployer: input.issuingEmployer || undefined, monthlyTopUpCents: input.monthlyTopUpCents }
+      : input.type === "bonds"
       ? { ...common, provider: input.provider || undefined }
       : common;
 
@@ -125,6 +149,10 @@ export function makeAccountsDomain(getOrgId: () => string) {
     async listCashLike(): Promise<Account[]> {
       const rows = await base.list();
       return rows.filter(a => isCashLike(a.type));
+    },
+
+    async setBalance(id: string, balanceCents: number, asOf: string): Promise<void> {
+      await base.update(id, { balanceCents, balanceAsOf: asOf } as any);
     },
   };
 }

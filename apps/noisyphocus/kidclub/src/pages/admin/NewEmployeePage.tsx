@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Timestamp } from 'firebase/firestore';
 import { Role, AppUser } from '@shared/models';
 import { employeeService } from '../../services/employeeService';
 import { eurosToCents } from '@shared/lib/money';
@@ -47,9 +48,9 @@ export default function NewEmployeePage({ setHrSection }: { setHrSection: (secti
           ssEmpPct,
           ssErPct,
           payDay,
-          startDate,
+          startDate: Timestamp.fromDate(startDate),
           active: true,
-        }
+        } as any
       );
       setHrSection('list');
     } catch (error) {

@@ -27,6 +27,7 @@ export type CategoryDoc = {
   ownerType?: OwnerType;
   ownerId?: string;
   parentCode?: string;
+  parentId?: string;
   systemRole?: CategorySystemRole;
   createdAt?: any;
 };

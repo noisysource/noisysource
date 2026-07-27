@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { Child, StudyRoomEntry, TransportationSubscription, Booking, Family } from '@shared/models';
 import { format } from 'date-fns';
 import { calculateAge } from '../../lib/utils';
+import { familyService } from '../../services/familyService';
 
 export default function ChildDetailPage() {
   const { childId } = useParams<{ childId: string }>();
@@ -53,112 +52,51 @@ export default function ChildDetailPage() {
 
   const fetchChildData = async () => {
     if (!childId || !user) return;
-    
     setIsLoading(true);
     try {
-      // Fetch child
-      const childDoc = await getDoc(doc(db, 'children', childId));
-      if (!childDoc.exists()) {
-        alert('Child not found');
+      const [childData, family] = await Promise.all([
+        familyService.getChild(childId),
+        familyService.getOrCreateFamily(
+          user.uid,
+          user.name || user.email?.split('@')[0] || 'Utilizador',
+          user.email || ''
+        ),
+      ]);
+
+      if (!childData) {
         navigate('/client/children');
         return;
       }
 
-      const childData = {
-        ...childDoc.data(),
-        id: childDoc.id,
-        dateOfBirth: childDoc.data().dateOfBirth?.toDate?.() || new Date(childDoc.data().dateOfBirth),
-        createdAt: childDoc.data().createdAt?.toDate?.() || new Date(childDoc.data().createdAt),
-        updatedAt: childDoc.data().updatedAt?.toDate?.() || new Date(childDoc.data().updatedAt),
-        age: childDoc.data().age || calculateAge(childDoc.data().dateOfBirth?.toDate?.() || new Date(childDoc.data().dateOfBirth)),
-      } as Child;
-
-      // Check if child belongs to user's family
-      const familiesQuery = query(
-        collection(db, 'families'),
-        where('primaryContact.userId', '==', user.uid)
-      );
-      const familiesSnapshot = await getDocs(familiesQuery);
-      
-      if (!familiesSnapshot.empty) {
-        const familyData = {
-          ...familiesSnapshot.docs[0].data(),
-          id: familiesSnapshot.docs[0].id,
-          createdAt: familiesSnapshot.docs[0].data().createdAt?.toDate?.() || new Date(),
-          updatedAt: familiesSnapshot.docs[0].data().updatedAt?.toDate?.() || new Date(),
-        } as Family;
-        setFamily(familyData);
-
-        // Verify child belongs to this family
-        if (childData.familyId !== familyData.id) {
-          alert('You do not have permission to view this child.');
-          navigate('/client/children');
-          return;
-        }
+      if (childData.familyId !== family.id) {
+        navigate('/client/children');
+        return;
       }
 
+      setFamily(family);
       setChild(childData);
       setEditFormData(childData);
-
-      // Fetch subscriptions
-      const [studySubs, transportSubs, bookings] = await Promise.all([
-        getDocs(query(collection(db, 'studyroom'), where('childId', '==', childId))),
-        getDocs(query(collection(db, 'transportationSubscriptions'), where('childId', '==', childId))),
-        getDocs(query(collection(db, 'bookings'), where('childId', '==', childId))),
-      ]);
-
-      setStudySubscriptions(
-        studySubs.docs.map(doc => ({
-          ...doc.data(),
-          id: doc.id,
-          startDate: doc.data().startDate?.toDate?.() || new Date(doc.data().startDate),
-          endDate: doc.data().endDate?.toDate?.() || new Date(doc.data().endDate),
-          createdAt: doc.data().createdAt?.toDate?.() || new Date(doc.data().createdAt),
-          updatedAt: doc.data().updatedAt?.toDate?.() || new Date(doc.data().updatedAt),
-        } as StudyRoomEntry))
-      );
-
-      setTransportSubscriptions(
-        transportSubs.docs.map(doc => ({
-          ...doc.data(),
-          id: doc.id,
-          createdAt: doc.data().createdAt?.toDate?.() || new Date(doc.data().createdAt),
-          updatedAt: doc.data().updatedAt?.toDate?.() || new Date(doc.data().updatedAt),
-        } as TransportationSubscription))
-      );
-
-      setPartyBookings(
-        bookings.docs.map(doc => ({
-          ...doc.data(),
-          id: doc.id,
-          createdAt: doc.data().createdAt?.toDate?.() || new Date(doc.data().createdAt),
-        } as Booking))
-      );
     } catch (error) {
-      console.error('Error fetching child data:', error);
-      alert('Error loading child information.');
+      console.error('Error fetching child/family data:', error);
     } finally {
       setIsLoading(false);
+    }
+
+    // Load subscriptions separately — failure here shouldn't break the page
+    try {
+      const { study, transport, parties } = await familyService.getChildSubscriptions(childId, user.uid);
+      setStudySubscriptions(study);
+      setTransportSubscriptions(transport);
+      setPartyBookings(parties);
+    } catch (error) {
+      console.error('Error fetching subscriptions:', error);
     }
   };
 
   const handleSave = async () => {
     if (!child || !childId) return;
-
     try {
-      const updates: any = {
-        ...editFormData,
-        updatedAt: new Date(),
-      };
-
-      // Remove undefined values
-      Object.keys(updates).forEach(key => {
-        if (updates[key] === undefined) {
-          delete updates[key];
-        }
-      });
-
-      await updateDoc(doc(db, 'children', childId), updates);
+      await familyService.updateChild(childId, editFormData);
       await fetchChildData();
       setIsEditing(false);
       alert('Child information updated successfully!');
@@ -257,11 +195,15 @@ export default function ChildDetailPage() {
                   <input
                     type="date"
                     required
-                    value={editFormData.dateOfBirth ? format(editFormData.dateOfBirth as Date, 'yyyy-MM-dd') : ''}
+                    value={(() => {
+                      const d = editFormData.dateOfBirth as Date | undefined;
+                      if (!d || isNaN(d.getTime())) return '';
+                      try { return format(d, 'yyyy-MM-dd'); } catch { return ''; }
+                    })()}
                     onChange={(e) => {
-                      const newDate = new Date(e.target.value);
-                      setEditFormData({ 
-                        ...editFormData, 
+                      const newDate = new Date(e.target.value + 'T12:00:00');
+                      setEditFormData({
+                        ...editFormData,
                         dateOfBirth: newDate,
                         age: calculateAge(newDate),
                       });

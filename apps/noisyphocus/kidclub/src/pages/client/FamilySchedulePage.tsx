@@ -40,6 +40,7 @@ export default function FamilySchedulePage() {
   }, [user]);
 
   const fetchFamilyData = async () => {
+    if (!user) return;
     setIsLoading(true);
     try {
       const familiesQuery = query(
