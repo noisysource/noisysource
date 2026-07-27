@@ -7,7 +7,6 @@ interface PartyBookingFormProps {
   initialData?: Booking;
   onSave?: (updatedBooking: Booking, reason: string) => void;
   partyConfig: PartyConfig;
-  isSimulation?: boolean;
 }
 
 const stripEmptyStringsToNull = <T extends Record<string, any>>(obj: T): T => {
@@ -20,7 +19,7 @@ const stripEmptyStringsToNull = <T extends Record<string, any>>(obj: T): T => {
   return newObj;
 };
 
-export default function PartyBookingForm({ initialData, onSave, partyConfig, isSimulation = false }: PartyBookingFormProps) {
+export default function PartyBookingForm({ initialData, onSave, partyConfig }: PartyBookingFormProps) {
   const [formData, setFormData] = useState<Booking | null>(initialData ?? null);
   const [changeReason, setChangeReason] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -79,13 +78,11 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
       }
       onSave(dataToSave, changeReason);
     } else {
-      if (isSimulation) return;
-
       await partyService.createBooking({ ...dataToSave, createdAt: new Date(), status: 'pending' });
       setSubmitted(true);
     }
   };
-  
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     setFormData(prev => {
@@ -94,8 +91,7 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
       if (type === 'number') {
         newValue = parseFloat(value);
       }
-      const newState = { ...prev, [name]: newValue };
-      return newState;
+      return { ...prev, [name]: newValue };
     });
   };
 
@@ -105,7 +101,6 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
       const newExtras = prev.extras?.includes(extraName)
         ? prev.extras.filter(e => e !== extraName)
         : [...(prev.extras || []), extraName];
-      
       return { ...prev, extras: newExtras };
     });
   };
@@ -124,10 +119,10 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
   const partyType = partyConfig.partyTypes.find(pt => pt.name === formData.partyType);
 
   return (
-    <form onSubmit={handleSubmit} className={`${isSimulation ? '' : 'bg-white p-6 rounded-lg shadow-xl'} max-w-3xl mx-auto relative pb-24`}>
-      <h2 className={`text-3xl font-bold text-center mb-2 ${isSimulation ? 'text-white' : 'text-purple-600'}`}>🎈 Reserva de Festa</h2>
+    <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-xl max-w-3xl mx-auto relative pb-24">
+      <h2 className="text-3xl font-bold text-center mb-2 text-purple-600">🎈 Reserva de Festa</h2>
       <p className="text-center text-gray-500 mb-6">Passo {currentStep} de {steps.length}: {steps[currentStep - 1]}</p>
-      
+
       <div className="mb-6">
         <div className="flex justify-between">
           {steps.map((step) => (
@@ -142,10 +137,10 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
       <div>
         {currentStep === 1 && (
           <div className="space-y-6">
-            <div className={`p-6 ${isSimulation ? 'bg-transparent' : 'bg-white'} rounded-xl shadow-md`}>
+            <div className="p-6 bg-white rounded-xl shadow-md">
               <div className="space-y-4">
                 <div>
-                  <label className={`block font-semibold text-sm mb-2 ${isSimulation ? 'text-white' : 'text-gray-600'}`}>Tipo de Festa</label>
+                  <label className="block font-semibold text-sm mb-2 text-gray-600">Tipo de Festa</label>
                   <select name="partyType" value={formData.partyType} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required>
                     <option value="">Selecione o tipo de festa</option>
                     {partyConfig.partyTypes.map(pt => (
@@ -158,22 +153,16 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
                     </p>
                   )}
                 </div>
-
-                {!isSimulation && (
-                  <>
-                    <div>
-                      <label className="block font-semibold text-gray-600 text-sm mb-2">📅 Data da Festa</label>
-                      <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-gray-600 text-sm mb-2">⏰ Hora da Festa</label>
-                      <input type="time" name="time" value={formData.time} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required />
-                    </div>
-                  </>
-                )}
-
                 <div>
-                  <label className={`block font-semibold text-sm mb-2 ${isSimulation ? 'text-white' : 'text-gray-600'}`}>👧👦 Número de Crianças</label>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">📅 Data da Festa</label>
+                  <input type="date" name="date" value={formData.date} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">⏰ Hora da Festa</label>
+                  <input type="time" name="time" value={formData.time} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required />
+                </div>
+                <div>
+                  <label className="block font-semibold text-sm mb-2 text-gray-600">👧👦 Número de Crianças</label>
                   <input type="number" name="numKids" value={formData.numKids} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required />
                   {partyType && (
                     <p className="text-xs text-gray-500 mt-2 italic">
@@ -193,56 +182,53 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
 
         {currentStep === 2 && (
           <div className="space-y-6">
-            <div className={`p-6 ${isSimulation ? 'bg-transparent' : 'bg-white'} rounded-xl shadow-md`}>
+            <div className="p-6 bg-white rounded-xl shadow-md">
               <h3 className="text-xl font-semibold text-gray-700 mb-4">Extras</h3>
               <div className="space-y-4">
                 {partyConfig.extras.map(extra => (
                   <div key={extra.name} className={`p-4 rounded-lg transition-all duration-300 flex items-center justify-between cursor-pointer border ${formData.extras?.includes(extra.name) ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`} onClick={() => handleExtraToggle(extra.name)}>
                     <label className="flex items-center gap-2">
                       <input type="checkbox" id={`extra-${extra.name}`} checked={formData.extras?.includes(extra.name) || false} onChange={() => {}} className="h-5 w-5 rounded-md border-gray-300 text-purple-500 focus:ring-purple-500" />
-                      <span className={`font-semibold ${isSimulation ? 'text-white' : 'text-gray-800'}`}>{extra.name}</span>
+                      <span className="font-semibold text-gray-800">{extra.name}</span>
                     </label>
-                    <span className={`font-semibold ${isSimulation ? 'text-gray-300' : 'text-purple-500'}`}>+€{extra.price.toFixed(2)}</span>
+                    <span className="font-semibold text-purple-500">+€{extra.price.toFixed(2)}</span>
                   </div>
                 ))}
               </div>
             </div>
           </div>
         )}
-        
+
         {currentStep === 3 && (
           <div className="space-y-6">
-            {!isSimulation && (
-              <div className="p-6 bg-white rounded-xl shadow-md">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block font-semibold text-gray-600 text-sm mb-2">👤 Nome do Responsável</label>
-                    <input type="text" name="parentName" value={formData.parentName} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-gray-600 text-sm mb-2">📧 Email</label>
-                    <input type="email" name="email" value={formData.email} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-gray-600 text-sm mb-2">📞 Telemóvel</label>
-                    <input type="tel" name="phone" value={formData.phone} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-gray-600 text-sm mb-2">🎉 Nome da Criança</label>
-                    <input type="text" name="childName" value={formData.childName} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-gray-600 text-sm mb-2">🎂 Idade a Celebrar</label>
-                    <input type="number" name="childAge" value={formData.childAge} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
-                  </div>
+            <div className="p-6 bg-white rounded-xl shadow-md">
+              <div className="space-y-4">
+                <div>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">👤 Nome do Responsável</label>
+                  <input type="text" name="parentName" value={formData.parentName} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">📧 Email</label>
+                  <input type="email" name="email" value={formData.email} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">📞 Telemóvel</label>
+                  <input type="tel" name="phone" value={formData.phone} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">🎉 Nome da Criança</label>
+                  <input type="text" name="childName" value={formData.childName} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-600 text-sm mb-2">🎂 Idade a Celebrar</label>
+                  <input type="number" name="childAge" value={formData.childAge} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-pink-500 focus:ring-pink-500 text-sm" required />
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
       </div>
 
-      {/* The new summary box */}
       <div className="p-6 bg-gray-50 rounded-xl shadow-md mt-6">
         <h3 className="text-xl font-semibold text-gray-700 mb-4">Resumo da Reserva</h3>
         {partyType && (
@@ -292,21 +278,21 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig, isS
 
       <div className="absolute bottom-0 left-0 right-0 bg-gray-100 p-4 border-t border-gray-200 flex justify-end items-center">
         <div className="flex gap-4">
-            {currentStep > 1 && (
-              <button type="button" onClick={prevStep} className="px-6 py-2 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors">
-                Anterior
-              </button>
-            )}
-            {currentStep < steps.length && (
-              <button type="button" onClick={nextStep} className="px-6 py-2 rounded-lg bg-purple-500 text-white hover:bg-purple-600 transition-colors">
-                Próximo
-              </button>
-            )}
-            {currentStep === steps.length && !onSave && !isSimulation && (
-              <button type="submit" className="px-6 py-2 rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors">
-                Enviar Reserva
-              </button>
-            )}
+          {currentStep > 1 && (
+            <button type="button" onClick={prevStep} className="px-6 py-2 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors">
+              Anterior
+            </button>
+          )}
+          {currentStep < steps.length && (
+            <button type="button" onClick={nextStep} className="px-6 py-2 rounded-lg bg-purple-500 text-white hover:bg-purple-600 transition-colors">
+              Próximo
+            </button>
+          )}
+          {currentStep === steps.length && !onSave && (
+            <button type="submit" className="px-6 py-2 rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors">
+              Enviar Reserva
+            </button>
+          )}
         </div>
       </div>
 
