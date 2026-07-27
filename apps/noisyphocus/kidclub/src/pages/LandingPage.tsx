@@ -1,26 +1,14 @@
-import { useState, useEffect } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { db } from '../lib/firebase';
-import { FeatureFlags } from '@shared/models/FeatureFlags';
 import SocialShare from '../components/SocialShare';
 
 export default function LandingPage() {
   const [lang, setLang] = useState<'pt' | 'en'>('pt');
-  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>({});
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, 'config', 'featureFlags'), (snap) => {
-      if (snap.exists()) setFeatureFlags(snap.data() as FeatureFlags);
-    });
-    return () => unsubscribe();
-  }, []);
 
   const pt = lang === 'pt';
 
   const services = [
     {
-      flag: featureFlags.party,
       emoji: '🎈',
       title: pt ? 'Festas' : 'Parties',
       desc: pt
@@ -30,7 +18,6 @@ export default function LandingPage() {
       badge: 'text-pink-600',
     },
     {
-      flag: featureFlags.summerCamps,
       emoji: '🎄',
       title: pt ? 'Campos de Férias' : 'Holiday Camps',
       desc: pt
@@ -40,7 +27,6 @@ export default function LandingPage() {
       badge: 'text-yellow-700',
     },
     {
-      flag: featureFlags.studyRoom,
       emoji: '📚',
       title: pt ? 'Sala de Estudo' : 'Study Room',
       desc: pt
@@ -50,7 +36,6 @@ export default function LandingPage() {
       badge: 'text-blue-600',
     },
     {
-      flag: featureFlags.transportation,
       emoji: '🚌',
       title: pt ? 'Transporte Escolar' : 'School Transport',
       desc: pt
@@ -104,15 +89,7 @@ export default function LandingPage() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {services.map((s) => (
-              <div
-                key={s.title}
-                className={`relative p-6 border rounded-2xl shadow-sm ${s.color}`}
-              >
-                {!s.flag && (
-                  <span className="absolute top-3 right-3 bg-yellow-400 text-yellow-900 text-xs font-bold px-2 py-0.5 rounded-full">
-                    {pt ? 'Brevemente' : 'Coming soon'}
-                  </span>
-                )}
+              <div key={s.title} className={`p-6 border rounded-2xl shadow-sm ${s.color}`}>
                 <p className="text-3xl mb-3">{s.emoji}</p>
                 <h3 className={`text-xl font-bold mb-2 ${s.badge}`}>{s.title}</h3>
                 <p className="text-sm text-gray-600 leading-relaxed">{s.desc}</p>
