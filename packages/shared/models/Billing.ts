@@ -8,6 +8,7 @@ export type BillingStatus =
   | 'paid'        // Easypay confirmed payment
   | 'invoiced'    // Vendus invoice created and emailed
   | 'failed'      // payment failed or expired
+  | 'cancelled'   // subscription was cancelled before payment
   | 'dry-run';    // test record, no real payment
 
 export interface BillingLineItem {

@@ -10,6 +10,7 @@ const STATUS_META: Record<BillingStatus, { label: string; className: string }> =
   paid:       { label: 'Pago',       className: 'bg-green-100 text-green-800' },
   invoiced:   { label: 'Faturado',   className: 'bg-purple-100 text-purple-800' },
   failed:     { label: 'Falhado',    className: 'bg-red-100 text-red-800' },
+  cancelled:  { label: 'Cancelado',  className: 'bg-gray-100 text-gray-500' },
   'dry-run':  { label: 'Simulação',  className: 'bg-gray-100 text-gray-600' },
 };
 

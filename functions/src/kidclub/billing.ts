@@ -518,17 +518,23 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
   };
 
   const periods = periodsUntilSchoolYearEnd(new Date());
-  let created = 0, updated = 0;
+  let created = 0, updated = 0, cancelled = 0;
 
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
+    const { lineItems, total } = computeLineItems(group, period);
 
     if (existing.exists) {
-      // Only update records still pending — don't touch anything already being processed/paid
       if (existing.data()?.status === "pending") {
-        const { lineItems, total } = computeLineItems(group, period);
-        if (lineItems.length > 0 && total > 0) {
+        if (lineItems.length === 0 || total === 0) {
+          // All subscriptions for this family are now cancelled/inactive
+          await appCol("billing").doc(docId).update({
+            status: "cancelled",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          cancelled++;
+        } else {
           await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
           updated++;
         }
@@ -536,11 +542,13 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
       continue;
     }
 
-    await buildBillingRecord(group, period, false, { docId, sendEmail: false });
-    created++;
+    if (lineItems.length > 0 && total > 0) {
+      await buildBillingRecord(group, period, false, { docId, sendEmail: false });
+      created++;
+    }
   }
 
-  console.log(`Billing schedule for family ${familyId}: ${created} created, ${updated} updated`);
+  console.log(`Billing schedule for family ${familyId}: ${created} created, ${updated} updated, ${cancelled} cancelled`);
 }
 
 // ── Backfill billing schedules for all existing active subscriptions ──────────
@@ -608,6 +616,32 @@ export const onTransportConfirmed = onDocumentUpdated(
     const after = event.data?.after?.data();
     if (!before || !after) return;
     if (before.status === after.status || after.status !== "active") return;
+    const familyId: string = after.familyId;
+    if (!familyId) { console.warn("transportationSubscriptions doc missing familyId"); return; }
+    await autoCreateBillingSchedule(familyId, after.userId ?? "");
+  }
+);
+
+export const onStudyroomCancelled = onDocumentUpdated(
+  { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    if (!before || !after) return;
+    if (before.status === after.status || after.status !== "cancelled") return;
+    const familyId: string = after.familyId;
+    if (!familyId) { console.warn("studyroom doc missing familyId"); return; }
+    await autoCreateBillingSchedule(familyId, after.userId ?? "");
+  }
+);
+
+export const onTransportCancelled = onDocumentUpdated(
+  { document: "_apps/arcoiris/transportationSubscriptions/{subId}", region: "europe-west3" },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    if (!before || !after) return;
+    if (before.status === after.status || after.status !== "cancelled") return;
     const familyId: string = after.familyId;
     if (!familyId) { console.warn("transportationSubscriptions doc missing familyId"); return; }
     await autoCreateBillingSchedule(familyId, after.userId ?? "");
