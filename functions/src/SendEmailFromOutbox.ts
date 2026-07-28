@@ -63,7 +63,7 @@ function encodeRFC822({
 }
 
 export const sendEmailFromOutbox = onDocumentCreated(
-  { document: "_apps/arcoiris/emailOutbox/{id}", secrets: ["SA_CLIENT_EMAIL", "SA_PRIVATE_KEY"] },
+  { document: "_apps/arcoiris/emailOutbox/{id}", region: "europe-west3", secrets: ["SA_CLIENT_EMAIL", "SA_PRIVATE_KEY"] },
   async (event) => {
     const snap = event.data;
     if (!snap) return;
