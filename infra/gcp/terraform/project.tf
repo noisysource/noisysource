@@ -7,8 +7,9 @@ resource "google_project_service" "apis" {
     "eventarc.googleapis.com",
     "artifactregistry.googleapis.com",
     "secretmanager.googleapis.com",
-    "run.googleapis.com", # Required for 2nd gen functions
-    "firestore.googleapis.com"
+    "run.googleapis.com",
+    "firestore.googleapis.com",
+    "orgpolicy.googleapis.com",
   ])
   service                    = each.key
   disable_on_destroy         = false
@@ -33,4 +34,21 @@ resource "google_firebase_hosting_site" "sites" {
 
 data "google_project" "project" {
   project_id = var.gcp_project_id
+}
+
+# Allow allUsers IAM bindings on this project — required for public Cloud Run
+# services (Firebase Functions v2). Without this, the GCP org policy
+# iam.allowedPolicyMemberDomains blocks the Firebase CLI from setting
+# the public invoker on callable functions.
+resource "google_org_policy_policy" "allow_public_iam" {
+  name   = "projects/${var.gcp_project_id}/policies/iam.allowedPolicyMemberDomains"
+  parent = "projects/${var.gcp_project_id}"
+
+  spec {
+    rules {
+      allow_all = "TRUE"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
 }

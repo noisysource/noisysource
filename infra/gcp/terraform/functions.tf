@@ -32,11 +32,23 @@ resource "google_cloudfunctions2_function" "send_email" {
   }
 
   service_config {
-    max_instance_count = 20
-    available_memory   = "256Mi"
-    timeout_seconds    = 60
+    max_instance_count    = 20
+    available_memory      = "256Mi"
+    timeout_seconds       = 60
     service_account_email = google_service_account.gmail_sender.email
-    
+
+    secret_environment_variables {
+      key        = "SA_CLIENT_EMAIL"
+      project_id = var.gcp_project_id
+      secret     = "SA_CLIENT_EMAIL"
+      version    = "latest"
+    }
+    secret_environment_variables {
+      key        = "SA_PRIVATE_KEY"
+      project_id = var.gcp_project_id
+      secret     = "SA_PRIVATE_KEY"
+      version    = "latest"
+    }
   }
 
   event_trigger {
@@ -49,10 +61,8 @@ resource "google_cloudfunctions2_function" "send_email" {
     }
     event_filters {
       attribute = "document"
-      value     = "emailOutbox/{id}"
+      value     = "_apps/arcoiris/emailOutbox/{id}"
     }
-    # Explicitly set the retry policy. For email sending, we do not want retries
-    # to avoid sending duplicate emails on transient errors.
     retry_policy = "RETRY_POLICY_DO_NOT_RETRY"
   }
 
@@ -72,16 +82,28 @@ resource "google_cloudfunctions2_function" "send_email" {
 }
 
 locals {
-  # A list of all your callable (HTTP-triggered) functions.
+  # All HTTP-callable and HTTP-request functions (excludes Firestore triggers and scheduled functions).
   callable_functions = toset([
+    # Shared / internal
     "getUsageSnapshot",
     "expandTemplatesInRange",
     "postPlannedInstance",
     "exportOrgData",
     "importOrgData",
     "wipeOrgData",
-    "getAnalyticsData",
+    "createRecurringExpenses",
+    "impersonateUser",
+    # KidClub — invoicing
     "triggerInvoiceGeneration",
+    # KidClub — billing
+    "sendBillingNotice",
+    "backfillBillingSchedules",
+    "initiateMbwayPayment",
+    "initiateMultibancoPayment",
+    "initiateCardPayment",
+    "setPaymentMethod",
+    "createPartyDeposit",
+    "easypayWebhook",
   ])
 }
 
