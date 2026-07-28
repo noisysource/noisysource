@@ -26,7 +26,7 @@ export default function PartyListPage() {
     if (!user) return;
     (async () => {
       const family = await familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? '');
-      const list = await partyService.getBookingsByFamily(family.id);
+      const list = await partyService.getBookingsByFamily(family.id, user.uid);
       setBookings(list);
       setLoading(false);
     })();

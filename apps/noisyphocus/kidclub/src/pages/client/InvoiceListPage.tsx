@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { getDocs, query, where } from 'firebase/firestore';
+import { col } from '../../lib/db';
 import { Invoice } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -17,7 +17,7 @@ export default function InvoiceListPage() {
       const fetchInvoices = async () => {
         setIsLoading(true);
         const invoicesQuery = query(
-          collection(db, 'invoices'),
+          col('invoices'),
           where('userId', '==', user.uid),
         );
         const snapshot = await getDocs(invoicesQuery);

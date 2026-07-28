@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createOrUpdateClient } from "./vendus";
+import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -12,7 +13,7 @@ const db = admin.firestore();
  */
 export const syncVendusClient = onDocumentWritten(
   {
-    document: "families/{familyId}",
+    document: "_apps/arcoiris/families/{familyId}",
     region: "europe-west3",
     secrets: ["VENDUS_API_KEY", "VENDUS_REGISTER_ID"],
   },
@@ -44,7 +45,7 @@ export const syncVendusClient = onDocumentWritten(
 
       // Store back on the family doc (only if changed)
       if (data.vendusClientId !== vendusClientId) {
-        await db.collection("families").doc(familyId).update({ vendusClientId });
+        await appCol("families").doc(familyId).update({ vendusClientId });
         console.log(`Synced family ${familyId} → Vendus client ${vendusClientId}`);
       }
     } catch (err) {

@@ -4,8 +4,8 @@ import { useUser } from '@shared/hooks';
 import { Child, StudyCenterConfig } from '@shared/models';
 import { familyService } from '../../../services/familyService';
 import { studyRoomService } from '../../../services/studyRoomService';
-import { collection, addDoc } from 'firebase/firestore';
-import { db } from '../../../lib/firebase';
+import { addDoc } from 'firebase/firestore';
+import { col } from '../../../lib/db';
 
 const WEEKDAYS = [
   { label: 'Segunda-feira', value: 'monday' },
@@ -13,6 +13,13 @@ const WEEKDAYS = [
   { label: 'Quarta-feira', value: 'wednesday' },
   { label: 'Quinta-feira', value: 'thursday' },
   { label: 'Sexta-feira', value: 'friday' },
+];
+
+const TIME_SLOTS = [
+  '08:00', '08:30', '09:00', '09:30', '10:00', '10:30',
+  '11:00', '11:30', '12:00', '12:30', '13:00', '13:30',
+  '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
+  '17:00', '17:30', '18:00',
 ];
 
 export default function StudyRoomEnrollPage() {
@@ -29,6 +36,7 @@ export default function StudyRoomEnrollPage() {
   const [submitted, setSubmitted] = useState(false);
 
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
+  const [dayHours, setDayHours] = useState<Record<string, string>>({});
   const [note, setNote] = useState('');
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
@@ -63,9 +71,11 @@ export default function StudyRoomEnrollPage() {
   }, [selectedDays, config]);
 
   const toggleDay = (day: string) => {
-    setSelectedDays(prev =>
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
-    );
+    setSelectedDays(prev => {
+      if (prev.includes(day)) return prev.filter(d => d !== day);
+      setDayHours(h => ({ ...h, [day]: h[day] ?? '14:00' }));
+      return [...prev, day];
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,7 +87,7 @@ export default function StudyRoomEnrollPage() {
       const today = new Date();
       const nextJuly = new Date(today.getFullYear() + (today.getMonth() > 5 ? 1 : 0), 6, 31);
 
-      await addDoc(collection(db, 'studyroom'), {
+      await addDoc(col('studyroom'), {
         familyId,
         userId: user?.uid || '',
         childId: child.id,
@@ -88,7 +98,7 @@ export default function StudyRoomEnrollPage() {
         guardianName: user?.name || '',
         email: user?.email || '',
         phone: '',
-        days: selectedDays.map(d => ({ day: d })),
+        days: selectedDays.map(d => ({ day: d, hour: dayHours[d] ?? '14:00', transport: false })),
         monthlyPrice,
         basePrice: monthlyPrice,
         startDate: new Date(startDate),
@@ -151,31 +161,48 @@ export default function StudyRoomEnrollPage() {
             {config ? `€${config.monthlyPricePerWeekday.toFixed(2)} por dia/mês` : ''}
           </p>
           <div className="space-y-2">
-            {WEEKDAYS.map(({ label, value }) => (
-              <label
-                key={value}
-                className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
-                  selectedDays.includes(value)
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedDays.includes(value)}
-                    onChange={() => toggleDay(value)}
-                    className="w-4 h-4 text-blue-600"
-                  />
-                  <span className="font-medium text-sm">{label}</span>
+            {WEEKDAYS.map(({ label, value }) => {
+              const selected = selectedDays.includes(value);
+              return (
+                <div
+                  key={value}
+                  className={`rounded-lg border transition-colors ${
+                    selected ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                  }`}
+                >
+                  <label className="flex items-center justify-between p-3 cursor-pointer">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleDay(value)}
+                        className="w-4 h-4 text-blue-600"
+                      />
+                      <span className="font-medium text-sm">{label}</span>
+                    </div>
+                    {selected && config && (
+                      <span className="text-sm text-blue-600 font-medium">
+                        €{config.monthlyPricePerWeekday.toFixed(2)}/mês
+                      </span>
+                    )}
+                  </label>
+                  {selected && (
+                    <div className="px-3 pb-3 flex items-center gap-2">
+                      <span className="text-xs text-gray-500 w-20 shrink-0">Hora de entrada</span>
+                      <select
+                        value={dayHours[value] ?? '14:00'}
+                        onChange={e => setDayHours(h => ({ ...h, [value]: e.target.value }))}
+                        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        {TIME_SLOTS.map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
-                {selectedDays.includes(value) && config && (
-                  <span className="text-sm text-blue-600 font-medium">
-                    €{config.monthlyPricePerWeekday.toFixed(2)}/mês
-                  </span>
-                )}
-              </label>
-            ))}
+              );
+            })}
           </div>
         </div>
 

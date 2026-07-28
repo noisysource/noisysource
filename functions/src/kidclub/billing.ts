@@ -3,6 +3,7 @@ import { onCall, onRequest } from "firebase-functions/v2/https";
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
+import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -45,8 +46,8 @@ function periodsUntilSchoolYearEnd(fromDate: Date): ReturnType<typeof periodForD
 
 async function getActiveSubs() {
   const [studySnap, transportSnap] = await Promise.all([
-    db.collection("studyroom").where("status", "in", ["active", "confirmed"]).get(),
-    db.collection("transportationSubscriptions").where("status", "==", "active").get(),
+    appCol("studyroom").where("status", "in", ["active", "confirmed"]).get(),
+    appCol("transportationSubscriptions").where("status", "==", "active").get(),
   ]);
   const byFamily: Record<string, { familyId: string; userId: string; study: any[]; transport: any[] }> = {};
   const ensure = (fid: string, uid: string) => {
@@ -60,13 +61,13 @@ async function getActiveSubs() {
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
 
 async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
-  const billingRef = db.collection("billing").doc(billingId);
+  const billingRef = appCol("billing").doc(billingId);
   const billing = (await billingRef.get()).data();
   if (!billing) throw new Error(`Billing record ${billingId} not found`);
 
   const { familyId, userId, lineItems, total, billingName, billingEmail, periodLabel } = billing;
 
-  const famSnap = await db.collection("families").doc(familyId).get();
+  const famSnap = await appCol("families").doc(familyId).get();
   const fam = famSnap.data() ?? {};
   const clientNif: string = fam.nif ?? "999999990";
 
@@ -77,7 +78,7 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
       email: billingEmail,
       ...(clientNif !== "999999990" ? { fiscal_id: clientNif } : {}),
     });
-    await db.collection("families").doc(familyId).update({ vendusClientId });
+    await appCol("families").doc(familyId).update({ vendusClientId });
   }
 
   const vendusClient: VendusClient = { id: vendusClientId };
@@ -104,7 +105,7 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
 
   // Queue invoice email
   if (billingEmail) {
-    await db.collection("emailOutbox").add({
+    await appCol("emailOutbox").add({
       to: billingEmail,
       subject: `Fatura ${invoiceNumber} — ${COMPANY_NAME} — ${periodLabel}`,
       html: buildInvoiceEmail({ clientName: billingName, invoiceNumber, periodLabel, total, lineItems }),
@@ -148,7 +149,7 @@ async function buildBillingRecord(
   const { familyId, userId, study, transport } = group;
   const { docId, sendEmail = !dryRun } = opts;
 
-  const famSnap = await db.collection("families").doc(familyId).get();
+  const famSnap = await appCol("families").doc(familyId).get();
   if (!famSnap.exists) { console.warn(`Family ${familyId} not found`); return; }
   const fam = famSnap.data()!;
   const contact = fam.primaryContact ?? {};
@@ -163,8 +164,8 @@ async function buildBillingRecord(
   dueDate.setDate(8);
 
   const billingRef = docId
-    ? db.collection("billing").doc(docId)
-    : db.collection("billing").doc();
+    ? appCol("billing").doc(docId)
+    : appCol("billing").doc();
 
   await billingRef.set({
     familyId,
@@ -184,7 +185,7 @@ async function buildBillingRecord(
   });
 
   if (sendEmail && billingEmail) {
-    await db.collection("emailOutbox").add({
+    await appCol("emailOutbox").add({
       to: billingEmail,
       subject: `Pagamento pendente — ${COMPANY_NAME} — ${period.label}`,
       html: buildPaymentNoticeEmail({ clientName: billingName, periodLabel: period.label, total, lineItems, billingId: billingRef.id }),
@@ -196,7 +197,7 @@ async function buildBillingRecord(
   return billingRef.id;
 }
 
-export const sendBillingNotices = onCall(
+export const sendBillingNotice = onCall(
   { region: "europe-west3", invoker: "public" },
   async (request) => {
     const uid = request.auth?.uid;
@@ -205,41 +206,35 @@ export const sendBillingNotices = onCall(
     const roles = userDoc.data()?.roles ?? {};
     if (!roles.owner && !roles.rainbowAdmin) throw new Error("Unauthorized");
 
-    const { year, month, dryRun = false } = request.data ?? {};
-    const date = year && month ? new Date(year, month - 1, 1) : new Date();
-    const period = periodForDate(date);
+    const { billingId } = request.data ?? {};
+    if (!billingId) throw new Error("billingId required");
 
-    const groups = await getActiveSubs();
-    let sent = 0, failed = 0;
+    const billingRef = appCol("billing").doc(billingId);
+    const billing = (await billingRef.get()).data();
+    if (!billing) throw new Error("Billing record not found");
+    if (!["pending", "failed"].includes(billing.status)) throw new Error("Record is not in a noticeable state");
+    if (!billing.billingEmail) throw new Error("No billing email on record");
 
-    for (const g of groups) {
-      try {
-        const docId = `${g.familyId}_${period.isoDate.slice(0, 7)}`;
-        const existing = await db.collection("billing").doc(docId).get();
+    await appCol("emailOutbox").add({
+      to: billing.billingEmail,
+      subject: `Pagamento pendente — ${COMPANY_NAME} — ${billing.periodLabel}`,
+      html: buildPaymentNoticeEmail({
+        clientName: billing.billingName,
+        periodLabel: billing.periodLabel,
+        total: billing.total,
+        lineItems: billing.lineItems,
+        billingId,
+      }),
+      status: "queued",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
-        if (existing.exists && existing.data()?.status === "pending" && !dryRun) {
-          // Record already created by trigger — just queue the email
-          const d = existing.data()!;
-          if (d.billingEmail) {
-            await db.collection("emailOutbox").add({
-              to: d.billingEmail,
-              subject: `Pagamento pendente — ${COMPANY_NAME} — ${period.label}`,
-              html: buildPaymentNoticeEmail({ clientName: d.billingName, periodLabel: period.label, total: d.total, lineItems: d.lineItems, billingId: existing.id }),
-              status: "queued",
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-          }
-        } else if (!existing.exists) {
-          await buildBillingRecord(g, period, dryRun, { docId, sendEmail: !dryRun });
-        }
-        sent++;
-      } catch (err) {
-        console.error(`Failed for family ${g.familyId}:`, err);
-        failed++;
-      }
-    }
+    await billingRef.update({
+      noticeSentAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
-    return { sent, failed, period: period.label, dryRun };
+    return { ok: true };
   }
 );
 
@@ -254,7 +249,7 @@ export const initiateMbwayPayment = onCall(
     const { billingId, phone } = request.data ?? {};
     if (!billingId || !phone) throw new Error("billingId and phone required");
 
-    const billingRef = db.collection("billing").doc(billingId);
+    const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
     if (!billing) throw new Error("Billing record not found");
     if (billing.userId !== uid) throw new Error("Unauthorized");
@@ -286,7 +281,7 @@ export const initiateMultibancoPayment = onCall(
     if (!uid) throw new Error("Unauthenticated");
 
     const { billingId } = request.data ?? {};
-    const billingRef = db.collection("billing").doc(billingId);
+    const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
     if (!billing) throw new Error("Billing record not found");
     if (billing.userId !== uid) throw new Error("Unauthorized");
@@ -328,7 +323,7 @@ export const initiateCardPayment = onCall(
     if (!uid) throw new Error("Unauthenticated");
 
     const { billingId } = request.data ?? {};
-    const billingRef = db.collection("billing").doc(billingId);
+    const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
     if (!billing) throw new Error("Billing record not found");
     if (billing.userId !== uid) throw new Error("Unauthorized");
@@ -366,7 +361,7 @@ export const easypayWebhook = onRequest(
     const { event, payment } = payload;
 
     if (event === "payment_success" && payment?.status === "paid") {
-      const snap = await db.collection("billing")
+      const snap = await appCol("billing")
         .where("easypayId", "==", payment.id)
         .limit(1)
         .get();
@@ -393,7 +388,7 @@ export const easypayWebhook = onRequest(
     }
 
     if (event === "payment_failed" || event === "payment_expired") {
-      const snap = await db.collection("billing")
+      const snap = await appCol("billing")
         .where("easypayId", "==", payment?.id)
         .limit(1)
         .get();
@@ -421,13 +416,13 @@ export const createPartyDeposit = onCall(
     const { bookingId } = request.data ?? {};
     if (!bookingId) throw new Error("bookingId required");
 
-    const bookingSnap = await db.collection("bookings").doc(bookingId).get();
+    const bookingSnap = await appCol("bookings").doc(bookingId).get();
     if (!bookingSnap.exists) throw new Error("Booking not found");
     const booking = bookingSnap.data()!;
 
     // Verify ownership — booking must have userId or familyId linked to caller
     if (booking.userId !== uid) {
-      const famSnap = await db.collection("families")
+      const famSnap = await appCol("families")
         .where("primaryContact.userId", "==", uid)
         .limit(1)
         .get();
@@ -441,7 +436,7 @@ export const createPartyDeposit = onCall(
     }
 
     // Return existing deposit billing if already created
-    const existing = await db.collection("billing")
+    const existing = await appCol("billing")
       .where("bookingId", "==", bookingId)
       .where("type", "==", "party_deposit")
       .limit(1)
@@ -458,7 +453,7 @@ export const createPartyDeposit = onCall(
       new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     );
 
-    const billingRef = await db.collection("billing").add({
+    const billingRef = await appCol("billing").add({
       familyId: booking.familyId,
       userId: uid,
       bookingId,
@@ -496,7 +491,7 @@ export const setPaymentMethod = onCall(
       throw new Error("Invalid payment method");
     }
 
-    const familySnap = await db.collection("families").where("userId", "==", uid).limit(1).get();
+    const familySnap = await appCol("families").where("userId", "==", uid).limit(1).get();
     if (familySnap.empty) throw new Error("Family not found");
 
     const update: Record<string, any> = { paymentMethod: method, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
@@ -511,8 +506,8 @@ export const setPaymentMethod = onCall(
 
 async function autoCreateBillingSchedule(familyId: string, userId: string): Promise<void> {
   const [studySnap, transportSnap] = await Promise.all([
-    db.collection("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
-    db.collection("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
+    appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
+    appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
   ]);
 
   const group = {
@@ -527,14 +522,14 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
 
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
-    const existing = await db.collection("billing").doc(docId).get();
+    const existing = await appCol("billing").doc(docId).get();
 
     if (existing.exists) {
       // Only update records still pending — don't touch anything already being processed/paid
       if (existing.data()?.status === "pending") {
         const { lineItems, total } = computeLineItems(group, period);
         if (lineItems.length > 0 && total > 0) {
-          await db.collection("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
           updated++;
         }
       }
@@ -567,12 +562,12 @@ export const backfillBillingSchedules = onCall(
         const periods = periodsUntilSchoolYearEnd(new Date());
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
-          const existing = await db.collection("billing").doc(docId).get();
+          const existing = await appCol("billing").doc(docId).get();
           if (existing.exists) {
             if (existing.data()?.status === "pending") {
               const { lineItems, total } = computeLineItems(group, period);
               if (lineItems.length > 0 && total > 0) {
-                await db.collection("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
                 updated++;
               }
             } else {
@@ -594,7 +589,7 @@ export const backfillBillingSchedules = onCall(
 );
 
 export const onStudyroomConfirmed = onDocumentUpdated(
-  { document: "studyroom/{entryId}", region: "europe-west3" },
+  { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
   async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
@@ -607,7 +602,7 @@ export const onStudyroomConfirmed = onDocumentUpdated(
 );
 
 export const onTransportConfirmed = onDocumentUpdated(
-  { document: "transportationSubscriptions/{subId}", region: "europe-west3" },
+  { document: "_apps/arcoiris/transportationSubscriptions/{subId}", region: "europe-west3" },
   async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();

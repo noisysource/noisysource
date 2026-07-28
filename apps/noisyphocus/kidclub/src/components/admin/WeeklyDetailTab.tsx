@@ -1,7 +1,7 @@
 
 import { useState, useEffect } from 'react';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, Timestamp, where } from 'firebase/firestore';
+import { col } from '../../lib/db';
+import { getDocs, query, Timestamp, where } from 'firebase/firestore';
 import { FinancialEvent } from '@shared/models';
 import { safeDate } from '@shared/lib/dates';
 import Calendar from '../Calendar';
@@ -25,7 +25,7 @@ export default function WeeklyDetailTab() {
     const endTimestamp = Timestamp.fromDate(endOfMonth);
 
     const eventsQuery = query(
-      collection(db, 'financialEvents'),
+      col('financialEvents'),
       where('date', '>=', startTimestamp),
       where('date', '<=', endTimestamp)
     );

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { getDoc, query, where, getDocs } from 'firebase/firestore';
+import { col, docRef } from '../../lib/db';
 import { Invoice, Payment } from '@shared/models';
 import { format } from 'date-fns';
 
@@ -17,7 +17,7 @@ export default function InvoiceDetailPage() {
         setIsLoading(true);
         
         // Fetch invoice
-        const invoiceRef = doc(db, 'invoices', id);
+        const invoiceRef = docRef('invoices', id);
         const invoiceSnap = await getDoc(invoiceRef);
         
         if (invoiceSnap.exists()) {
@@ -37,7 +37,7 @@ export default function InvoiceDetailPage() {
 
           // Fetch associated payment if exists
           if (invoiceData.paymentId) {
-            const paymentRef = doc(db, 'payments', invoiceData.paymentId);
+            const paymentRef = docRef('payments', invoiceData.paymentId);
             const paymentSnap = await getDoc(paymentRef);
             if (paymentSnap.exists()) {
               const paymentData = paymentSnap.data();
@@ -54,7 +54,7 @@ export default function InvoiceDetailPage() {
           } else {
             // Check if there's a payment linked to this invoice
             const paymentsQuery = query(
-              collection(db, 'payments'),
+              col('payments'),
               where('invoiceId', '==', invoiceSnap.id)
             );
             const paymentsSnap = await getDocs(paymentsQuery);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { getDocs, updateDoc } from 'firebase/firestore';
+import { col, docRef } from '../../lib/db';
 
 type SubStatus = 'pending' | 'active' | 'cancelled';
 
@@ -76,8 +76,8 @@ export default function SubscriptionsAdminPage() {
     setError(null);
     try {
       const [studySnap, transportSnap] = await Promise.all([
-        getDocs(collection(db, 'studyroom')),
-        getDocs(collection(db, 'transportationSubscriptions')),
+        getDocs(col('studyroom')),
+        getDocs(col('transportationSubscriptions')),
       ]);
 
       const study: SubItem[] = studySnap.docs.map(d => {
@@ -136,9 +136,10 @@ export default function SubscriptionsAdminPage() {
   const approve = async (item: SubItem) => {
     setProcessing(item.id);
     try {
-      const col = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(doc(db, col, item.id), {
-        status: 'active',
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      const newStatus = item._type === 'study' ? 'confirmed' : 'active';
+      await updateDoc(docRef(colName, item.id), {
+        status: newStatus,
         approvedAt: new Date(),
         updatedAt: new Date(),
       });
@@ -152,8 +153,8 @@ export default function SubscriptionsAdminPage() {
     if (!rejectReason.trim()) return;
     setProcessing(item.id);
     try {
-      const col = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(doc(db, col, item.id), {
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      await updateDoc(docRef(colName, item.id), {
         status: 'cancelled',
         statusReason: rejectReason,
         rejectedAt: new Date(),
@@ -171,8 +172,8 @@ export default function SubscriptionsAdminPage() {
     if (!window.confirm(`Cancelar inscrição de ${item.childName}?`)) return;
     setProcessing(item.id);
     try {
-      const col = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(doc(db, col, item.id), {
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      await updateDoc(docRef(colName, item.id), {
         status: 'cancelled',
         statusReason: 'Cancelado pelo administrador',
         cancelledAt: new Date(),

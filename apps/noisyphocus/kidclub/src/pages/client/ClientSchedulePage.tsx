@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { getDocs, query, where } from 'firebase/firestore';
+import { col } from '../../lib/db';
 import { StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
 import { format, parseISO, isPast, isFuture, startOfDay, addDays } from 'date-fns';
 import { Link } from 'react-router-dom';
@@ -35,7 +35,7 @@ export default function ClientSchedulePage() {
         setIsLoading(true);
 
         // Fetch study room subscriptions
-        const studyQuery = query(collection(db, 'studyroom'), where('userId', '==', user.uid));
+        const studyQuery = query(col('studyroom'), where('userId', '==', user.uid));
         const studySnapshot = await getDocs(studyQuery);
         setStudySubscriptions(
           studySnapshot.docs.map(doc => {
@@ -54,7 +54,7 @@ export default function ClientSchedulePage() {
         // First try userId (uid), then email as fallback
         let transportSnapshot;
         const transportQueryByUserId = query(
-          collection(db, 'transportationSubscriptions'),
+          col('transportationSubscriptions'),
           where('userId', '==', user.uid)
         );
         transportSnapshot = await getDocs(transportQueryByUserId);
@@ -62,7 +62,7 @@ export default function ClientSchedulePage() {
         // If no results by userId, try by email
         if (transportSnapshot.empty && user.email) {
           const transportQueryByEmail = query(
-            collection(db, 'transportationSubscriptions'),
+            col('transportationSubscriptions'),
             where('contactEmail', '==', user.email)
           );
           transportSnapshot = await getDocs(transportQueryByEmail);
@@ -92,7 +92,7 @@ export default function ClientSchedulePage() {
         // Fetch party bookings by email
         if (user.email) {
           const bookingsQuery = query(
-            collection(db, 'bookings'),
+            col('bookings'),
             where('email', '==', user.email)
           );
           const bookingsSnapshot = await getDocs(bookingsQuery);

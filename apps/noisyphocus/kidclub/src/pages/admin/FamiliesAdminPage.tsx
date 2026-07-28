@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, deleteDoc, query, orderBy, Timestamp } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { getDocs, deleteDoc, query, orderBy, Timestamp } from 'firebase/firestore';
+import { col, docRef } from '../../lib/db';
 
 interface FamilyDoc {
   id: string;
@@ -86,11 +86,11 @@ export default function FamiliesAdminPage() {
     setLoading(true);
     try {
       const [famSnap, childSnap, studySnap, transportSnap, billingSnap] = await Promise.all([
-        getDocs(query(collection(db, 'families'), orderBy('createdAt', 'desc'))),
-        getDocs(collection(db, 'children')),
-        getDocs(collection(db, 'studyroom')),
-        getDocs(collection(db, 'transportationSubscriptions')),
-        getDocs(collection(db, 'billing')),
+        getDocs(query(col('families'), orderBy('createdAt', 'desc'))),
+        getDocs(col('children')),
+        getDocs(col('studyroom')),
+        getDocs(col('transportationSubscriptions')),
+        getDocs(col('billing')),
       ]);
       setFamilies(famSnap.docs.map(d => ({ id: d.id, ...d.data() } as FamilyDoc)));
       setChildren(childSnap.docs.map(d => ({ id: d.id, ...d.data() } as ChildDoc)));
@@ -109,11 +109,11 @@ export default function FamiliesAdminPage() {
     setDeleting(familyId);
     try {
       const toDelete = [
-        ...children.filter(c => c.familyId === familyId).map(c => doc(db, 'children', c.id)),
-        ...study.filter(s => s.familyId === familyId).map(s => doc(db, 'studyroom', s.id)),
-        ...transport.filter(t => t.familyId === familyId).map(t => doc(db, 'transportationSubscriptions', t.id)),
-        ...billing.filter(b => b.familyId === familyId).map(b => doc(db, 'billing', b.id)),
-        doc(db, 'families', familyId),
+        ...children.filter(c => c.familyId === familyId).map(c => docRef('children', c.id)),
+        ...study.filter(s => s.familyId === familyId).map(s => docRef('studyroom', s.id)),
+        ...transport.filter(t => t.familyId === familyId).map(t => docRef('transportationSubscriptions', t.id)),
+        ...billing.filter(b => b.familyId === familyId).map(b => docRef('billing', b.id)),
+        docRef('families', familyId),
       ];
       await Promise.all(toDelete.map(ref => deleteDoc(ref)));
       await load();

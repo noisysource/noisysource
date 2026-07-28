@@ -1,5 +1,5 @@
-import { collection, getDocs, query, where, doc, getDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { getDocs, query, where, getDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { col, docRef } from '../lib/db';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
 import { calculateAge } from '../lib/utils';
 
@@ -24,7 +24,7 @@ const mapFamily = (id: string, data: any): Family => ({
 
 export const familyService = {
   async getOrCreateFamily(userId: string, userName: string, userEmail: string): Promise<Family> {
-    const q = query(collection(db, 'families'), where('primaryContact.userId', '==', userId));
+    const q = query(col('families'), where('primaryContact.userId', '==', userId));
     const snapshot = await getDocs(q);
 
     if (!snapshot.empty) {
@@ -44,28 +44,28 @@ export const familyService = {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    const ref = await addDoc(collection(db, 'families'), newFamily);
+    const ref = await addDoc(col('families'), newFamily);
     return { ...newFamily, id: ref.id };
   },
 
   async updateFamily(familyId: string, updates: Partial<Omit<Family, 'id' | 'createdAt'>>): Promise<void> {
     const clean: any = { ...updates, updatedAt: new Date() };
     Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
-    await updateDoc(doc(db, 'families', familyId), clean);
+    await updateDoc(docRef('families', familyId), clean);
   },
 
   async getFamilyChildren(familyId: string, includeInactive = false, userId?: string): Promise<Child[]> {
     // When userId is provided, query by userId so Firestore rules (resource.data.userId == auth.uid) are satisfied
     const q = userId
-      ? query(collection(db, 'children'), where('userId', '==', userId))
-      : query(collection(db, 'children'), where('familyId', '==', familyId));
+      ? query(col('children'), where('userId', '==', userId))
+      : query(col('children'), where('familyId', '==', familyId));
     const snapshot = await getDocs(q);
     const all = snapshot.docs.map(d => mapChild(d.id, d.data()));
     return includeInactive ? all : all.filter(c => c.status !== 'inactive');
   },
 
   async getChild(childId: string): Promise<Child | null> {
-    const snap = await getDoc(doc(db, 'children', childId));
+    const snap = await getDoc(docRef('children', childId));
     if (!snap.exists()) return null;
     return mapChild(snap.id, snap.data());
   },
@@ -90,28 +90,28 @@ export const familyService = {
     if (data.medicalNotes) clean.medicalNotes = data.medicalNotes;
     if (data.allergies?.length) clean.allergies = data.allergies;
     if (data.notes) clean.notes = data.notes;
-    await addDoc(collection(db, 'children'), clean);
+    await addDoc(col('children'), clean);
   },
 
   async updateChild(childId: string, updates: Partial<Child>): Promise<void> {
     const clean: any = { ...updates, updatedAt: new Date() };
     Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
-    await updateDoc(doc(db, 'children', childId), clean);
+    await updateDoc(docRef('children', childId), clean);
   },
 
   async deactivateChild(childId: string): Promise<void> {
-    await updateDoc(doc(db, 'children', childId), { status: 'inactive', updatedAt: new Date() });
+    await updateDoc(docRef('children', childId), { status: 'inactive', updatedAt: new Date() });
   },
 
   async deleteChild(childId: string): Promise<void> {
-    await deleteDoc(doc(db, 'children', childId));
+    await deleteDoc(docRef('children', childId));
   },
 
   async getChildSubscriptionCounts(childId: string): Promise<number> {
     const [study, transport, bookings] = await Promise.all([
-      getDocs(query(collection(db, 'studyroom'), where('childId', '==', childId))),
-      getDocs(query(collection(db, 'transportationSubscriptions'), where('childId', '==', childId))),
-      getDocs(query(collection(db, 'bookings'), where('childId', '==', childId))),
+      getDocs(query(col('studyroom'), where('childId', '==', childId))),
+      getDocs(query(col('transportationSubscriptions'), where('childId', '==', childId))),
+      getDocs(query(col('bookings'), where('childId', '==', childId))),
     ]);
     const isActive = (d: any) => d.data().status === 'active';
     return study.docs.filter(isActive).length + transport.docs.filter(isActive).length + bookings.docs.length;
@@ -124,14 +124,14 @@ export const familyService = {
   }> {
     // When userId is provided, query by userId (rule-compatible) and filter client-side by childId
     const studyQ = userId
-      ? query(collection(db, 'studyroom'), where('userId', '==', userId))
-      : query(collection(db, 'studyroom'), where('childId', '==', childId));
+      ? query(col('studyroom'), where('userId', '==', userId))
+      : query(col('studyroom'), where('childId', '==', childId));
     const transportQ = userId
-      ? query(collection(db, 'transportationSubscriptions'), where('userId', '==', userId))
-      : query(collection(db, 'transportationSubscriptions'), where('childId', '==', childId));
+      ? query(col('transportationSubscriptions'), where('userId', '==', userId))
+      : query(col('transportationSubscriptions'), where('childId', '==', childId));
     const bookingsQ = userId
-      ? query(collection(db, 'bookings'), where('userId', '==', userId))
-      : query(collection(db, 'bookings'), where('childId', '==', childId));
+      ? query(col('bookings'), where('userId', '==', userId))
+      : query(col('bookings'), where('childId', '==', childId));
 
     const [studySnap, transportSnap, bookingsSnap] = await Promise.all([
       getDocs(studyQ),
@@ -168,14 +168,14 @@ export const familyService = {
   }> {
     const [studySnap, transportSnap, bookingsSnap] = await Promise.all([
       getDocs(userId
-        ? query(collection(db, 'studyroom'), where('userId', '==', userId))
-        : query(collection(db, 'studyroom'), where('familyId', '==', familyId))),
+        ? query(col('studyroom'), where('userId', '==', userId))
+        : query(col('studyroom'), where('familyId', '==', familyId))),
       getDocs(userId
-        ? query(collection(db, 'transportationSubscriptions'), where('userId', '==', userId))
-        : query(collection(db, 'transportationSubscriptions'), where('familyId', '==', familyId))),
+        ? query(col('transportationSubscriptions'), where('userId', '==', userId))
+        : query(col('transportationSubscriptions'), where('familyId', '==', familyId))),
       getDocs(userId
-        ? query(collection(db, 'bookings'), where('userId', '==', userId))
-        : query(collection(db, 'bookings'), where('familyId', '==', familyId))),
+        ? query(col('bookings'), where('userId', '==', userId))
+        : query(col('bookings'), where('familyId', '==', familyId))),
     ]);
 
     return {

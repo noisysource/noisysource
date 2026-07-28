@@ -1,5 +1,5 @@
-import { getDocs, collection, doc, getDoc, setDoc, updateDoc, addDoc, query, where } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { getDocs, getDoc, setDoc, updateDoc, addDoc, query, where } from 'firebase/firestore';
+import { col, docRef } from '../lib/db';
 import { Booking, PartyConfig } from '@shared/models';
 import { safeDate } from '@shared/lib/dates';
 
@@ -7,7 +7,7 @@ type Status = "pending" | "confirmed" | "rejected";
 
 export const partyService = {
   async getBookings(): Promise<Booking[]> {
-    const bookingsSnap = await getDocs(collection(db, "bookings"));
+    const bookingsSnap = await getDocs(col("bookings"));
     const list: Booking[] = bookingsSnap.docs.map((d) => {
       const x: any = d.data();
       const s: Status = (x.status as Status) ?? "pending";
@@ -39,7 +39,7 @@ export const partyService = {
   },
 
   async getPartyConfig(): Promise<PartyConfig> {
-    const snap = await getDoc(doc(db, 'config', 'party'));
+    const snap = await getDoc(docRef('config', 'party'));
     if (snap.exists()) {
       return snap.data() as PartyConfig;
     }
@@ -50,23 +50,26 @@ export const partyService = {
   },
 
   async savePartyConfig(config: PartyConfig): Promise<void> {
-    await setDoc(doc(db, 'config', 'party'), config);
+    await setDoc(docRef('config', 'party'), config);
   },
 
   async updateBookingStatus(id: string, status: Status): Promise<void> {
-    await updateDoc(doc(db, 'bookings', id), { status });
+    await updateDoc(docRef('bookings', id), { status });
   },
 
   async updateBooking(booking: Booking): Promise<void> {
-    await updateDoc(doc(db, "bookings", booking.id), { ...booking });
+    await updateDoc(docRef('bookings', booking.id), { ...booking });
   },
 
   async createBooking(booking: Omit<Booking, 'id'>): Promise<void> {
-    await addDoc(collection(db, 'bookings'), booking);
+    await addDoc(col('bookings'), booking);
   },
 
-  async getBookingsByFamily(familyId: string): Promise<Booking[]> {
-    const snap = await getDocs(query(collection(db, 'bookings'), where('familyId', '==', familyId)));
+  async getBookingsByFamily(familyId: string, userId?: string): Promise<Booking[]> {
+    const q = userId
+      ? query(col('bookings'), where('userId', '==', userId))
+      : query(col('bookings'), where('familyId', '==', familyId));
+    const snap = await getDocs(q);
     const list: Booking[] = snap.docs.map((d) => {
       const x: any = d.data();
       return {
@@ -95,7 +98,7 @@ export const partyService = {
   },
 
   async getBookingById(id: string): Promise<Booking | null> {
-    const snap = await getDoc(doc(db, 'bookings', id));
+    const snap = await getDoc(docRef('bookings', id));
     if (!snap.exists()) return null;
     const x: any = snap.data();
     return {

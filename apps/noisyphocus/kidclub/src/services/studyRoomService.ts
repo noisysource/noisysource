@@ -1,12 +1,12 @@
-import { getDocs, collection, doc, getDoc, setDoc, updateDoc, arrayUnion, Timestamp, addDoc } from 'firebase/firestore';
+import { getDocs, getDoc, setDoc, updateDoc, arrayUnion, Timestamp, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db } from '../lib/firebase';
+import { col, docRef } from '../lib/db';
 import { StudyRoomEntry, StudyCenterConfig, EntryChangeHistory, StudyStatus, normalizeStatus } from '@shared/models';
 import { safeDate } from '@shared/lib/dates';
 
 export const studyRoomService = {
   async getStudyRoomEntries(): Promise<StudyRoomEntry[]> {
-    const entriesSnap = await getDocs(collection(db, "studyroom"));
+    const entriesSnap = await getDocs(col("studyroom"));
     const list: StudyRoomEntry[] = entriesSnap.docs.map((d) => {
       const x: any = d.data();
       const s: StudyStatus = normalizeStatus(x);
@@ -44,13 +44,13 @@ export const studyRoomService = {
   },
 
   async getStudyCenterConfig(): Promise<StudyCenterConfig | null> {
-    const configDocRef = doc(db, 'config', 'studyCenter');
+    const configDocRef = docRef('config', 'studyCenter');
     const configSnap = await getDoc(configDocRef);
     return configSnap.exists() ? configSnap.data() as StudyCenterConfig : null;
   },
 
   async saveStudyCenterConfig(config: StudyCenterConfig): Promise<void> {
-    const configDocRef = doc(db, 'config', 'studyCenter');
+    const configDocRef = docRef('config', 'studyCenter');
     await setDoc(configDocRef, config);
   },
 
@@ -61,7 +61,7 @@ export const studyRoomService = {
       timestamp: Timestamp.now(),
     };
 
-    await updateDoc(doc(db, 'studyroom', id), {
+    await updateDoc(docRef('studyroom', id), {
       status,
       statusReason: reason,
       statusHistory: arrayUnion(newHistoryEntry),
@@ -75,7 +75,7 @@ export const studyRoomService = {
     });
 
     if (Object.keys(dataToUpdate).length > 0) {
-      await updateDoc(doc(db, "studyroom", entry.id), {
+      await updateDoc(docRef('studyroom', entry.id), {
         ...dataToUpdate,
         entryHistory: arrayUnion(...changes),
       });
@@ -83,7 +83,7 @@ export const studyRoomService = {
   },
 
   async createEntry(entry: Omit<StudyRoomEntry, 'id'>): Promise<void> {
-    await addDoc(collection(db, 'studyroom'), entry);
+    await addDoc(col('studyroom'), entry);
   },
 
   async uploadFile(entryId: string, file: File): Promise<any> {
@@ -100,7 +100,7 @@ export const studyRoomService = {
     };
 
     // Update Firestore document
-    const entryDocRef = doc(db, "studyroom", entryId);
+    const entryDocRef = docRef('studyroom', entryId);
     await updateDoc(entryDocRef, {
       uploadedFiles: arrayUnion(newFile),
     });

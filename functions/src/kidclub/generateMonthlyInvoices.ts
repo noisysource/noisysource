@@ -2,6 +2,7 @@ import * as admin from "firebase-admin";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall } from "firebase-functions/v2/https";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT } from "./vendus";
+import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -60,8 +61,8 @@ function dayLabel(day: string): string {
 
 async function getActiveSubs(): Promise<FamilyGroup[]> {
   const [studySnap, transportSnap] = await Promise.all([
-    db.collection("studyroom").where("status", "==", "active").get(),
-    db.collection("transportationSubscriptions").where("status", "==", "active").get(),
+    appCol("studyroom").where("status", "==", "active").get(),
+    appCol("transportationSubscriptions").where("status", "==", "active").get(),
   ]);
 
   const byFamily: Record<string, FamilyGroup> = {};
@@ -92,7 +93,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
   const { familyId, userId, study, transport } = group;
 
   // Get family contact details
-  const famSnap = await db.collection("families").doc(familyId).get();
+  const famSnap = await appCol("families").doc(familyId).get();
   if (!famSnap.exists) {
     console.warn(`Family ${familyId} not found, skipping`);
     return;
@@ -140,7 +141,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
   if (dryRun) {
     const dueDate = new Date(period.start);
     dueDate.setDate(8);
-    await db.collection("invoices").add({
+    await appCol("invoices").add({
       familyId,
       userId,
       status: "dry-run",
@@ -169,7 +170,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
       email: clientEmail,
       ...(clientNif !== "999999990" ? { fiscal_id: clientNif } : {}),
     });
-    await db.collection("families").doc(familyId).update({ vendusClientId });
+    await appCol("families").doc(familyId).update({ vendusClientId });
   }
 
   const vendusClient: VendusClient = { id: vendusClientId };
@@ -184,7 +185,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
   } catch (err) {
     console.error(`Vendus error for family ${familyId}:`, err);
     // Store failed invoice for retry
-    await db.collection("invoices").add({
+    await appCol("invoices").add({
       familyId,
       userId,
       status: "error",
@@ -209,7 +210,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
   dueDate.setDate(8); // due by the 8th
 
   // Store invoice in Firestore
-  const invoiceRef = await db.collection("invoices").add({
+  const invoiceRef = await appCol("invoices").add({
     familyId,
     userId,
     vendusId: vendusDoc.id,
@@ -233,7 +234,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
 
   // Queue email
   if (clientEmail) {
-    await db.collection("emailOutbox").add({
+    await appCol("emailOutbox").add({
       to: clientEmail,
       subject: `Fatura ${invoiceNumber} — ${COMPANY_NAME} — ${period.label}`,
       html: buildInvoiceEmail({

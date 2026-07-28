@@ -1,6 +1,7 @@
 
-import { collection, writeBatch, doc, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { writeBatch, getDoc, setDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { col, docRef } from '../lib/db';
 import { Event } from '@shared/models/Event';
 import { FinancialEvent } from '@shared/models/FinancialEvent';
 import { EventModification, StudyRoomEntry, Booking, TransportationSubscription } from '@shared/models';
@@ -10,10 +11,36 @@ import { getTransportBooking } from './transportationService';
 import { centsToEuros } from '@shared/lib/money';
 import { employeeService } from './employeeService';
 
+// ── School calendar config ────────────────────────────────────────────────────
+
+export interface SchoolCalendarConfig {
+  yearEndDate: string; // 'YYYY-MM-DD'
+}
+
+const SCHOOL_CAL_DOC = docRef('config', 'schoolCalendar');
+
+export const schoolCalendarService = {
+  async get(): Promise<SchoolCalendarConfig | null> {
+    const snap = await getDoc(SCHOOL_CAL_DOC);
+    return snap.exists() ? (snap.data() as SchoolCalendarConfig) : null;
+  },
+  async save(cfg: SchoolCalendarConfig): Promise<void> {
+    await setDoc(SCHOOL_CAL_DOC, cfg);
+  },
+};
+
 //<editor-fold desc="Data Fetching">
 const getConfirmedStudyRoomEntries = async () => {
-  const studyRoomQuery = query(collection(db, 'studyroom'), where('status', '==', 'confirmed'));
+  const studyRoomQuery = query(col('studyroom'), where('status', '==', 'confirmed'));
   const snapshot = await getDocs(studyRoomQuery);
+  return snapshot.docs.map(doc => ({ ...doc.data() as StudyRoomEntry, id: doc.id }));
+};
+
+const getStudyRoomEntriesForCalendar = async () => {
+  const snapshot = await getDocs(query(
+    col('studyroom'),
+    where('status', 'in', ['confirmed', 'active', 'pending']),
+  ));
   return snapshot.docs.map(doc => ({ ...doc.data() as StudyRoomEntry, id: doc.id }));
 };
 
@@ -21,7 +48,7 @@ const getConfirmedPartyBookings = async (month: Date) => {
   const start = startOfMonth(month);
   const end = endOfMonth(month);
   const partyQuery = query(
-    collection(db, 'bookings'),
+    col('bookings'),
     where('status', '==', 'confirmed'),
     where('date', '>=', format(start, 'yyyy-MM-dd')),
     where('date', '<=', format(end, 'yyyy-MM-dd'))
@@ -31,8 +58,16 @@ const getConfirmedPartyBookings = async (month: Date) => {
 };
 
 const getActiveTransportSubscriptions = async () => {
-  const transportSubQuery = query(collection(db, 'transportationSubscriptions'), where('status', '==', 'active'));
+  const transportSubQuery = query(col('transportationSubscriptions'), where('status', '==', 'active'));
   const snapshot = await getDocs(transportSubQuery);
+  return snapshot.docs.map(doc => ({ ...doc.data() as TransportationSubscription, id: doc.id }));
+};
+
+const getTransportSubscriptionsForCalendar = async () => {
+  const snapshot = await getDocs(query(
+    col('transportationSubscriptions'),
+    where('status', 'in', ['active', 'pending']),
+  ));
   return snapshot.docs.map(doc => ({ ...doc.data() as TransportationSubscription, id: doc.id }));
 };
 
@@ -66,7 +101,7 @@ const getApprovedCancellations = async (month: Date): Promise<EventModification[
   
   // Fetch all approved cancellations
   const cancellationsQuery = query(
-    collection(db, 'eventModifications'),
+    col('eventModifications'),
     where('modificationType', '==', 'cancelled'),
     where('status', '==', 'approved')
   );
@@ -124,7 +159,6 @@ const generateFinancialEvents = (batch: any, items: any[], mapper: (item: any) =
     if (result) {
       const events = Array.isArray(result) ? result : [result];
       events.forEach(({ id, event }) => {
-        const financialEventsRef = collection(db, 'financialEvents');
         const eventData: FinancialEvent = {
           id,
           label: '',
@@ -139,7 +173,7 @@ const generateFinancialEvents = (batch: any, items: any[], mapper: (item: any) =
           eventKind: 'planned',
           ...event,
         };
-        batch.set(doc(financialEventsRef, id), eventData, { merge: true });
+        batch.set(docRef('financialEvents', id), eventData, { merge: true });
       });
     }
   });
@@ -148,14 +182,12 @@ const generateFinancialEvents = (batch: any, items: any[], mapper: (item: any) =
 // Event Sourcing: Events are immutable. Only create if doesn't exist.
 // We check existence before calling this, so we use set() instead of merge()
 const createCalendarEvent = (batch: any, id: string, data: Omit<Event, 'id'>) => {
-  const eventsRef = collection(db, 'events');
   // Use set() to create new event (immutable fact)
   // We only call this if event doesn't exist (checked before)
-  batch.set(doc(eventsRef, id), { ...data, id });
+  batch.set(docRef('events', id), { ...data, id });
 };
 
 const createFinancialEvent = (batch: any, id: string, event: Partial<FinancialEvent>) => {
-  const financialEventsRef = collection(db, 'financialEvents');
   const eventData: FinancialEvent = {
     id,
     label: '',
@@ -170,7 +202,7 @@ const createFinancialEvent = (batch: any, id: string, event: Partial<FinancialEv
     eventKind: 'planned',
     ...event,
   };
-  batch.set(doc(financialEventsRef, id), eventData, { merge: true });
+  batch.set(docRef('financialEvents', id), eventData, { merge: true });
 };
 
 //</editor-fold>
@@ -270,7 +302,7 @@ export const eventService = {
 
     // 1. Fetch regular calendar events
     const eventsQuery = query(
-      collection(db, 'events'),
+      col('events'),
       where('start', '>=', Timestamp.fromDate(start)),
       where('start', '<=', Timestamp.fromDate(end))
     );
@@ -297,7 +329,7 @@ export const eventService = {
     
     // Fetch EventModifications to get creation timestamps for ordering
     const eventModificationsQuery = query(
-      collection(db, 'eventModifications'),
+      col('eventModifications'),
       where('date', '>=', Timestamp.fromDate(start)),
       where('date', '<=', Timestamp.fromDate(end)),
       where('status', '==', 'approved')
@@ -371,31 +403,168 @@ export const eventService = {
     const eventsWithCancellationInfo = eventsWithState;
 
     // 4. Fetch planned financial events
-    const financialEventsQuery = query(
-      collection(db, 'financialEvents'),
-      where('eventKind', '==', 'planned'),
-      where('date', '>=', Timestamp.fromDate(start)),
-      where('date', '<=', Timestamp.fromDate(end))
+    let financialEventList: Event[] = [];
+    try {
+      const financialEventsQuery = query(
+        col('financialEvents'),
+        where('eventKind', '==', 'planned'),
+        where('date', '>=', Timestamp.fromDate(start)),
+        where('date', '<=', Timestamp.fromDate(end))
+      );
+      const financialEventsSnap = await getDocs(financialEventsQuery);
+      financialEventList = financialEventsSnap.docs.map((doc) => {
+        const fe = doc.data() as FinancialEvent;
+        return {
+          id: fe.id,
+          title: `${fe.label} - €${fe.amount.toFixed(2)}`,
+          amount: fe.amount,
+          start: fe.date,
+          end: fe.date,
+          type: 'financial',
+          status: 'confirmed',
+          bookingId: fe.id,
+          accountId: fe.accountId,
+        };
+      });
+    } catch (err) {
+      console.error('[Calendar] failed to fetch financial events:', err);
+    }
+
+    // 5. Fetch party bookings directly (pending + confirmed) — no need to generate
+    // Use a full collection read (no where clauses) to avoid Firestore rules evaluation
+    // issues with range queries, then filter client-side.
+    let partyEvents: Event[] = [];
+    try {
+      const partySnap = await getDocs(col('bookings'));
+      const startStr = format(start, 'yyyy-MM-dd');
+      const endStr   = format(end,   'yyyy-MM-dd');
+      partyEvents = partySnap.docs
+        .map(d => ({ id: d.id, ...d.data() } as Booking & { id: string }))
+        .filter(b => b.status !== 'rejected' && b.date >= startStr && b.date <= endStr)
+        .map(b => {
+          const bookingDate = new Date(`${b.date}T${b.time || '10:00'}`);
+          return {
+            id: `party_${b.id}`,
+            title: `Festa — ${b.childName}`,
+            start: Timestamp.fromDate(bookingDate),
+            end: Timestamp.fromDate(new Date(bookingDate.getTime() + 2 * 60 * 60 * 1000)),
+            type: 'party',
+            bookingId: b.id,
+            status: b.status,
+            booking: b,
+          } as unknown as Event;
+        });
+    } catch (err) {
+      console.error('[Calendar] failed to fetch party bookings:', err);
+    }
+
+    // 6. Compute study & transport events live from subscriptions (no "Generate Events" needed)
+    let computedStudyEvents: Event[] = [];
+    let computedTransportEvents: Event[] = [];
+    try {
+      const [studyEntries, transportSubs, schoolCal] = await Promise.all([
+        getStudyRoomEntriesForCalendar(),
+        getTransportSubscriptionsForCalendar(),
+        schoolCalendarService.get(),
+      ]);
+
+      // Hard cap: school year end date (null = no cap)
+      const schoolYearEnd: Date | null = schoolCal?.yearEndDate
+        ? new Date(`${schoolCal.yearEndDate}T23:59:59`)
+        : null;
+
+      const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+      for (const day of eachDayOfInterval({ start, end })) {
+        const dayName = DAY_NAMES[day.getDay()];
+        const dateStr = format(day, 'yyyy-MM-dd');
+
+        for (const entry of studyEntries) {
+          // Trust 'confirmed' status for liveness. School year end is the primary cap.
+          // Individual endDate only applies when it's EARLIER than the school year end
+          // (i.e. a mid-year cancellation), not when it's a stale value from a past year.
+          const rawEnd = entry.endDate ? safeDate(entry.endDate) : null;
+          const entryEnd = schoolYearEnd
+            ? (rawEnd && rawEnd < schoolYearEnd ? rawEnd : schoolYearEnd)
+            : rawEnd;
+          if (entryEnd && day > entryEnd) continue;
+
+          for (const daySel of entry.days) {
+            if (daySel.day !== dayName) continue;
+            const eventId = `study_${entry.id}_${dateStr}`;
+            const isCancelled = shouldSkipEvent(eventId, entry.id, 'study', day, cancellations);
+            const startDt = new Date(`${dateStr}T${daySel.hour}`);
+            computedStudyEvents.push({
+              id: eventId,
+              title: entry.childName,
+              start: Timestamp.fromDate(startDt),
+              end: Timestamp.fromDate(new Date(startDt.getTime() + 5 * 60 * 60 * 1000)),
+              type: 'study',
+              bookingId: entry.id,
+              status: (entry.status === 'confirmed' || (entry.status as string) === 'active') ? 'confirmed' : 'pending',
+              isCancelled,
+              booking: {
+                childName: entry.childName,
+                schoolName: entry.schoolName,
+                hasTransport: daySel.transport,
+                subscriptionId: entry.id,
+                subscriptionType: 'study',
+              },
+            } as unknown as Event);
+          }
+        }
+
+        for (const sub of transportSubs) {
+          const subStart = safeDate(sub.startDate);
+          const rawSubEnd = sub.endDate ? safeDate(sub.endDate) : null;
+          const subEnd = rawSubEnd && schoolYearEnd
+            ? (rawSubEnd < schoolYearEnd ? rawSubEnd : schoolYearEnd)
+            : (rawSubEnd ?? schoolYearEnd);
+          if (day < subStart || (subEnd && day > subEnd)) continue;
+
+          for (const sched of sub.schedule || []) {
+            if (sched.dayOfWeek !== dayName) continue;
+            const eventId = `transport_sub_${sub.id}_${dateStr}_${sched.pickupTime.replace(':', '')}`;
+            const isCancelled = shouldSkipEvent(eventId, sub.id, 'transport', day, cancellations);
+            const startDt = new Date(`${dateStr}T${sched.pickupTime}`);
+            computedTransportEvents.push({
+              id: eventId,
+              title: sub.childName,
+              start: Timestamp.fromDate(startDt),
+              end: Timestamp.fromDate(startDt),
+              type: 'transport',
+              bookingId: sub.id,
+              status: sub.status === 'active' ? 'confirmed' : 'pending',
+              isCancelled,
+              booking: {
+                childName: sub.childName,
+                pickupTime: sched.pickupTime,
+                pickupLocation: sched.pickupLocation,
+                dropoffLocation: sched.dropoffLocation,
+                subscriptionId: sub.id,
+                subscriptionType: 'transport',
+              },
+            } as unknown as Event);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Calendar] failed to compute subscription events:', err);
+    }
+
+    // Keep only non-subscription, non-party events from the events collection
+    // (study/transport computed live; party comes from bookings collection)
+    const coreEvents = eventsWithCancellationInfo.filter(
+      e => e.type !== 'study' && e.type !== 'transport' && e.type !== 'party'
     );
-    const financialEventsSnap = await getDocs(financialEventsQuery);
-    const financialEventList: Event[] = financialEventsSnap.docs.map((doc) => {
-      const fe = doc.data() as FinancialEvent;
 
-      return {
-        id: fe.id,
-        title: `${fe.label} - €${fe.amount.toFixed(2)}`,
-        amount: fe.amount,
-        start: fe.date,
-        end: fe.date,
-        type: 'financial',
-        status: 'confirmed',
-        bookingId: fe.id,
-        accountId: fe.accountId,
-      };
-    });
-
-    // 5. Combine and return both lists (including cancelled events, they're just marked)
-    return [...eventsWithCancellationInfo, ...financialEventList];
+    return [
+      ...coreEvents,
+      ...computedStudyEvents,
+      ...computedTransportEvents,
+      ...partyEvents,
+      ...financialEventList,
+    ] as unknown as Event[];
   },
 
   async generateEvents(month: Date): Promise<number> {
@@ -413,7 +582,7 @@ export const eventService = {
         const start = startOfMonth(month);
         const end = endOfMonth(month);
         const eventsQuery = query(
-          collection(db, 'events'),
+          col('events'),
           where('start', '>=', Timestamp.fromDate(start)),
           where('start', '<=', Timestamp.fromDate(end))
         );

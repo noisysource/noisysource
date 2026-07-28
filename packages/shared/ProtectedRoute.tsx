@@ -1,5 +1,5 @@
 // shared/components/auth/ProtectRoute.tsx
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useUser } from './hooks';
 import type { AppUser } from '@shared/dist/models';
@@ -13,6 +13,7 @@ interface ProtectRouteProps {
 
 export function ProtectRoute({ children, requiredRole }: ProtectRouteProps) {
   const user = useUser();
+  const location = useLocation();
 
   if (user === undefined) {
     return (
@@ -22,9 +23,9 @@ export function ProtectRoute({ children, requiredRole }: ProtectRouteProps) {
     );
   }
 
-  // 🚫 Not authenticated
+  // 🚫 Not authenticated — send to login, preserve the intended destination
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
   // 🔐 Authenticated, but missing required role

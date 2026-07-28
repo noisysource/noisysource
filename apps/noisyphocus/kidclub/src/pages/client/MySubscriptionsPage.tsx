@@ -82,9 +82,20 @@ export default function MySubscriptionsPage() {
       ) : (
         <div className="space-y-8">
           {childSubs.map(({ child, study, transport }) => {
+            const toSubStatus = (raw: string | undefined, kind: 'study' | 'transport'): SubStatus => {
+              if (kind === 'study') {
+                if (raw === 'confirmed' || raw === 'active') return 'active';
+                if (raw === 'canceled' || raw === 'cancelled' || raw === 'archived') return 'cancelled';
+              } else {
+                if (raw === 'active') return 'active';
+                if (raw === 'inactive') return 'suspended';
+                if (raw === 'cancelled') return 'cancelled';
+              }
+              return 'pending';
+            };
             const allSubs = [
-              ...study.map(s => ({ key: `study-${s.id}`, type: 'Sala de Estudo' as const, status: (s.status ?? 'pending') as SubStatus, price: s.monthlyPrice, days: s.days, startDate: s.startDate, id: s.id })),
-              ...transport.map(t => ({ key: `transport-${t.id}`, type: 'Transporte' as const, status: (t.status ?? 'pending') as SubStatus, price: t.monthlyFee, days: null, startDate: t.createdAt, id: t.id })),
+              ...study.map(s => ({ key: `study-${s.id}`, type: 'Sala de Estudo' as const, status: toSubStatus(s.status, 'study'), price: s.monthlyPrice, days: s.days, startDate: s.startDate, id: s.id })),
+              ...transport.map(t => ({ key: `transport-${t.id}`, type: 'Transporte' as const, status: toSubStatus(t.status, 'transport'), price: t.monthlyFee, days: null, startDate: t.createdAt, id: t.id })),
             ];
 
             return (
@@ -120,39 +131,46 @@ export default function MySubscriptionsPage() {
                   </div>
                 ) : (
                   <div className="divide-y divide-gray-100">
-                    {allSubs.map(sub => (
-                      <div key={sub.key} className="px-6 py-4 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <span className="text-2xl">
-                            {sub.type === 'Sala de Estudo' ? '📚' : '🚌'}
-                          </span>
-                          <div>
-                            <p className="font-medium text-gray-900">{sub.type}</p>
-                            {sub.days && sub.days.length > 0 && (
-                              <p className="text-sm text-gray-500">
-                                {sub.days.map((d: any) => d.day || d).join(', ')}
-                              </p>
-                            )}
-                            {sub.startDate && (
-                              <p className="text-xs text-gray-400">
-                                Desde {format(sub.startDate instanceof Date ? sub.startDate : new Date(sub.startDate), 'MMMM yyyy', { locale: pt })}
-                              </p>
-                            )}
+                    {allSubs.map(sub => {
+                      const detailPath = sub.type === 'Sala de Estudo'
+                        ? `/client/study/${sub.id}`
+                        : `/client/transport/${sub.id}`;
+                      return (
+                        <Link
+                          key={sub.key}
+                          to={detailPath}
+                          className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-4">
+                            <span className="text-2xl">
+                              {sub.type === 'Sala de Estudo' ? '📚' : '🚌'}
+                            </span>
+                            <div>
+                              <p className="font-medium text-gray-900">{sub.type}</p>
+                              {sub.days && sub.days.length > 0 && (
+                                <p className="text-sm text-gray-500">
+                                  {sub.days.map((d: any) => d.day || d).join(', ')}
+                                </p>
+                              )}
+                              {sub.startDate && (
+                                <p className="text-xs text-gray-400">
+                                  Desde {format(sub.startDate instanceof Date ? sub.startDate : new Date(sub.startDate), 'MMMM yyyy', { locale: pt })}
+                                </p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          {sub.status === 'active' && (
-                            <span className="font-semibold text-gray-900">€{(sub.price ?? 0).toFixed(2)}/mês</span>
-                          )}
-                          <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${statusClass[sub.status]}`}>
-                            {statusLabel[sub.status]}
-                          </span>
-                          {sub.status === 'active' && (
-                            <CancelButton childId={child.id} subId={sub.id} type={sub.type === 'Sala de Estudo' ? 'study' : 'transport'} onDone={() => window.location.reload()} />
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                          <div className="flex items-center gap-4">
+                            {sub.price != null && sub.status === 'active' && (
+                              <span className="font-semibold text-gray-900">€{(sub.price).toFixed(2)}/mês</span>
+                            )}
+                            <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${statusClass[sub.status]}`}>
+                              {statusLabel[sub.status]}
+                            </span>
+                            <span className="text-gray-300 text-lg">›</span>
+                          </div>
+                        </Link>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -164,63 +182,3 @@ export default function MySubscriptionsPage() {
   );
 }
 
-function CancelButton({ childId, subId, type, onDone }: { childId: string; subId: string; type: 'study' | 'transport'; onDone: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-
-  const handleCancel = async () => {
-    setSending(true);
-    try {
-      // Mark as cancellation requested — admin will process
-      const { doc, updateDoc } = await import('firebase/firestore');
-      const { db } = await import('../../lib/firebase');
-      const col = type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(doc(db, col, subId), {
-        cancelRequested: true,
-        cancelRequestedAt: new Date(),
-        updatedAt: new Date(),
-      });
-      setOpen(false);
-      onDone();
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="text-xs text-red-500 hover:text-red-700 underline"
-      >
-        Cancelar
-      </button>
-
-      {open && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-            <h3 className="font-bold text-lg mb-2">Pedir cancelamento</h3>
-            <p className="text-gray-600 text-sm mb-4">
-              O seu pedido de cancelamento será enviado à equipa para processamento. A inscrição mantém-se ativa até confirmação.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={handleCancel}
-                disabled={sending}
-                className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 disabled:opacity-60 text-sm"
-              >
-                {sending ? 'A enviar...' : 'Confirmar pedido'}
-              </button>
-              <button
-                onClick={() => setOpen(false)}
-                className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 text-sm"
-              >
-                Voltar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}

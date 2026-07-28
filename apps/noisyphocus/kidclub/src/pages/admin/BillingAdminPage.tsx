@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, Timestamp } from 'firebase/firestore';
+import { getDocs, query, orderBy, Timestamp } from 'firebase/firestore';
 import { callable } from '../../lib/callable';
-import { db } from '../../lib/firebase';
+import { col } from '../../lib/db';
 import { BillingRecord, BillingStatus, BillingPaymentMethod } from '@shared/models';
 
 const STATUS_META: Record<BillingStatus, { label: string; className: string }> = {
@@ -20,39 +20,37 @@ const METHOD_LABEL: Record<BillingPaymentMethod, string> = {
   subscription: 'Subscrição',
 };
 
-const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 function fmtDate(ts?: Timestamp) { return ts ? ts.toDate().toLocaleDateString('pt-PT') : '—'; }
+function fmtDateTime(ts?: Timestamp) {
+  if (!ts) return '—';
+  return ts.toDate().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' });
+}
 
 export default function BillingAdminPage() {
   const [records, setRecords] = useState<BillingRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [dryRun, setDryRun] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [sendResult, setSendResult] = useState<Record<string, string>>({});
 
-  const now = new Date();
-  const [genYear, setGenYear] = useState(now.getFullYear());
-  const [genMonth, setGenMonth] = useState(now.getMonth() + 1);
-  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('pending');
   const [filterPeriod, setFilterPeriod] = useState('all');
 
-  const fetch = async () => {
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<string | null>(null);
+
+  const fetchRecords = async () => {
     setLoading(true);
     try {
-      const snap = await getDocs(query(collection(db, 'billing'), orderBy('createdAt', 'desc')));
+      const snap = await getDocs(query(col('billing'), orderBy('createdAt', 'desc')));
       setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() } as BillingRecord)));
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetch(); }, []);
-
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  useEffect(() => { fetchRecords(); }, []);
 
   const handleBackfill = async () => {
     if (!confirm('Gerar calendário de cobranças para todas as famílias com inscrições ativas?')) return;
@@ -63,7 +61,7 @@ export default function BillingAdminPage() {
       const res = await fn({});
       const { created, updated, skipped, families } = res.data;
       setBackfillResult(`✅ ${families} famílias · ${created} criados · ${updated} atualizados · ${skipped} ignorados`);
-      await fetch();
+      await fetchRecords();
     } catch (err: any) {
       setBackfillResult(`❌ ${err.message}`);
     } finally {
@@ -71,21 +69,18 @@ export default function BillingAdminPage() {
     }
   };
 
-  const handleSend = async () => {
-    const mode = dryRun ? 'SIMULAÇÃO (sem emails reais)' : 'REAL (envia emails e cria registos)';
-    if (!confirm(`Enviar cobranças de ${MONTHS[genMonth - 1]} ${genYear} — ${mode}?`)) return;
-    setSending(true);
-    setResult(null);
+  const handleSendNotice = async (record: BillingRecord) => {
+    if (!confirm(`Enviar aviso de pagamento a ${record.billingName} (${record.billingEmail}) — ${record.periodLabel}?`)) return;
+    setSendingId(record.id!);
     try {
-      const fn = callable<object, { sent: number; failed: number; period: string }>('sendBillingNotices');
-      const res = await fn({ year: genYear, month: genMonth, dryRun });
-      const { sent, failed, period } = res.data;
-      setResult(`✅ ${period}${dryRun ? ' (simulação)' : ''}: ${sent} notificação(ões) enviada(s)${failed ? `, ${failed} erro(s)` : ''}`);
-      await fetch();
+      const fn = callable<object, { ok: boolean }>('sendBillingNotice');
+      await fn({ billingId: record.id });
+      setSendResult(prev => ({ ...prev, [record.id!]: '✅ Enviado' }));
+      await fetchRecords();
     } catch (err: any) {
-      setResult(`❌ ${err.message}`);
+      setSendResult(prev => ({ ...prev, [record.id!]: `❌ ${err.message}` }));
     } finally {
-      setSending(false);
+      setSendingId(null);
     }
   };
 
@@ -142,28 +137,6 @@ export default function BillingAdminPage() {
         {backfillResult && <span className="text-sm text-gray-700 w-full">{backfillResult}</span>}
       </div>
 
-      {/* Send notices */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
-        <h2 className="font-semibold text-gray-700">Enviar Cobranças</h2>
-        <div className="flex items-center gap-3 flex-wrap">
-          <select value={genMonth} onChange={e => setGenMonth(Number(e.target.value))} className="border rounded px-3 py-2 text-sm">
-            {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-          </select>
-          <input type="number" value={genYear} onChange={e => setGenYear(Number(e.target.value))}
-            className="border rounded px-3 py-2 text-sm w-24" min={2024} max={2030} />
-          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-            <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="w-4 h-4" />
-            <span className={dryRun ? 'text-blue-700 font-medium' : 'text-gray-500'}>Simulação</span>
-          </label>
-          <button onClick={handleSend} disabled={sending}
-            className={`px-4 py-2 rounded text-sm font-medium text-white disabled:opacity-50 ${dryRun ? 'bg-blue-600 hover:bg-blue-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
-            {sending ? 'A enviar...' : dryRun ? 'Simular' : 'Enviar Cobranças'}
-          </button>
-          {result && <span className="text-sm text-gray-700">{result}</span>}
-        </div>
-        <p className="text-xs text-gray-400">Cada família recebe um email com o valor a pagar e acede ao portal para escolher o método de pagamento.</p>
-      </div>
-
       {/* Filters */}
       <div className="flex gap-3 flex-wrap items-center">
         <select value={filterPeriod} onChange={e => setFilterPeriod(e.target.value)} className="border rounded px-3 py-2 text-sm">
@@ -193,7 +166,7 @@ export default function BillingAdminPage() {
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">Total</th>
                 <th className="text-left px-4 py-3 font-semibold text-gray-600">Vencimento</th>
                 <th className="text-left px-4 py-3 font-semibold text-gray-600">Estado</th>
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">Fatura</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-600">Ação</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -213,7 +186,21 @@ export default function BillingAdminPage() {
                         {STATUS_META[r.status]?.label ?? r.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{r.invoiceNumber ?? '—'}</td>
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                      {['pending', 'failed'].includes(r.status) && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleSendNotice(r)}
+                            disabled={sendingId === r.id}
+                            className="px-3 py-1 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap">
+                            {sendingId === r.id ? 'A enviar...' : 'Enviar aviso'}
+                          </button>
+                          {sendResult[r.id!] && (
+                            <span className="text-xs text-gray-600">{sendResult[r.id!]}</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                   {expandedId === r.id && (
                     <tr>
@@ -227,7 +214,11 @@ export default function BillingAdminPage() {
                         {r.multibancoEntity && (
                           <p className="text-xs text-gray-500 mt-1">Multibanco: Entidade <strong>{r.multibancoEntity}</strong> · Referência <strong>{r.multibancoReference}</strong></p>
                         )}
+                        {r.noticeSentAt && (
+                          <p className="text-xs text-indigo-600 mt-1">Aviso enviado em {fmtDateTime(r.noticeSentAt)}</p>
+                        )}
                         {r.paidAt && <p className="text-xs text-green-700 mt-1">Pago em {fmtDate(r.paidAt)}</p>}
+                        {r.invoiceNumber && <p className="text-xs text-purple-700 mt-1">Fatura: {r.invoiceNumber}</p>}
                       </td>
                     </tr>
                   )}

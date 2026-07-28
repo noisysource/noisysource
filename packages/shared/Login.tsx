@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import type { Auth } from 'firebase/auth';
 import type { Firestore } from 'firebase/firestore';
 import { loginWithGoogle, handleGoogleRedirectResult } from './firebase/auth';
@@ -13,9 +13,12 @@ interface LoginPageProps {
 
 export default function LoginPage({ auth, db, redirectTo = '/client' }: LoginPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const user = useUser();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const destination = (location.state as { from?: string } | null)?.from ?? redirectTo;
 
   // Handle returning from Google redirect
   useEffect(() => {
@@ -27,7 +30,7 @@ export default function LoginPage({ auth, db, redirectTo = '/client' }: LoginPag
   // Navigate once auth state resolves
   useEffect(() => {
     if (user) {
-      navigate(redirectTo, { replace: true });
+      navigate(destination, { replace: true });
     } else if (user === null) {
       setLoading(false);
     }

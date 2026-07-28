@@ -25,6 +25,9 @@ export default function PartyBookingPage() {
   const [numKids, setNumKids] = useState(10);
   const [extras, setExtras] = useState<string[]>([]);
   const [childId, setChildId] = useState('');
+  const [manualChild, setManualChild] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualAge, setManualAge] = useState<number | ''>('');
 
   useEffect(() => {
     if (!user) return;
@@ -61,21 +64,24 @@ export default function PartyBookingPage() {
     setExtras(prev => prev.includes(name) ? prev.filter(e => e !== name) : [...prev, name]);
 
   const handleSubmit = async () => {
-    if (!user || !familyId || !childId) return;
+    if (!user || !familyId) return;
+    if (!manualChild && !childId) return;
     const child = children.find(c => c.id === childId);
-    if (!child) return;
+    const resolvedName = manualChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
+    const resolvedAge = manualChild ? Number(manualAge) : child ? (child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear()) : 0;
+    if (!resolvedName) return;
 
     setSubmitting(true);
     try {
       await partyService.createBooking({
         familyId,
-        childId,
+        childId: manualChild ? '' : childId,
         userId: user.uid,
         parentName: user.name || user.email?.split('@')[0] || '',
         email: user.email || '',
         phone: '',
-        childName: `${child.firstName} ${child.lastName}`,
-        childAge: child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear(),
+        childName: resolvedName,
+        childAge: resolvedAge,
         partyType,
         date,
         time,
@@ -212,27 +218,76 @@ export default function PartyBookingPage() {
       {/* Step 3 */}
       {step === 3 && (
         <div className="space-y-4">
-          {children.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Criança a celebrar</label>
-              <div className="space-y-2">
-                {children.map(c => (
+              <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Criança a celebrar</label>
+
+              {/* Registered children */}
+              {children.length > 0 && !manualChild && (
+                <div className="space-y-2">
+                  {children.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => setChildId(c.id)}
+                      className={`w-full text-left p-3 rounded-xl border-2 transition ${childId === c.id ? 'border-pink-500 bg-pink-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    >
+                      <p className="font-medium text-gray-800">{c.firstName} {c.lastName}</p>
+                      {c.dateOfBirth && (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {new Date().getFullYear() - new Date(c.dateOfBirth).getFullYear()} anos
+                        </p>
+                      )}
+                    </button>
+                  ))}
                   <button
-                    key={c.id}
-                    onClick={() => setChildId(c.id)}
-                    className={`w-full text-left p-3 rounded-xl border-2 transition ${childId === c.id ? 'border-pink-500 bg-pink-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    onClick={() => { setManualChild(true); setChildId(''); }}
+                    className="w-full text-left p-3 rounded-xl border-2 border-dashed border-gray-200 hover:border-pink-300 hover:bg-pink-50 transition text-sm text-gray-500"
                   >
-                    <p className="font-medium text-gray-800">{c.firstName} {c.lastName}</p>
-                    {c.dateOfBirth && (
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {new Date().getFullYear() - new Date(c.dateOfBirth).getFullYear()} anos
-                      </p>
-                    )}
+                    + Outra criança (não está na lista)
                   </button>
-                ))}
-              </div>
+                </div>
+              )}
+
+              {/* Manual entry — shown when no children or user chose "other" */}
+              {(children.length === 0 || manualChild) && (
+                <div className="space-y-3">
+                  {children.length === 0 && (
+                    <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                      Não tem crianças registadas na sua conta. Pode introduzir os dados directamente.
+                    </p>
+                  )}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Nome da criança</label>
+                    <input
+                      type="text"
+                      placeholder="Nome completo"
+                      value={manualName}
+                      onChange={e => setManualName(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Idade a celebrar</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={18}
+                      placeholder="ex: 7"
+                      value={manualAge}
+                      onChange={e => setManualAge(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
+                    />
+                  </div>
+                  {manualChild && children.length > 0 && (
+                    <button
+                      onClick={() => { setManualChild(false); setManualName(''); setManualAge(''); }}
+                      className="text-xs text-pink-600 underline"
+                    >
+                      ← Escolher da lista
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-          )}
 
           {/* Summary */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
@@ -273,7 +328,7 @@ export default function PartyBookingPage() {
             </button>
             <button
               onClick={handleSubmit}
-              disabled={submitting || !childId}
+              disabled={submitting || (!manualChild && !childId) || (manualChild && !manualName.trim())}
               className="flex-1 bg-pink-600 text-white font-semibold py-3 rounded-xl hover:bg-pink-700 transition disabled:opacity-40"
             >
               {submitting ? 'A enviar...' : 'Enviar pedido'}

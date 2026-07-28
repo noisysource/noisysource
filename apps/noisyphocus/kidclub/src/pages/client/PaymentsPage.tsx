@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { query, where, getDocs } from 'firebase/firestore';
 import { callable } from '../../lib/callable';
-import { db } from '../../lib/firebase';
+import { col } from '../../lib/db';
 import { useUser } from '@shared/hooks';
 import { BillingRecord } from '@shared/models';
 
@@ -49,7 +49,7 @@ export default function PaymentsPage() {
       setLoading(true);
       try {
         const snap = await getDocs(
-          query(collection(db, 'billing'), where('userId', '==', user.uid))
+          query(col('billing'), where('userId', '==', user.uid))
         );
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as BillingRecord))

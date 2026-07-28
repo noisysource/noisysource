@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, addDoc } from 'firebase/firestore';
+import { col } from '../../lib/db';
+import { getDocs, query, where, addDoc } from 'firebase/firestore';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { format, parseISO, isFuture, isPast, startOfDay, addDays } from 'date-fns';
@@ -44,7 +44,7 @@ export default function FamilySchedulePage() {
     setIsLoading(true);
     try {
       const familiesQuery = query(
-        collection(db, 'families'),
+        col('families'),
         where('primaryContact.userId', '==', user.uid)
       );
       const familiesSnapshot = await getDocs(familiesQuery);
@@ -62,7 +62,7 @@ export default function FamilySchedulePage() {
           createdAt: new Date(),
           updatedAt: new Date(),
         };
-        const familyRef = await addDoc(collection(db, 'families'), newFamily);
+        const familyRef = await addDoc(col('families'), newFamily);
         const familyData = {
           ...newFamily,
           id: familyRef.id,
@@ -89,10 +89,10 @@ export default function FamilySchedulePage() {
 
         // Fetch all data for the family
         const [childrenSnap, studySnap, transportSnap, partiesSnap] = await Promise.all([
-          getDocs(query(collection(db, 'children'), where('familyId', '==', familyId))),
-          getDocs(query(collection(db, 'studyroom'), where('familyId', '==', familyId))),
-          getDocs(query(collection(db, 'transportationSubscriptions'), where('familyId', '==', familyId))),
-          getDocs(query(collection(db, 'bookings'), where('familyId', '==', familyId))),
+          getDocs(query(col('children'), where('familyId', '==', familyId))),
+          getDocs(query(col('studyroom'), where('familyId', '==', familyId))),
+          getDocs(query(col('transportationSubscriptions'), where('familyId', '==', familyId))),
+          getDocs(query(col('bookings'), where('familyId', '==', familyId))),
         ]);
 
         setChildren(childrenSnap.docs.map(d => ({ ...d.data(), id: d.id } as Child)));

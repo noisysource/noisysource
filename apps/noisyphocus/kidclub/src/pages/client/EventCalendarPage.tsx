@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, addDoc, Timestamp } from 'firebase/firestore';
+import { getDocs, query, where, addDoc, Timestamp } from 'firebase/firestore';
+import { col } from '../../lib/db';
 import { Event, EventModification, StudyRoomEntry, TransportationSubscription } from '@shared/models';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isPast, startOfWeek, endOfWeek, addWeeks } from 'date-fns';
 import { eventService } from '../../services/eventService';
@@ -32,8 +32,8 @@ export default function EventCalendarPage() {
     try {
       // Fetch subscriptions to match events
       const [studySubs, transportSubs] = await Promise.all([
-        getDocs(query(collection(db, 'studyroom'), where('childId', '==', childId))),
-        getDocs(query(collection(db, 'transportationSubscriptions'), where('childId', '==', childId))),
+        getDocs(query(col('studyroom'), where('childId', '==', childId))),
+        getDocs(query(col('transportationSubscriptions'), where('childId', '==', childId))),
       ]);
 
       const studySubscriptions = studySubs.docs.map(doc => ({
@@ -67,7 +67,7 @@ export default function EventCalendarPage() {
       // Fetch modifications - note: Firestore doesn't support range queries on dates easily
       // We'll fetch all modifications for the child and filter client-side
       const modsQuery = query(
-        collection(db, 'eventModifications'),
+        col('eventModifications'),
         where('childId', '==', childId)
       );
       const modsSnapshot = await getDocs(modsQuery);
@@ -110,7 +110,7 @@ export default function EventCalendarPage() {
 
       // Find family
       const familiesQuery = query(
-        collection(db, 'families'),
+        col('families'),
         where('primaryContact.userId', '==', user.uid)
       );
       const familiesSnapshot = await getDocs(familiesQuery);
@@ -138,7 +138,7 @@ export default function EventCalendarPage() {
         updatedAt: new Date(),
       };
 
-      await addDoc(collection(db, 'eventModifications'), modification);
+      await addDoc(col('eventModifications'), modification);
 
       // Don't modify the original event - Event Sourcing principle: events are immutable
       // The cancellation is recorded in EventModification, which we'll use when reading events

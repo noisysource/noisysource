@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { addDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { col } from '../../lib/db';
 import { AppUser, Role } from '@shared/models';
 import { employeeService } from '../../services/employeeService';
 import GenerateTimesheetModal from '../../components/admin/GenerateTimesheetModal';
@@ -45,7 +45,7 @@ export default function TimesheetsPage() {
     const endOfMonth = new Date(forDate.getFullYear(), forDate.getMonth() + 1, 0);
 
     const q = query(
-      collection(db, 'timesheets'),
+      col('timesheets'),
       where('employeeId', '==', employeeId),
       where('date', '>=', Timestamp.fromDate(startOfMonth)),
       where('date', '<=', Timestamp.fromDate(endOfMonth))
@@ -70,7 +70,7 @@ export default function TimesheetsPage() {
       hoursWorked,
     };
 
-    await addDoc(collection(db, 'timesheets'), newTimesheet);
+    await addDoc(col('timesheets'), newTimesheet);
 
     setHoursWorked(0);
     fetchTimesheets(selectedEmployee, date);

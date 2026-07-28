@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
-import { db } from '../../lib/firebase';
-import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
+import { getDocs, query, where, orderBy, limit } from 'firebase/firestore';
+import { col } from '../../lib/db';
 import { StudyRoomEntry, TransportationSubscription, Invoice } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -24,18 +24,18 @@ export default function ClientDashboardPage() {
         setIsLoading(true);
 
         // Fetch study room subscriptions
-        const studyQuery = query(collection(db, 'studyroom'), where('userId', '==', user.uid));
+        const studyQuery = query(col('studyroom'), where('userId', '==', user.uid));
         const studySnapshot = await getDocs(studyQuery);
         setStudySubscriptions(studySnapshot.docs.map(doc => ({ ...doc.data() as StudyRoomEntry, id: doc.id })));
 
         // Fetch transport subscriptions
-        const transportQuery = query(collection(db, 'transportationSubscriptions'), where('userId', '==', user.uid));
+        const transportQuery = query(col('transportationSubscriptions'), where('userId', '==', user.uid));
         const transportSnapshot = await getDocs(transportQuery);
         setTransportSubscriptions(transportSnapshot.docs.map(doc => ({ ...doc.data() as TransportationSubscription, id: doc.id })));
 
         // Fetch recent invoices
         const invoicesQuery = query(
-          collection(db, 'invoices'),
+          col('invoices'),
           where('userId', '==', user.uid),
           orderBy('issueDate', 'desc'),
           limit(5)
@@ -57,7 +57,7 @@ export default function ClientDashboardPage() {
 
         // Calculate invoice summary
         const allInvoicesQuery = query(
-          collection(db, 'invoices'),
+          col('invoices'),
           where('userId', '==', user.uid)
         );
         const allInvoicesSnapshot = await getDocs(allInvoicesQuery);

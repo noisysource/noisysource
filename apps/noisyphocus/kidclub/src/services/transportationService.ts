@@ -1,13 +1,13 @@
-import { doc, getDoc, collection, getDocs, query, where, setDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { getDoc, getDocs, query, where, setDoc } from 'firebase/firestore';
+import { col, docRef } from '../lib/db';
 import { TransportationConfig, TransportationSubscription } from '@shared/models/Transportation';
 import { StudyRoomEntry } from '@shared/models';
 
 const CONFIG_ID = 'transportation';
 
 export const getTransportationConfig = async (): Promise<TransportationConfig | null> => {
-  const docRef = doc(db, 'config', CONFIG_ID);
-  const docSnap = await getDoc(docRef);
+  const configRef = docRef('config', CONFIG_ID);
+  const docSnap = await getDoc(configRef);
   if (docSnap.exists()) {
     return docSnap.data() as TransportationConfig;
   }
@@ -15,12 +15,12 @@ export const getTransportationConfig = async (): Promise<TransportationConfig | 
 };
 
 export const saveTransportationConfig = async (config: TransportationConfig): Promise<void> => {
-  const docRef = doc(db, 'config', CONFIG_ID);
-  await setDoc(docRef, config, { merge: true });
+  const configRef = docRef('config', CONFIG_ID);
+  await setDoc(configRef, config, { merge: true });
 };
 
 export const getActiveTransportationSubscriptions = async (): Promise<TransportationSubscription[]> => {
-  const q = query(collection(db, 'transportationSubscriptions'), where('status', '==', 'active'));
+  const q = query(col('transportationSubscriptions'), where('status', '==', 'active'));
   const snapshot = await getDocs(q);
   return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TransportationSubscription));
 };
@@ -30,7 +30,7 @@ export const getTransportBooking = async (
   type: 'study' | 'subscription'
 ): Promise<StudyRoomEntry | TransportationSubscription | null> => {
   const collectionName = type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-  const docSnap = await getDoc(doc(db, collectionName, bookingId));
+  const docSnap = await getDoc(docRef(collectionName, bookingId));
   if (docSnap.exists()) {
     return { id: docSnap.id, ...docSnap.data() } as StudyRoomEntry | TransportationSubscription;
   }

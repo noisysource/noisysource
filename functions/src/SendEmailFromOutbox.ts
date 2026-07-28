@@ -63,7 +63,8 @@ function encodeRFC822({
 }
 
 export const sendEmailFromOutbox = onDocumentCreated(
-  "emailOutbox/{id}", async (event) => {
+  { document: "_apps/arcoiris/emailOutbox/{id}", secrets: ["SA_CLIENT_EMAIL", "SA_PRIVATE_KEY"] },
+  async (event) => {
     const snap = event.data;
     if (!snap) return;
 
@@ -97,7 +98,7 @@ export const sendEmailFromOutbox = onDocumentCreated(
 
     try {
       // Optional kill switch
-      const globalsDoc = await db.doc("settings/globals").get();
+      const globalsDoc = await db.doc("_apps/arcoiris/settings/globals").get();
       const globals = globalsDoc.data() ?? {};
 
       if (globals.emailsEnabled === false) {
@@ -107,7 +108,7 @@ export const sendEmailFromOutbox = onDocumentCreated(
 
       const senderEmail = globals.senderEmail as string | undefined;
       if (!senderEmail) {
-        throw new Error("`senderEmail` is not configured in settings/globals document.");
+        throw new Error("`senderEmail` is not configured in _apps/arcoiris/settings/globals document.");
       }
 
       // Auth

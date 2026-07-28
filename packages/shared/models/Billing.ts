@@ -46,6 +46,9 @@ export interface BillingRecord {
   // Card / pay-by-link
   paymentLink?: string;
 
+  // Admin actions
+  noticeSentAt?: Timestamp;
+
   // Outcome
   paidAt?: Timestamp;
   invoiceNumber?: string;

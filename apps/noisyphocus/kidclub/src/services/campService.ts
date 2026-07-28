@@ -1,5 +1,5 @@
-import { collection, doc, getDoc, getDocs, addDoc, updateDoc, query, where, Timestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { getDoc, getDocs, addDoc, updateDoc, query, where, Timestamp } from 'firebase/firestore';
+import { col, docRef } from '../lib/db';
 import { CampDay, CampBooking, CampConfig } from '@shared/models/Camp';
 
 const safeDate = (d: any): Date => {
@@ -14,7 +14,7 @@ const safeDate = (d: any): Date => {
 export const campService = {
     // Camp Days
     async getCampDays(): Promise<CampDay[]> {
-        const daysSnap = await getDocs(collection(db, 'campDays'));
+        const daysSnap = await getDocs(col('campDays'));
         return daysSnap.docs.map((d) => {
             const data = d.data();
             return {
@@ -34,7 +34,7 @@ export const campService = {
     },
 
     async getCampDay(id: string): Promise<CampDay | null> {
-        const dayDoc = await getDoc(doc(db, 'campDays', id));
+        const dayDoc = await getDoc(docRef('campDays', id));
         if (!dayDoc.exists()) return null;
         const data = dayDoc.data();
         return {
@@ -56,7 +56,7 @@ export const campService = {
         if (day.id) {
             // Update existing document - exclude id from the update data
             const { id, ...updateData } = day;
-            await updateDoc(doc(db, 'campDays', id), {
+            await updateDoc(docRef('campDays', id), {
                 ...updateData,
                 updatedAt: Timestamp.now(),
             });
@@ -64,19 +64,19 @@ export const campService = {
         } else {
             // Create new document - exclude id field completely
             const { id, ...createData } = day;
-            const docRef = await addDoc(collection(db, 'campDays'), {
+            const newDoc = await addDoc(col('campDays'), {
                 ...createData,
                 createdAt: Timestamp.now(),
                 updatedAt: Timestamp.now(),
             });
-            return docRef.id;
+            return newDoc.id;
         }
     },
 
     // Get bookings for a specific day to check capacity
     async getBookingsForDay(dayId: string): Promise<CampBooking[]> {
         const bookingsSnap = await getDocs(
-            query(collection(db, 'campBookings'), where('selectedDays', 'array-contains', dayId))
+            query(col('campBookings'), where('selectedDays', 'array-contains', dayId))
         );
         return bookingsSnap.docs
             .map((d) => {
@@ -150,12 +150,12 @@ export const campService = {
             bookingData.notes = booking.notes;
         }
 
-        const docRef = await addDoc(collection(db, 'campBookings'), bookingData);
-        return docRef.id;
+        const newDoc = await addDoc(col('campBookings'), bookingData);
+        return newDoc.id;
     },
 
     async getBookings(): Promise<CampBooking[]> {
-        const bookingsSnap = await getDocs(collection(db, 'campBookings'));
+        const bookingsSnap = await getDocs(col('campBookings'));
         return bookingsSnap.docs
             .map((d) => {
                 const data = d.data();
@@ -192,12 +192,12 @@ export const campService = {
             updateData.statusReason = reason;
         }
 
-        await updateDoc(doc(db, 'campBookings', id), updateData);
+        await updateDoc(docRef('campBookings', id), updateData);
     },
 
     // Camp Config
     async getCampConfig(): Promise<CampConfig | null> {
-        const configDoc = await getDoc(doc(db, 'config', 'camp'));
+        const configDoc = await getDoc(docRef('config', 'camp'));
         if (!configDoc.exists()) return null;
         const data = configDoc.data();
         return {
@@ -216,7 +216,7 @@ export const campService = {
     },
 
     async saveCampConfig(config: CampConfig): Promise<void> {
-        await updateDoc(doc(db, 'config', 'camp'), {
+        await updateDoc(docRef('config', 'camp'), {
             ...config,
             updatedAt: Timestamp.now(),
         });

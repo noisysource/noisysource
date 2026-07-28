@@ -1,5 +1,6 @@
-import { collection, writeBatch, doc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { writeBatch, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { col, docRef } from '../lib/db';
 
 const VARS = ["studentName", "guardianName", "status", "schoolName"] as const;
 type Token = typeof VARS[number];
@@ -13,7 +14,7 @@ function applyTokens(tpl: string, r: any) {
 
 export const emailService = {
   async sendEmails(recipients: any[], subjectTpl: string, bodyTpl: string, statusFilter: string, search: string): Promise<number> {
-    const campaignRef = await addDoc(collection(db, "emailCampaigns"), {
+    const campaignRef = await addDoc(col("emailCampaigns"), {
       kind: "studyroom-manual",
       subjectTpl,
       bodyTpl,
@@ -32,7 +33,7 @@ export const emailService = {
 
       const idempotencyKey = `${campaignRef.id}:${r.id}`;
       const docId = idempotencyKey.replace(/[:]/g, "_");
-      const outRef = doc(db, "emailOutbox", docId);
+      const outRef = docRef("emailOutbox", docId);
 
       // use merge:true for idempotent retries (won’t duplicate)
       batch.set(
