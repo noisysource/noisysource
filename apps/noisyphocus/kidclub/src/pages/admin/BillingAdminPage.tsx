@@ -58,10 +58,12 @@ export default function BillingAdminPage() {
     setBackfilling(true);
     setBackfillResult(null);
     try {
-      const fn = callable<object, { created: number; updated: number; skipped: number; failed: number; families: number }>('backfillBillingSchedules');
+      const fn = callable<object, { created: number; updated: number; skipped: number; cancelled: number; failed: number; families: number }>('backfillBillingSchedules');
       const res = await fn({});
-      const { created, updated, skipped, families } = res.data;
-      setBackfillResult(`✅ ${families} famílias · ${created} criados · ${updated} atualizados · ${skipped} ignorados`);
+      const { created, updated, skipped, cancelled, families } = res.data;
+      const parts = [`${families} famílias`, `${created} criados`, `${updated} atualizados`, `${skipped} ignorados`];
+      if (cancelled) parts.push(`${cancelled} cancelados`);
+      setBackfillResult(`✅ ${parts.join(' · ')}`);
       await fetchRecords();
     } catch (err: any) {
       setBackfillResult(`❌ ${err.message}`);

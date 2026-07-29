@@ -563,19 +563,34 @@ export const backfillBillingSchedules = onCall(
     if (!roles.owner && !roles.rainbowAdmin) throw new Error("Unauthorized");
 
     const groups = await getActiveSubs();
-    let created = 0, updated = 0, skipped = 0, failed = 0;
+    let created = 0, updated = 0, skipped = 0, cancelled = 0, failed = 0;
+    const familiesWithActiveSubs = new Set(groups.map(g => g.familyId));
 
+    // Cancel pending records for families that no longer have any active subscriptions
+    const orphanSnap = await appCol("billing").where("status", "==", "pending").get();
+    for (const doc of orphanSnap.docs) {
+      const familyId = doc.data().familyId;
+      if (!familiesWithActiveSubs.has(familyId)) {
+        await doc.ref.update({ status: "cancelled", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        cancelled++;
+      }
+    }
+
+    // Recalculate / create billing records for families with active subscriptions
     for (const group of groups) {
       try {
         const periods = periodsUntilSchoolYearEnd(new Date());
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
+          const { lineItems, total } = computeLineItems(group, period);
           if (existing.exists) {
             if (existing.data()?.status === "pending") {
-              const { lineItems, total } = computeLineItems(group, period);
-              if (lineItems.length > 0 && total > 0) {
-                await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+              if (lineItems.length === 0 || total === 0) {
+                await existing.ref.update({ status: "cancelled", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                cancelled++;
+              } else {
+                await existing.ref.update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
                 updated++;
               }
             } else {
@@ -583,8 +598,10 @@ export const backfillBillingSchedules = onCall(
             }
             continue;
           }
-          await buildBillingRecord(group, period, false, { docId, sendEmail: false });
-          created++;
+          if (lineItems.length > 0 && total > 0) {
+            await buildBillingRecord(group, period, false, { docId, sendEmail: false });
+            created++;
+          }
         }
       } catch (err) {
         console.error(`Backfill failed for family ${group.familyId}:`, err);
@@ -592,7 +609,7 @@ export const backfillBillingSchedules = onCall(
       }
     }
 
-    return { created, updated, skipped, failed, families: groups.length };
+    return { created, updated, skipped, cancelled, failed, families: groups.length };
   }
 );
 
