@@ -8,6 +8,7 @@ export interface EcContractDoc {
   startDate?: Date;
   endDate?: Date;
   active: boolean;
+  nonWorkingDays?: string[];   // ISO date strings e.g. ["2026-08-15", "2026-12-25"]
   createdAt?: Date;
 }
 
