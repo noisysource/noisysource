@@ -188,3 +188,49 @@ export const onTransportStatusNotify = onDocumentUpdated(
     }
   },
 );
+
+// ── Camp subscription admin notification ──────────────────────────────────────
+
+function buildNewCampSubscriptionAdminEmail(data: FirebaseFirestore.DocumentData, campName: string): string {
+  const typeLabel =
+    data.subscriptionType === "day" ? "Dia(s)" :
+    data.subscriptionType === "week" ? "Semana(s)" : "Campo Completo";
+  const body = `
+    <p style="font-size:16px;color:#374151;">Nova inscrição recebida — <strong>Campos</strong></p>
+    <table style="width:100%;font-size:14px;color:#374151;margin:16px 0;border-collapse:collapse;">
+      <tr><td style="padding:6px 0;color:#6b7280;width:120px;">Criança</td><td style="padding:6px 0;"><strong>${data.childName ?? "—"}</strong></td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Campo</td><td style="padding:6px 0;">${campName}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Tipo</td><td style="padding:6px 0;">${typeLabel}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Dias selec.</td><td style="padding:6px 0;">${(data.selectedDays ?? []).length} dia(s)</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Total</td><td style="padding:6px 0;"><strong>€${(data.totalAmount ?? 0).toFixed(2)}</strong></td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Sinal (25%)</td><td style="padding:6px 0;"><strong>€${(data.depositAmount ?? 0).toFixed(2)}</strong></td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Encarregado</td><td style="padding:6px 0;">${data.parentName ?? "—"}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">Email</td><td style="padding:6px 0;">${data.parentEmail ?? "—"}</td></tr>
+    </table>
+    <p style="text-align:center;margin-top:24px;">
+      <a href="${APP_URL}/admin/camps" style="background:#4f46e5;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">Ver inscrições</a>
+    </p>`;
+  return emailWrapper("Nova inscrição — Campos", body);
+}
+
+export const onCampSubscriptionCreated = onDocumentCreated(
+  { document: "_apps/arcoiris/campSubscriptions/{id}", region: "europe-west3" },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+
+    let campName: string = data.campId ?? "—";
+    try {
+      const campDoc = await appCol("camps").doc(data.campId).get();
+      if (campDoc.exists) campName = campDoc.data()?.name ?? campName;
+    } catch {
+      // best-effort
+    }
+
+    await queueEmail(
+      ADMIN_EMAIL,
+      `Nova inscrição — Campos: ${data.childName ?? ""}`,
+      buildNewCampSubscriptionAdminEmail(data, campName),
+    );
+  },
+);

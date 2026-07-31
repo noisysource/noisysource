@@ -1,6 +1,43 @@
 /**
- * Christmas Camp Models
+ * Camp Models
  */
+
+export interface Camp {
+    id: string;
+    name: string;
+    type: 'october' | 'christmas' | 'easter' | 'summer' | 'other';
+    startDate: string;   // YYYY-MM-DD
+    endDate: string;     // YYYY-MM-DD
+    description?: string;
+    active: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+export interface CampSubscription {
+    id: string;
+    campId: string;
+    familyId: string;
+    userId: string;
+    childName: string;
+    childAge?: number;
+    parentName: string;
+    parentEmail: string;
+    parentPhone?: string;
+    subscriptionType: 'day' | 'week' | 'full';
+    selectedDays: string[];       // campDay document IDs
+    totalAmount: number;
+    depositAmount: number;
+    balanceAmount: number;
+    status: 'pending' | 'confirmed' | 'cancelled';
+    statusReason?: string;
+    depositBillingId?: string;
+    balanceBillingId?: string;
+    depositRefundPending?: boolean;
+    notes?: string;
+    createdAt: Date;
+    updatedAt: Date;
+}
 
 export interface CampDay {
     id: string;

@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
-import { onCall, onRequest } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
-import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT } from "./vendus";
+import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 
@@ -61,39 +61,63 @@ async function getActiveSubs() {
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
 
 async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
+  console.log(`[Vendus] start billingId=${billingId}`);
+
   const billingRef = appCol("billing").doc(billingId);
   const billing = (await billingRef.get()).data();
   if (!billing) throw new Error(`Billing record ${billingId} not found`);
+  if (billing.status === "invoiced") {
+    console.log(`[Vendus] billing ${billingId} already invoiced, skipping`);
+    return;
+  }
 
   const { familyId, userId, lineItems, total, billingName, billingEmail, periodLabel } = billing;
+  console.log(`[Vendus] billing ok — family=${familyId} total=${total} period=${periodLabel}`);
 
   const famSnap = await appCol("families").doc(familyId).get();
   const fam = famSnap.data() ?? {};
   const clientNif: string = fam.nif ?? "999999990";
 
   let vendusClientId: number | null = fam.vendusClientId ?? null;
+  console.log(`[Vendus] vendusClientId=${vendusClientId ?? "none"} nif=${clientNif}`);
+
   if (!vendusClientId) {
     vendusClientId = await createOrUpdateClient(familyId, {
       name: billingName,
       email: billingEmail,
+      send_email: "yes",
       ...(clientNif !== "999999990" ? { fiscal_id: clientNif } : {}),
     });
     await appCol("families").doc(familyId).update({ vendusClientId });
+    console.log(`[Vendus] client created/synced vendusClientId=${vendusClientId}`);
   }
 
   const vendusClient: VendusClient = { id: vendusClientId };
+  const isCampBilling = billing.type === "camp_deposit" || billing.type === "camp_balance";
   const items: VendusLineItem[] = lineItems.map((li: any) => ({
-    id: li.title.startsWith("Transporte") ? PRODUCT_TRANSPORT : PRODUCT_STUDY,
+    id: (!isCampBilling && li.title.startsWith("Transporte")) ? PRODUCT_TRANSPORT : PRODUCT_STUDY,
     title: li.title,
     qty: 1,
     gross_price: li.amount,
   }));
 
-  const period = periodForDate(new Date(billing.periodStart.toDate()));
-  const vendusDoc = await createInvoice(vendusClient, items, period.isoDate, `Período: ${periodLabel}`);
-  if (vendusDoc.errors?.length) throw new Error(vendusDoc.errors.map((e: any) => e.message).join("; "));
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  console.log(`[Vendus] creating invoice — items=${items.length} date=${todayIso} (period=${periodLabel})`);
+
+  const vendusPaymentMethodId = billing.paymentMethod === "multibanco"
+    ? PAYMENT_METHOD_MULTIBANCO
+    : PAYMENT_METHOD_TRANSFERENCIA;
+
+  const vendusDoc = await createInvoice(vendusClient, items, todayIso, vendusPaymentMethodId, total, `Período: ${periodLabel}`);
+
+  if (vendusDoc.errors?.length) {
+    console.error(`[Vendus] API errors:`, JSON.stringify(vendusDoc.errors));
+    throw new Error(vendusDoc.errors.map((e: any) => e.message).join("; "));
+  }
 
   const invoiceNumber = vendusDoc.number;
+  console.log(`[Vendus] invoice created — number=${invoiceNumber} id=${vendusDoc.id} atcud=${vendusDoc.atcud}`);
 
   await billingRef.update({
     status: "invoiced",
@@ -102,17 +126,6 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
     atcud: vendusDoc.atcud ?? null,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
-
-  // Queue invoice email
-  if (billingEmail) {
-    await appCol("emailOutbox").add({
-      to: billingEmail,
-      subject: `Fatura ${invoiceNumber} — ${COMPANY_NAME} — ${periodLabel}`,
-      html: buildInvoiceEmail({ clientName: billingName, invoiceNumber, periodLabel, total, lineItems }),
-      status: "queued",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  }
 }
 
 // ── Compute line items for a group (pure, no DB access) ──────────────────────
@@ -241,25 +254,37 @@ export const sendBillingNotice = onCall(
 // ── Client initiates MBWay payment ───────────────────────────────────────────
 
 export const initiateMbwayPayment = onCall(
-  { region: "europe-west3", invoker: "public", secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY"] },
+  { region: "europe-west3", invoker: "public", secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY", "EASYPAY_WEBHOOK_URL"] },
   async (request) => {
     const uid = request.auth?.uid;
-    if (!uid) throw new Error("Unauthenticated");
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
 
     const { billingId, phone } = request.data ?? {};
-    if (!billingId || !phone) throw new Error("billingId and phone required");
+    if (!billingId || !phone) throw new HttpsError("invalid-argument", "billingId and phone required");
+
+    console.log(`[MBWay] initiate uid=${uid} billingId=${billingId} phone=${String(phone).slice(0, 3)}***`);
 
     const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
-    if (!billing) throw new Error("Billing record not found");
-    if (billing.userId !== uid) throw new Error("Unauthorized");
-    if (billing.status !== "pending") throw new Error("Already processed");
+    if (!billing) throw new HttpsError("not-found", "Billing record not found");
+    if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
+    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
+    if (!billing.total || billing.total < 0.5) throw new HttpsError("failed-precondition", `Billing total is €${(billing.total ?? 0).toFixed(2)} — minimum is €0.50`);
 
-    const res = await createMbwayPayment(
-      { name: billing.billingName, email: billing.billingEmail, phone },
-      billing.total,
-      `${COMPANY_NAME} — ${billing.periodLabel}`,
-    );
+    console.log(`[MBWay] billing ok — total=${billing.total} period=${billing.periodLabel}`);
+
+    let res;
+    try {
+      res = await createMbwayPayment(
+        { name: billing.billingName, email: billing.billingEmail, phone },
+        billing.total,
+        `${COMPANY_NAME} — ${billing.periodLabel}`,
+      );
+      console.log(`[MBWay] EasyPay response — id=${res.id} status=${res.method?.status}`);
+    } catch (err: any) {
+      console.error(`[MBWay] EasyPay call failed:`, err.message);
+      throw new HttpsError("internal", `EasyPay error: ${err.message}`);
+    }
 
     await billingRef.update({
       status: "processing",
@@ -268,6 +293,7 @@ export const initiateMbwayPayment = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    console.log(`[MBWay] billing ${billingId} → processing easypayId=${res.id}`);
     return { easypayId: res.id };
   }
 );
@@ -275,17 +301,17 @@ export const initiateMbwayPayment = onCall(
 // ── Client initiates Multibanco payment ──────────────────────────────────────
 
 export const initiateMultibancoPayment = onCall(
-  { region: "europe-west3", invoker: "public", secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY"] },
+  { region: "europe-west3", invoker: "public", secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY", "EASYPAY_WEBHOOK_URL"] },
   async (request) => {
     const uid = request.auth?.uid;
-    if (!uid) throw new Error("Unauthenticated");
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
 
     const { billingId } = request.data ?? {};
     const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
-    if (!billing) throw new Error("Billing record not found");
-    if (billing.userId !== uid) throw new Error("Unauthorized");
-    if (billing.status !== "pending") throw new Error("Already processed");
+    if (!billing) throw new HttpsError("not-found", "Billing record not found");
+    if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
+    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
 
     const dueDate = billing.dueDate.toDate();
     const expiry = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")} 23:59`;
@@ -317,17 +343,17 @@ export const initiateMultibancoPayment = onCall(
 // ── Client initiates card payment ─────────────────────────────────────────────
 
 export const initiateCardPayment = onCall(
-  { region: "europe-west3", invoker: "public", secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY"] },
+  { region: "europe-west3", invoker: "public", secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY", "EASYPAY_WEBHOOK_URL"] },
   async (request) => {
     const uid = request.auth?.uid;
-    if (!uid) throw new Error("Unauthenticated");
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
 
     const { billingId } = request.data ?? {};
     const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
-    if (!billing) throw new Error("Billing record not found");
-    if (billing.userId !== uid) throw new Error("Unauthorized");
-    if (billing.status !== "pending") throw new Error("Already processed");
+    if (!billing) throw new HttpsError("not-found", "Billing record not found");
+    if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
+    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
 
     const res = await createCardPayment(
       { name: billing.billingName, email: billing.billingEmail },
@@ -358,46 +384,102 @@ export const easypayWebhook = onRequest(
     const payload = req.body as EasypayWebhookPayload;
     console.log("Easypay webhook:", JSON.stringify(payload));
 
-    const { event, payment } = payload;
+    // EasyPay v2 sends two calls per payment:
+    //   { id, type: "capture", status: "success"|"failed"|"expired" }
+    //   { id, value, method, transaction: { type: "capture", values: { paid } } }
+    const paymentId = payload.id;
+    if (!paymentId) {
+      res.status(200).send("ok");
+      return;
+    }
 
-    if (event === "payment_success" && payment?.status === "paid") {
+    const isSuccess =
+      (payload.type === "capture" && payload.status === "success") ||
+      (!!payload.transaction && Number(payload.transaction.values?.paid ?? 0) > 0);
+
+    const isFailure =
+      payload.type === "capture" &&
+      (payload.status === "failed" || payload.status === "expired");
+
+    if (isSuccess) {
+      console.log(`[Webhook] success easypayId=${paymentId}`);
+
       const snap = await appCol("billing")
-        .where("easypayId", "==", payment.id)
+        .where("easypayId", "==", paymentId)
         .limit(1)
         .get();
 
       if (snap.empty) {
-        console.warn(`No billing record for easypayId ${payment.id}`);
+        console.warn(`[Webhook] no billing record found for easypayId=${paymentId}`);
         res.status(200).send("ok");
         return;
       }
 
       const billingDoc = snap.docs[0];
+      const billingData = billingDoc.data();
+      const currentStatus = billingData.status;
+
+      // Retry invoice creation if paid but invoice failed previously
+      if (currentStatus === "paid" && billingData.invoiceError) {
+        console.log(`[Webhook] billing ${billingDoc.id} paid but invoice failed — retrying`);
+        await billingDoc.ref.update({ invoiceError: admin.firestore.FieldValue.delete() });
+        try {
+          await createVendusInvoiceForBilling(billingDoc.id);
+          console.log(`[Webhook] Vendus invoice created for billing ${billingDoc.id}`);
+        } catch (err: any) {
+          console.error(`[Webhook] Vendus invoice failed for billing ${billingDoc.id}:`, err.message);
+          await billingDoc.ref.update({ invoiceError: err.message, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        }
+        res.status(200).send("ok");
+        return;
+      }
+
+      // Idempotent: EasyPay sends two webhook calls per payment
+      if (currentStatus !== "processing") {
+        console.log(`[Webhook] billing ${billingDoc.id} already processed (status=${currentStatus})`);
+        res.status(200).send("ok");
+        return;
+      }
+
+      console.log(`[Webhook] matched billing ${billingDoc.id} — marking paid`);
       await billingDoc.ref.update({
         status: "paid",
         paidAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
+      console.log(`[Webhook] billing ${billingDoc.id} → paid — starting Vendus invoice`);
       try {
         await createVendusInvoiceForBilling(billingDoc.id);
-      } catch (err) {
-        console.error(`Vendus invoice failed for billing ${billingDoc.id}:`, err);
-        // Don't fail the webhook — payment is confirmed, invoice can be retried
+        console.log(`[Webhook] Vendus invoice created for billing ${billingDoc.id}`);
+      } catch (err: any) {
+        console.error(`[Webhook] Vendus invoice failed for billing ${billingDoc.id}:`, err.message);
+        await billingDoc.ref.update({
+          invoiceError: err.message,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       }
     }
 
-    if (event === "payment_failed" || event === "payment_expired") {
+    if (isFailure) {
+      console.log(`[Webhook] failure easypayId=${paymentId} status=${payload.status}`);
+
       const snap = await appCol("billing")
-        .where("easypayId", "==", payment?.id)
+        .where("easypayId", "==", paymentId)
         .limit(1)
         .get();
 
       if (!snap.empty) {
-        await snap.docs[0].ref.update({
-          status: "failed",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        const currentStatus = snap.docs[0].data().status;
+        if (currentStatus === "processing") {
+          await snap.docs[0].ref.update({
+            status: "failed",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          console.log(`[Webhook] billing ${snap.docs[0].id} → failed`);
+        }
+      } else {
+        console.warn(`[Webhook] no billing found for easypayId=${paymentId}`);
       }
     }
 
@@ -475,6 +557,44 @@ export const createPartyDeposit = onCall(
     });
 
     return { billingId: billingRef.id };
+  }
+);
+
+// ── Admin: retry Vendus invoice for a paid billing record ────────────────────
+
+export const retryVendusInvoice = onCall(
+  { region: "europe-west3", invoker: "public", secrets: ["VENDUS_API_KEY", "VENDUS_REGISTER_ID"] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
+    const userDoc = await db.collection("users").doc(uid).get();
+    const roles = userDoc.data()?.roles ?? {};
+    if (!roles.owner && !roles.rainbowAdmin) throw new HttpsError("permission-denied", "Unauthorized");
+
+    const { billingId, force } = request.data ?? {};
+    if (!billingId) throw new HttpsError("invalid-argument", "billingId required");
+
+    const billingRef = appCol("billing").doc(billingId);
+    const billing = (await billingRef.get()).data();
+    if (!billing) throw new HttpsError("not-found", "Billing record not found");
+    if (!["paid", "invoiced"].includes(billing.status)) {
+      throw new HttpsError("failed-precondition", `Cannot create invoice for status=${billing.status}`);
+    }
+    if (billing.status === "invoiced" && !billing.invoiceError && !force) {
+      throw new HttpsError("already-exists", `Invoice already created: ${billing.invoiceNumber}`);
+    }
+
+    // Reset status to paid so createVendusInvoiceForBilling can re-run
+    await billingRef.update({
+      status: "paid",
+      invoiceError: admin.firestore.FieldValue.delete(),
+      invoiceNumber: admin.firestore.FieldValue.delete(),
+      vendusId: admin.firestore.FieldValue.delete(),
+      atcud: admin.firestore.FieldValue.delete(),
+    });
+
+    await createVendusInvoiceForBilling(billingId);
+    return { ok: true };
   }
 );
 
@@ -712,43 +832,3 @@ function buildPaymentNoticeEmail(opts: {
 </body></html>`;
 }
 
-function buildInvoiceEmail(opts: {
-  clientName: string;
-  invoiceNumber: string;
-  periodLabel: string;
-  total: number;
-  lineItems: { title: string; amount: number }[];
-}): string {
-  const { clientName, invoiceNumber, periodLabel, total, lineItems } = opts;
-  const rows = lineItems.map(li =>
-    `<tr><td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#374151;">${li.title}</td>
-     <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;text-align:right;color:#374151;">€${li.amount.toFixed(2)}</td></tr>`
-  ).join("");
-
-  return `<!DOCTYPE html><html lang="pt"><body style="margin:0;padding:0;background:#f9fafb;font-family:Arial,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:32px 0;">
-<tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-<tr><td style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:32px 40px;text-align:center;">
-  <h1 style="margin:0;color:#fff;font-size:24px;">${COMPANY_NAME}</h1>
-  <p style="margin:8px 0 0;color:#c4b5fd;font-size:14px;">Fatura ${invoiceNumber} — ${periodLabel}</p>
-</td></tr>
-<tr><td style="padding:32px 40px;">
-  <p style="font-size:16px;color:#374151;">Olá, <strong>${clientName}</strong>,</p>
-  <p style="font-size:14px;color:#6b7280;">O seu pagamento foi confirmado. Segue a fatura referente ao mês de <strong>${periodLabel}</strong>.</p>
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">${rows}</table>
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
-    <tr><td style="padding:16px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;">
-      <table width="100%"><tr>
-        <td style="color:#166534;font-size:14px;">✅ Pagamento recebido · Fatura ${invoiceNumber}</td>
-        <td style="color:#15803d;font-size:20px;font-weight:700;text-align:right;">€${total.toFixed(2)}</td>
-      </tr></table>
-    </td></tr>
-  </table>
-</td></tr>
-<tr><td style="background:#f9fafb;padding:20px 40px;text-align:center;border-top:1px solid #e5e7eb;">
-  <p style="margin:0;font-size:12px;color:#9ca3af;">${COMPANY_NAME} · NIF 518942120 · Avenida da Guarda Inglesa, Lote E, Coimbra</p>
-</td></tr>
-</table></td></tr></table>
-</body></html>`;
-}

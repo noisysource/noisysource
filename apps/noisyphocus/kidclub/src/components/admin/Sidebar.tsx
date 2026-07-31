@@ -36,6 +36,10 @@ export default function Sidebar() {
           <SidebarNavLink to="/admin/party-config">🛠️ Configuração</SidebarNavLink>
         </SidebarSection>
 
+        <SidebarSection title="🏕️ Campos">
+          <SidebarNavLink to="/admin/camps">🏕️ Campos</SidebarNavLink>
+        </SidebarSection>
+
         <SidebarSection title="⚙️ Configuração">
           <SidebarNavLink to="/admin/study-pricing">📚 Sala de Estudo</SidebarNavLink>
           <SidebarNavLink to="/admin/transport-config">🚌 Transporte</SidebarNavLink>

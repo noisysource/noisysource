@@ -37,6 +37,10 @@ export default function ClientSidebar() {
           <span>🎈</span> Festas
         </Link>
 
+        <Link to="/client/camps" className={linkClass('/client/camps')}>
+          <span>🏕️</span> Campos
+        </Link>
+
         <div className="pt-3 pb-1">
           <p className="text-xs text-gray-500 uppercase tracking-wider px-3">Financeiro</p>
         </div>

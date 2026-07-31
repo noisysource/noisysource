@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall } from "firebase-functions/v2/https";
-import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT } from "./vendus";
+import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -178,7 +178,7 @@ async function generateForFamily(group: FamilyGroup, period: ReturnType<typeof p
   // Create invoice in Vendus
   let vendusDoc: Awaited<ReturnType<typeof createInvoice>>;
   try {
-    vendusDoc = await createInvoice(vendusClient, items, period.isoDate, `Período: ${period.label}`);
+    vendusDoc = await createInvoice(vendusClient, items, period.isoDate, PAYMENT_METHOD_TRANSFERENCIA, subtotal, `Período: ${period.label}`);
     if (vendusDoc.errors?.length) {
       throw new Error(vendusDoc.errors.map((e) => e.message).join("; "));
     }

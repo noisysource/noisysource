@@ -3,8 +3,8 @@ import { campService } from '../../services/campService';
 import { CampDay, CampBooking } from '@shared/models/Camp';
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, getDay, startOfWeek, endOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { db } from '../../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { getDocs } from 'firebase/firestore';
+import { col } from '../../lib/db';
 
 export default function CampAdminPanel() {
     const [section, setSection] = useState<'days' | 'bookings' | 'daily'>('bookings');
@@ -26,7 +26,7 @@ export default function CampAdminPanel() {
         setIsLoading(true);
         try {
             // Load study room subscriptions to identify study room kids
-            const studyRoomSnapshot = await getDocs(collection(db, 'studyroom'));
+            const studyRoomSnapshot = await getDocs(col('studyroom'));
             const studyRoomIds = new Set<string>();
             studyRoomSnapshot.docs.forEach(doc => {
                 const data = doc.data();

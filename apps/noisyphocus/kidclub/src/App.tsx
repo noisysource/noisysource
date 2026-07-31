@@ -16,6 +16,7 @@ import CalendarPage from './pages/admin/CalendarPage';
 import EmailCenterPage from './pages/admin/EmailCenterPage';
 import TransportationConfigPage from './pages/admin/transport/TransportationConfigPage';
 import CampAdminPage from './pages/admin/CampAdminPage';
+import CampsAdminPage from './pages/admin/CampsAdminPage';
 import EditEmployeePage from './pages/admin/EditEmployeePage';
 import TimesheetsPage from './pages/admin/TimesheetsPage';
 import DataManagementPage from './pages/admin/DataManagementPage';
@@ -44,6 +45,7 @@ import TransportEnrollPage from './pages/client/enrollment/TransportEnrollPage';
 import PartyListPage from './pages/client/parties/PartyListPage';
 import PartyBookingPage from './pages/client/parties/PartyBookingPage';
 import PartyDetailPage from './pages/client/parties/PartyDetailPage';
+import ClientCampsPage from './pages/client/camps/ClientCampsPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import TermsPage from './pages/TermsPage';
 
@@ -73,6 +75,7 @@ export default function App() {
           <Route path="email-center" element={<EmailCenterPage />} />
           <Route path="transport-config" element={<TransportationConfigPage />} />
           <Route path="camp" element={<CampAdminPage />} />
+          <Route path="camps" element={<CampsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
           <Route path="families" element={<FamiliesAdminPage />} />
           {/* Legacy redirects */}
@@ -120,6 +123,9 @@ export default function App() {
           <Route path="parties" element={<PartyListPage />} />
           <Route path="parties/new" element={<PartyBookingPage />} />
           <Route path="parties/:id" element={<PartyDetailPage />} />
+
+          {/* Camps */}
+          <Route path="camps" element={<ClientCampsPage />} />
 
           {/* Legacy compat */}
           <Route path="family/schedule" element={<FamilySchedulePage />} />
