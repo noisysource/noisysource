@@ -2,12 +2,50 @@ import { useEffect, useMemo, useState } from "react";
 import type { EcContractDoc } from "@shared/models/EcContract";
 import { estimatedMonthlyInvoiceCents } from "@shared/models/EcContract";
 import { formatEUR } from "@shared/lib/money";
+import { computeEcProjection } from "@shared/lib/ecProjection";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { api } from "../lib/api";
 import { useEntity } from "../hooks/EntityContext";
 import { syncEcContractRecurring, deactivateEcContractRecurring } from "../lib/contractSync";
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Convert a Date to a local YYYY-MM-DD string (avoids UTC-offset issues). */
+function dateToIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Format an ISO date as "sex., 25 de dez. de 2026" in pt-PT. */
+function formatChipDate(iso: string): string {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString("pt-PT", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** Format YYYY-MM as "mar. 2026" in pt-PT. */
+function formatYearMonth(ym: string): string {
+  const [y, m] = ym.split("-");
+  return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("pt-PT", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** Today as YYYY-MM */
+function todayYearMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// ── types ─────────────────────────────────────────────────────────────────────
 
 type FormState = {
   clientName: string;
@@ -18,6 +56,7 @@ type FormState = {
   startDate: string;
   endDate: string;
   active: boolean;
+  nonWorkingDays: string[];
 };
 
 const empty = (): FormState => ({
@@ -29,6 +68,7 @@ const empty = (): FormState => ({
   startDate: "",
   endDate: "",
   active: true,
+  nonWorkingDays: [],
 });
 
 function fromDoc(d: EcContractDoc): FormState {
@@ -38,11 +78,14 @@ function fromDoc(d: EcContractDoc): FormState {
     dailyRateEUR: (d.dailyRateCents / 100).toFixed(2),
     totalDays: d.totalDays ? String(d.totalDays) : "",
     expectedDays: String(d.expectedDaysPerMonth),
-    startDate: d.startDate ? d.startDate.toISOString().slice(0, 10) : "",
-    endDate: d.endDate ? d.endDate.toISOString().slice(0, 10) : "",
+    startDate: d.startDate ? dateToIso(d.startDate) : "",
+    endDate: d.endDate ? dateToIso(d.endDate) : "",
     active: d.active,
+    nonWorkingDays: d.nonWorkingDays ? [...d.nonWorkingDays].sort() : [],
   };
 }
+
+// ── component ─────────────────────────────────────────────────────────────────
 
 export default function EcContractsPage() {
   const { selectedEntity } = useEntity();
@@ -54,6 +97,9 @@ export default function EcContractsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(empty());
   const [formOpen, setFormOpen] = useState(true);
+
+  // Non-working day date input
+  const [nwdInput, setNwdInput] = useState("");
 
   async function reload() {
     setBusy(true);
@@ -72,17 +118,30 @@ export default function EcContractsPage() {
   function startCreate() {
     setEditingId(null);
     setForm(empty());
+    setNwdInput("");
     setFormOpen(true);
   }
 
   function startEdit(d: EcContractDoc) {
     setEditingId(d.id);
     setForm(fromDoc(d));
+    setNwdInput("");
     setFormOpen(true);
   }
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm(f => ({ ...f, [k]: v }));
+
+  function addNwd() {
+    const iso = nwdInput.trim();
+    if (!iso || form.nonWorkingDays.includes(iso)) return;
+    set("nonWorkingDays", [...form.nonWorkingDays, iso].sort());
+    setNwdInput("");
+  }
+
+  function removeNwd(iso: string) {
+    set("nonWorkingDays", form.nonWorkingDays.filter(d => d !== iso));
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -103,11 +162,13 @@ export default function EcContractsPage() {
         startDate: form.startDate ? new Date(form.startDate) : undefined,
         endDate: form.endDate ? new Date(form.endDate) : undefined,
         active: form.active,
+        nonWorkingDays: form.nonWorkingDays.length > 0 ? form.nonWorkingDays : undefined,
       });
       const saved = await api.ecContracts.get(id);
       if (saved) await syncEcContractRecurring(saved);
       setEditingId(null);
       setForm(empty());
+      setNwdInput("");
       await reload();
       setMsg("Saved ✔  — Recurring updated");
     } catch (e: any) {
@@ -136,8 +197,27 @@ export default function EcContractsPage() {
     [rows]
   );
 
+  // Compute the projection live from form state (re-runs whenever form fields change)
+  const projection = useMemo(() => {
+    if (!form.startDate || !form.totalDays) return null;
+    const dailyRateCents = Math.round(parseFloat(form.dailyRateEUR || "0") * 100);
+    const totalDays = parseInt(form.totalDays, 10);
+    if (!dailyRateCents || !totalDays || totalDays <= 0) return null;
+    try {
+      return computeEcProjection(
+        { startDate: form.startDate, dailyRateCents, totalDays },
+        form.nonWorkingDays,
+        new Date(),
+      );
+    } catch {
+      return null;
+    }
+  }, [form.startDate, form.dailyRateEUR, form.totalDays, form.nonWorkingDays]);
+
+  const currentYM = todayYearMonth();
+
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
+    <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-6">
       {/* LEFT: list */}
       <div className="space-y-4">
         <div className="flex items-end justify-between gap-4 flex-wrap">
@@ -145,7 +225,8 @@ export default function EcContractsPage() {
             <h2 className="text-xl font-semibold">EC Contracts — Revenue</h2>
             {rows.length > 0 && (
               <div className="text-sm text-zinc-400 mt-1">
-                Active estimated monthly: <span className="text-white font-medium">{formatEUR(totalEstimated)}</span>
+                Active estimated monthly:{" "}
+                <span className="text-white font-medium">{formatEUR(totalEstimated)}</span>
               </div>
             )}
           </div>
@@ -193,15 +274,20 @@ export default function EcContractsPage() {
                 </tr>
               ))}
               {!rows.length && (
-                <tr><td colSpan={7} className="px-3 py-6 text-zinc-500">No EC contracts. Add one to start forecasting NoisySource revenue.</td></tr>
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-zinc-500">
+                    No EC contracts. Add one to start forecasting NoisySource revenue.
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
         </Card>
       </div>
 
-      {/* RIGHT: form */}
-      <div className="xl:sticky xl:top-4 h-fit">
+      {/* RIGHT: form + projection */}
+      <div className="xl:sticky xl:top-4 h-fit space-y-4">
+        {/* Form card */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="text-lg font-medium">{editingId ? "Edit contract" : "New contract"}</div>
@@ -269,14 +355,20 @@ export default function EcContractsPage() {
               {form.dailyRateEUR && (form.expectedDays || form.totalDays) && (
                 <div className="text-sm text-zinc-300 bg-zinc-900 rounded px-3 py-2 space-y-0.5">
                   {form.expectedDays && (
-                    <div>Est. monthly: <span className="text-emerald-400 font-semibold">
-                      {formatEUR(Math.round(parseFloat(form.dailyRateEUR || "0") * 100) * parseFloat(form.expectedDays || "0"))}
-                    </span></div>
+                    <div>
+                      Est. monthly:{" "}
+                      <span className="text-emerald-400 font-semibold">
+                        {formatEUR(Math.round(parseFloat(form.dailyRateEUR || "0") * 100) * parseFloat(form.expectedDays || "0"))}
+                      </span>
+                    </div>
                   )}
                   {form.totalDays && (
-                    <div>Total contract value: <span className="text-emerald-400 font-semibold">
-                      {formatEUR(Math.round(parseFloat(form.dailyRateEUR || "0") * 100) * parseInt(form.totalDays || "0", 10))}
-                    </span></div>
+                    <div>
+                      Total contract value:{" "}
+                      <span className="text-emerald-400 font-semibold">
+                        {formatEUR(Math.round(parseFloat(form.dailyRateEUR || "0") * 100) * parseInt(form.totalDays || "0", 10))}
+                      </span>
+                    </div>
                   )}
                 </div>
               )}
@@ -290,6 +382,47 @@ export default function EcContractsPage() {
                   <div className="text-xs text-zinc-400 mb-1">End date</div>
                   <Input type="date" value={form.endDate} onChange={e => set("endDate", e.target.value)} />
                 </div>
+              </div>
+
+              {/* Non-working days */}
+              <div>
+                <div className="text-xs text-zinc-400 mb-1">Dias não trabalhados</div>
+                <div className="flex gap-2">
+                  <Input
+                    type="date"
+                    value={nwdInput}
+                    onChange={e => setNwdInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNwd(); } }}
+                    className="flex-1 min-w-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={addNwd}
+                    className="shrink-0 text-xs px-3 py-1.5 rounded bg-zinc-700 hover:bg-zinc-600 whitespace-nowrap"
+                  >
+                    Adicionar
+                  </button>
+                </div>
+                {form.nonWorkingDays.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {form.nonWorkingDays.map(iso => (
+                      <span
+                        key={iso}
+                        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-950 text-red-300 border border-red-800"
+                      >
+                        {formatChipDate(iso)}
+                        <button
+                          type="button"
+                          onClick={() => removeNwd(iso)}
+                          className="ml-0.5 text-red-400 hover:text-red-200 leading-none"
+                          aria-label={`Remove ${iso}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <label className="flex items-center gap-2 text-sm">
@@ -314,6 +447,96 @@ export default function EcContractsPage() {
             </form>
           )}
         </Card>
+
+        {/* Projection card — only rendered when there is enough data */}
+        {projection && (
+          <Card className="p-4 space-y-4">
+            <div className="text-base font-medium text-zinc-100">Projeção do Contrato</div>
+
+            {/* Stats grid */}
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="bg-zinc-900 rounded px-3 py-2">
+                <div className="text-xs text-zinc-400 mb-0.5">Dias contratados</div>
+                <div className="font-semibold text-white">{projection.totalContractWorkingDays}</div>
+              </div>
+              <div className="bg-zinc-900 rounded px-3 py-2">
+                <div className="text-xs text-zinc-400 mb-0.5">Dias trabalhados</div>
+                <div className="font-semibold text-white">{projection.workedDays}</div>
+              </div>
+              <div className="bg-zinc-900 rounded px-3 py-2">
+                <div className="text-xs text-zinc-400 mb-0.5">Dias restantes</div>
+                <div className="font-semibold text-white">{projection.remainingDays}</div>
+              </div>
+              <div className="bg-zinc-900 rounded px-3 py-2">
+                <div className="text-xs text-zinc-400 mb-0.5">Fim previsto</div>
+                <div className="font-semibold text-white">
+                  {new Date(`${projection.contractEndDate}T12:00:00`).toLocaleDateString("pt-PT", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Earnings */}
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="bg-zinc-900 rounded px-3 py-2">
+                <div className="text-xs text-zinc-400 mb-0.5">Ganhos até hoje</div>
+                <div className="font-semibold text-emerald-400">{formatEUR(projection.earnedCents)}</div>
+              </div>
+              <div className="bg-zinc-900 rounded px-3 py-2">
+                <div className="text-xs text-zinc-400 mb-0.5">Total previsto</div>
+                <div className="font-semibold text-emerald-400">{formatEUR(projection.projectedTotalCents)}</div>
+              </div>
+            </div>
+
+            {/* Month-by-month breakdown */}
+            <div>
+              <div className="text-xs text-zinc-400 mb-2">Mês a mês</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead>
+                    <tr className="border-b border-zinc-700 text-zinc-400 text-xs">
+                      <th className="pb-1.5 pr-3 font-normal">Mês</th>
+                      <th className="pb-1.5 pr-3 text-right font-normal">Dias úteis</th>
+                      <th className="pb-1.5 text-right font-normal">Rendimento</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projection.monthBreakdown.map(mb => {
+                      const isPast = mb.yearMonth < currentYM;
+                      const isCurrent = mb.yearMonth === currentYM;
+                      return (
+                        <tr
+                          key={mb.yearMonth}
+                          className={[
+                            "border-b border-zinc-800/60",
+                            isPast ? "opacity-50" : "",
+                            isCurrent ? "bg-zinc-800/40" : "",
+                          ].join(" ")}
+                        >
+                          <td className={`py-1.5 pr-3 ${isCurrent ? "font-semibold text-zinc-100" : ""}`}>
+                            {formatYearMonth(mb.yearMonth)}
+                          </td>
+                          <td className="py-1.5 pr-3 text-right tabular-nums">{mb.workingDays}</td>
+                          <td
+                            className={[
+                              "py-1.5 text-right tabular-nums",
+                              isCurrent ? "text-emerald-400 font-semibold" : isPast ? "" : "text-zinc-200",
+                            ].join(" ")}
+                          >
+                            {formatEUR(mb.incomeCents)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );

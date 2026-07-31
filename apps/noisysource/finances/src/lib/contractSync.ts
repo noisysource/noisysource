@@ -14,7 +14,16 @@
 import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { EcContractDoc } from "@shared/models/EcContract";
 import { computeMonthlyPayroll } from "@shared/lib/payroll";
+import { computeEcProjection } from "@shared/lib/ecProjection";
 import { api } from "./api";
+
+/** Convert a Date to a local YYYY-MM-DD string (avoids UTC-offset issues). */
+function dateToLocalIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 function toYearMonth(date: Date | undefined): string | undefined {
   if (!date) return undefined;
@@ -90,10 +99,35 @@ export async function deactivateEmploymentContractRecurring(
 
 export async function syncEcContractRecurring(contract: EcContractDoc): Promise<void> {
   const sourceId = `ec:${contract.id}`;
+
+  // If we have enough data, use the projection to compute the true average
+  // working days per month (accounting for non-working days and partial months).
+  // Otherwise fall back to the manually-set expectedDaysPerMonth.
+  let amountCents: number;
+  if (contract.startDate && contract.totalDays) {
+    const projection = computeEcProjection(
+      {
+        startDate: dateToLocalIso(contract.startDate),
+        dailyRateCents: contract.dailyRateCents,
+        totalDays: contract.totalDays,
+      },
+      contract.nonWorkingDays ?? [],
+      new Date(),
+    );
+    const numMonths = projection.monthBreakdown.length;
+    const avgDays =
+      numMonths > 0
+        ? Math.round((projection.totalContractWorkingDays / numMonths) * 10) / 10
+        : contract.expectedDaysPerMonth;
+    amountCents = Math.round(contract.dailyRateCents * avgDays);
+  } else {
+    amountCents = contract.dailyRateCents * contract.expectedDaysPerMonth;
+  }
+
   await api.recurring.upsertBySourceId(sourceId, {
     type: "income",
     description: `EC — ${contract.clientName}${contract.projectName ? ` / ${contract.projectName}` : ""}`,
-    amountCents: contract.dailyRateCents * contract.expectedDaysPerMonth,
+    amountCents,
     frequency: "monthly",
     dayOfMonth: 1,
     startYearMonth: toYearMonth(contract.startDate),
