@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import { useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 
 export type EntityType = 'private' | 'company';
@@ -9,47 +10,23 @@ export type Entity = {
   type: EntityType;
 };
 
-// The 3 fixed entities — no dynamic fetch needed
 export const ENTITIES: Entity[] = [
-  { id: 'private', name: 'Private', type: 'private' },
-  { id: 'noisysource', name: 'NoisySource', type: 'company' },
-  { id: 'noisyphocus', name: 'NoisyPhocus', type: 'company' },
+  { id: 'private',     name: 'Private',     type: 'private' },
+  { id: 'noisysource', name: 'NoisySource',  type: 'company' },
+  { id: 'noisyphocus', name: 'NoisyPhocus',  type: 'company' },
 ];
 
-interface EntityContextType {
-  entities: Entity[];
-  selectedEntity: Entity;
-  setSelectedEntityId: (entityId: string) => void;
-}
-
-const EntityContext = createContext<EntityContextType | undefined>(undefined);
-
-export const EntityProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [selectedEntityId, setSelectedEntityId] = useState<string>('private');
-
-  const selectedEntity = ENTITIES.find(e => e.id === selectedEntityId) ?? ENTITIES[0];
+/** Reads the active entity from the URL segment `/:entity/...`.
+ *  Falls back to 'private' on global routes (e.g. Dashboard).
+ *  Calls api.setEntity() so all domain calls use the correct entity. */
+export function useEntity() {
+  const params = useParams<{ entity?: string }>();
+  const entityId = params.entity ?? 'private';
+  const selectedEntity = ENTITIES.find(e => e.id === entityId) ?? ENTITIES[0];
 
   useEffect(() => {
-    api.setEntity(selectedEntityId);
-  }, [selectedEntityId]);
+    api.setEntity(entityId);
+  }, [entityId]);
 
-  const value = useMemo(() => ({
-    entities: ENTITIES,
-    selectedEntity,
-    setSelectedEntityId,
-  }), [selectedEntity]);
-
-  return (
-    <EntityContext.Provider value={value}>
-      {children}
-    </EntityContext.Provider>
-  );
-};
-
-export const useEntity = () => {
-  const context = useContext(EntityContext);
-  if (context === undefined) {
-    throw new Error('useEntity must be used within an EntityProvider');
-  }
-  return context;
-};
+  return { entities: ENTITIES, selectedEntity };
+}

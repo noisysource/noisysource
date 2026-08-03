@@ -5,7 +5,7 @@ export function OrgSelector() {
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs text-zinc-500">Context</label>
+      <label className="text-xs text-zinc-500">Entity</label>
       <select
         value={selectedEntity.id}
         onChange={(e) => setSelectedEntityId(e.target.value)}

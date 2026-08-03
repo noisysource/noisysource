@@ -7,8 +7,8 @@ interface BaseAccount {
   code: string;          // short, unique per org (e.g. "NS:BPI", "AR:CGD")
   name: string;          // display name
   type: AccountType;
-  ownerType: OwnerType;  // REQUIRED now
-  ownerId: string;       // REQUIRED now (FK to orgs/{org}/companies|people/{id})
+  ownerType?: OwnerType;
+  ownerId?: string;
   jointOwnerIds?: string[]; // additional co-owners (e.g. joint bank accounts)
   currency: "EUR";       // fix for now
   createdAt: Date | any;

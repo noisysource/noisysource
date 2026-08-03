@@ -156,6 +156,19 @@ service cloud.firestore {
         allow read, write: if isRainbowAdmin() || isOwner();
       }
 
+      // Camp subscriptions (families signing up for a camp)
+      match /campSubscriptions/{doc} {
+        allow read, write: if isRainbowAdmin() || isOwner();
+        allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+        allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      }
+
+      // Camp definitions (periods/configs created by admin)
+      match /camps/{doc} {
+        allow read: if isAuthenticated();
+        allow write: if isRainbowAdmin() || isOwner();
+      }
+
       // Camp
       match /campBookings/{doc} {
         allow read, write: if isRainbowAdmin() || isOwner();
@@ -175,6 +188,11 @@ service cloud.firestore {
       match /{collection}/{docId} {
         allow read, write: if isFinhubAdmin();
       }
+    }
+
+    // Cross-entity event stream (finances_events root collection)
+    match /finances_events/{eventId} {
+      allow read, write: if isFinhubAdmin();
     }
 
     // Shared Ledger collections (Finances app, legacy root-level)

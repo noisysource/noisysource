@@ -17,6 +17,7 @@ import { db } from "../../firebase";
 /** ---------- helpers (deep clean) ---------- */
 const stripUndefinedDeep = <T>(v: T): T => {
   if (Array.isArray(v)) return v.map(stripUndefinedDeep) as any;
+  if (v instanceof Date) return v;
   if (v && typeof v === "object") {
     const out: any = {};
     for (const [k, val] of Object.entries(v as any)) {
@@ -30,6 +31,7 @@ const stripUndefinedDeep = <T>(v: T): T => {
 
 const nullsToUndefinedDeep = <T>(v: T): T => {
   if (Array.isArray(v)) return v.map(nullsToUndefinedDeep) as any;
+  if (v instanceof Date) return v;
   if (v && typeof v === "object") {
     const out: any = {};
     for (const [k, val] of Object.entries(v as any)) {

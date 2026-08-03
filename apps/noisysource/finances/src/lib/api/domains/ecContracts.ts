@@ -15,6 +15,9 @@ const from = (raw: any, id: string): EcContractDoc => ({
   endDate: toDate(raw?.endDate) ?? undefined,
   active: raw?.active !== false,
   nonWorkingDays: Array.isArray(raw?.nonWorkingDays) ? (raw.nonWorkingDays as string[]) : undefined,
+  halfDays: Array.isArray(raw?.halfDays) ? (raw.halfDays as string[]) : undefined,
+  daysToPayment: raw?.daysToPayment != null ? Number(raw.daysToPayment) : undefined,
+  paymentAccountId: raw?.paymentAccountId || undefined,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
 

@@ -43,8 +43,9 @@ Source files in `src/`:
 
 ## Firestore
 - Security rules are centralised — review on every change involving new collections
-- Namespace collections per app (e.g. `kidclub_`, `finances_`)
-- KidClub uses the `kidclub` named database (not `(default)`)
+- Single `(default)` database per project — all apps share it, scoped by collection prefix
+- KidClub: `_apps/arcoiris/{collection}` — FinHub: `finances_entities/{entityId}/{collection}`
+- FinHub can query KidClub collections directly for financial management
 
 ---
 

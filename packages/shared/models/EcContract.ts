@@ -8,7 +8,10 @@ export interface EcContractDoc {
   startDate?: Date;
   endDate?: Date;
   active: boolean;
-  nonWorkingDays?: string[];   // ISO date strings e.g. ["2026-08-15", "2026-12-25"]
+  nonWorkingDays?: string[];   // ISO date strings — full day off (counts as 1 day)
+  halfDays?: string[];         // ISO date strings — half day off (counts as 0.5 day)
+  daysToPayment?: number;      // calendar days from TS submission to expected payment
+  paymentAccountId?: string;   // account that receives EC payments
   createdAt?: Date;
 }
 

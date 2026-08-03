@@ -59,7 +59,7 @@ All data lives under `finances_entities/{entityId}/` sub-collections in the **(d
 |---|---|
 | Frontend | React + Vite (port 5174) |
 | Backend | Firebase Cloud Functions (shared `/functions`) |
-| Database | Firestore (default database, not `kidclub`) |
+| Database | Firestore (`(default)` database, shared with KidClub) |
 | Auth | Firebase Auth (Google) + GCP IAP |
 | Hosting | Firebase Hosting (target: `finances`) |
 
@@ -143,7 +143,7 @@ All data lives under `finances_entities/{entityId}/` sub-collections in the **(d
 
 ## Notes
 - IAP setup reference: `../../../infra/gcp/`
-- Firestore database: `(default)` — KidClub uses the `kidclub` named database
+- Firestore database: `(default)` — same database as KidClub (scoped by collection prefix)
 - NoisyPhocus income from KidClub: deferred to next iteration
 - Bank integration (Nordigen/GoCardless): future, not current priority
 - IRS: Renato + Marisa file jointly (declaração conjunta)

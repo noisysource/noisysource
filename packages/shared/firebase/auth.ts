@@ -22,7 +22,7 @@ export const loginWithGoogle = async (auth: Auth, db: Firestore) => {
   await ensureUserDoc(db, result.user);
 };
 
-// No-op kept for call-site compatibility — redirect flow removed
+// No-op — redirect flow not used; kept for call-site compatibility
 export const handleGoogleRedirectResult = async (_auth: Auth, _db: Firestore): Promise<boolean> => false;
 
 export const logout = async (auth: Auth) => {

@@ -52,11 +52,14 @@ function nextDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
 }
 
-/** True when the date is Mon-Fri and not in the nonWorking set. */
-function isWorkingDay(d: Date, nonWorking: Set<string>): boolean {
-  const dow = d.getDay(); // 0=Sun, 6=Sat
-  if (dow === 0 || dow === 6) return false;
-  return !nonWorking.has(localIso(d));
+/** Returns the working-day weight for a date: 0 (off/weekend), 0.5 (half-day), or 1 (full day). */
+function dayWeight(d: Date, nonWorking: Set<string>, halfDays: Set<string>): number {
+  const dow = d.getDay();
+  if (dow === 0 || dow === 6) return 0;
+  const iso = localIso(d);
+  if (nonWorking.has(iso)) return 0;
+  if (halfDays.has(iso)) return 0.5;
+  return 1;
 }
 
 /**
@@ -75,21 +78,24 @@ export function computeEcProjection(
   },
   nonWorkingDays: string[],
   today: Date,
+  halfDays: string[] = [],
 ): EcProjection {
   const nonWorking = new Set(nonWorkingDays);
+  const half = new Set(halfDays);
   const start = parseDate(contract.startDate);
   const { dailyRateCents, totalDays } = contract;
 
-  // ── 1. Walk forward from startDate, counting working days until totalDays ──
+  // ── 1. Walk forward from startDate, accumulating weights until totalDays ──
 
   let contractEnd = start;
   let counted = 0;
   let cursor = new Date(start);
 
   while (counted < totalDays) {
-    if (isWorkingDay(cursor, nonWorking)) {
-      counted++;
-      if (counted === totalDays) {
+    const w = dayWeight(cursor, nonWorking, half);
+    if (w > 0) {
+      counted += w;
+      if (counted >= totalDays) {
         contractEnd = new Date(cursor);
         break;
       }
@@ -108,14 +114,13 @@ export function computeEcProjection(
   let workedDays = 0;
   cursor = new Date(start);
   while (cursor <= effectiveEnd) {
-    if (isWorkingDay(cursor, nonWorking)) workedDays++;
+    workedDays += dayWeight(cursor, nonWorking, half);
     cursor = nextDay(cursor);
   }
 
   // ── 3. Month breakdown ──
 
   const months: EcProjection["monthBreakdown"] = [];
-  // Start of the first calendar month in the contract span
   let monthStart = new Date(start.getFullYear(), start.getMonth(), 1);
   const lastMonth = new Date(contractEnd.getFullYear(), contractEnd.getMonth(), 1);
 
@@ -130,9 +135,8 @@ export function computeEcProjection(
 
     while (cursor < monthEndExclusive) {
       const iso = localIso(cursor);
-      // Only count days that fall within the contract span
       if (iso >= contract.startDate && iso <= contractEndStr) {
-        if (isWorkingDay(cursor, nonWorking)) daysInMonth++;
+        daysInMonth += dayWeight(cursor, nonWorking, half);
       }
       cursor = nextDay(cursor);
     }

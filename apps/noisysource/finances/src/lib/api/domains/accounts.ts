@@ -22,12 +22,12 @@ type BaseSave = {
   id?: string;
   code?: string;
   name: string;
-  ownerType: OwnerType;
-  ownerId: string;
+  ownerType?: OwnerType;
+  ownerId?: string;
   jointOwnerIds?: string[];
   currency?: "EUR";
   active?: boolean;
-  createdAt?: Date; // ignored on update; auto-set on create in base
+  createdAt?: Date;
   balanceCents?: number;
   balanceAsOf?: string;
 };

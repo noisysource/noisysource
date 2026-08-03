@@ -20,16 +20,6 @@ function dateToIso(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Format an ISO date as "sex., 25 de dez. de 2026" in pt-PT. */
-function formatChipDate(iso: string): string {
-  return new Date(`${iso}T12:00:00`).toLocaleDateString("pt-PT", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
 /** Format YYYY-MM as "mar. 2026" in pt-PT. */
 function formatYearMonth(ym: string): string {
   const [y, m] = ym.split("-");
@@ -54,9 +44,11 @@ type FormState = {
   totalDays: string;
   expectedDays: string;
   startDate: string;
-  endDate: string;
+  daysToPayment: string;
+  paymentAccountId: string;
   active: boolean;
   nonWorkingDays: string[];
+  halfDays: string[];
 };
 
 const empty = (): FormState => ({
@@ -66,9 +58,11 @@ const empty = (): FormState => ({
   totalDays: "",
   expectedDays: "",
   startDate: "",
-  endDate: "",
+  daysToPayment: "10",
+  paymentAccountId: "",
   active: true,
   nonWorkingDays: [],
+  halfDays: [],
 });
 
 function fromDoc(d: EcContractDoc): FormState {
@@ -79,9 +73,11 @@ function fromDoc(d: EcContractDoc): FormState {
     totalDays: d.totalDays ? String(d.totalDays) : "",
     expectedDays: String(d.expectedDaysPerMonth),
     startDate: d.startDate ? dateToIso(d.startDate) : "",
-    endDate: d.endDate ? dateToIso(d.endDate) : "",
+    daysToPayment: d.daysToPayment != null ? String(d.daysToPayment) : "10",
+    paymentAccountId: d.paymentAccountId ?? "",
     active: d.active,
     nonWorkingDays: d.nonWorkingDays ? [...d.nonWorkingDays].sort() : [],
+    halfDays: d.halfDays ? [...d.halfDays].sort() : [],
   };
 }
 
@@ -91,21 +87,26 @@ export default function EcContractsPage() {
   const { selectedEntity } = useEntity();
 
   const [rows, setRows] = useState<EcContractDoc[]>([]);
+  const [accounts, setAccounts] = useState<import('@shared/models/Account').Account[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(empty());
   const [formOpen, setFormOpen] = useState(true);
 
-  // Non-working day date input
-  const [nwdInput, setNwdInput] = useState("");
 
   async function reload() {
     setBusy(true);
     setMsg(null);
     try {
-      setRows(await api.ecContracts.list());
+      const [contracts, accs] = await Promise.all([
+        api.ecContracts.list(),
+        api.accounts.list(),
+      ]);
+      setRows(contracts);
+      setAccounts(accs);
     } catch (e: any) {
       setMsg(e?.message ?? "Failed to load");
     } finally {
@@ -118,40 +119,31 @@ export default function EcContractsPage() {
   function startCreate() {
     setEditingId(null);
     setForm(empty());
-    setNwdInput("");
     setFormOpen(true);
   }
 
   function startEdit(d: EcContractDoc) {
     setEditingId(d.id);
     setForm(fromDoc(d));
-    setNwdInput("");
     setFormOpen(true);
   }
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm(f => ({ ...f, [k]: v }));
 
-  function addNwd() {
-    const iso = nwdInput.trim();
-    if (!iso || form.nonWorkingDays.includes(iso)) return;
-    set("nonWorkingDays", [...form.nonWorkingDays, iso].sort());
-    setNwdInput("");
-  }
-
-  function removeNwd(iso: string) {
-    set("nonWorkingDays", form.nonWorkingDays.filter(d => d !== iso));
-  }
-
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!form.clientName.trim()) return;
     setBusy(true);
     setMsg(null);
+    setSaveError(null);
     try {
       const dailyRateCents = Math.round(parseFloat(form.dailyRateEUR || "0") * 100);
       const totalDays = form.totalDays ? parseInt(form.totalDays, 10) : undefined;
       const expectedDaysPerMonth = parseFloat(form.expectedDays || "0");
+      const startDate = form.startDate ? new Date(form.startDate + "T12:00:00") : undefined;
+      const endDate = projection ? new Date(projection.contractEndDate + "T12:00:00") : undefined;
+      console.log("[ecContracts.save] startDate:", form.startDate, "→", startDate);
       const id = await api.ecContracts.save({
         id: editingId ?? undefined,
         clientName: form.clientName.trim(),
@@ -159,20 +151,26 @@ export default function EcContractsPage() {
         dailyRateCents,
         totalDays,
         expectedDaysPerMonth,
-        startDate: form.startDate ? new Date(form.startDate) : undefined,
-        endDate: form.endDate ? new Date(form.endDate) : undefined,
+        startDate,
+        endDate,
         active: form.active,
+        paymentAccountId: form.paymentAccountId || undefined,
         nonWorkingDays: form.nonWorkingDays.length > 0 ? form.nonWorkingDays : undefined,
+        halfDays: form.halfDays.length > 0 ? form.halfDays : undefined,
+        daysToPayment: form.daysToPayment ? parseInt(form.daysToPayment, 10) : undefined,
       });
-      const saved = await api.ecContracts.get(id);
-      if (saved) await syncEcContractRecurring(saved);
+      console.log("[ecContracts.save] saved id:", id);
       setEditingId(null);
       setForm(empty());
-      setNwdInput("");
       await reload();
-      setMsg("Saved ✔  — Recurring updated");
+      setMsg("Saved ✔");
+      // Sync recurring in background — don't let sync errors block the save
+      api.ecContracts.get(id).then(saved => {
+        if (saved) syncEcContractRecurring(saved).catch(err => console.error("[contractSync] error:", err));
+      });
     } catch (e: any) {
-      setMsg(e?.message ?? "Save failed");
+      console.error("[ecContracts.save] error:", e);
+      setSaveError(e?.message ?? "Save failed");
     } finally {
       setBusy(false);
     }
@@ -208,11 +206,12 @@ export default function EcContractsPage() {
         { startDate: form.startDate, dailyRateCents, totalDays },
         form.nonWorkingDays,
         new Date(),
+        form.halfDays,
       );
     } catch {
       return null;
     }
-  }, [form.startDate, form.dailyRateEUR, form.totalDays, form.nonWorkingDays]);
+  }, [form.startDate, form.dailyRateEUR, form.totalDays, form.nonWorkingDays, form.halfDays]);
 
   const currentYM = todayYearMonth();
 
@@ -234,6 +233,7 @@ export default function EcContractsPage() {
         </div>
 
         {msg && <div className="text-sm text-emerald-400">{msg}</div>}
+        {saveError && <div className="text-sm text-red-400 font-medium">⚠ {saveError}</div>}
 
         <Card className="overflow-x-auto">
           <table className="min-w-full text-sm text-left">
@@ -241,6 +241,7 @@ export default function EcContractsPage() {
               <tr className="border-b border-zinc-700 text-zinc-300">
                 <th className="px-3 py-2">Client</th>
                 <th className="px-3 py-2">Project</th>
+                <th className="px-3 py-2">Start</th>
                 <th className="px-3 py-2">Daily rate</th>
                 <th className="px-3 py-2">Total days</th>
                 <th className="px-3 py-2">Est. days/mo</th>
@@ -254,6 +255,9 @@ export default function EcContractsPage() {
                 <tr key={r.id} className={`border-b border-zinc-800 ${!r.active ? "opacity-50" : ""}`}>
                   <td className="px-3 py-2 font-medium">{r.clientName}</td>
                   <td className="px-3 py-2 text-zinc-400">{r.projectName || "—"}</td>
+                  <td className="px-3 py-2 text-zinc-400 text-xs">
+                    {r.startDate ? dateToIso(r.startDate) : <span className="text-red-500">—</span>}
+                  </td>
                   <td className="px-3 py-2">{formatEUR(r.dailyRateCents)}</td>
                   <td className="px-3 py-2">
                     {r.totalDays ? (
@@ -275,7 +279,7 @@ export default function EcContractsPage() {
               ))}
               {!rows.length && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-zinc-500">
+                  <td colSpan={9} className="px-3 py-6 text-zinc-500">
                     No EC contracts. Add one to start forecasting NoisySource revenue.
                   </td>
                 </tr>
@@ -375,54 +379,37 @@ export default function EcContractsPage() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <div className="text-xs text-zinc-400 mb-1">Start date</div>
+                  <div className="text-xs text-zinc-400 mb-1">Data de início</div>
                   <Input type="date" value={form.startDate} onChange={e => set("startDate", e.target.value)} />
                 </div>
                 <div>
-                  <div className="text-xs text-zinc-400 mb-1">End date</div>
-                  <Input type="date" value={form.endDate} onChange={e => set("endDate", e.target.value)} />
+                  <div className="text-xs text-zinc-400 mb-1">Dias até pagamento</div>
+                  <Input type="number" placeholder="10" value={form.daysToPayment} onChange={e => set("daysToPayment", e.target.value)} />
                 </div>
               </div>
 
-              {/* Non-working days */}
               <div>
-                <div className="text-xs text-zinc-400 mb-1">Dias não trabalhados</div>
-                <div className="flex gap-2">
-                  <Input
-                    type="date"
-                    value={nwdInput}
-                    onChange={e => setNwdInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNwd(); } }}
-                    className="flex-1 min-w-0"
-                  />
-                  <button
-                    type="button"
-                    onClick={addNwd}
-                    className="shrink-0 text-xs px-3 py-1.5 rounded bg-zinc-700 hover:bg-zinc-600 whitespace-nowrap"
-                  >
-                    Adicionar
-                  </button>
+                <div className="text-xs text-zinc-400 mb-1">Conta de destino</div>
+                <select
+                  value={form.paymentAccountId}
+                  onChange={e => set("paymentAccountId", e.target.value)}
+                  className="w-full h-10 rounded-md border border-zinc-700 bg-zinc-900 text-white px-3 py-2 text-sm"
+                >
+                  <option value="">— sem conta associada —</option>
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div className="text-xs text-zinc-400 mb-1">Fim previsto</div>
+                <div className="h-9 flex items-center px-3 rounded bg-zinc-900 text-sm text-zinc-300">
+                  {projection
+                    ? new Date(`${projection.contractEndDate}T12:00:00`).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric" })
+                    : <span className="text-zinc-600">—</span>
+                  }
                 </div>
-                {form.nonWorkingDays.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {form.nonWorkingDays.map(iso => (
-                      <span
-                        key={iso}
-                        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-950 text-red-300 border border-red-800"
-                      >
-                        {formatChipDate(iso)}
-                        <button
-                          type="button"
-                          onClick={() => removeNwd(iso)}
-                          className="ml-0.5 text-red-400 hover:text-red-200 leading-none"
-                          aria-label={`Remove ${iso}`}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
 
               <label className="flex items-center gap-2 text-sm">

@@ -3,6 +3,7 @@ import * as admin from "firebase-admin";
 admin.initializeApp();
 
 export { getUsageSnapshot } from "./usage";
+export { getGcpCosts } from "./getGcpCosts";
 
 export { expandTemplatesInRange, postPlannedInstance } from "./LedgerFunctions";
 export * from "./OrgDataTools";

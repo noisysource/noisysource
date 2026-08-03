@@ -51,9 +51,9 @@
 | **prod** | Live production | Public / IAP depending on app |
 | **dev** | Development & internal testing | IAP-protected or local only |
 
-Firebase/GCP projects (actual IDs — rename planned when infra is refactored):
-- prod: `rainbow-prod-2454b`
-- dev: `kidclub-dev`
+Firebase/GCP projects (display names: "NoisySource Dev" / "NoisySource Prod"):
+- prod: `rainbow-prod-2454b` (display: NoisySource Prod)
+- dev: `kidclub-dev` (display: NoisySource Dev)
 
 GitHub: `github.com/noisysource/noisysource`
 
@@ -75,6 +75,13 @@ All apps share Firebase Cloud Functions located in `/functions`.
 - See `/functions/CLAUDE.md` for function conventions and structure
 - Apps should never duplicate logic — always check `/functions` first
 - Firestore security rules are also managed centrally
+
+## Firestore Architecture
+Single `(default)` database per project — both KidClub and FinHub share the same database within each environment. Collection scoping prevents conflicts:
+- KidClub: `_apps/arcoiris/{collection}/...`
+- FinHub: `finances_entities/{entityId}/{collection}/...`
+
+This allows FinHub to read KidClub data directly for financial management (subscription revenue → income tracking).
 
 ---
 

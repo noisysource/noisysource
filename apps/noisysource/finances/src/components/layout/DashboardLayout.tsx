@@ -2,23 +2,13 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard,
 } from 'lucide-react';
-import { Role } from '@shared/models/Roles';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
 import { useUser } from '@shared/hooks';
 import { logout } from '@shared/firebase/auth';
-import { OrgSelector } from './OrgSelector';
-import { useEntity } from '../../hooks/EntityContext';
-
-type NavItem = {
-  path: string;
-  label: string;
-  icon: JSX.Element;
-  requiredRole?: Role;
-  entities?: string[]; // if set, only show for these entity IDs
-};
+import { GcpCostCard } from '../GcpCostCard';
 
 function usePersistedToggle(key: string, def = true) {
   const [open, setOpen] = useState<boolean>(() => {
@@ -30,20 +20,20 @@ function usePersistedToggle(key: string, def = true) {
 }
 
 function Section({
-  title, children, storeKey, defaultOpen = true,
-}: { title: string; children: React.ReactNode; storeKey: string; defaultOpen?: boolean }) {
+  title, emoji, children, storeKey, defaultOpen = false,
+}: { title: string; emoji?: string; children: React.ReactNode; storeKey: string; defaultOpen?: boolean }) {
   const { open, setOpen } = usePersistedToggle(`nav:${storeKey}`, defaultOpen);
   return (
-    <div className="mb-3">
+    <div className="mb-2">
       <button
-        className="w-full flex items-center justify-between px-2 py-1.5 text-sm font-semibold text-zinc-300 hover:text-white"
+        className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-bold text-zinc-400 uppercase tracking-wider hover:text-white"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
       >
-        <span>{title}</span>
-        <span className="text-xs text-zinc-500">{open ? '▾' : '▸'}</span>
+        <span>{emoji && <span className="mr-1.5">{emoji}</span>}{title}</span>
+        <span className="text-zinc-600">{open ? '▾' : '▸'}</span>
       </button>
-      {open && <div className="mt-1 space-y-1">{children}</div>}
+      {open && <div className="mt-0.5 space-y-0.5">{children}</div>}
     </div>
   );
 }
@@ -52,7 +42,7 @@ function NavLink({ to, icon, label, active }: { to: string; icon: JSX.Element; l
   return (
     <Link
       to={to}
-      className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-zinc-800 ${
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors hover:bg-zinc-800 ${
         active ? 'bg-zinc-800 text-white' : 'text-zinc-400'
       }`}
     >
@@ -64,39 +54,12 @@ function NavLink({ to, icon, label, active }: { to: string; icon: JSX.Element; l
 export default function DashboardLayout() {
   const location = useLocation();
   const user = useUser();
-  const { selectedEntity } = useEntity();
   if (!user) return null;
-
-  const setupItems: NavItem[] = [
-    { path: '/setup/people',       label: 'People',               icon: <User size={18} />,       requiredRole: Role.FinhubAdmin },
-    { path: '/setup/companies',    label: 'Companies',            icon: <Building2 size={18} />,  requiredRole: Role.FinhubAdmin },
-    { path: '/setup/accounts',     label: 'Accounts',             icon: <Banknote size={18} />,   requiredRole: Role.FinhubAdmin },
-    { path: '/setup/contracts',    label: 'Employment Contracts', icon: <FileText size={18} />,   requiredRole: Role.FinhubAdmin, entities: ['noisysource'] },
-    { path: '/setup/ec-contracts', label: 'EC Contracts',         icon: <TrendingUp size={18} />, requiredRole: Role.FinhubAdmin, entities: ['noisysource'] },
-  ];
-
-  const financeItems: NavItem[] = [
-    { path: '/recurring',  label: 'Recurring',     icon: <RefreshCw size={18} />,  requiredRole: Role.FinhubAdmin },
-    { path: '/forecast',   label: 'Forecast',      icon: <BarChart2 size={18} />,  requiredRole: Role.FinhubAdmin },
-    { path: '/cashflow',   label: 'Cash Flow',     icon: <Waves size={18} />,      requiredRole: Role.FinhubAdmin },
-    { path: '/payroll',    label: 'Payroll',       icon: <Calculator size={18} />, requiredRole: Role.FinhubAdmin, entities: ['noisysource', 'noisyphocus'] },
-    { path: '/irs',        label: 'IRS Simulator', icon: <Receipt size={18} />,    requiredRole: Role.FinhubAdmin, entities: ['private'] },
-    { path: '/categories', label: 'Categories',    icon: <FolderTree size={18} />, requiredRole: Role.FinhubAdmin },
-  ];
-
-  const adminItems: NavItem[] = [
-    { path: '/admin/access', label: 'Manage Access', icon: <ShieldCheck size={18} />, requiredRole: Role.Owner },
-    { path: '/admin/dev',    label: 'Dev Tools',     icon: <Wrench size={18} />,      requiredRole: Role.Owner },
-  ];
-
-  const canSee = (item: NavItem) => {
-    if (item.requiredRole && !user.roles?.[item.requiredRole]) return false;
-    if (item.entities && !item.entities.includes(selectedEntity.id)) return false;
-    return true;
-  };
 
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
+
+  const isOwner = user.roles?.owner;
 
   const handleLogout = async () => {
     await logout(auth);
@@ -106,53 +69,82 @@ export default function DashboardLayout() {
 
   return (
     <div className="h-screen flex text-white">
-      <aside className="w-64 bg-zinc-900 p-4 flex flex-col justify-between overflow-y-auto">
+      <aside className="w-60 bg-zinc-900 p-3 flex flex-col justify-between overflow-y-auto shrink-0">
         <div>
-          <div className="mb-4">
-            <h1 className="text-xl font-bold flex items-center gap-2">
+          <div className="mb-4 px-2">
+            <h1 className="text-lg font-bold flex items-center gap-2">
               <span>💰</span> FinHub
             </h1>
-            <div className="mt-2">
-              <OrgSelector />
-            </div>
           </div>
 
-          <nav>
-            <Section title="Setup" storeKey="setup" defaultOpen={false}>
-              {setupItems.filter(canSee).map(i => (
-                <NavLink key={i.path} to={i.path} label={i.label} icon={i.icon} active={isActive(i.path)} />
-              ))}
+          <nav className="space-y-1">
+            {/* Dashboard — global */}
+            <div className="mb-3">
+              <NavLink to="/" icon={<LayoutDashboard size={16} />} label="Dashboard" active={location.pathname === '/'} />
+            </div>
+
+            {/* Private */}
+            <Section title="Private" emoji="🏠" storeKey="entity:private" defaultOpen>
+              <NavLink to="/private/accounts"  icon={<Banknote size={16} />}  label="Accounts"      active={isActive('/private/accounts')} />
+              <NavLink to="/private/irs"        icon={<Receipt size={16} />}   label="IRS Simulator" active={isActive('/private/irs')} />
+              <NavLink to="/private/recurring"  icon={<RefreshCw size={16} />} label="Recurring"     active={isActive('/private/recurring')} />
+              <NavLink to="/private/forecast"   icon={<BarChart2 size={16} />} label="Forecast"      active={isActive('/private/forecast')} />
             </Section>
 
-            <Section title="Finance" storeKey="finance" defaultOpen>
-              {financeItems.filter(canSee).map(i => (
-                <NavLink key={i.path} to={i.path} label={i.label} icon={i.icon} active={isActive(i.path)} />
-              ))}
+            {/* NoisySource */}
+            <Section title="NoisySource" emoji="🏢" storeKey="entity:noisysource" defaultOpen>
+              <NavLink to="/noisysource/accounts"     icon={<Banknote size={16} />}    label="Accounts"     active={isActive('/noisysource/accounts')} />
+              <NavLink to="/noisysource/ec-contracts" icon={<TrendingUp size={16} />}  label="EC Contracts" active={isActive('/noisysource/ec-contracts')} />
+              <NavLink to="/noisysource/contracts"    icon={<FileText size={16} />}    label="Employment"   active={isActive('/noisysource/contracts')} />
+              <NavLink to="/noisysource/payroll"      icon={<Calculator size={16} />}  label="Payroll"      active={isActive('/noisysource/payroll')} />
+              <NavLink to="/noisysource/recurring"    icon={<RefreshCw size={16} />}   label="Recurring"    active={isActive('/noisysource/recurring')} />
+              <NavLink to="/noisysource/forecast"     icon={<BarChart2 size={16} />}   label="Forecast"     active={isActive('/noisysource/forecast')} />
             </Section>
 
-            <Section title="Admin" storeKey="admin" defaultOpen={false}>
-              {adminItems.filter(canSee).map(i => (
-                <NavLink key={i.path} to={i.path} label={i.label} icon={i.icon} active={isActive(i.path)} />
-              ))}
+            {/* NoisyPhocus */}
+            <Section title="NoisyPhocus" emoji="📸" storeKey="entity:noisyphocus">
+              <NavLink to="/noisyphocus/accounts" icon={<Banknote size={16} />}   label="Accounts" active={isActive('/noisyphocus/accounts')} />
+              <NavLink to="/noisyphocus/payroll"  icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
             </Section>
+
+            {/* Admin */}
+            {isOwner && (
+              <Section title="Admin" emoji="⚙️" storeKey="admin">
+                <NavLink to="/setup/people"    icon={<User size={16} />}       label="People"        active={isActive('/setup/people')} />
+                <NavLink to="/setup/companies" icon={<Building2 size={16} />}  label="Companies"     active={isActive('/setup/companies')} />
+                <NavLink to="/admin/access"    icon={<ShieldCheck size={16} />} label="Access"       active={isActive('/admin/access')} />
+                <NavLink to="/admin/dev"       icon={<Wrench size={16} />}     label="Dev Tools"     active={isActive('/admin/dev')} />
+                <NavLink to="/noisysource/categories" icon={<FolderTree size={16} />} label="Categories" active={isActive('/noisysource/categories')} />
+              </Section>
+            )}
+
+            {/* Cashflow — entity-agnostic shortcut, goes to noisysource by default */}
+            <div className="mt-2 pt-2 border-t border-zinc-800">
+              <NavLink to="/noisysource/cashflow" icon={<Waves size={16} />} label="Cash Flow" active={isActive('/noisysource/cashflow') || isActive('/private/cashflow')} />
+            </div>
           </nav>
         </div>
 
-        <div className="space-y-2 border-t border-zinc-800 pt-4 text-sm">
-          <a
-            href="https://kidclub.pt"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-zinc-400 hover:bg-zinc-800"
-          >
-            <ExternalLink size={16} /> KidClub
-          </a>
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-red-400 hover:bg-zinc-800"
-          >
-            <LogOut size={16} /> Logout
-          </button>
+        <div>
+          <div className="mb-3 border-t border-zinc-800 pt-3">
+            <GcpCostCard />
+          </div>
+          <div className="space-y-1 text-sm">
+            <a
+              href="https://kidclub.pt"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-md text-zinc-400 hover:bg-zinc-800"
+            >
+              <ExternalLink size={14} /> KidClub
+            </a>
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-red-400 hover:bg-zinc-800"
+            >
+              <LogOut size={14} /> Logout
+            </button>
+          </div>
         </div>
       </aside>
 

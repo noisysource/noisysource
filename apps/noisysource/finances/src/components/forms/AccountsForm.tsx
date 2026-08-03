@@ -1,25 +1,11 @@
-// apps/finhub/src/components/accounts/AccountForm.tsx
 import { useEffect, useMemo, useState } from "react";
-import type { Account, AccountType, OwnerType, VoucherType } from "@shared/models/Account";
-import { cleanUndefined } from "@shared/lib/clean";
+import type { Account, AccountType, VoucherType } from "@shared/models/Account";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { api } from "../../lib/api";
-import { useAccountsData } from "../../hooks/useAccountData";
-
-const initials = (s: string) =>
-  (s || "")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w[0]!.toUpperCase())
-    .join("");
 
 const slug = (s: string) =>
-  (s || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  (s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 export function AccountForm({
   initial,
@@ -30,16 +16,11 @@ export function AccountForm({
   onSaved?: () => Promise<void> | void;
   onCancel: () => void;
 }) {
-  // shared owners data (companies/people) from hook
-  const { companies, people, reload, loading } = useAccountsData();
-
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [ownerType, setOwnerType] = useState<OwnerType | "">("");
-  const [ownerId, setOwnerId] = useState("");
-  const [jointOwnerIds, setJointOwnerIds] = useState<string[]>([]);
   const [type, setType] = useState<AccountType>("bank");
   const [name, setName] = useState("");
-  const [currency, setCurrency] = useState<"EUR">("EUR");
+  const [balanceCents, setBalanceCents] = useState("");
+  const [balanceAsOf, setBalanceAsOf] = useState("");
 
   // bank
   const [bankName, setBankName] = useState("");
@@ -59,34 +40,26 @@ export function AccountForm({
   // bonds
   const [bondsProvider, setBondsProvider] = useState("CTT");
 
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
   useEffect(() => {
     if (!initial) {
       setEditingId(null);
-      setOwnerType("");
-      setOwnerId("");
-      setJointOwnerIds([]);
       setType("bank");
       setName("");
-      setCurrency("EUR");
-      setBankName("");
-      setIban("");
-      setBic("");
-      setIssuer("");
-      setLast4("");
-      setVoucherType("meal");
-      setVoucherProvider("Edenred");
-      setIssuingEmployer("");
-      setMonthlyTopUp("");
+      setBalanceCents(""); setBalanceAsOf("");
+      setBankName(""); setIban(""); setBic("");
+      setIssuer(""); setLast4("");
+      setVoucherType("meal"); setVoucherProvider("Edenred"); setIssuingEmployer(""); setMonthlyTopUp("");
       setBondsProvider("CTT");
       return;
     }
     setEditingId(initial.id);
-    setOwnerType((initial as any).ownerType || "");
-    setOwnerId((initial as any).ownerId || "");
-    setJointOwnerIds((initial as any).jointOwnerIds || []);
     setType(initial.type);
     setName(initial.name || "");
-    setCurrency(((initial as any).currency as "EUR") || "EUR");
+    setBalanceCents(initial.balanceCents != null ? String(initial.balanceCents / 100) : "");
+    setBalanceAsOf((initial as any).balanceAsOf || "");
     setBankName((initial as any).bankName || "");
     setIban((initial as any).iban || "");
     setBic((initial as any).bic || "");
@@ -99,185 +72,89 @@ export function AccountForm({
     setBondsProvider((initial as any).provider || "CTT");
   }, [initial]);
 
-  // owner token → lower-case; company prefers shortCode, person uses initials
-  const ownerToken = useMemo(() => {
-    if (ownerType === "company") {
-      const c = companies.find((x) => x.id === ownerId);
-      const raw = c?.shortCode || initials(c?.name || "");
-      return slug(raw);
-    }
-    if (ownerType === "person") {
-      const p = people.find((x) => x.id === ownerId);
-      return slug(initials(p?.name || ""));
-    }
-    return "";
-  }, [ownerType, ownerId, companies, people]);
-
-  // final auto code: owner:type:name
   const codePreview = useMemo(() => {
-    const parts = [ownerToken, type, slug(name || `${type} account`)].filter(Boolean);
-    return parts.join(":");
-  }, [ownerToken, type, name]);
+    return [type, slug(name || type)].join(":");
+  }, [type, name]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!ownerType || !ownerId) return;
+    if (!name.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      const bal = balanceCents !== "" ? Math.round(parseFloat(balanceCents) * 100) : undefined;
+      const topUp = monthlyTopUp ? Math.round(parseFloat(monthlyTopUp) * 100) : undefined;
 
-    const base = cleanUndefined({
-      id: editingId || undefined,
-      code: codePreview,
-      name: name.trim() || `${type.toUpperCase()} Account`,
-      type,
-      ownerType,
-      ownerId,
-      jointOwnerIds: jointOwnerIds.length ? jointOwnerIds : undefined,
-      currency,
-      createdAt: new Date(),
-    });
+      const base = {
+        id: editingId || undefined,
+        code: codePreview,
+        name: name.trim(),
+        type,
+        currency: "EUR" as const,
+        balanceCents: bal,
+        balanceAsOf: balanceAsOf || undefined,
+      };
 
-    const topUpCents = monthlyTopUp ? Math.round(parseFloat(monthlyTopUp) * 100) : undefined;
-    const payload =
-      type === "bank"
-        ? cleanUndefined({ ...base, bankName: bankName || undefined, iban: iban || undefined, bic: bic || undefined })
-        : type === "credit"
-        ? cleanUndefined({ ...base, issuer: issuer || undefined, last4: last4 || undefined })
-        : type === "voucher"
-        ? cleanUndefined({
-            ...base,
-            voucherType,
-            provider: voucherProvider || undefined,
-            issuingEmployer: issuingEmployer || undefined,
-            monthlyTopUpCents: topUpCents,
-          })
-        : type === "bonds"
-        ? cleanUndefined({ ...base, provider: bondsProvider || undefined })
-        : base;
+      const payload =
+        type === "bank"
+          ? { ...base, bankName: bankName || undefined, iban: iban || undefined, bic: bic || undefined }
+          : type === "credit"
+          ? { ...base, issuer: issuer || undefined, last4: last4 || undefined }
+          : type === "voucher"
+          ? { ...base, voucherType, provider: voucherProvider || undefined, issuingEmployer: issuingEmployer || undefined, monthlyTopUpCents: topUp }
+          : type === "bonds"
+          ? { ...base, provider: bondsProvider || undefined }
+          : base;
 
-    await api.accounts.save(payload as any);
-    await reload();
-    await onSaved?.();
+      await api.accounts.save(payload as any);
+      await onSaved?.();
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    } finally {
+      setBusy(false);
+    }
   }
-
-  const submitDisabled = loading || !ownerType || !ownerId || !name.trim();
 
   return (
     <form onSubmit={handleSave} className="space-y-3">
-      <div className="text-xs text-zinc-400">{loading ? "Loading owners…" : "\u00A0"}</div>
-
-      <div>
-        <div className="text-xs text-zinc-400 mb-1">Owner</div>
-        <div className="grid grid-cols-2 gap-2">
-          <select
-            value={ownerType}
-            onChange={(e) => {
-              setOwnerType(e.target.value as OwnerType | "");
-              setOwnerId("");
-            }}
-            className="bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-          >
-            <option value="">No owner</option>
-            <option value="company">Company</option>
-            <option value="person">Person</option>
-          </select>
-          <select
-            value={ownerId}
-            onChange={(e) => setOwnerId(e.target.value)}
-            className="bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-            disabled={!ownerType}
-          >
-            <option value="">{ownerType ? "Select…" : "—"}</option>
-            {ownerType === "company" &&
-              companies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            {ownerType === "person" &&
-              people.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-          </select>
-        </div>
-      </div>
-
-      {ownerType === "person" && ownerId && (
-        <div>
-          <div className="text-xs text-zinc-400 mb-1">Joint holders (optional)</div>
-          <div className="space-y-1">
-            {people.filter(p => p.id !== ownerId).map(p => (
-              <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={jointOwnerIds.includes(p.id)}
-                  onChange={e => setJointOwnerIds(prev =>
-                    e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id)
-                  )}
-                  className="accent-emerald-500"
-                />
-                {p.name}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
+      {err && <div className="text-sm text-red-400">{err}</div>}
 
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <div className="text-xs text-zinc-400 mb-1">Type</div>
-          <select
-            value={type}
-            onChange={(e) => setType(e.target.value as AccountType)}
-            className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-          >
-            <option value="bank">Bank</option>
-            <option value="credit">Credit card</option>
+          <div className="text-xs text-zinc-400 mb-1">Tipo</div>
+          <select value={type} onChange={e => setType(e.target.value as AccountType)}
+            className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1">
+            <option value="bank">Conta bancária</option>
+            <option value="credit">Cartão crédito</option>
             <option value="voucher">Voucher</option>
-            <option value="bonds">Bonds / CTT</option>
+            <option value="bonds">Obrigações / CTT</option>
             <option value="wallet">Wallet</option>
-            <option value="cash">Cash</option>
+            <option value="cash">Dinheiro</option>
           </select>
         </div>
         <div>
-          <div className="text-xs text-zinc-400 mb-1">Currency</div>
-          <select
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value as "EUR")}
-            className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-          >
-            <option value="EUR">EUR</option>
-          </select>
+          <div className="text-xs text-zinc-400 mb-1">Moeda</div>
+          <div className="bg-zinc-900 border border-zinc-700 text-zinc-400 rounded px-2 py-1 text-sm">EUR</div>
         </div>
       </div>
 
       <div>
-        <div className="text-xs text-zinc-400 mb-1">Name</div>
-        <Input
-          placeholder="e.g., BPI Main / Edenred Meal / AMEX Corp"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-        />
+        <div className="text-xs text-zinc-400 mb-1">Nome</div>
+        <Input placeholder="ex. BPI Principal / Edenred Refeição" value={name} onChange={e => setName(e.target.value)} required />
       </div>
 
       {type === "bank" && (
         <div className="space-y-2">
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Bank</div>
-            <Input
-              placeholder="BPI / CGD / Millennium…"
-              value={bankName}
-              onChange={(e) => setBankName(e.target.value)}
-            />
+            <div className="text-xs text-zinc-400 mb-1">Banco</div>
+            <Input placeholder="BPI / CGD / Millennium…" value={bankName} onChange={e => setBankName(e.target.value)} />
           </div>
           <div>
             <div className="text-xs text-zinc-400 mb-1">IBAN</div>
-            <Input placeholder="PT50…" value={iban} onChange={(e) => setIban(e.target.value)} />
+            <Input placeholder="PT50…" value={iban} onChange={e => setIban(e.target.value)} />
           </div>
           <div>
             <div className="text-xs text-zinc-400 mb-1">BIC</div>
-            <Input placeholder="BBPIPTPL…" value={bic} onChange={(e) => setBic(e.target.value)} />
+            <Input placeholder="BBPIPTPL…" value={bic} onChange={e => setBic(e.target.value)} />
           </div>
         </div>
       )}
@@ -285,12 +162,12 @@ export function AccountForm({
       {type === "credit" && (
         <div className="space-y-2">
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Issuer</div>
-            <Input placeholder="AMEX / VISA…" value={issuer} onChange={(e) => setIssuer(e.target.value)} />
+            <div className="text-xs text-zinc-400 mb-1">Emissor</div>
+            <Input placeholder="AMEX / VISA…" value={issuer} onChange={e => setIssuer(e.target.value)} />
           </div>
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Last 4</div>
-            <Input placeholder="1234" value={last4} onChange={(e) => setLast4(e.target.value)} />
+            <div className="text-xs text-zinc-400 mb-1">Últimos 4 dígitos</div>
+            <Input placeholder="1234" value={last4} onChange={e => setLast4(e.target.value)} />
           </div>
         </div>
       )}
@@ -298,71 +175,64 @@ export function AccountForm({
       {type === "voucher" && (
         <div className="space-y-2">
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Voucher type</div>
-            <select
-              value={voucherType}
-              onChange={(e) => setVoucherType(e.target.value as VoucherType)}
-              className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-            >
-              <option value="meal">Meal</option>
-              <option value="childcare">Childcare</option>
-              <option value="education">Education</option>
+            <div className="text-xs text-zinc-400 mb-1">Tipo de voucher</div>
+            <select value={voucherType} onChange={e => setVoucherType(e.target.value as VoucherType)}
+              className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1">
+              <option value="meal">Refeição</option>
+              <option value="childcare">Creche</option>
+              <option value="education">Educação</option>
             </select>
           </div>
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Provider</div>
-            <Input
-              placeholder="Edenred / Coverflex / …"
-              value={voucherProvider}
-              onChange={(e) => setVoucherProvider(e.target.value)}
-            />
+            <div className="text-xs text-zinc-400 mb-1">Fornecedor</div>
+            <Input placeholder="Edenred / Coverflex…" value={voucherProvider} onChange={e => setVoucherProvider(e.target.value)} />
           </div>
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Issuing employer</div>
-            <Input
-              placeholder="NoisySource / Exquisite Talent / …"
-              value={issuingEmployer}
-              onChange={(e) => setIssuingEmployer(e.target.value)}
-            />
+            <div className="text-xs text-zinc-400 mb-1">Entidade emissora</div>
+            <Input placeholder="NoisySource / Exquisite Talent…" value={issuingEmployer} onChange={e => setIssuingEmployer(e.target.value)} />
           </div>
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Monthly top-up (€)</div>
-            <Input
-              type="number"
-              placeholder="0.00"
-              step="0.01"
-              value={monthlyTopUp}
-              onChange={(e) => setMonthlyTopUp(e.target.value)}
-            />
+            <div className="text-xs text-zinc-400 mb-1">Carregamento mensal (€)</div>
+            <Input type="number" placeholder="0.00" step="0.01" value={monthlyTopUp} onChange={e => setMonthlyTopUp(e.target.value)} />
           </div>
         </div>
       )}
 
       {type === "bonds" && (
         <div>
-          <div className="text-xs text-zinc-400 mb-1">Provider</div>
-          <Input
-            placeholder="CTT"
-            value={bondsProvider}
-            onChange={(e) => setBondsProvider(e.target.value)}
-          />
+          <div className="text-xs text-zinc-400 mb-1">Fornecedor</div>
+          <Input placeholder="CTT" value={bondsProvider} onChange={e => setBondsProvider(e.target.value)} />
         </div>
       )}
 
+      <div className="border-t border-zinc-800 pt-3 space-y-2">
+        <div className="text-xs text-zinc-400 font-semibold uppercase tracking-wide">Saldo atual (opcional)</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Saldo (€)</div>
+            <Input type="number" placeholder="0.00" step="0.01" value={balanceCents} onChange={e => setBalanceCents(e.target.value)} />
+          </div>
+          <div>
+            <div className="text-xs text-zinc-400 mb-1">Data</div>
+            <Input type="date" value={balanceAsOf} onChange={e => setBalanceAsOf(e.target.value)} />
+          </div>
+        </div>
+      </div>
+
       <div>
-        <div className="text-xs text-zinc-400 mb-1">Auto code</div>
-        <div className="text-sm font-mono bg-zinc-950 border border-zinc-800 rounded px-2 py-1">
-          {codePreview || "…"}
+        <div className="text-xs text-zinc-400 mb-1">Código automático</div>
+        <div className="text-sm font-mono bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-300">
+          {codePreview}
         </div>
       </div>
 
       <div className="flex gap-2">
-        <Button type="submit" className="flex-1" disabled={submitDisabled}>
-          {editingId ? "Update" : "Create"}
+        <Button type="submit" className="flex-1" disabled={busy || !name.trim()}>
+          {editingId ? "Atualizar" : "Criar"}
         </Button>
         {editingId && (
           <Button type="button" variant="secondary" className="flex-1" onClick={onCancel}>
-            Cancel
+            Cancelar
           </Button>
         )}
       </div>

@@ -9,6 +9,7 @@ import { makePayrollRunsDomain } from "./domains/payrollRuns";
 import { makeRecurringDomain } from "./domains/recurring";
 import { makeForecastEventsDomain } from "./domains/forecastEvents";
 import { makeIRSConfigDomain } from "./domains/irsConfig";
+import { makeFinanceEventsDomain } from "./domains/financeEvents";
 
 export const api = (() => {
   let _entityId = "private";
@@ -29,6 +30,7 @@ export const api = (() => {
     recurring: makeRecurringDomain(getEntityId),
     forecastEvents: makeForecastEventsDomain(getEntityId),
     irsConfig: makeIRSConfigDomain(getEntityId),
+    financeEvents: makeFinanceEventsDomain(),
   };
 })();
 
