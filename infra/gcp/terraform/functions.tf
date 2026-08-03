@@ -103,7 +103,12 @@ locals {
     "initiateCardPayment",
     "setPaymentMethod",
     "createPartyDeposit",
+    "retryVendusInvoice",
     "easypayWebhook",
+    # KidClub — camps
+    "createCampSubscription",
+    "confirmCampSubscription",
+    "cancelCampSubscription",
   ])
 }
 

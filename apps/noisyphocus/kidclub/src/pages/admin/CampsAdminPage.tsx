@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { getDocs, getDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, Timestamp } from 'firebase/firestore';
+import { getDocs, getDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, Timestamp, writeBatch, doc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { db } from '../../lib/firebase';
 import { callable } from '../../lib/callable';
 import { Camp, CampSubscription, CampDay } from '@shared/models/Camp';
 
@@ -74,6 +75,27 @@ const emptyDayForm = (): DayForm => ({
 const emptyCampForm = (): CampForm => ({
   name: '', type: 'summer', startDate: '', endDate: '', description: '', active: true,
 });
+
+const PT_WEEKDAY: Record<number, string> = {
+  1: 'Segunda-feira', 2: 'Terça-feira', 3: 'Quarta-feira', 4: 'Quinta-feira', 5: 'Sexta-feira',
+};
+
+function weekdaysBetween(startDate: string, endDate: string): string[] {
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const end = new Date(ey, em - 1, ed);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dates: string[] = [];
+  while (cur <= end) {
+    const dow = cur.getDay();
+    if (dow >= 1 && dow <= 5) {
+      dates.push(`${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`);
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
 
 // ── main component ────────────────────────────────────────────────────────────
 
@@ -201,17 +223,68 @@ export default function CampsAdminPage() {
           createdAt: now.toDate(),
           updatedAt: now.toDate(),
         };
+
+        // Auto-generate one campDay per weekday in the date range
+        let generatedDays: CampDay[] = [];
+        if (campForm.startDate && campForm.endDate) {
+          const dates = weekdaysBetween(campForm.startDate, campForm.endDate);
+          if (dates.length > 0) {
+            const batch = writeBatch(db);
+            generatedDays = dates.map(date => {
+              const [y, m, d] = date.split('-').map(Number);
+              const dayRef = doc(col('campDays'));
+              const dayData = {
+                campId: ref.id,
+                date,
+                name: PT_WEEKDAY[new Date(y, m - 1, d).getDay()] ?? date,
+                morning: '', lunch: '', afternoon: '',
+                capacity: 20, price: 0, active: true,
+                createdAt: now, updatedAt: now,
+              };
+              batch.set(dayRef, dayData);
+              return { id: dayRef.id, ...dayData, createdAt: now.toDate(), updatedAt: now.toDate() };
+            });
+            await batch.commit();
+          }
+        }
+
         setCamps(prev => [newCamp, ...prev]);
         setSelectedCamp(newCamp);
         setShowNewCamp(false);
-        setCampDays([]);
+        setCampDays(generatedDays);
         setSubscriptions([]);
-        setSuccessMsg('Campo criado.');
+        setSuccessMsg(`Campo criado com ${generatedDays.length} dia(s) gerado(s).`);
       }
     } catch (e: any) {
       setError(e.message);
     } finally {
       setSavingCamp(false);
+    }
+  };
+
+  // ── Delete camp ──────────────────────────────────────────────────────────────
+
+  const handleDeleteCamp = async () => {
+    if (!selectedCamp) return;
+    if (subscriptions.some(s => s.status !== 'cancelled')) {
+      setError('Não é possível eliminar um campo com inscrições ativas. Cancele primeiro todas as inscrições.');
+      return;
+    }
+    if (!confirm(`Eliminar o campo "${selectedCamp.name}" e todos os seus dias? Esta ação é irreversível.`)) return;
+    setError(null);
+    try {
+      // Delete all camp days
+      const batch = writeBatch(db);
+      campDays.forEach(d => batch.delete(docRef('campDays', d.id)));
+      await batch.commit();
+      await deleteDoc(docRef('camps', selectedCamp.id));
+      setCamps(prev => prev.filter(c => c.id !== selectedCamp.id));
+      setSelectedCamp(null);
+      setCampDays([]);
+      setSubscriptions([]);
+      setSuccessMsg('Campo eliminado.');
+    } catch (e: any) {
+      setError(e.message);
     }
   };
 
@@ -381,6 +454,12 @@ export default function CampsAdminPage() {
           <div className="p-6 space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold text-gray-800">{selectedCamp.name}</h2>
+              <button
+                onClick={handleDeleteCamp}
+                className="text-sm text-red-600 hover:text-red-700 border border-red-200 hover:border-red-400 px-3 py-1.5 rounded transition-colors"
+              >
+                Eliminar campo
+              </button>
             </div>
 
             {/* Camp form */}
@@ -429,8 +508,11 @@ export default function CampsAdminPage() {
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Data *</label>
-                          <input type="date" required value={dayForm.date} onChange={e => setDayForm(f => ({ ...f, date: e.target.value }))}
+                          <input type="date" required value={dayForm.date}
+                            min={selectedCamp.startDate} max={selectedCamp.endDate}
+                            onChange={e => setDayForm(f => ({ ...f, date: e.target.value }))}
                             className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+                          <p className="text-xs text-gray-400 mt-0.5">{fmtDate(selectedCamp.startDate)} – {fmtDate(selectedCamp.endDate)}</p>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Nome *</label>

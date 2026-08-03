@@ -40,11 +40,7 @@ function emailWrapper(headerSub: string, body: string): string {
 // ── createCampSubscription ────────────────────────────────────────────────────
 
 export const createCampSubscription = onCall(
-  {
-    region: "europe-west3",
-    invoker: "public",
-    secrets: ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY", "EASYPAY_WEBHOOK_URL"],
-  },
+  { region: "europe-west3", invoker: "public" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");

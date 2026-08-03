@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { Child, StudyRoomEntry, TransportationSubscription, Family } from '@shared/models';
+import { CampSubscription } from '@shared/models/Camp';
 import { Link } from 'react-router-dom';
 import { familyService } from '../../services/familyService';
+import { getDocs, query, where } from 'firebase/firestore';
+import { col } from '../../lib/db';
 import { format } from 'date-fns';
 import { pt } from 'date-fns/locale';
 
@@ -28,16 +31,31 @@ interface ChildSubs {
   transport: TransportationSubscription[];
 }
 
+const campStatusLabel: Record<string, string> = {
+  pending: 'Pendente',
+  confirmed: 'Confirmado',
+  cancelled: 'Cancelado',
+};
+
+const campStatusClass: Record<string, string> = {
+  pending: 'bg-yellow-100 text-yellow-800',
+  confirmed: 'bg-green-100 text-green-800',
+  cancelled: 'bg-gray-100 text-gray-600',
+};
+
 export default function MySubscriptionsPage() {
   const user = useUser();
   const [family, setFamily] = useState<Family | null>(null);
   const [childSubs, setChildSubs] = useState<ChildSubs[]>([]);
+  const [campSubs, setCampSubs] = useState<CampSubscription[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
     const load = async () => {
       setIsLoading(true);
+
+      // Load family + per-child subscriptions
       try {
         const fam = await familyService.getOrCreateFamily(
           user.uid,
@@ -53,9 +71,27 @@ export default function MySubscriptionsPage() {
           })
         );
         setChildSubs(data);
-      } finally {
-        setIsLoading(false);
+      } catch (e) {
+        console.error('[MySubscriptionsPage] family load failed:', e);
       }
+
+      // Load camp subscriptions independently so a family error doesn't block this
+      try {
+        const campSnap = await getDocs(
+          query(col('campSubscriptions'), where('userId', '==', user.uid))
+        );
+        const subs = campSnap.docs.map(d => ({ id: d.id, ...d.data() } as CampSubscription));
+        subs.sort((a, b) => {
+          const ta = (a.createdAt as any)?.seconds ?? 0;
+          const tb = (b.createdAt as any)?.seconds ?? 0;
+          return tb - ta;
+        });
+        setCampSubs(subs);
+      } catch (e) {
+        console.error('[MySubscriptionsPage] camp subs load failed:', e);
+      }
+
+      setIsLoading(false);
     };
     load();
   }, [user]);
@@ -70,6 +106,54 @@ export default function MySubscriptionsPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">As minhas inscrições</h1>
+      </div>
+
+      {/* Camps section — shown regardless of children */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+          <div>
+            <h2 className="font-semibold text-gray-900">Campos de Férias</h2>
+            <p className="text-sm text-gray-500">Inscrições em campos de férias e atividades</p>
+          </div>
+          <Link
+            to="/client/camps"
+            className="bg-orange-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-orange-700"
+          >
+            + Inscrever
+          </Link>
+        </div>
+        {campSubs.length === 0 ? (
+          <div className="px-6 py-8 text-center text-gray-400 text-sm">
+            Sem inscrições em campos de férias.
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {campSubs.map(sub => (
+              <div key={sub.id} className="px-6 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <span className="text-2xl">⛺</span>
+                  <div>
+                    <p className="font-medium text-gray-900">{sub.childName}</p>
+                    <p className="text-sm text-gray-500">
+                      {sub.subscriptionType === 'day' ? 'Dia avulso' :
+                       sub.subscriptionType === 'week' ? 'Semana' : 'Período completo'}
+                      {' · '}{sub.selectedDays.length} dia{sub.selectedDays.length !== 1 ? 's' : ''}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {format(sub.createdAt instanceof Date ? sub.createdAt : new Date((sub.createdAt as any)?.seconds ? (sub.createdAt as any).seconds * 1000 : sub.createdAt), 'dd MMM yyyy', { locale: pt })}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <span className="font-semibold text-gray-900">€{sub.totalAmount.toFixed(2)}</span>
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${campStatusClass[sub.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                    {campStatusLabel[sub.status] ?? sub.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {!hasChildren ? (

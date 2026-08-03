@@ -21,14 +21,14 @@ Public-facing website for **KidClub** (Arco-Íris da Pequenada), owned by **Nois
 | Frontend | React + Vite, TypeScript |
 | Styling | Tailwind CSS |
 | Backend | Firebase Cloud Functions (shared `/functions`) |
-| Database | Firestore (`kidclub` named database) |
+| Database | Firestore (`(default)` database, scoped under `_apps/arcoiris/`) |
 | Auth | Firebase Auth (admin users only) |
 | Hosting | Firebase Hosting |
 
 ## Firebase
-- Dev project: `kidclub-dev` → site `kidclub-dev-arcoiris`
-- Prod project: `rainbow-prod-2454b` → site `rainbow-prod-2454b-arcoiris`
-- Firestore database name: `kidclub` (not `(default)`)
+- Dev project: `kidclub-dev` (NoisySource Dev) → site `kidclub-dev-arcoiris`
+- Prod project: `rainbow-prod-2454b` (NoisySource Prod) → site `rainbow-prod-2454b-arcoiris`
+- Firestore: `(default)` database, all KidClub data under `_apps/arcoiris/`
 
 ---
 
@@ -42,7 +42,7 @@ Public-facing website for **KidClub** (Arco-Íris da Pequenada), owned by **Nois
 - Feature flags controlled via Firestore `config/featureFlags` document
 
 ## Firestore Collections
-All prefixed with `kidclub_` (or under the `kidclub` named database). Key collections:
+All under `_apps/arcoiris/` in the `(default)` database. Key collections:
 - `config/featureFlags` — feature toggles
 - `config/studyCenter` — study room pricing config
 - `events` / `eventModifications` — calendar events
