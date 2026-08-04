@@ -19,6 +19,18 @@ resource "google_project_iam_member" "gmail_sender_firebase_roles" {
 
 
 
+# Grant the default Compute SA Firebase/Firestore access so callable functions can
+# reach Firestore via the Admin SDK even before Terraform has set gmail_sender as SA.
+resource "google_project_iam_member" "compute_sa_firebase_roles" {
+  for_each = toset([
+    "roles/firebase.admin",
+    "roles/datastore.user",
+  ])
+  project = var.gcp_project_id
+  role    = each.key
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
 # 6. Grant the Eventarc Service Agent role (ensures 2nd gen functions can be triggered)
 resource "google_project_iam_member" "eventarc_service_agent" {
   depends_on = [google_project_service.apis]
