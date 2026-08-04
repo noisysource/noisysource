@@ -31,11 +31,9 @@ export function AccountForm({
   const [issuer, setIssuer] = useState("");
   const [last4, setLast4] = useState("");
 
-  // voucher
   const [voucherType, setVoucherType] = useState<VoucherType>("meal");
-  const [voucherProvider, setVoucherProvider] = useState("Edenred");
-  const [issuingEmployer, setIssuingEmployer] = useState("");
-  const [monthlyTopUp, setMonthlyTopUp] = useState("");
+  const [voucherProvider, setVoucherProvider] = useState("");
+  const [voucherEmployer, setVoucherEmployer] = useState("");
 
   // bonds
   const [bondsProvider, setBondsProvider] = useState("CTT");
@@ -51,7 +49,7 @@ export function AccountForm({
       setBalanceCents(""); setBalanceAsOf("");
       setBankName(""); setIban(""); setBic("");
       setIssuer(""); setLast4("");
-      setVoucherType("meal"); setVoucherProvider("Edenred"); setIssuingEmployer(""); setMonthlyTopUp("");
+      setVoucherType("meal"); setVoucherProvider(""); setVoucherEmployer("");
       setBondsProvider("CTT");
       return;
     }
@@ -66,9 +64,8 @@ export function AccountForm({
     setIssuer((initial as any).issuer || "");
     setLast4((initial as any).last4 || "");
     setVoucherType((initial as any).voucherType || "meal");
-    setVoucherProvider((initial as any).provider || "Edenred");
-    setIssuingEmployer((initial as any).issuingEmployer || "");
-    setMonthlyTopUp((initial as any).monthlyTopUpCents ? String((initial as any).monthlyTopUpCents / 100) : "");
+    setVoucherProvider((initial as any).provider || "");
+    setVoucherEmployer((initial as any).employerName || "");
     setBondsProvider((initial as any).provider || "CTT");
   }, [initial]);
 
@@ -82,7 +79,6 @@ export function AccountForm({
     setBusy(true); setErr(null);
     try {
       const bal = balanceCents !== "" ? Math.round(parseFloat(balanceCents) * 100) : undefined;
-      const topUp = monthlyTopUp ? Math.round(parseFloat(monthlyTopUp) * 100) : undefined;
 
       const base = {
         id: editingId || undefined,
@@ -100,7 +96,7 @@ export function AccountForm({
           : type === "credit"
           ? { ...base, issuer: issuer || undefined, last4: last4 || undefined }
           : type === "voucher"
-          ? { ...base, voucherType, provider: voucherProvider || undefined, issuingEmployer: issuingEmployer || undefined, monthlyTopUpCents: topUp }
+          ? { ...base, voucherType, provider: voucherProvider || undefined, employerName: voucherEmployer || undefined }
           : type === "bonds"
           ? { ...base, provider: bondsProvider || undefined }
           : base;
@@ -184,17 +180,25 @@ export function AccountForm({
             </select>
           </div>
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Fornecedor</div>
-            <Input placeholder="Edenred / Coverflex…" value={voucherProvider} onChange={e => setVoucherProvider(e.target.value)} />
+            <div className="text-xs text-zinc-400 mb-1">Fornecedor (opcional)</div>
+            <Input placeholder="Edenred / Coverflex / Ticket…" value={voucherProvider} onChange={e => setVoucherProvider(e.target.value)} />
           </div>
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Entidade emissora</div>
-            <Input placeholder="NoisySource / Exquisite Talent…" value={issuingEmployer} onChange={e => setIssuingEmployer(e.target.value)} />
+            <div className="text-xs text-zinc-400 mb-1">Empregador que carrega (opcional)</div>
+            <input
+              list="employers-voucher-list"
+              className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1 text-sm"
+              placeholder="NoisySource / Exquisite Talent…"
+              value={voucherEmployer}
+              onChange={e => setVoucherEmployer(e.target.value)}
+            />
+            <datalist id="employers-voucher-list">
+              <option value="NoisySource" />
+              <option value="Exquisite Talent" />
+              <option value="ASFD" />
+            </datalist>
           </div>
-          <div>
-            <div className="text-xs text-zinc-400 mb-1">Carregamento mensal (€)</div>
-            <Input type="number" placeholder="0.00" step="0.01" value={monthlyTopUp} onChange={e => setMonthlyTopUp(e.target.value)} />
-          </div>
+          <p className="text-xs text-zinc-600">O saldo é carregado pelos contratos de trabalho. Cada empresa configura o valor na sua ficha de benefícios.</p>
         </div>
       )}
 

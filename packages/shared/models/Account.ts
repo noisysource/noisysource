@@ -36,9 +36,8 @@ export interface CreditAccount extends BaseAccount {
 export interface VoucherAccount extends BaseAccount {
   type: "voucher";
   voucherType: VoucherType;
-  provider: string;           // e.g. "Edenred", "Coverflex"
-  issuingEmployer: string;    // company name or id reference
-  monthlyTopUpCents?: number; // expected monthly credit
+  provider?: string;          // e.g. "Edenred", "Coverflex"
+  employerName?: string;      // which employer loads this card, e.g. "NoisySource", "Exquisite Talent"
 }
 
 export interface BondsAccount extends BaseAccount {

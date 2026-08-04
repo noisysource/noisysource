@@ -16,6 +16,7 @@ import CompaniesPage from './pages/admin/CompaniesPage';
 import AccountsPage from './pages/AccountsPage';
 import ContractsPage from './pages/EmploymentContractsPage';
 import EcContractsPage from './pages/EcContractsPage';
+import IncomeSourcesPage from './pages/IncomeSourcesPage';
 
 // Finance
 import RecurringPage from './pages/RecurringPage';
@@ -58,6 +59,7 @@ export default function App() {
             {/* Entity-scoped routes — entity comes from URL param */}
             <Route path=":entity">
               <Route path="accounts"     element={<AccountsPage />} />
+              <Route path="income"       element={<IncomeSourcesPage />} />
               <Route path="ec-contracts" element={<EcContractsPage />} />
               <Route path="contracts"    element={<ContractsPage />} />
               <Route path="payroll"      element={<PayrollPage />} />

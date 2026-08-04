@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
@@ -85,8 +85,9 @@ export default function DashboardLayout() {
 
             {/* Private */}
             <Section title="Private" emoji="🏠" storeKey="entity:private" defaultOpen>
-              <NavLink to="/private/accounts"  icon={<Banknote size={16} />}  label="Accounts"      active={isActive('/private/accounts')} />
-              <NavLink to="/private/irs"        icon={<Receipt size={16} />}   label="IRS Simulator" active={isActive('/private/irs')} />
+              <NavLink to="/private/accounts"  icon={<Banknote size={16} />}    label="Accounts"          active={isActive('/private/accounts')} />
+              <NavLink to="/private/income"    icon={<Briefcase size={16} />}  label="Fontes Rendimento" active={isActive('/private/income')} />
+              <NavLink to="/private/irs"       icon={<Receipt size={16} />}    label="IRS Simulator"     active={isActive('/private/irs')} />
               <NavLink to="/private/recurring"  icon={<RefreshCw size={16} />} label="Recurring"     active={isActive('/private/recurring')} />
               <NavLink to="/private/forecast"   icon={<BarChart2 size={16} />} label="Forecast"      active={isActive('/private/forecast')} />
             </Section>

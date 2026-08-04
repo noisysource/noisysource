@@ -52,23 +52,14 @@ export default function EmploymentContractsPage() {
   const set = <K extends keyof typeof EMPTY_FORM>(k: K, v: (typeof EMPTY_FORM)[K]) =>
     setForm(f => ({ ...f, [k]: v }));
 
-  // person's bank accounts for net pay wiring (includes joint-owned accounts)
+  // bank accounts for net pay (all loaded accounts — entity + private)
   const bankAccountsForPerson = useMemo(
-    () => accounts.filter(a =>
-      a.type === "bank" && a.ownerType === "person" &&
-      (a.ownerId === form.personId || a.jointOwnerIds?.includes(form.personId))
-    ),
-    [accounts, form.personId]
+    () => accounts.filter(a => a.type === "bank"),
+    [accounts]
   );
 
-  // all accounts for benefits editor (includes joint-owned accounts)
-  const accountsForPerson = useMemo(
-    () => accounts.filter(a =>
-      a.ownerType === "person" &&
-      (a.ownerId === form.personId || a.jointOwnerIds?.includes(form.personId))
-    ),
-    [accounts, form.personId]
-  );
+  // all accounts for benefit wiring (entity + private, any type)
+  const accountsForPerson = useMemo(() => accounts, [accounts]);
 
   // load reference data when entity changes
   useEffect(() => {

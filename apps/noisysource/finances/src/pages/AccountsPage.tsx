@@ -152,6 +152,9 @@ export default function AccountsPage() {
                     <td className="px-3 py-2 text-zinc-400">
                       {typeLabel[a.type] ?? a.type}
                       {a.type === 'voucher' && ` · ${(a as any).voucherType ?? ''}`}
+                      {a.type === 'voucher' && (a as any).employerName && (
+                        <span className="ml-1 text-zinc-600">· {(a as any).employerName}</span>
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       <span className={bal !== 0 ? 'text-emerald-400 font-medium' : 'text-zinc-500'}>{formatEUR(bal)}</span>
