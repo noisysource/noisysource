@@ -1,0 +1,62 @@
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import * as admin from "firebase-admin";
+
+const TOKEN_URL = "https://api.netatmo.com/oauth2/token";
+const API_BASE = "https://api.netatmo.com/api";
+const CONFIG_DOC = "domotics_config/netatmo";
+
+interface NetatmoConfig {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  homeId: string;
+}
+
+async function getAccessToken(): Promise<{ token: string; homeId: string }> {
+  const snap = await admin.firestore().doc(CONFIG_DOC).get();
+  if (!snap.exists) throw new HttpsError("not-found", "Netatmo config missing — run setup");
+  const config = snap.data() as NetatmoConfig;
+
+  const resp = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      refresh_token: config.refreshToken,
+    }),
+  });
+
+  const data = await resp.json() as Record<string, string>;
+  if (!data.access_token) throw new HttpsError("internal", "Token refresh failed");
+
+  if (data.refresh_token && data.refresh_token !== config.refreshToken) {
+    await admin.firestore().doc(CONFIG_DOC).update({ refreshToken: data.refresh_token });
+  }
+
+  return { token: data.access_token, homeId: config.homeId };
+}
+
+export const legrandGetStatus = onCall({ region: "europe-west3" }, async () => {
+  const { token, homeId } = await getAccessToken();
+  const resp = await fetch(`${API_BASE}/homestatus?home_id=${homeId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new HttpsError("internal", `Netatmo error: ${resp.status}`);
+  return resp.json();
+});
+
+export const legrandSetState = onCall<{
+  modules: Array<{ id: string; on?: boolean; target_position?: number }>;
+}>({ region: "europe-west3" }, async ({ data }) => {
+  const { token, homeId } = await getAccessToken();
+  const resp = await fetch(`${API_BASE}/setstate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ home: { id: homeId, modules: data.modules } }),
+  });
+  if (!resp.ok) throw new HttpsError("internal", `Netatmo error: ${resp.status}`);
+  return resp.json();
+});
+

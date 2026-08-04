@@ -5,9 +5,11 @@ interface Props {
   room: Room;
   devices: Device[];
   onClick: () => void;
+  editMode?: boolean;
+  onRoomNameChange?: (roomId: string, name: string) => void;
 }
 
-export default function RoomCard({ room, devices, onClick }: Props) {
+export default function RoomCard({ room, devices, onClick, editMode = false, onRoomNameChange }: Props) {
   const lights = devices.filter((d): d is LightDevice => d.type === 'light');
   const blinds = devices.filter((d): d is BlindDevice => d.type === 'blind');
   const lightsOn = lights.filter(l => l.state.on).length;
@@ -25,6 +27,24 @@ export default function RoomCard({ room, devices, onClick }: Props) {
     : blinds.length === 1
       ? '1 estore'
       : `${blinds.length} estores`;
+
+  if (editMode) {
+    return (
+      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 min-h-[140px] flex flex-col">
+        <span className="text-4xl mb-3 select-none leading-none" aria-hidden="true">
+          {room.icon}
+        </span>
+        <input
+          className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm font-semibold text-zinc-100 w-full outline-none focus:border-zinc-400 transition-colors"
+          value={room.name}
+          onChange={e => onRoomNameChange?.(room.id, e.target.value)}
+        />
+        <p className="mt-auto pt-2 text-xs text-zinc-600">
+          {devices.length} dispositivo{devices.length !== 1 ? 's' : ''}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <button

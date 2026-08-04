@@ -118,7 +118,11 @@ importers:
         specifier: ^3.3.1
         version: 3.5.0
 
-  apps/noisysource/domotics: {}
+  apps/noisysource/domotics:
+    dependencies:
+      firebase:
+        specifier: ^10.14.1
+        version: 10.14.1
 
   apps/noisysource/finances:
     dependencies:

@@ -6,7 +6,11 @@
     "dev": "vite",
     "dev:prod": "vite --mode production",
     "build": "vite build",
+    "build:staging": "vite build --mode staging",
     "preview": "vite preview",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "firebase": "^10.14.1"
   }
 }

@@ -195,6 +195,12 @@ service cloud.firestore {
       allow read, write: if isFinhubAdmin();
     }
 
+    // ── Domotics app ──────────────────────────────────────────────────────────
+    // No Firebase Auth — access is gated by GCP IAP at the network level.
+    match /domotics_config/{docId} {
+      allow read, write: if true;
+    }
+
     // Shared Ledger collections (Finances app, legacy root-level)
     match /expenses/{doc} {
       allow read, write: if isFinhubAdmin() || isOwner();
