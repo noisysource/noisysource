@@ -9,3 +9,5 @@ firebase_hosting_site_ids = ["kidclub-dev-arcoiris", "kidclub-dev-finhub"]
 gmail_sender_sa_id = "gmail-sender-kidclub-dev"
 
 gcp_region = "europe-west3"
+
+firestore_database_name = "(default)"

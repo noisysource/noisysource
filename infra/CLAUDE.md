@@ -16,10 +16,15 @@ All infrastructure is owned and managed by **NoisySource** across two active GCP
 > Project IDs retain legacy names from before the monorepo migration. Rename is planned as part of future infra cleanup.
 
 ### Terraform state
-Stored in GCS bucket `rainbow-terraform-state`. Prefix per environment (`kidclub-dev`, `rainbow-prod-2454b`).
+Stored in GCS bucket `kidclub-terraform-state` (in `kidclub-dev` project), prefix per environment (`kidclub-dev`, `rainbow-prod-2454b`).
 
 ### Authentication for Terraform
-Use `GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)` as env prefix when running terraform commands — ADC (application-default) has been unreliable on this machine.
+Uses Application Default Credentials (ADC). One-time setup:
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project kidclub-dev
+```
+After setup, plain `terraform` commands work without any prefix. ADC refresh tokens persist across sessions.
 
 ---
 
@@ -52,9 +57,8 @@ WIF pool lives in `kidclub-dev` project (`projects/245453200769/locations/global
 Manages: APIs, Firebase project + hosting sites, Firestore database, Cloud Functions infrastructure, IAM, Workload Identity.
 
 ```bash
-# Always prefix with token
-GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) terraform init -backend-config="prefix=kidclub-dev" -reconfigure
-GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) terraform apply -var-file="env/kidclub-dev.tfvars"
+terraform init -backend-config="prefix=kidclub-dev" -reconfigure
+terraform apply -var-file="env/kidclub-dev.tfvars"
 ```
 
 ---
@@ -62,7 +66,7 @@ GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) terraform apply -var
 ## Firestore Databases
 | Project | Database name | Region |
 |---|---|---|
-| `kidclub-dev` | `kidclub` | `europe-west3` |
+| `kidclub-dev` | `(default)` | `europe-west3` |
 | `rainbow-prod-2454b` | `(default)` | `eur3` |
 
 ---

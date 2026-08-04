@@ -11,5 +11,7 @@ terraform {
 }
 
 provider "google-beta" {
-  project = var.gcp_project_id
+  project               = var.gcp_project_id
+  user_project_override = true
+  billing_project       = var.gcp_project_id
 }

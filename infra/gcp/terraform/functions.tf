@@ -60,7 +60,12 @@ resource "google_cloudfunctions2_function" "send_email" {
       value     = var.firestore_database_name
     }
     event_filters {
+      attribute = "namespace"
+      value     = var.firestore_database_name
+    }
+    event_filters {
       attribute = "document"
+      operator  = "match-path-pattern"
       value     = "_apps/arcoiris/emailOutbox/{id}"
     }
     retry_policy = "RETRY_POLICY_DO_NOT_RETRY"
@@ -109,6 +114,9 @@ locals {
     "createCampSubscription",
     "confirmCampSubscription",
     "cancelCampSubscription",
+    # Domotics
+    "legrandGetStatus",
+    "legrandSetState",
   ])
 }
 
