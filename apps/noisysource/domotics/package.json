@@ -1,0 +1,12 @@
+{
+  "name": "domotics",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "dev:prod": "vite --mode production",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  }
+}
