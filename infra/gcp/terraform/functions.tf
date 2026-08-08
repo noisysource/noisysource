@@ -114,6 +114,8 @@ locals {
     "createCampSubscription",
     "confirmCampSubscription",
     "cancelCampSubscription",
+    # User management
+    "lookupUserByEmail",
     # Domotics
     "legrandGetStatus",
     "legrandSetState",

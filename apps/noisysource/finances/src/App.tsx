@@ -20,6 +20,7 @@ import IncomeSourcesPage from './pages/IncomeSourcesPage';
 
 // Finance
 import RecurringPage from './pages/RecurringPage';
+import CreditsPage from './pages/CreditsPage';
 import ForecastPage from './pages/ForecastPage';
 import CashFlowPage from './pages/CashFlowPage';
 import IRSPage from './pages/IRSPage';
@@ -29,6 +30,7 @@ import PayrollPage from './pages/PayrollPage';
 // Admin
 import AdminUsersPage from './pages/admin/Users';
 import DevToolsPage from './pages/admin/DevtoolsPage';
+import VaultPage from './pages/VaultPage';
 
 
 export default function App() {
@@ -65,10 +67,14 @@ export default function App() {
               <Route path="payroll"      element={<PayrollPage />} />
               <Route path="irs"          element={<IRSPage />} />
               <Route path="recurring"    element={<RecurringPage />} />
+              <Route path="credits"     element={<CreditsPage />} />
               <Route path="forecast"     element={<ForecastPage />} />
               <Route path="cashflow"     element={<CashFlowPage />} />
               <Route path="categories"   element={<CategoriesPage />} />
             </Route>
+
+            {/* Vault */}
+            <Route path="vault" element={<VaultPage />} />
 
             {/* Global admin/setup routes */}
             <Route path="setup/people"    element={<PeoplePage />} />

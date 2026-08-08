@@ -1,9 +1,13 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { EcContractDoc } from '@shared/models/EcContract';
-import type { FinanceEvent, ComputedEvent } from '@shared/models/FinanceEvent';
+import type { EmploymentContractDoc } from '@shared/models/Employment';
+import type { IncomeSourceDoc } from '@shared/models/IncomeSource';
+import type { FinanceEvent, ComputedEvent, FinanceEntityId } from '@shared/models/FinanceEvent';
 import type { Account } from '@shared/models/Account';
+import type { RecurringEntryDoc } from '@shared/models/RecurringEntry';
+import type { CreditContractDoc } from '@shared/models/CreditContract';
 import { computeEcProjection } from '@shared/lib/ecProjection';
-import { generateEcEvents } from '@shared/lib/eventGenerators';
+import { generateEcEvents, generateEmploymentEvents, generateIncomeSourceEvents, generateRecurringEvents, generateCreditEvents } from '@shared/lib/eventGenerators';
 import { formatEUR } from '@shared/lib/money';
 import { api } from '../lib/api';
 import { Link } from 'react-router-dom';
@@ -88,6 +92,11 @@ export default function DashboardPage() {
   const [contract, setContract] = useState<EcContractDoc | null>(null);
   const [storedEvents, setStoredEvents] = useState<FinanceEvent[]>([]);
   const [accounts, setAccounts] = useState<TaggedAccount[]>([]);
+  const [employmentContracts, setEmploymentContracts] = useState<EmploymentContractDoc[]>([]);
+  const [incomeSources, setIncomeSources] = useState<IncomeSourceDoc[]>([]);
+  const [peopleMap, setPeopleMap] = useState<Map<string, string>>(new Map());
+  const [allRecurring, setAllRecurring] = useState<{ entry: RecurringEntryDoc; entityId: FinanceEntityId }[]>([]);
+  const [allCredits, setAllCredits]     = useState<{ contract: CreditContractDoc; entityId: FinanceEntityId }[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -129,12 +138,42 @@ export default function DashboardPage() {
           for (const a of accs) allAccounts.push({ ...a, entityId });
         }
 
+        // Load employment contracts + income sources for calendar event generation
+        api.setEntity('noisysource');
+        const empContracts = await api.contracts.list();
+        api.setEntity('private');
+        const sources = await api.incomeSources.list();
+        const peopleList = await api.people.list() as { id: string; name: string }[];
+
+        // Load manually-created recurring entries from all entities (exclude auto-generated from contracts)
+        const recurringAll: { entry: RecurringEntryDoc; entityId: FinanceEntityId }[] = [];
+        for (const eid of ['noisysource', 'private', 'noisyphocus'] as FinanceEntityId[]) {
+          api.setEntity(eid);
+          const entries = await api.recurring.listActive();
+          for (const e of entries) {
+            if (!e.sourceId) recurringAll.push({ entry: e, entityId: eid });
+          }
+        }
+
+        // Load active credit contracts from all entities
+        const creditsAll: { contract: CreditContractDoc; entityId: FinanceEntityId }[] = [];
+        for (const eid of ['noisysource', 'private', 'noisyphocus'] as FinanceEntityId[]) {
+          api.setEntity(eid);
+          const cs = await api.credits.listActive();
+          for (const c of cs) creditsAll.push({ contract: c, entityId: eid });
+        }
+
         // Restore entity to the one holding the contract
         api.setEntity(contractEntity);
 
         setContract(active);
         contractRef.current = active;
         setAccounts(allAccounts);
+        setEmploymentContracts(empContracts);
+        setIncomeSources(sources as IncomeSourceDoc[]);
+        setPeopleMap(new Map(peopleList.map(p => [p.id, p.name])));
+        setAllRecurring(recurringAll);
+        setAllCredits(creditsAll);
         const n = active?.nonWorkingDays ?? [];
         const h = active?.halfDays ?? [];
         setNwd(n); latestNwd.current = n;
@@ -166,7 +205,14 @@ export default function DashboardPage() {
   const contractEnd = projection?.contractEndDate;
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const computedEvents = useMemo(() => contract ? generateEcEvents(contract, new Date()) : [], [contract, nwd, half]);
+  const computedEvents = useMemo(() => {
+    const ec = contract ? generateEcEvents(contract, new Date()) : [];
+    const emp = generateEmploymentEvents(employmentContracts, peopleMap, '2024-01', 60);
+    const inc = generateIncomeSourceEvents(incomeSources, '2024-01', 60);
+    const rec  = generateRecurringEvents(allRecurring, '2024-01', 60);
+    const cred = generateCreditEvents(allCredits, '2024-01', 60);
+    return [...ec, ...emp, ...inc, ...rec, ...cred];
+  }, [contract, nwd, half, employmentContracts, incomeSources, peopleMap, allRecurring, allCredits]);
 
   const [monthStart, monthEnd] = useMemo(() => ymBounds(viewMonth), [viewMonth]);
 
@@ -228,9 +274,9 @@ export default function DashboardPage() {
     if (!showBalance) return new Map();
     const map = new Map<string, number>();
     for (const iso of cells.filter(Boolean) as string[]) {
-      const confirmed = storedEvents.filter(e => e.date <= iso).reduce((s, e) => s + e.amountCents, 0);
+      const confirmed = storedEvents.filter(e => e.date >= today && e.date <= iso).reduce((s, e) => s + e.amountCents, 0);
       const planned = computedEvents
-        .filter(e => e.date <= iso && !confirmedSourceIds.has(e.key))
+        .filter(e => e.date >= today && e.date <= iso && !confirmedSourceIds.has(e.key))
         .reduce((s, e) => s + e.amountCents, 0);
       map.set(iso, totalBaselineCents + confirmed + planned);
     }
@@ -239,19 +285,20 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBalance, viewMonth, storedEvents, computedEvents, confirmedSourceIds, totalBaselineCents]);
 
-  // Per-account breakdown for the selected day (for day-detail panel)
-  const accountBalancesOnDay = useMemo(() => {
-    if (!selectedDay || !accounts.length) return [];
+  // Per-account projected balances — baseline (account.balanceCents) + events from today to refDay
+  const projectedBalances = useMemo(() => {
+    if (!accounts.length) return [];
+    const refDay = selectedDay ?? today;
     return accounts.map(a => {
       const confirmed = storedEvents
-        .filter(e => e.date <= selectedDay && e.accountId === a.id)
+        .filter(e => e.date >= today && e.date <= refDay && e.accountId === a.id)
         .reduce((s, e) => s + e.amountCents, 0);
       const planned = computedEvents
-        .filter(e => e.date <= selectedDay && (e as any).accountId === a.id && !confirmedSourceIds.has(e.key))
+        .filter(e => e.date >= today && e.date <= refDay && (e as any).accountId === a.id && !confirmedSourceIds.has((e as ComputedEvent).key ?? ''))
         .reduce((s, e) => s + e.amountCents, 0);
       return { account: a, balance: (a.balanceCents ?? 0) + confirmed + planned };
     });
-  }, [selectedDay, accounts, storedEvents, computedEvents, confirmedSourceIds]);
+  }, [accounts, storedEvents, computedEvents, confirmedSourceIds, selectedDay, today]);
 
   // ── handlers ──────────────────────────────────────────────────────────────
 
@@ -330,12 +377,7 @@ export default function DashboardPage() {
 
   if (loading) return <div className="text-zinc-500 p-8">A carregar...</div>;
 
-  if (!contract) return (
-    <div className="text-zinc-400 p-8">
-      Sem contrato EC ativo.{' '}
-      <Link to="/noisysource/ec-contracts" className="text-blue-400 underline">Criar contrato</Link>
-    </div>
-  );
+  // Contract may be null if there's no active EC contract — the calendar still shows salary/income events
 
   return (
     <div className="space-y-5">
@@ -344,7 +386,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold capitalize">{fmtYM(viewMonth)}</h1>
           <p className="text-sm text-zinc-400 mt-0.5">
-            {contract.clientName}{contract.projectName ? ` · ${contract.projectName}` : ''}
+            {contract ? `${contract.clientName}${contract.projectName ? ` · ${contract.projectName}` : ''}` : 'Salários & Rendimentos'}
             {saving && <span className="ml-2 text-zinc-500">a guardar…</span>}
           </p>
         </div>
@@ -361,7 +403,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_260px] gap-5">
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-5">
+        <div className="space-y-4">
         {/* Calendar */}
         <div className="bg-zinc-900 rounded-xl p-4 select-none">
           <div className="grid grid-cols-7 mb-1">
@@ -441,24 +484,89 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* ── Projected balance strip ─────────────────────────────────────── */}
+        {projectedBalances.length > 0 && (() => {
+          const refDay = selectedDay ?? today;
+          const refLabel = refDay === today
+            ? 'hoje'
+            : new Date(refDay + 'T12:00:00').toLocaleDateString('pt-PT', { day: 'numeric', month: 'long' });
+          const grandTotal = projectedBalances.reduce((s, x) => s + x.balance, 0);
+          const ENTITIES = [
+            { id: 'private',     label: 'Privado',     color: 'text-blue-400',    dot: 'bg-blue-500' },
+            { id: 'noisysource', label: 'NoisySource',  color: 'text-emerald-400', dot: 'bg-emerald-500' },
+            { id: 'noisyphocus', label: 'NoisyPhocus',  color: 'text-purple-400',  dot: 'bg-purple-500' },
+          ] as const;
+          return (
+            <div className="bg-zinc-900 rounded-xl p-4 space-y-4">
+              <div className="flex items-baseline justify-between flex-wrap gap-2">
+                <div>
+                  <span className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">Saldos projetados</span>
+                  <span className="ml-2 text-xs text-zinc-600">até {refLabel}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs text-zinc-500 mr-1">Total</span>
+                  <span className={`text-base font-bold tabular-nums ${grandTotal >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {formatEUR(grandTotal)}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {ENTITIES.map(({ id, label, color, dot }) => {
+                  const accs = projectedBalances.filter(x => x.account.entityId === id);
+                  if (!accs.length) return null;
+                  const entityTotal = accs.reduce((s, x) => s + x.balance, 0);
+                  return (
+                    <div key={id} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+                          <span className={`text-xs font-semibold uppercase tracking-wide ${color}`}>{label}</span>
+                        </div>
+                        <span className={`text-xs font-medium tabular-nums ${entityTotal >= 0 ? 'text-zinc-400' : 'text-red-400'}`}>
+                          {formatEUR(entityTotal)}
+                        </span>
+                      </div>
+                      <div className="space-y-1 pl-3 border-l border-zinc-800">
+                        {accs.map(({ account, balance }) => (
+                          <div key={account.id} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-[10px] text-zinc-600 shrink-0">
+                                {account.type === 'voucher' ? '🎫' : '🏦'}
+                              </span>
+                              <span className="text-xs text-zinc-400 truncate">{account.name}</span>
+                            </div>
+                            <span className={`text-xs font-medium tabular-nums shrink-0 ${balance > 0 ? 'text-zinc-200' : balance < 0 ? 'text-red-400' : 'text-zinc-600'}`}>
+                              {formatEUR(balance)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+        </div>
+
         {/* Right panel */}
-        <div className="space-y-4">
+        <div className="space-y-3 xl:self-start xl:sticky xl:top-4 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto xl:pr-1">
           {selectedDay ? (
             /* ── Day detail ─────────────────────────────────────────── */
             <>
+              {/* Date header + EC day state */}
               <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-zinc-100 capitalize">
+                  <h3 className="font-semibold text-zinc-100 capitalize text-base">
                     {new Date(selectedDay + 'T12:00:00').toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' })}
                   </h3>
                   <button onClick={() => setSelectedDay(null)}
                     className="text-zinc-500 hover:text-zinc-300 text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-zinc-800">×</button>
                 </div>
-                {(() => {
+                {contract && (() => {
                   const kind = dayKind(selectedDay, contractStart, contractEnd, nwdSet, halfSet);
-                  if (kind === 'weekend' || kind === 'outside') return (
-                    <p className="text-xs text-zinc-600">{kind === 'weekend' ? 'Fim de semana' : 'Fora do contrato'}</p>
-                  );
+                  if (kind === 'weekend' || kind === 'outside') return null;
                   return (
                     <div className="flex gap-2">
                       {([
@@ -477,79 +585,81 @@ export default function DashboardPage() {
                 })()}
               </div>
 
-              {/* Events */}
+              {/* Events — grouped by entity */}
               {(() => {
                 const dayEvts = eventsByDate.get(selectedDay) ?? [];
                 if (!dayEvts.length) return (
-                  <div className="bg-zinc-900 rounded-xl p-4 text-sm text-zinc-600 text-center">Sem eventos neste dia</div>
+                  <div className="bg-zinc-900 rounded-xl p-4 text-sm text-zinc-500 text-center">Sem eventos neste dia</div>
                 );
-                return (
-                  <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
-                    <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Eventos</div>
-                    {dayEvts.map(e => {
-                      const meta = EVENT_META[e.type] ?? EVENT_META.income;
-                      const computed = isComputed(e);
-                      const isPayment = e.type === 'ec_payment' && computed;
-                      const isConfirmed = isPayment && confirmedSourceIds.has((e as ComputedEvent).key);
-                      return (
-                        <div key={eventKey(e)} className="space-y-2">
-                          <div className="flex items-center justify-between text-sm gap-2">
-                            <span className="flex items-center gap-1.5 text-zinc-300 min-w-0">
-                              <span>{meta.icon}</span>
-                              <span className="truncate">{e.description ?? meta.label}</span>
-                              {computed && <span className="text-[9px] text-zinc-500 bg-zinc-800 px-1 py-px rounded shrink-0">estimado</span>}
-                            </span>
-                            {e.amountCents > 0 && (
-                              <span className="text-emerald-400 font-medium shrink-0">{formatEUR(e.amountCents)}</span>
-                            )}
-                          </div>
-                          {isPayment && (
-                            <div className="flex justify-end">
-                              {isConfirmed
-                                ? <span className="text-xs text-emerald-500 font-medium">✓ recebido</span>
-                                : <button onClick={() => confirmPayment(e as ComputedEvent)} disabled={confirming}
-                                    className="text-xs px-3 py-1 rounded bg-emerald-800 hover:bg-emerald-700 text-emerald-200 disabled:opacity-50"
-                                  >
-                                    Confirmar recebimento
-                                  </button>
-                              }
-                            </div>
+
+                const nsEvts  = dayEvts.filter(e => (isComputed(e) ? e : e as FinanceEvent).entityId === 'noisysource');
+                const prvEvts = dayEvts.filter(e => (isComputed(e) ? e : e as FinanceEvent).entityId === 'private');
+                const otherEvts = dayEvts.filter(e => {
+                  const eid = (isComputed(e) ? e : e as FinanceEvent).entityId;
+                  return eid !== 'noisysource' && eid !== 'private';
+                });
+
+                const renderEvent = (e: AnyEvent) => {
+                  const meta = EVENT_META[e.type] ?? EVENT_META.income;
+                  const computed = isComputed(e);
+                  const isConfirmable = computed && (e.type === 'ec_payment' || e.type === 'salary_credit' || e.type === 'income');
+                  const isConfirmed = isConfirmable && confirmedSourceIds.has((e as ComputedEvent).key);
+                  return (
+                    <div key={eventKey(e)} className="flex items-start justify-between gap-3 py-2 border-b border-zinc-800/60 last:border-0">
+                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                        <span className="text-base leading-tight mt-px shrink-0">{meta.icon}</span>
+                        <div className="min-w-0">
+                          <div className="text-sm text-zinc-200 leading-snug truncate">{e.description ?? meta.label}</div>
+                          {computed && !isConfirmed && (
+                            <span className="text-[10px] text-zinc-500">estimado</span>
+                          )}
+                          {isConfirmed && (
+                            <span className="text-[10px] text-emerald-500 font-medium">✓ confirmado</span>
                           )}
                         </div>
-                      );
-                    })}
+                      </div>
+                      <div className="flex flex-col items-end gap-1.5 shrink-0">
+                        {e.amountCents !== 0 && (
+                          <span className={`text-sm font-semibold tabular-nums ${e.amountCents > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {e.amountCents > 0 ? '+' : '−'}{formatEUR(Math.abs(e.amountCents))}
+                          </span>
+                        )}
+                        {isConfirmable && !isConfirmed && (
+                          <button onClick={() => confirmPayment(e as ComputedEvent)} disabled={confirming}
+                            className="text-[10px] px-2 py-0.5 rounded bg-emerald-900 hover:bg-emerald-800 text-emerald-300 border border-emerald-800 disabled:opacity-50 whitespace-nowrap"
+                          >
+                            Confirmar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                };
+
+                return (
+                  <div className="space-y-2">
+                    {nsEvts.length > 0 && (
+                      <div className="bg-zinc-900 rounded-xl px-4 pt-3 pb-1">
+                        <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1">NoisySource</div>
+                        {nsEvts.map(renderEvent)}
+                      </div>
+                    )}
+                    {prvEvts.length > 0 && (
+                      <div className="bg-zinc-900 rounded-xl px-4 pt-3 pb-1">
+                        <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1">Privado</div>
+                        {prvEvts.map(renderEvent)}
+                      </div>
+                    )}
+                    {otherEvts.length > 0 && (
+                      <div className="bg-zinc-900 rounded-xl px-4 pt-3 pb-1">
+                        <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1">Outros</div>
+                        {otherEvts.map(renderEvent)}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
 
-              {/* Account balances on selected day */}
-              {accountBalancesOnDay.length > 0 && (
-                <div className="bg-zinc-900 rounded-xl p-4 space-y-2.5">
-                  <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Saldos</div>
-                  {accountBalancesOnDay.map(({ account, balance }) => (
-                    <div key={account.id} className="flex items-center justify-between text-sm gap-2">
-                      <span className="flex items-center gap-1.5 text-zinc-300 min-w-0">
-                        <span className="text-[9px] text-zinc-500 bg-zinc-800 px-1 py-px rounded shrink-0 font-mono">
-                          {ENTITY_LABEL[account.entityId] ?? account.entityId}
-                        </span>
-                        <span className="truncate">{account.name}</span>
-                      </span>
-                      <span className={`font-medium shrink-0 ${balance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {formatEUR(balance)}
-                      </span>
-                    </div>
-                  ))}
-                  {accountBalancesOnDay.length > 1 && (() => {
-                    const total = accountBalancesOnDay.reduce((s, x) => s + x.balance, 0);
-                    return (
-                      <div className="border-t border-zinc-800 pt-2 flex items-center justify-between text-sm font-semibold">
-                        <span className="text-zinc-400">Total</span>
-                        <span className={total >= 0 ? 'text-emerald-300' : 'text-red-300'}>{formatEUR(total)}</span>
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
 
               <button disabled className="w-full text-xs px-3 py-2 rounded-lg border border-zinc-800 text-zinc-700 cursor-not-allowed">
                 + Novo lançamento (em breve)

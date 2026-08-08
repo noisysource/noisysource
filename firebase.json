@@ -30,12 +30,7 @@
       "target": "finances",
       "public": "apps/noisysource/finances/dist",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [
-        {
-          "source": "**",
-          "destination": "/index.html"
-        }
-      ]
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
     }
   ],
   "emulators": {

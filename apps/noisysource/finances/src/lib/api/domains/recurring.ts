@@ -21,6 +21,9 @@ const from = (raw: any, id: string): RecurringEntryDoc => ({
   onceYearMonth: raw?.onceYearMonth || undefined,
   active: raw?.active !== false,
   sourceId: raw?.sourceId || undefined,
+  reimbursable: raw?.reimbursable === true,
+  paidByAccountId: raw?.paidByAccountId || undefined,
+  lastReimbursedYM: raw?.lastReimbursedYM || undefined,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
 

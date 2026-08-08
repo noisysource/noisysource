@@ -6,7 +6,13 @@
  */
 
 import { computeEcProjection } from './ecProjection';
+import { computeMonthlyPayroll } from './payroll';
+import { buildAmortizationSchedule } from './amortization';
 import type { EcContractDoc } from '../models/EcContract';
+import type { RecurringEntryDoc } from '../models/RecurringEntry';
+import type { EmploymentContractDoc } from '../models/Employment';
+import type { IncomeSourceDoc } from '../models/IncomeSource';
+import type { CreditContractDoc } from '../models/CreditContract';
 import type { ComputedEvent, FinanceEntityId } from '../models/FinanceEvent';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -106,6 +112,342 @@ export function generateEcEvents(
       sourceId: contract.id,
       metadata: { yearMonth: mb.yearMonth, tsDate: tsDay },
     });
+  }
+
+  return events;
+}
+
+// ── Employment contract generator ────────────────────────────────────────────
+
+/** Duck-typed Timestamp → "YYYY-MM" */
+function tsToYM(ts: any): string | undefined {
+  if (!ts) return undefined;
+  try {
+    const d: Date = typeof ts.toDate === 'function' ? ts.toDate() : ts instanceof Date ? ts : new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  } catch { return undefined; }
+}
+
+function clampDay(ym: string, day: number): number {
+  const [y, m] = ym.split('-').map(Number);
+  return Math.min(day, new Date(y, m, 0).getDate());
+}
+
+function ymWindow(startYM: string, months: number): string[] {
+  const [sy, sm] = startYM.split('-').map(Number);
+  return Array.from({ length: months }, (_, i) => {
+    const d = new Date(sy, sm - 1 + i, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+}
+
+/**
+ * Generate salary credit + benefit credit events from employment contracts.
+ * Only contracts with flowToPrivate=true generate private income events.
+ * Also generates the NoisySource payroll expense event for each contract.
+ */
+export function generateEmploymentEvents(
+  contracts: EmploymentContractDoc[],
+  people: ReadonlyMap<string, string>,
+  startYM: string,
+  months: number,
+): ComputedEvent[] {
+  const events: ComputedEvent[] = [];
+
+  for (const contract of contracts) {
+    if (!contract.active) continue;
+
+    const contractStartYM = tsToYM(contract.startDate);
+    const contractEndYM = contract.endDate ? tsToYM(contract.endDate) : undefined;
+    const personName = (people.get(contract.personId) ?? contract.personId).split(' ')[0];
+    const payDay = contract.payDay ?? 25;
+
+    // Compute payroll using current month — rates don't change month-to-month in this model
+    const now = new Date();
+    const row = computeMonthlyPayroll(contract, now.getFullYear(), now.getMonth() + 1);
+
+    for (const ym of ymWindow(startYM, months)) {
+      if (contractStartYM && ym < contractStartYM) continue;
+      if (contractEndYM && ym > contractEndYM) continue;
+
+      const day = clampDay(ym, payDay);
+      const date = `${ym}-${String(day).padStart(2, '0')}`;
+
+      // NoisySource payroll burden (gross + SS employer)
+      events.push({
+        key: `emp_exp:${contract.id}:${ym}`,
+        computed: true,
+        entityId: 'noisysource' as FinanceEntityId,
+        type: 'expense',
+        date,
+        amountCents: -(row.grossCents + row.ssErCents),
+        status: 'planned',
+        description: `Encargos Salariais — ${personName}`,
+        sourceType: 'employment_contract',
+        sourceId: contract.id,
+      });
+
+      if (!contract.flowToPrivate) continue;
+
+      // Cash benefits (no voucher account) are included in net transfer
+      const cashBenefitsCents = row.benefits
+        .filter(b => !b.benefitAccountId)
+        .reduce((s, b) => s + b.totalCents, 0);
+
+      events.push({
+        key: `emp_sal:${contract.id}:${ym}`,
+        computed: true,
+        entityId: 'private' as FinanceEntityId,
+        type: 'salary_credit',
+        date,
+        amountCents: row.netCents + cashBenefitsCents,
+        status: 'planned',
+        description: `Salário NoisySource — ${personName}`,
+        accountId: contract.netPayAccountId || undefined,
+        sourceType: 'employment_contract',
+        sourceId: contract.id,
+      });
+
+      // Voucher benefit credits
+      for (const b of row.benefits) {
+        if (!b.benefitAccountId || b.totalCents <= 0) continue;
+        const label = b.type === 'MEAL_CARD' ? 'Cartão Refeição'
+          : b.type === 'CHILDCARE' ? 'Cheque Creche'
+          : b.type ?? 'Benefício';
+        events.push({
+          key: `emp_ben:${contract.id}:${b.type}:${ym}`,
+          computed: true,
+          entityId: 'private' as FinanceEntityId,
+          type: 'income',
+          date,
+          amountCents: b.totalCents,
+          status: 'planned',
+          description: `${label} — ${personName}`,
+          accountId: b.benefitAccountId,
+          sourceType: 'employment_contract',
+          sourceId: contract.id,
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+// ── Income source generator ───────────────────────────────────────────────────
+
+/**
+ * Generate net income + benefit credit events from external income sources.
+ * These are incomes from employers NoisySource does not manage payroll for.
+ */
+export function generateIncomeSourceEvents(
+  sources: IncomeSourceDoc[],
+  startYM: string,
+  months: number,
+): ComputedEvent[] {
+  const events: ComputedEvent[] = [];
+
+  for (const source of sources) {
+    if (!source.active) continue;
+
+    const sourceStartYM = source.startDate ? source.startDate.slice(0, 7) : undefined;
+    const gross = source.grossMonthlyCents;
+    const irs = Math.round(gross * (source.irsRatePct ?? 0) / 100);
+    const ss = Math.round(gross * (source.ssEmpPct ?? 11) / 100);
+    const net = gross - irs - ss;
+    const payDay = source.payDay ?? 28;
+
+    for (const ym of ymWindow(startYM, months)) {
+      if (sourceStartYM && ym < sourceStartYM) continue;
+
+      const day = clampDay(ym, payDay);
+      const date = `${ym}-${String(day).padStart(2, '0')}`;
+
+      events.push({
+        key: `inc_sal:${source.id}:${ym}`,
+        computed: true,
+        entityId: 'private' as FinanceEntityId,
+        type: 'income',
+        date,
+        amountCents: net,
+        status: 'planned',
+        description: `${source.employerName} — ${source.personName}`,
+        accountId: source.netPayAccountId || undefined,
+        sourceType: 'employment_contract',
+        sourceId: source.id,
+      });
+
+      for (const benefit of source.benefits ?? []) {
+        if (!benefit.benefitAccountId) continue;
+        const perMonth = (benefit as any).perMonthCents ?? 0;
+        const perDay = (benefit as any).perDayCents ?? 0;
+        const days = (benefit as any).daysPerMonth ?? 0;
+        const totalCents = perMonth + (perDay * days);
+        if (totalCents <= 0) continue;
+        const label = benefit.type === 'MEAL_CARD' ? 'Cartão Refeição'
+          : benefit.type === 'CHILDCARE' ? 'Cheque Creche'
+          : benefit.type ?? 'Benefício';
+        events.push({
+          key: `inc_ben:${source.id}:${benefit.type}:${ym}`,
+          computed: true,
+          entityId: 'private' as FinanceEntityId,
+          type: 'income',
+          date,
+          amountCents: totalCents,
+          status: 'planned',
+          description: `${label} — ${source.personName}`,
+          accountId: benefit.benefitAccountId,
+          sourceType: 'employment_contract',
+          sourceId: source.id,
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+// ── Recurring entries generator ───────────────────────────────────────────────
+
+function ymToMonths(ym: string): number {
+  const [y, m] = ym.split('-').map(Number);
+  return y * 12 + m;
+}
+
+function monthsToYM(totalMonths: number): string {
+  const m = ((totalMonths - 1) % 12) + 1;
+  const y = (totalMonths - m) / 12;
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+function recurringApplies(r: RecurringEntryDoc, ym: string): boolean {
+  if (!r.active) return false;
+  if (r.startYearMonth && ym < r.startYearMonth) return false;
+  if (r.endYearMonth && ym > r.endYearMonth) return false;
+  if (r.frequency === 'monthly') return true;
+  if (r.frequency === 'once') return ym === r.onceYearMonth;
+  if (r.frequency === 'quarterly') {
+    const ref = r.startYearMonth ?? ym.slice(0, 4) + '-01';
+    const diff = ymToMonths(ym) - ymToMonths(ref);
+    return diff >= 0 && diff % 3 === 0;
+  }
+  if (r.frequency === 'annual') {
+    return parseInt(ym.slice(5), 10) === (r.monthOfYear ?? 1);
+  }
+  return false;
+}
+
+function clampDayToMonth(ym: string, day: number): number {
+  const [y, m] = ym.split('-').map(Number);
+  return Math.min(day, new Date(y, m, 0).getDate());
+}
+
+/**
+ * Convert recurring entry templates into ComputedEvent[] for a month window.
+ * Entries are tagged with their entity; amountCents is signed (income positive, expense negative).
+ */
+export function generateRecurringEvents(
+  entries: ReadonlyArray<{ entry: RecurringEntryDoc; entityId: FinanceEntityId }>,
+  startYM: string,
+  months: number,
+): ComputedEvent[] {
+  const events: ComputedEvent[] = [];
+  const startN = ymToMonths(startYM);
+
+  for (const { entry: r, entityId } of entries) {
+    for (let i = 0; i < months; i++) {
+      const ym = monthsToYM(startN + i);
+      if (!recurringApplies(r, ym)) continue;
+
+      const day = clampDayToMonth(ym, r.dayOfMonth);
+      const date = `${ym}-${String(day).padStart(2, '0')}`;
+      const signedAmount = r.type === 'expense' ? -r.amountCents : r.amountCents;
+
+      events.push({
+        key: `rec:${r.id}:${ym}`,
+        computed: true,
+        entityId,
+        type: r.type,
+        date,
+        amountCents: signedAmount,
+        status: 'planned',
+        description: r.description,
+        accountId: r.accountId,
+        toAccountId: r.toAccountId,
+        sourceType: 'recurring',
+        sourceId: r.id,
+      });
+
+      // Cross-entity cash-out: when a company expense is paid from a personal account,
+      // also emit an expense event on that personal entity so the cash flow shows there too.
+      if (r.reimbursable && r.paidByAccountId) {
+        const paidByEntityId = r.paidByAccountId.split('-')[0] as FinanceEntityId;
+        events.push({
+          key: `rec:${r.id}:${ym}:paid`,
+          computed: true,
+          entityId: paidByEntityId,
+          type: 'expense',
+          date,
+          amountCents: -Math.abs(signedAmount),
+          status: 'planned',
+          description: r.description,
+          accountId: r.paidByAccountId,
+          sourceType: 'recurring',
+          sourceId: r.id,
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+// ── Credit contract generator ─────────────────────────────────────────────────
+
+/**
+ * Generate monthly installment expense events from credit contracts.
+ * Each event carries capital/interest breakdown in metadata for the forecast chart.
+ */
+export function generateCreditEvents(
+  credits: ReadonlyArray<{ contract: CreditContractDoc; entityId: FinanceEntityId }>,
+  startYM: string,
+  months: number,
+): ComputedEvent[] {
+  const events: ComputedEvent[] = [];
+  const endYM = monthsToYM(ymToMonths(startYM) + months - 1);
+
+  for (const { contract: c, entityId } of credits) {
+    if (!c.active) continue;
+
+    const schedule = buildAmortizationSchedule(c);
+    const day = c.dayOfMonth ?? 15;
+
+    for (const row of schedule) {
+      if (row.ym < startYM || row.ym > endYM) continue;
+
+      const clampedDay = clampDayToMonth(row.ym, day);
+      const date = `${row.ym}-${String(clampedDay).padStart(2, '0')}`;
+
+      events.push({
+        key: `credit:${c.id}:${row.ym}`,
+        computed: true,
+        entityId,
+        type: 'expense',
+        date,
+        amountCents: -row.paymentCents,
+        status: 'planned',
+        description: `${c.creditor} — ${c.description}`,
+        accountId: c.accountId,
+        sourceType: 'credit_contract',
+        sourceId: c.id,
+        metadata: {
+          capitalCents: row.capitalCents,
+          interestCents: row.interestCents,
+          outstandingCents: row.outstandingCents,
+          paymentNumber: row.paymentNumber,
+        },
+      });
+    }
   }
 
   return events;

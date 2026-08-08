@@ -47,6 +47,7 @@ const from = (raw: any, id: string): EmploymentContractDoc => ({
 
   benefits: mapBenefitsFrom(raw?.benefits),
   netPayAccountId: raw?.netPayAccountId || "",
+  flowToPrivate: raw?.flowToPrivate === true,
 });
 
 const to = (doc: EmploymentContractDoc) =>
@@ -68,6 +69,7 @@ const to = (doc: EmploymentContractDoc) =>
 
     benefits: Array.isArray(doc.benefits) ? doc.benefits.map(b => stripUndefined(b)) : [],
     netPayAccountId: doc.netPayAccountId || "",
+    flowToPrivate: doc.flowToPrivate === true,
   });
 
 /** ----- domain factory ----- */

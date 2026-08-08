@@ -13,6 +13,7 @@
 
 import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { EcContractDoc } from "@shared/models/EcContract";
+import type { IncomeSourceDoc } from "@shared/models/IncomeSource";
 import { computeMonthlyPayroll } from "@shared/lib/payroll";
 import { computeEcProjection } from "@shared/lib/ecProjection";
 import { api } from "./api";
@@ -68,6 +69,7 @@ export async function syncEmploymentContractRecurring(
       type: "income",
       description: `Salário NoisySource — ${personName}`,
       amountCents: row.netCents + cashBenefitsCents,
+      accountId: contract.netPayAccountId || undefined,
       frequency: "monthly",
       dayOfMonth: contract.payDay ?? 25,
       startYearMonth: toYearMonth(contract.startDate as any),
@@ -75,6 +77,28 @@ export async function syncEmploymentContractRecurring(
       active: contract.active,
       sourceId: privSourceId,
     });
+
+    // 3. Private: voucher benefit credits (meal card, childcare, etc.)
+    for (const benefit of contract.benefits ?? []) {
+      const benefitAccountId = (benefit as any).benefitAccountId as string | undefined;
+      if (!benefitAccountId) continue;
+      const b = row.benefits.find(rb => rb.type === benefit.type);
+      if (!b || b.totalCents <= 0) continue;
+      const benefitSourceId = `emp:${contract.id}:benefit:${benefit.type}`;
+      await api.recurring.upsertBySourceId(benefitSourceId, {
+        type: "income",
+        description: `${benefit.type === "MEAL_CARD" ? "Cartão Refeição" : benefit.type === "CHILDCARE" ? "Cheque Creche" : benefit.type} — ${personName}`,
+        amountCents: b.totalCents,
+        accountId: benefitAccountId,
+        frequency: "monthly",
+        dayOfMonth: contract.payDay ?? 25,
+        startYearMonth: toYearMonth(contract.startDate as any),
+        endYearMonth: toYearMonth(contract.endDate as any),
+        active: contract.active,
+        sourceId: benefitSourceId,
+      });
+    }
+
     api.setEntity(currentEntityId);
   } else {
     // Deactivate any existing private entry if flowToPrivate was turned off
@@ -139,4 +163,61 @@ export async function syncEcContractRecurring(contract: EcContractDoc): Promise<
 
 export async function deactivateEcContractRecurring(contractId: string): Promise<void> {
   await api.recurring.deactivateBySourceId(`ec:${contractId}`);
+}
+
+// ── Income source (external employer) ───────────────────────────────────────
+
+export async function syncIncomeSourceRecurring(source: IncomeSourceDoc): Promise<void> {
+  const gross = source.grossMonthlyCents;
+  const irs = Math.round(gross * (source.irsRatePct ?? 0) / 100);
+  const ss = Math.round(gross * (source.ssEmpPct ?? 11) / 100);
+  const net = gross - irs - ss;
+
+  const startYM = source.startDate ? source.startDate.slice(0, 7) : undefined;
+  const prevEntity = api.entityId;
+  api.setEntity("private");
+
+  const sourceId = `inc:${source.id}`;
+  await api.recurring.upsertBySourceId(sourceId, {
+    type: "income",
+    description: `${source.employerName} — ${source.personName}`,
+    amountCents: net,
+    accountId: source.netPayAccountId || undefined,
+    frequency: "monthly",
+    dayOfMonth: source.payDay ?? 28,
+    startYearMonth: startYM,
+    active: source.active,
+    sourceId,
+  });
+
+  for (const benefit of source.benefits ?? []) {
+    const benefitAccountId = (benefit as any).benefitAccountId as string | undefined;
+    if (!benefitAccountId) continue;
+    const perMonth = (benefit as any).perMonthCents as number | undefined;
+    const perDay = (benefit as any).perDayCents as number | undefined;
+    const days = (benefit as any).daysPerMonth as number | undefined;
+    const totalCents = (perMonth ?? 0) + ((perDay ?? 0) * (days ?? 0));
+    if (totalCents <= 0) continue;
+    const benefitSourceId = `inc:${source.id}:benefit:${benefit.type}`;
+    await api.recurring.upsertBySourceId(benefitSourceId, {
+      type: "income",
+      description: `${benefit.type === "MEAL_CARD" ? "Cartão Refeição" : benefit.type === "CHILDCARE" ? "Cheque Creche" : benefit.type} — ${source.personName}`,
+      amountCents: totalCents,
+      accountId: benefitAccountId,
+      frequency: "monthly",
+      dayOfMonth: source.payDay ?? 28,
+      startYearMonth: startYM,
+      active: source.active,
+      sourceId: benefitSourceId,
+    });
+  }
+
+  api.setEntity(prevEntity);
+}
+
+export async function deactivateIncomeSourceRecurring(sourceId: string): Promise<void> {
+  const prevEntity = api.entityId;
+  api.setEntity("private");
+  await api.recurring.deactivateBySourceId(`inc:${sourceId}`);
+  api.setEntity(prevEntity);
 }

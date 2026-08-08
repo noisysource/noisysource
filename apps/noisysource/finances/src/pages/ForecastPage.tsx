@@ -1,255 +1,393 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ForecastEventDoc, ForecastEventStatus } from "@shared/models/RecurringEntry";
+import type { RecurringEntryDoc } from "@shared/models/RecurringEntry";
+import type { CreditContractDoc } from "@shared/models/CreditContract";
+import type { EmploymentContractDoc } from "@shared/models/Employment";
+import type { IncomeSourceDoc } from "@shared/models/IncomeSource";
+import type { EcContractDoc } from "@shared/models/EcContract";
+import type { ComputedEvent, FinanceEntityId } from "@shared/models/FinanceEvent";
+import type { Account } from "@shared/models/Account";
+import {
+  generateRecurringEvents,
+  generateCreditEvents,
+  generateEmploymentEvents,
+  generateIncomeSourceEvents,
+  generateEcEvents,
+} from "@shared/lib/eventGenerators";
+import { isCashLike } from "@shared/models/Account";
 import { formatEUR } from "@shared/lib/money";
-import { generateForecastEvents, summariseByMonth, toYM } from "@shared/lib/forecast";
 import { Card } from "../components/ui/card";
-import { Button } from "../components/ui/button";
 import { api } from "../lib/api";
-import { useEntity } from "../hooks/EntityContext";
 
-const STATUS_LABELS: Record<ForecastEventStatus, string> = {
-  forecast: "Forecast",
-  confirmed: "Confirmed",
-  skipped: "Skipped",
-};
-
-const STATUS_STYLE: Record<ForecastEventStatus, string> = {
-  forecast: "bg-zinc-800 text-zinc-300",
-  confirmed: "bg-emerald-900 text-emerald-300",
-  skipped: "bg-zinc-900 text-zinc-600 line-through",
-};
+// ── helpers ────────────────────────────────────────────────────────────────────
 
 function currentYM(): string {
   const d = new Date();
-  return toYM(d.getFullYear(), d.getMonth() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function addMonths(ym: string, n: number): string {
+  const [y, m] = ym.split('-').map(Number);
+  const total = y * 12 + m + n;
+  const mo = ((total - 1) % 12) + 1;
+  const yr = (total - mo) / 12;
+  return `${yr}-${String(mo).padStart(2, '0')}`;
+}
+
+function ymLabel(ym: string): string {
+  const [y, m] = ym.split('-');
+  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  return `${months[parseInt(m) - 1]} ${y.slice(2)}`;
+}
+
+function compactEUR(cents: number): string {
+  const eur = Math.abs(cents) / 100;
+  if (eur >= 1000) return `€${(eur / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  return `€${Math.round(eur)}`;
+}
+
+const ENTITY_IDS: FinanceEntityId[] = ['private', 'noisysource', 'noisyphocus'];
+const ENTITY_LABELS: Record<FinanceEntityId, string> = {
+  private: 'Private',
+  noisysource: 'NoisySource',
+  noisyphocus: 'NoisyPhocus',
+};
+const ENTITY_COLORS: Record<FinanceEntityId, string> = {
+  private: 'text-blue-400',
+  noisysource: 'text-emerald-400',
+  noisyphocus: 'text-purple-400',
+};
+const ENTITY_BORDER: Record<FinanceEntityId, string> = {
+  private: 'border-blue-800/50',
+  noisysource: 'border-emerald-800/50',
+  noisyphocus: 'border-purple-800/50',
+};
+
+const MONTHS = 12;
+const TYPE_LABELS: Record<string, string> = {
+  income: 'Rendimento', expense: 'Despesa', transfer: 'Transf.',
+  salary_credit: 'Salário', ec_payment: 'EC', ec_ts_submission: 'TS',
+  tax_payment: 'Imposto', kidclub_revenue: 'KidClub', vacation: 'Férias',
+};
+
+// ── types ──────────────────────────────────────────────────────────────────────
+
+interface EntityMonth {
+  inCents: number;
+  outCents: number;
+  netCents: number;
+  events: ComputedEvent[];
+}
+
+interface MonthData {
+  ym: string;
+  householdIn: number;
+  householdOut: number;
+  householdNet: number;
+  projectedBalance: number;
+  byEntity: Record<FinanceEntityId, EntityMonth>;
+  events: ComputedEvent[];
+}
+
+// ── main component ─────────────────────────────────────────────────────────────
+
 export default function ForecastPage() {
-  const { selectedEntity } = useEntity();
+  const startYM = currentYM();
 
-  const [startYM, setStartYM] = useState<string>(currentYM);
-  const [events, setEvents] = useState<ForecastEventDoc[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<string>(currentYM);
-  const [busy, setBusy] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [allRecurring, setAllRecurring]             = useState<{ entry: RecurringEntryDoc; entityId: FinanceEntityId }[]>([]);
+  const [allCredits, setAllCredits]                 = useState<{ contract: CreditContractDoc; entityId: FinanceEntityId }[]>([]);
+  const [allAccounts, setAllAccounts]               = useState<{ account: Account; entityId: FinanceEntityId }[]>([]);
+  const [employmentContracts, setEmploymentContracts] = useState<EmploymentContractDoc[]>([]);
+  const [incomeSources, setIncomeSources]           = useState<IncomeSourceDoc[]>([]);
+  const [ecContract, setEcContract]                 = useState<EcContractDoc | null>(null);
+  const [peopleMap, setPeopleMap]                   = useState<Map<string, string>>(new Map());
+  const [loading, setLoading]                       = useState(true);
 
-  const endYM = useMemo(() => {
-    const [y, m] = startYM.split("-").map(Number);
-    const d = new Date(y, m - 1 + 11, 1);
-    return toYM(d.getFullYear(), d.getMonth() + 1);
-  }, [startYM]);
+  const [selectedYM, setSelectedYM]     = useState(startYM);
+  const [entityFilter, setEntityFilter] = useState<FinanceEntityId | 'all'>('all');
 
-  async function loadEvents() {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const evts = await api.forecastEvents.listInRange(startYM, endYM);
-      setEvents(evts);
-    } catch (e: any) {
-      setMsg(e?.message ?? "Failed to load events");
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const recurringAll: typeof allRecurring = [];
+        const creditsAll:   typeof allCredits   = [];
+        const accountsAll:  typeof allAccounts  = [];
 
-  useEffect(() => { void loadEvents(); }, [selectedEntity.id, startYM]);
+        for (const eid of ENTITY_IDS) {
+          api.setEntity(eid);
+          const [recs, creds, accs] = await Promise.all([
+            api.recurring.listActive(),
+            api.credits.listActive(),
+            api.accounts.list(),
+          ]);
+          // exclude auto-generated entries (sourceId = linked to a contract)
+          for (const e of recs) if (!e.sourceId) recurringAll.push({ entry: e, entityId: eid });
+          for (const c of creds) creditsAll.push({ contract: c, entityId: eid });
+          for (const a of accs) accountsAll.push({ account: a, entityId: eid });
+        }
 
-  async function generate() {
-    setGenerating(true);
-    setMsg(null);
-    try {
-      const recurring = await api.recurring.listActive();
-      const existingIds = new Set(events.map(e => e.id));
-      const toCreate = generateForecastEvents(recurring, startYM, 12, existingIds);
+        // Active EC contract
+        let activeEc: EcContractDoc | null = null;
+        for (const eid of ENTITY_IDS) {
+          api.setEntity(eid);
+          const list = await api.ecContracts.list();
+          const found = list.find((c: EcContractDoc) => c.active);
+          if (found) { activeEc = found; break; }
+        }
 
-      if (!toCreate.length) {
-        setMsg("All events already generated — nothing new to add.");
-        return;
+        api.setEntity('noisysource');
+        const empContracts = await api.contracts.list() as EmploymentContractDoc[];
+
+        api.setEntity('private');
+        const [sources, people] = await Promise.all([
+          api.incomeSources.list() as Promise<IncomeSourceDoc[]>,
+          api.people.list() as Promise<{ id: string; name: string }[]>,
+        ]);
+
+        setAllRecurring(recurringAll);
+        setAllCredits(creditsAll);
+        setAllAccounts(accountsAll);
+        setEmploymentContracts(empContracts);
+        setIncomeSources(sources);
+        setEcContract(activeEc);
+        setPeopleMap(new Map(people.map(p => [p.id, p.name])));
+      } catch (e) {
+        console.error('[Forecast] load failed:', e);
+      } finally {
+        setLoading(false);
       }
-
-      await Promise.all(toCreate.map(e => api.forecastEvents.upsertEvent(e)));
-      await loadEvents();
-      setMsg(`Generated ${toCreate.length} event(s) ✔`);
-    } catch (e: any) {
-      setMsg(e?.message ?? "Generation failed");
-    } finally {
-      setGenerating(false);
     }
-  }
+    void load();
+  }, []);
 
-  async function updateStatus(id: string, status: ForecastEventStatus) {
-    try {
-      await api.forecastEvents.updateStatus(id, status);
-      setEvents(prev => prev.map(e => e.id === id ? { ...e, status } : e));
-    } catch (e: any) {
-      setMsg(e?.message ?? "Update failed");
-    }
-  }
+  const allEvents = useMemo((): ComputedEvent[] => {
+    const rec  = generateRecurringEvents(allRecurring, startYM, MONTHS);
+    const cred = generateCreditEvents(allCredits, startYM, MONTHS);
+    const emp  = generateEmploymentEvents(employmentContracts, peopleMap, startYM, MONTHS);
+    const inc  = generateIncomeSourceEvents(incomeSources, startYM, MONTHS);
+    const ec   = ecContract ? generateEcEvents(ecContract) : [];
+    return [...rec, ...cred, ...emp, ...inc, ...ec];
+  }, [allRecurring, allCredits, employmentContracts, incomeSources, ecContract, peopleMap, startYM]);
 
-  async function deleteEvent(id: string) {
-    if (!confirm("Delete this event?")) return;
-    try {
-      await api.forecastEvents.delete(id);
-      setEvents(prev => prev.filter(e => e.id !== id));
-    } catch (e: any) {
-      setMsg(e?.message ?? "Delete failed");
-    }
-  }
-
-  const summary = useMemo(() => summariseByMonth(events), [events]);
-  const monthEvents = useMemo(
-    () => events.filter(e => e.yearMonth === selectedMonth).sort((a, b) => a.dayOfMonth - b.dayOfMonth),
-    [events, selectedMonth]
+  const startingBalance = useMemo(() =>
+    allAccounts
+      .filter(a => isCashLike(a.account.type) && a.account.balanceCents != null)
+      .reduce((s, a) => s + (a.account.balanceCents ?? 0), 0),
+    [allAccounts],
   );
+  const hasStartingBalance = startingBalance !== 0;
 
-  const overallNet = useMemo(
-    () => summary.reduce((s, m) => s + m.netCents, 0),
-    [summary]
-  );
+  const monthData = useMemo((): MonthData[] => {
+    let runningBalance = startingBalance;
+    return Array.from({ length: MONTHS }, (_, i) => {
+      const ym   = addMonths(startYM, i);
+      const evts = allEvents.filter(e => e.date.startsWith(ym));
+
+      const byEntity = Object.fromEntries(ENTITY_IDS.map(eid => {
+        const ee = evts.filter(e => e.entityId === eid).sort((a, b) => a.date.localeCompare(b.date));
+        return [eid, {
+          inCents:  ee.filter(e => e.amountCents > 0).reduce((s, e) => s + e.amountCents, 0),
+          outCents: ee.filter(e => e.amountCents < 0).reduce((s, e) => s + Math.abs(e.amountCents), 0),
+          netCents: ee.reduce((s, e) => s + e.amountCents, 0),
+          events:   ee,
+        }];
+      })) as Record<FinanceEntityId, EntityMonth>;
+
+      const householdIn  = evts.filter(e => e.amountCents > 0).reduce((s, e) => s + e.amountCents, 0);
+      const householdOut = evts.filter(e => e.amountCents < 0).reduce((s, e) => s + Math.abs(e.amountCents), 0);
+      const householdNet = householdIn - householdOut;
+      runningBalance += householdNet;
+
+      return { ym, householdIn, householdOut, householdNet, projectedBalance: runningBalance, byEntity, events: evts };
+    });
+  }, [allEvents, startYM, startingBalance]);
+
+  const selectedMonth = monthData.find(m => m.ym === selectedYM) ?? monthData[0];
+
+  const filteredEvents = useMemo(() => {
+    if (!selectedMonth) return [];
+    return entityFilter === 'all'
+      ? selectedMonth.events.slice().sort((a, b) => a.date.localeCompare(b.date))
+      : selectedMonth.byEntity[entityFilter].events;
+  }, [selectedMonth, entityFilter]);
+
+  const yearNet = monthData.reduce((s, m) => s + m.householdNet, 0);
+  const avgIn   = monthData.reduce((s, m) => s + m.householdIn, 0) / MONTHS;
+  const avgOut  = monthData.reduce((s, m) => s + m.householdOut, 0) / MONTHS;
+
+  const maxBar  = Math.max(...monthData.map(m => Math.max(m.householdIn, m.householdOut)), 1);
+
+  if (loading) {
+    return <div className="text-zinc-500 text-sm pt-8 text-center">A carregar previsão…</div>;
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Controls */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <div className="text-xs text-zinc-400 mb-1">Start month</div>
-          <input
-            type="month"
-            value={startYM}
-            onChange={e => setStartYM(e.target.value)}
-            className="bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1"
-          />
-        </div>
-        <Button onClick={generate} disabled={generating || busy} variant="secondary">
-          {generating ? "Generating…" : "Generate from recurring"}
-        </Button>
-        <Button onClick={loadEvents} disabled={busy} variant="secondary">
-          Refresh
-        </Button>
-        {overallNet !== 0 && (
-          <div className="text-sm text-zinc-400">
-            12-month net: <span className={overallNet >= 0 ? "text-emerald-400 font-medium" : "text-red-400 font-medium"}>
-              {formatEUR(overallNet)}
-            </span>
+    <div className="space-y-5">
+
+      {/* Summary strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card className="px-4 py-3">
+          <div className="text-xs text-zinc-500 mb-1">Rendimento médio/mês</div>
+          <div className="text-lg font-semibold tabular-nums text-emerald-400">{formatEUR(avgIn)}</div>
+        </Card>
+        <Card className="px-4 py-3">
+          <div className="text-xs text-zinc-500 mb-1">Despesas médias/mês</div>
+          <div className="text-lg font-semibold tabular-nums text-red-400">{formatEUR(avgOut)}</div>
+        </Card>
+        <Card className="px-4 py-3">
+          <div className="text-xs text-zinc-500 mb-1">Saldo líquido 12 meses</div>
+          <div className={`text-lg font-semibold tabular-nums ${yearNet >= 0 ? 'text-white' : 'text-red-400'}`}>
+            {yearNet >= 0 ? '+' : ''}{formatEUR(yearNet)}
           </div>
-        )}
+        </Card>
+        <Card className="px-4 py-3">
+          <div className="text-xs text-zinc-500 mb-1">{hasStartingBalance ? 'Saldo projetado (12m)' : 'Saldo atual não definido'}</div>
+          <div className={`text-lg font-semibold tabular-nums ${hasStartingBalance ? 'text-zinc-300' : 'text-zinc-600'}`}>
+            {hasStartingBalance ? formatEUR(monthData.at(-1)!.projectedBalance) : '—'}
+          </div>
+        </Card>
       </div>
 
-      {msg && <div className="text-sm text-emerald-400">{msg}</div>}
+      {/* 12-month strip */}
+      <div className="overflow-x-auto pb-1">
+        <div className="flex gap-1.5 min-w-max">
+          {monthData.map(m => {
+            const isSelected = m.ym === selectedYM;
+            const inH  = Math.max(Math.round((m.householdIn  / maxBar) * 40), m.householdIn  > 0 ? 4 : 0);
+            const outH = Math.max(Math.round((m.householdOut / maxBar) * 40), m.householdOut > 0 ? 4 : 0);
+            const isDeficit = m.householdNet < 0;
 
-      {/* 12-month summary grid */}
-      <Card className="overflow-x-auto">
-        <div className="grid grid-cols-12 min-w-[900px]">
-          {summary.length === 0 ? (
-            <div className="col-span-12 px-4 py-6 text-zinc-500 text-sm">
-              No events yet. Add recurring entries and click "Generate from recurring".
-            </div>
-          ) : (
-            summary.map(s => {
-              const isSelected = s.yearMonth === selectedMonth;
-              return (
-                <button
-                  key={s.yearMonth}
-                  onClick={() => setSelectedMonth(s.yearMonth)}
-                  className={`flex flex-col items-center py-3 px-1 border-r border-zinc-800 last:border-r-0 transition-colors hover:bg-zinc-800 ${isSelected ? "bg-zinc-800 ring-1 ring-inset ring-zinc-600" : ""}`}
-                >
-                  <div className="text-xs text-zinc-400 mb-2">{s.yearMonth.slice(5)}/{s.yearMonth.slice(2, 4)}</div>
-                  <div className="text-xs text-emerald-400">{formatEUR(s.incomeCents)}</div>
-                  <div className="text-xs text-red-400">−{formatEUR(s.expenseCents)}</div>
-                  <div className={`text-xs font-semibold mt-1 ${s.netCents >= 0 ? "text-white" : "text-red-400"}`}>
-                    {s.netCents >= 0 ? "+" : ""}{formatEUR(s.netCents)}
+            return (
+              <button
+                key={m.ym}
+                onClick={() => setSelectedYM(m.ym)}
+                className={`flex flex-col items-center w-[84px] shrink-0 rounded-lg border px-2 pt-2 pb-2.5 text-xs transition-all ${
+                  isSelected
+                    ? 'border-zinc-500 bg-zinc-800 shadow-sm'
+                    : 'border-zinc-800 bg-zinc-900/70 hover:bg-zinc-800/60 hover:border-zinc-700'
+                }`}
+              >
+                <div className={`font-medium mb-2 ${isSelected ? 'text-white' : 'text-zinc-400'}`}>
+                  {ymLabel(m.ym)}
+                </div>
+
+                {/* Mini bar chart */}
+                <div className="flex items-end gap-1 h-10 mb-2 w-full justify-center">
+                  <div className="w-[14px] rounded-t bg-emerald-800/80" style={{ height: `${inH}px` }} />
+                  <div className="w-[14px] rounded-t bg-red-900/80"     style={{ height: `${outH}px` }} />
+                </div>
+
+                <div className="text-emerald-400 tabular-nums">{compactEUR(m.householdIn)}</div>
+                <div className="text-red-400   tabular-nums">-{compactEUR(m.householdOut)}</div>
+                <div className={`font-semibold tabular-nums mt-0.5 ${isDeficit ? 'text-red-400' : 'text-white'}`}>
+                  {m.householdNet >= 0 ? '+' : ''}{compactEUR(m.householdNet)}
+                </div>
+
+                {hasStartingBalance && (
+                  <div className="text-zinc-500 tabular-nums text-[10px] mt-1 border-t border-zinc-800 w-full text-center pt-1">
+                    {compactEUR(m.projectedBalance)}
                   </div>
-                  <div className="text-xs text-zinc-600 mt-1">{s.eventCount} items</div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Month detail */}
+      {selectedMonth && (
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div>
+              <h2 className="text-base font-semibold">{ymLabel(selectedMonth.ym)}</h2>
+              <div className="text-xs text-zinc-500 mt-0.5">
+                <span className="text-emerald-400">+{formatEUR(selectedMonth.householdIn)}</span>
+                {' · '}
+                <span className="text-red-400">-{formatEUR(selectedMonth.householdOut)}</span>
+                {' · '}
+                <span className={selectedMonth.householdNet >= 0 ? 'text-white' : 'text-red-400'}>
+                  {selectedMonth.householdNet >= 0 ? '+' : ''}{formatEUR(selectedMonth.householdNet)} líquido
+                </span>
+              </div>
+            </div>
+
+            {/* Entity filter */}
+            <div className="flex gap-1 flex-wrap">
+              {(['all', ...ENTITY_IDS] as const).map(eid => (
+                <button
+                  key={eid}
+                  onClick={() => setEntityFilter(eid)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    entityFilter === eid
+                      ? 'bg-zinc-700 border-zinc-500 text-white'
+                      : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600'
+                  }`}
+                >
+                  {eid === 'all' ? 'Todos' : ENTITY_LABELS[eid]}
                 </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Entity breakdown row */}
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {ENTITY_IDS.map(eid => {
+              const em = selectedMonth.byEntity[eid];
+              return (
+                <Card key={eid} className={`px-3 py-2.5 border ${ENTITY_BORDER[eid]}`}>
+                  <div className={`text-xs font-medium mb-1 ${ENTITY_COLORS[eid]}`}>{ENTITY_LABELS[eid]}</div>
+                  <div className="text-xs text-zinc-500 tabular-nums">
+                    {em.inCents > 0 && <span className="text-emerald-400/70">+{compactEUR(em.inCents)} </span>}
+                    {em.outCents > 0 && <span className="text-red-400/70">-{compactEUR(em.outCents)}</span>}
+                  </div>
+                  <div className={`text-sm font-semibold tabular-nums mt-0.5 ${em.netCents >= 0 ? 'text-white' : 'text-red-400'}`}>
+                    {em.netCents >= 0 ? '+' : ''}{formatEUR(em.netCents)}
+                  </div>
+                </Card>
               );
-            })
+            })}
+          </div>
+
+          {/* Events list */}
+          {filteredEvents.length === 0 ? (
+            <div className="text-zinc-500 text-sm py-6 text-center">Sem eventos para este período.</div>
+          ) : (
+            <div className="space-y-1">
+              {filteredEvents.map(e => {
+                const isPositive = e.amountCents > 0;
+                const typeLabel  = TYPE_LABELS[e.type] ?? e.type;
+                return (
+                  <div
+                    key={e.key}
+                    className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800"
+                  >
+                    {/* Day */}
+                    <div className="text-xs text-zinc-600 w-5 text-center tabular-nums shrink-0">
+                      {e.date.slice(8)}
+                    </div>
+
+                    {/* Entity badge */}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border bg-zinc-950 shrink-0 ${ENTITY_COLORS[e.entityId]} ${ENTITY_BORDER[e.entityId]}`}>
+                      {ENTITY_LABELS[e.entityId]}
+                    </span>
+
+                    {/* Type badge */}
+                    <span className="text-[10px] text-zinc-600 shrink-0">{typeLabel}</span>
+
+                    {/* Description */}
+                    <div className="flex-1 min-w-0 text-sm text-zinc-300 truncate">{e.description}</div>
+
+                    {/* Amount */}
+                    <div className={`text-sm font-semibold tabular-nums shrink-0 ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {isPositive ? '+' : '-'}{formatEUR(Math.abs(e.amountCents))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
-      </Card>
-
-      {/* Selected month events */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-medium">
-            {selectedMonth} — {monthEvents.length} event(s)
-          </h3>
-        </div>
-
-        {monthEvents.length === 0 ? (
-          <div className="text-zinc-500 text-sm">No events for this month. Select a month above or generate events.</div>
-        ) : (
-          <div className="space-y-2">
-            {monthEvents.map(e => (
-              <div
-                key={e.id}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg bg-zinc-900 border border-zinc-800"
-              >
-                {/* Day badge */}
-                <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs text-zinc-400 shrink-0">
-                  {e.dayOfMonth}
-                </div>
-
-                {/* Description + meta */}
-                <div className="flex-1 min-w-0">
-                  <div className={`font-medium text-sm ${e.status === "skipped" ? "line-through text-zinc-600" : ""}`}>
-                    {e.description}
-                  </div>
-                  <div className="text-xs text-zinc-500 capitalize">{e.type}{e.recurringId ? " · recurring" : " · one-off"}</div>
-                </div>
-
-                {/* Amount */}
-                <div className={`text-sm font-semibold shrink-0 ${
-                  e.type === "income" ? "text-emerald-400"
-                  : e.type === "expense" ? "text-red-400"
-                  : "text-blue-400"
-                }`}>
-                  {e.type === "expense" ? "−" : "+"}{formatEUR(e.amountCents)}
-                </div>
-
-                {/* Status badge */}
-                <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${STATUS_STYLE[e.status]}`}>
-                  {STATUS_LABELS[e.status]}
-                </span>
-
-                {/* Actions */}
-                <div className="flex gap-1 shrink-0">
-                  {e.status !== "confirmed" && (
-                    <button
-                      onClick={() => updateStatus(e.id, "confirmed")}
-                      className="text-xs px-2 py-1 rounded bg-emerald-900 hover:bg-emerald-800 text-emerald-300"
-                    >
-                      ✔
-                    </button>
-                  )}
-                  {e.status !== "forecast" && (
-                    <button
-                      onClick={() => updateStatus(e.id, "forecast")}
-                      className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-                    >
-                      Reset
-                    </button>
-                  )}
-                  {e.status !== "skipped" && (
-                    <button
-                      onClick={() => updateStatus(e.id, "skipped")}
-                      className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
-                    >
-                      Skip
-                    </button>
-                  )}
-                  <button
-                    onClick={() => deleteEvent(e.id)}
-                    className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-red-900 text-zinc-400 hover:text-red-300"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

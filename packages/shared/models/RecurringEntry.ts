@@ -16,7 +16,10 @@ export interface RecurringEntryDoc {
   endYearMonth?: string;    // "YYYY-MM" — inclusive; absent = indefinite
   onceYearMonth?: string;   // "YYYY-MM" — for frequency = 'once'
   active: boolean;
-  sourceId?: string;    // e.g. "ec:{id}" or "emp:{id}:ns" — used for upsert-by-source
+  sourceId?: string;        // e.g. "ec:{id}" or "emp:{id}:ns" — used for upsert-by-source
+  reimbursable?: boolean;    // true = paid from a personal account on behalf of this entity
+  paidByAccountId?: string;  // e.g. 'private-revolut' — account that actually pays; entity derived by prefix
+  lastReimbursedYM?: string; // "YYYY-MM" — month through which reimbursement was settled
   createdAt?: Date;
 }
 

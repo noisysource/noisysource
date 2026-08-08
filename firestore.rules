@@ -182,6 +182,12 @@ service cloud.firestore {
     }
 
     // ── Finances app ─────────────────────────────────────────────────────────
+    match /finances_people/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
+    }
+    match /finances_companies/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
+    }
     match /finances_entities/{entityId} {
       allow read, write: if isFinhubAdmin();
 

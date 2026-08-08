@@ -10,6 +10,7 @@ export * from "./OrgDataTools";
 export { sendEmailFromOutbox } from "./SendEmailFromOutbox";
 export { createRecurringExpenses } from "./recurringExpenses";
 export { impersonateUser } from "./impersonation";
+export { lookupUserByEmail } from "./userManagement";
 export { generateMonthlyInvoices, triggerInvoiceGeneration } from "./kidclub/generateMonthlyInvoices";
 export { syncVendusClient } from "./kidclub/syncVendusClient";
 export { sendBillingNotice, backfillBillingSchedules, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, createPartyDeposit, retryVendusInvoice, onStudyroomConfirmed, onTransportConfirmed, onStudyroomCancelled, onTransportCancelled } from "./kidclub/billing";

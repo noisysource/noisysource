@@ -11,6 +11,7 @@ import { makeForecastEventsDomain } from "./domains/forecastEvents";
 import { makeIRSConfigDomain } from "./domains/irsConfig";
 import { makeFinanceEventsDomain } from "./domains/financeEvents";
 import { makeIncomeSourcesDomain } from "./domains/incomeSources";
+import { makeCreditsDomain } from "./domains/credits";
 
 export const api = (() => {
   let _entityId = "private";
@@ -33,6 +34,7 @@ export const api = (() => {
     irsConfig: makeIRSConfigDomain(getEntityId),
     financeEvents: makeFinanceEventsDomain(),
     incomeSources: makeIncomeSourcesDomain(getEntityId),
+    credits: makeCreditsDomain(getEntityId),
   };
 })();
 

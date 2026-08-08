@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
+import { collection, getDocs } from "firebase/firestore";
 import type { BenefitConfig, IncomeSourceDoc } from "@shared/models/IncomeSource";
+import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { Account } from "@shared/models/Account";
 import { formatEUR } from "@shared/lib/money";
+import { db } from "../lib/firebase";
 import { api } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { BenefitsEditor } from "../components/BenefitsEditor";
+import { syncIncomeSourceRecurring } from "../lib/contractSync";
 
 function toEUR(cents: number) { return cents > 0 ? (cents / 100).toFixed(2) : ""; }
 function fromEUR(s: string) { return Math.round((parseFloat(s) || 0) * 100); }
@@ -26,13 +30,16 @@ const EMPTY_FORM = {
   benefits: [] as BenefitConfig[],
 };
 
+type FlowingContract = EmploymentContractDoc & { personName: string; companyName: string };
+
 export default function IncomeSourcesPage() {
-  const [sources, setSources]   = useState<IncomeSourceDoc[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [sources, setSources]       = useState<IncomeSourceDoc[]>([]);
+  const [flowing, setFlowing]       = useState<FlowingContract[]>([]);
+  const [accounts, setAccounts]     = useState<Account[]>([]);
+  const [editingId, setEditingId]   = useState<string | null>(null);
+  const [form, setForm]             = useState(EMPTY_FORM);
+  const [busy, setBusy]             = useState(false);
+  const [msg, setMsg]               = useState<string | null>(null);
 
   const set = <K extends keyof typeof EMPTY_FORM>(k: K, v: (typeof EMPTY_FORM)[K]) =>
     setForm(f => ({ ...f, [k]: v }));
@@ -40,12 +47,27 @@ export default function IncomeSourcesPage() {
   const bankAccounts = useMemo(() => accounts.filter(a => a.type === "bank"), [accounts]);
 
   async function reload() {
-    const [srcs, accs] = await Promise.all([
+    const [srcs, accs, people, companies, contractsSnap] = await Promise.all([
       api.incomeSources.list(),
       api.accounts.list(),
+      api.people.list() as Promise<{ id: string; name: string }[]>,
+      api.companies.list() as Promise<{ id: string; name: string }[]>,
+      getDocs(collection(db, 'finances_entities', 'noisysource', 'employmentContracts')),
     ]);
     setSources(srcs as IncomeSourceDoc[]);
     setAccounts(accs as Account[]);
+
+    const peopleMap = Object.fromEntries((people).map(p => [p.id, p.name]));
+    const companyMap = Object.fromEntries((companies).map(c => [c.id, c.name]));
+    const flowingContracts = contractsSnap.docs
+      .map(d => ({ id: d.id, ...d.data() } as EmploymentContractDoc))
+      .filter(c => c.flowToPrivate && c.active !== false)
+      .map(c => ({
+        ...c,
+        personName: peopleMap[c.personId] ?? c.personId,
+        companyName: companyMap[c.companyId] ?? c.companyId,
+      }));
+    setFlowing(flowingContracts);
   }
 
   useEffect(() => { void reload(); }, []);
@@ -95,6 +117,7 @@ export default function IncomeSourcesPage() {
       };
       const id = await api.incomeSources.save(payload as any);
       setEditingId(id);
+      await syncIncomeSourceRecurring({ ...payload, id } as IncomeSourceDoc);
       await reload();
       setMsg("Guardado ✔");
     } catch (e: any) {
@@ -127,16 +150,17 @@ export default function IncomeSourcesPage() {
     return { gross, irs, ss, net: gross - irs - ss };
   }, [form.grossEUR, form.irsPct, form.ssEmpPct]);
 
-  // Group sources by person for the right panel
+  // Group all income (sources + flowing contracts) by person for the right panel
   const byPerson = useMemo(() => {
-    const map = new Map<string, IncomeSourceDoc[]>();
-    for (const s of sources) {
-      const list = map.get(s.personName) ?? [];
-      list.push(s);
-      map.set(s.personName, list);
-    }
+    const map = new Map<string, { sources: IncomeSourceDoc[]; contracts: FlowingContract[] }>();
+    const get = (name: string) => {
+      if (!map.has(name)) map.set(name, { sources: [], contracts: [] });
+      return map.get(name)!;
+    };
+    for (const s of sources) get(s.personName).sources.push(s);
+    for (const c of flowing) get(c.personName).contracts.push(c);
     return map;
-  }, [sources]);
+  }, [sources, flowing]);
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
@@ -305,14 +329,32 @@ export default function IncomeSourcesPage() {
             <Button variant="secondary" onClick={startNew} type="button" disabled={!editingId}>Nova</Button>
           </div>
 
-          {sources.length === 0 ? (
+          {byPerson.size === 0 ? (
             <div className="text-sm text-zinc-500">Nenhuma fonte configurada.</div>
           ) : (
             <div className="space-y-4">
-              {Array.from(byPerson.entries()).map(([person, srcs]) => (
+              {Array.from(byPerson.entries()).map(([person, { sources: srcs, contracts: ctrs }]) => (
                 <div key={person}>
                   <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">{person}</div>
                   <div className="space-y-2">
+                    {/* Flowing employment contracts — read-only */}
+                    {ctrs.map(c => (
+                      <div key={c.id} className="rounded border border-zinc-700 bg-zinc-900/50 px-3 py-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium truncate">{c.companyName}</div>
+                            <div className="text-xs text-zinc-500 mt-0.5">
+                              {formatEUR(c.grossMonthlyCents ?? 0)}/mês · dia {c.payDay}
+                              {c.benefits?.length > 0 && ` · ${c.benefits.length} benefício${c.benefits.length > 1 ? "s" : ""}`}
+                            </div>
+                          </div>
+                          <span className="text-xs text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5 shrink-0">
+                            Contrato
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Editable income sources */}
                     {srcs.map(s => (
                       <div
                         key={s.id}
@@ -324,12 +366,8 @@ export default function IncomeSourcesPage() {
                             <div className="text-xs text-zinc-500 mt-0.5">
                               {formatEUR(s.grossMonthlyCents)}/mês · dia {s.payDay}
                               {s.active === false && " · inativo"}
+                              {s.benefits.length > 0 && ` · ${s.benefits.length} benefício${s.benefits.length > 1 ? "s" : ""}`}
                             </div>
-                            {s.benefits.length > 0 && (
-                              <div className="text-xs text-zinc-600 mt-0.5">
-                                {s.benefits.length} benefício{s.benefits.length > 1 ? "s" : ""}
-                              </div>
-                            )}
                           </div>
                           <div className="flex gap-2 text-xs shrink-0">
                             <button className="text-blue-400 underline" onClick={() => startEdit(s)}>Editar</button>

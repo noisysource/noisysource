@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
@@ -59,6 +59,15 @@ export default function DashboardLayout() {
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
+  // Matches any entity's version of a feature (e.g. "recurring" hits /private/recurring AND /noisysource/recurring)
+  const isFeature = (feature: string) =>
+    location.pathname.split('/').at(-1) === feature;
+
+  // Derive current entity from URL so Gestão links keep entity context
+  const VALID_ENTITIES = ['private', 'noisysource', 'noisyphocus'];
+  const pathEntity = location.pathname.split('/').filter(Boolean)[0] ?? '';
+  const currentEntity = VALID_ENTITIES.includes(pathEntity) ? pathEntity : 'noisysource';
+
   const isOwner = user.roles?.owner;
 
   const handleLogout = async () => {
@@ -85,27 +94,31 @@ export default function DashboardLayout() {
 
             {/* Private */}
             <Section title="Private" emoji="🏠" storeKey="entity:private" defaultOpen>
-              <NavLink to="/private/accounts"  icon={<Banknote size={16} />}    label="Accounts"          active={isActive('/private/accounts')} />
-              <NavLink to="/private/income"    icon={<Briefcase size={16} />}  label="Fontes Rendimento" active={isActive('/private/income')} />
-              <NavLink to="/private/irs"       icon={<Receipt size={16} />}    label="IRS Simulator"     active={isActive('/private/irs')} />
-              <NavLink to="/private/recurring"  icon={<RefreshCw size={16} />} label="Recurring"     active={isActive('/private/recurring')} />
-              <NavLink to="/private/forecast"   icon={<BarChart2 size={16} />} label="Forecast"      active={isActive('/private/forecast')} />
+              <NavLink to="/private/accounts" icon={<Banknote size={16} />}   label="Contas"            active={isActive('/private/accounts')} />
+              <NavLink to="/private/income"   icon={<Briefcase size={16} />}  label="Rendimento"        active={isActive('/private/income')} />
+              <NavLink to="/private/irs"      icon={<Receipt size={16} />}    label="IRS"               active={isActive('/private/irs')} />
             </Section>
 
             {/* NoisySource */}
             <Section title="NoisySource" emoji="🏢" storeKey="entity:noisysource" defaultOpen>
-              <NavLink to="/noisysource/accounts"     icon={<Banknote size={16} />}    label="Accounts"     active={isActive('/noisysource/accounts')} />
-              <NavLink to="/noisysource/ec-contracts" icon={<TrendingUp size={16} />}  label="EC Contracts" active={isActive('/noisysource/ec-contracts')} />
-              <NavLink to="/noisysource/contracts"    icon={<FileText size={16} />}    label="Employment"   active={isActive('/noisysource/contracts')} />
-              <NavLink to="/noisysource/payroll"      icon={<Calculator size={16} />}  label="Payroll"      active={isActive('/noisysource/payroll')} />
-              <NavLink to="/noisysource/recurring"    icon={<RefreshCw size={16} />}   label="Recurring"    active={isActive('/noisysource/recurring')} />
-              <NavLink to="/noisysource/forecast"     icon={<BarChart2 size={16} />}   label="Forecast"     active={isActive('/noisysource/forecast')} />
+              <NavLink to="/noisysource/accounts"     icon={<Banknote size={16} />}   label="Contas"       active={isActive('/noisysource/accounts')} />
+              <NavLink to="/noisysource/ec-contracts" icon={<TrendingUp size={16} />} label="EC Contracts" active={isActive('/noisysource/ec-contracts')} />
+              <NavLink to="/noisysource/contracts"    icon={<FileText size={16} />}   label="Contratos"    active={isActive('/noisysource/contracts')} />
+              <NavLink to="/noisysource/payroll"      icon={<Calculator size={16} />} label="Payroll"      active={isActive('/noisysource/payroll')} />
             </Section>
 
             {/* NoisyPhocus */}
             <Section title="NoisyPhocus" emoji="📸" storeKey="entity:noisyphocus">
-              <NavLink to="/noisyphocus/accounts" icon={<Banknote size={16} />}   label="Accounts" active={isActive('/noisyphocus/accounts')} />
+              <NavLink to="/noisyphocus/accounts" icon={<Banknote size={16} />}   label="Contas"   active={isActive('/noisyphocus/accounts')} />
               <NavLink to="/noisyphocus/payroll"  icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
+            </Section>
+
+            {/* Gestão — cross-entity features, entity context preserved from URL */}
+            <Section title="Gestão" emoji="📊" storeKey="gestao" defaultOpen>
+              <NavLink to={`/${currentEntity}/recurring`} icon={<RefreshCw size={16} />}  label="Recorrentes" active={isFeature('recurring')} />
+              <NavLink to={`/${currentEntity}/credits`}   icon={<CreditCard size={16} />} label="Créditos"    active={isFeature('credits')} />
+              <NavLink to={`/${currentEntity}/forecast`}  icon={<BarChart2 size={16} />}  label="Forecast"    active={isFeature('forecast')} />
+              <NavLink to="/vault"                        icon={<KeyRound size={16} />}   label="Vault"       active={isActive('/vault')} />
             </Section>
 
             {/* Admin */}
