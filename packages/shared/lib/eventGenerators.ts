@@ -452,3 +452,68 @@ export function generateCreditEvents(
 
   return events;
 }
+
+// ── KidClub billing generator ─────────────────────────────────────────────────
+
+/** Minimal billing record shape — avoids a hard dependency on Firestore Timestamp types. */
+export interface KidclubBillingRecord {
+  id: string;
+  status: string;
+  total: number;            // euros (floating point)
+  dueDate: { toDate(): Date };
+  paidAt?: { toDate(): Date } | null;
+  periodLabel?: string;
+}
+
+/**
+ * Maps KidClub billing records to NoisyPhocus income events.
+ * - paid / invoiced   → confirmed income at paidAt date
+ * - pending / processing → planned income at dueDate
+ * All other statuses (cancelled, failed, dry-run) are ignored.
+ */
+export function generateKidclubEvents(
+  records: KidclubBillingRecord[],
+  startYM: string,
+  months: number,
+): ComputedEvent[] {
+  const startN = ymToMonths(startYM);
+  const endYM  = monthsToYM(startN + months - 1);
+  const events: ComputedEvent[] = [];
+
+  for (const rec of records) {
+    if (rec.status === 'cancelled' || rec.status === 'failed' || rec.status === 'dry-run') continue;
+
+    let date: string;
+    let evtStatus: 'confirmed' | 'planned';
+
+    if ((rec.status === 'paid' || rec.status === 'invoiced') && rec.paidAt) {
+      const d = rec.paidAt.toDate();
+      date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      evtStatus = 'confirmed';
+    } else if (rec.status === 'pending' || rec.status === 'processing') {
+      const d = rec.dueDate.toDate();
+      date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      evtStatus = 'planned';
+    } else {
+      continue;
+    }
+
+    const ym = date.substring(0, 7);
+    if (ym < startYM || ym > endYM) continue;
+
+    events.push({
+      key: `kidclub:${rec.id}`,
+      computed: true,
+      entityId: 'noisyphocus',
+      type: 'kidclub_revenue',
+      date,
+      amountCents: Math.round(rec.total * 100),
+      status: evtStatus,
+      description: rec.periodLabel ? `KidClub — ${rec.periodLabel}` : 'KidClub',
+      sourceType: 'kidclub_billing',
+      sourceId: rec.id,
+    });
+  }
+
+  return events;
+}

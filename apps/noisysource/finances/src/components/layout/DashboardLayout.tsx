@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
@@ -110,6 +110,7 @@ export default function DashboardLayout() {
             {/* NoisyPhocus */}
             <Section title="NoisyPhocus" emoji="📸" storeKey="entity:noisyphocus">
               <NavLink to="/noisyphocus/accounts" icon={<Banknote size={16} />}   label="Contas"   active={isActive('/noisyphocus/accounts')} />
+              <NavLink to="/noisyphocus/revenue"  icon={<Store size={16} />}      label="KidClub"  active={isActive('/noisyphocus/revenue')} />
               <NavLink to="/noisyphocus/payroll"  icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
             </Section>
 

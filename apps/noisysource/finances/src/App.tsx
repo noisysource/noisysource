@@ -26,6 +26,7 @@ import CashFlowPage from './pages/CashFlowPage';
 import IRSPage from './pages/IRSPage';
 import CategoriesPage from './pages/CategoriesPage';
 import PayrollPage from './pages/PayrollPage';
+import NoisyPhocusRevenuePage from './pages/NoisyPhocusRevenuePage';
 
 // Admin
 import AdminUsersPage from './pages/admin/Users';
@@ -65,6 +66,7 @@ export default function App() {
               <Route path="ec-contracts" element={<EcContractsPage />} />
               <Route path="contracts"    element={<ContractsPage />} />
               <Route path="payroll"      element={<PayrollPage />} />
+              <Route path="revenue"      element={<NoisyPhocusRevenuePage />} />
               <Route path="irs"          element={<IRSPage />} />
               <Route path="recurring"    element={<RecurringPage />} />
               <Route path="credits"     element={<CreditsPage />} />

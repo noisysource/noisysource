@@ -72,9 +72,10 @@ service cloud.firestore {
         allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       }
 
-      // Billing records — created by Cloud Functions, read by clients
+      // Billing records — created by Cloud Functions, read by clients and FinHub
       match /billing/{id} {
-        allow read, write: if isRainbowAdmin() || isOwner();
+        allow read: if isRainbowAdmin() || isOwner() || isFinhubAdmin();
+        allow write: if isRainbowAdmin() || isOwner();
         allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
       }
 

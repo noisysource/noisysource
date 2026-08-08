@@ -12,7 +12,9 @@ import {
   generateEmploymentEvents,
   generateIncomeSourceEvents,
   generateEcEvents,
+  generateKidclubEvents,
 } from "@shared/lib/eventGenerators";
+import type { KidclubBillingRecord } from "@shared/lib/eventGenerators";
 import { isCashLike } from "@shared/models/Account";
 import { formatEUR } from "@shared/lib/money";
 import { Card } from "../components/ui/card";
@@ -100,6 +102,7 @@ export default function ForecastPage() {
   const [incomeSources, setIncomeSources]           = useState<IncomeSourceDoc[]>([]);
   const [ecContract, setEcContract]                 = useState<EcContractDoc | null>(null);
   const [peopleMap, setPeopleMap]                   = useState<Map<string, string>>(new Map());
+  const [kidclubBilling, setKidclubBilling]         = useState<KidclubBillingRecord[]>([]);
   const [loading, setLoading]                       = useState(true);
 
   const [selectedYM, setSelectedYM]     = useState(startYM);
@@ -144,6 +147,8 @@ export default function ForecastPage() {
           api.people.list() as Promise<{ id: string; name: string }[]>,
         ]);
 
+        const billing = await api.kidclub.listBilling();
+
         setAllRecurring(recurringAll);
         setAllCredits(creditsAll);
         setAllAccounts(accountsAll);
@@ -151,6 +156,7 @@ export default function ForecastPage() {
         setIncomeSources(sources);
         setEcContract(activeEc);
         setPeopleMap(new Map(people.map(p => [p.id, p.name])));
+        setKidclubBilling(billing);
       } catch (e) {
         console.error('[Forecast] load failed:', e);
       } finally {
@@ -166,8 +172,9 @@ export default function ForecastPage() {
     const emp  = generateEmploymentEvents(employmentContracts, peopleMap, startYM, MONTHS);
     const inc  = generateIncomeSourceEvents(incomeSources, startYM, MONTHS);
     const ec   = ecContract ? generateEcEvents(ecContract) : [];
-    return [...rec, ...cred, ...emp, ...inc, ...ec];
-  }, [allRecurring, allCredits, employmentContracts, incomeSources, ecContract, peopleMap, startYM]);
+    const kc   = generateKidclubEvents(kidclubBilling, startYM, MONTHS);
+    return [...rec, ...cred, ...emp, ...inc, ...ec, ...kc];
+  }, [allRecurring, allCredits, employmentContracts, incomeSources, ecContract, peopleMap, kidclubBilling, startYM]);
 
   const startingBalance = useMemo(() =>
     allAccounts

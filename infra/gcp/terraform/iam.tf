@@ -79,3 +79,21 @@ resource "google_service_account_iam_member" "workload_identity_user" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/noisysource/noisysource"
 }
+
+# ── Cross-project: grant dev functions SA BigQuery access on prod ─────────────
+# The getGcpCosts function runs in kidclub-dev but queries rainbow-prod-2454b BigQuery.
+
+resource "google_project_iam_member" "dev_sa_bq_job_user_prod" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/bigquery.jobUser"
+  member   = "serviceAccount:${google_service_account.gmail_sender.email}"
+}
+
+resource "google_bigquery_dataset_iam_member" "dev_sa_bq_data_viewer_billing_export" {
+  provider   = google.prod
+  project    = "rainbow-prod-2454b"
+  dataset_id = "billing_export"
+  role       = "roles/bigquery.dataViewer"
+  member     = "serviceAccount:${google_service_account.gmail_sender.email}"
+}

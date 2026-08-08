@@ -24,7 +24,8 @@ export type FinanceEventSource =
   | 'employment_contract'
   | 'recurring'
   | 'manual'
-  | 'vacation';
+  | 'vacation'
+  | 'kidclub_billing';
 
 export interface FinanceEvent {
   id: string;
