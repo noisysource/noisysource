@@ -53,8 +53,8 @@ export const getGcpCosts = onCall(
 
       const query = `
         SELECT
-          project.id AS project_id,
-          COALESCE(project.name, project.id, service.description) AS project_name,
+          COALESCE(project.id, CONCAT('svc:', service.id), 'account') AS project_id,
+          COALESCE(project.name, project.id, service.description, service.id, 'account') AS project_name,
           ROUND(SUM(cost + IFNULL(
             (SELECT SUM(c.amount) FROM UNNEST(credits) c), 0
           )), 4) AS net_cost
