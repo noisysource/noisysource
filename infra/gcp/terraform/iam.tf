@@ -82,6 +82,8 @@ resource "google_service_account_iam_member" "workload_identity_user" {
 
 # ── Cross-project: grant dev functions SA BigQuery access on prod ─────────────
 # The getGcpCosts function runs in kidclub-dev but queries rainbow-prod-2454b BigQuery.
+# Two SAs need access: gmail_sender (Terraform-managed functions) and the default
+# compute SA (firebase-cli-deployed functions like getGcpCosts).
 
 resource "google_project_iam_member" "dev_sa_bq_job_user_prod" {
   provider = google.prod
@@ -96,4 +98,19 @@ resource "google_bigquery_dataset_iam_member" "dev_sa_bq_data_viewer_billing_exp
   dataset_id = "billing_export"
   role       = "roles/bigquery.dataViewer"
   member     = "serviceAccount:${google_service_account.gmail_sender.email}"
+}
+
+resource "google_project_iam_member" "dev_compute_sa_bq_job_user_prod" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/bigquery.jobUser"
+  member   = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_bigquery_dataset_iam_member" "dev_compute_sa_bq_data_viewer_billing_export" {
+  provider   = google.prod
+  project    = "rainbow-prod-2454b"
+  dataset_id = "billing_export"
+  role       = "roles/bigquery.dataViewer"
+  member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
