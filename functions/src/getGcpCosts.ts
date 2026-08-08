@@ -54,14 +54,14 @@ export const getGcpCosts = onCall(
       const query = `
         SELECT
           COALESCE(project.id, CONCAT('svc:', service.id), 'account') AS project_id,
-          COALESCE(project.name, project.id, service.description, service.id, 'account') AS project_name,
+          COALESCE(MAX(project.name), project.id, MAX(service.description), MAX(service.id), 'account') AS project_name,
           ROUND(SUM(cost + IFNULL(
             (SELECT SUM(c.amount) FROM UNNEST(credits) c), 0
           )), 4) AS net_cost
         FROM \`${BQ_PROJECT}.${BQ_DATASET}.${BQ_TABLE}\`
         WHERE DATE(usage_start_time) >= '${monthStart}'
           AND currency = 'EUR'
-        GROUP BY project_id, project_name
+        GROUP BY project_id
         ORDER BY net_cost DESC
       `;
 
