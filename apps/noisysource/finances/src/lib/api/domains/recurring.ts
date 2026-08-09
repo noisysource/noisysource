@@ -24,6 +24,7 @@ const from = (raw: any, id: string): RecurringEntryDoc => ({
   reimbursable: raw?.reimbursable === true,
   paidByAccountId: raw?.paidByAccountId || undefined,
   lastReimbursedYM: raw?.lastReimbursedYM || undefined,
+  ivaRatePct: typeof raw?.ivaRatePct === 'number' ? raw.ivaRatePct : undefined,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
 

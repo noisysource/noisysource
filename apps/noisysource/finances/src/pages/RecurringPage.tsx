@@ -63,13 +63,14 @@ type Form = {
   active: boolean;
   reimbursable: boolean;
   paidByAccountId: string;
+  ivaRatePct: string; // '' | '0' | '6' | '13' | '23'
 };
 const emptyForm = (): Form => ({
   type: 'expense', description: '', amountEUR: '',
   accountId: '', toAccountId: '', frequency: 'monthly',
   dayOfMonth: '1', monthOfYear: '1', startYearMonth: '',
   endYearMonth: '', onceYearMonth: '', active: true,
-  reimbursable: false, paidByAccountId: '',
+  reimbursable: false, paidByAccountId: '', ivaRatePct: '',
 });
 function fromDoc(d: RecurringEntryDoc): Form {
   return {
@@ -82,6 +83,7 @@ function fromDoc(d: RecurringEntryDoc): Form {
     onceYearMonth: d.onceYearMonth ?? '', active: d.active,
     reimbursable: d.reimbursable ?? false,
     paidByAccountId: d.paidByAccountId ?? '',
+    ivaRatePct: d.ivaRatePct != null ? String(d.ivaRatePct) : '',
   };
 }
 
@@ -251,6 +253,24 @@ function RecurringFormModal({
             </div>
           )}
 
+          {form.type !== 'transfer' && (
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">Taxa de IVA</div>
+              <div className="flex gap-1">
+                {(['', '0', '6', '13', '23'] as const).map(r => (
+                  <button key={r} type="button" onClick={() => set('ivaRatePct', r)}
+                    className={`flex-1 py-1 rounded text-xs font-medium border transition-colors ${
+                      form.ivaRatePct === r
+                        ? 'border-blue-500 bg-blue-900/50 text-blue-200'
+                        : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                    }`}>
+                    {r === '' ? 'N/A' : `${r}%`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.active} onChange={e => set('active', e.target.checked)} />
             Ativo
@@ -355,6 +375,9 @@ export default function RecurringPage() {
       active: form.active,
       reimbursable: form.reimbursable || undefined,
       paidByAccountId: (form.reimbursable && form.paidByAccountId) ? form.paidByAccountId : undefined,
+      ivaRatePct: (form.type !== 'transfer' && form.ivaRatePct !== '')
+        ? parseInt(form.ivaRatePct, 10)
+        : undefined,
     });
     await reload();
     setMsg('Guardado ✔');

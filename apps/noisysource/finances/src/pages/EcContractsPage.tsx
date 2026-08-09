@@ -46,6 +46,7 @@ type FormState = {
   startDate: string;
   daysToPayment: string;
   paymentAccountId: string;
+  ivaRatePct: string;
   active: boolean;
   nonWorkingDays: string[];
   halfDays: string[];
@@ -60,6 +61,7 @@ const empty = (): FormState => ({
   startDate: "",
   daysToPayment: "10",
   paymentAccountId: "",
+  ivaRatePct: "23",
   active: true,
   nonWorkingDays: [],
   halfDays: [],
@@ -75,6 +77,7 @@ function fromDoc(d: EcContractDoc): FormState {
     startDate: d.startDate ? dateToIso(d.startDate) : "",
     daysToPayment: d.daysToPayment != null ? String(d.daysToPayment) : "10",
     paymentAccountId: d.paymentAccountId ?? "",
+    ivaRatePct: d.ivaRatePct != null ? String(d.ivaRatePct) : "23",
     active: d.active,
     nonWorkingDays: d.nonWorkingDays ? [...d.nonWorkingDays].sort() : [],
     halfDays: d.halfDays ? [...d.halfDays].sort() : [],
@@ -158,6 +161,7 @@ export default function EcContractsPage() {
         nonWorkingDays: form.nonWorkingDays.length > 0 ? form.nonWorkingDays : undefined,
         halfDays: form.halfDays.length > 0 ? form.halfDays : undefined,
         daysToPayment: form.daysToPayment ? parseInt(form.daysToPayment, 10) : undefined,
+        ivaRatePct: form.ivaRatePct !== '' ? parseInt(form.ivaRatePct, 10) : undefined,
       });
       console.log("[ecContracts.save] saved id:", id);
       setEditingId(null);
@@ -409,6 +413,22 @@ export default function EcContractsPage() {
                     ? new Date(`${projection.contractEndDate}T12:00:00`).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric" })
                     : <span className="text-zinc-600">—</span>
                   }
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-zinc-400 mb-1">Taxa de IVA</div>
+                <div className="flex gap-1">
+                  {(['0', '6', '13', '23'] as const).map(r => (
+                    <button key={r} type="button" onClick={() => set('ivaRatePct', r)}
+                      className={`flex-1 py-1 rounded text-xs font-medium border transition-colors ${
+                        form.ivaRatePct === r
+                          ? 'border-blue-500 bg-blue-900/50 text-blue-200'
+                          : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                      }`}>
+                      {r}%
+                    </button>
+                  ))}
                 </div>
               </div>
 

@@ -27,6 +27,8 @@ import IRSPage from './pages/IRSPage';
 import CategoriesPage from './pages/CategoriesPage';
 import PayrollPage from './pages/PayrollPage';
 import NoisyPhocusRevenuePage from './pages/NoisyPhocusRevenuePage';
+import LoansPage from './pages/LoansPage';
+import VatPage from './pages/VatPage';
 
 // Admin
 import AdminUsersPage from './pages/admin/Users';
@@ -67,6 +69,8 @@ export default function App() {
               <Route path="contracts"    element={<ContractsPage />} />
               <Route path="payroll"      element={<PayrollPage />} />
               <Route path="revenue"      element={<NoisyPhocusRevenuePage />} />
+              <Route path="loans"        element={<LoansPage />} />
+              <Route path="vat"          element={<VatPage />} />
               <Route path="irs"          element={<IRSPage />} />
               <Route path="recurring"    element={<RecurringPage />} />
               <Route path="credits"     element={<CreditsPage />} />

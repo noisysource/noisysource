@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store, Handshake, Receipt as ReceiptVat,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
@@ -96,21 +96,24 @@ export default function DashboardLayout() {
             <Section title="Private" emoji="🏠" storeKey="entity:private" defaultOpen>
               <NavLink to="/private/accounts" icon={<Banknote size={16} />}   label="Contas"            active={isActive('/private/accounts')} />
               <NavLink to="/private/income"   icon={<Briefcase size={16} />}  label="Rendimento"        active={isActive('/private/income')} />
+              <NavLink to="/private/loans"    icon={<Handshake size={16} />}  label="Empréstimos"       active={isActive('/private/loans')} />
               <NavLink to="/private/irs"      icon={<Receipt size={16} />}    label="IRS"               active={isActive('/private/irs')} />
             </Section>
 
             {/* NoisySource */}
             <Section title="NoisySource" emoji="🏢" storeKey="entity:noisysource" defaultOpen>
-              <NavLink to="/noisysource/accounts"     icon={<Banknote size={16} />}   label="Contas"       active={isActive('/noisysource/accounts')} />
-              <NavLink to="/noisysource/ec-contracts" icon={<TrendingUp size={16} />} label="EC Contracts" active={isActive('/noisysource/ec-contracts')} />
-              <NavLink to="/noisysource/contracts"    icon={<FileText size={16} />}   label="Contratos"    active={isActive('/noisysource/contracts')} />
-              <NavLink to="/noisysource/payroll"      icon={<Calculator size={16} />} label="Payroll"      active={isActive('/noisysource/payroll')} />
+              <NavLink to="/noisysource/accounts"     icon={<Banknote size={16} />}     label="Contas"       active={isActive('/noisysource/accounts')} />
+              <NavLink to="/noisysource/ec-contracts" icon={<TrendingUp size={16} />}   label="EC Contracts" active={isActive('/noisysource/ec-contracts')} />
+              <NavLink to="/noisysource/contracts"    icon={<FileText size={16} />}     label="Contratos"    active={isActive('/noisysource/contracts')} />
+              <NavLink to="/noisysource/payroll"      icon={<Calculator size={16} />}   label="Payroll"      active={isActive('/noisysource/payroll')} />
+              <NavLink to="/noisysource/vat"          icon={<ReceiptVat size={16} />}   label="IVA"          active={isActive('/noisysource/vat')} />
             </Section>
 
             {/* NoisyPhocus */}
             <Section title="NoisyPhocus" emoji="📸" storeKey="entity:noisyphocus">
               <NavLink to="/noisyphocus/accounts" icon={<Banknote size={16} />}   label="Contas"   active={isActive('/noisyphocus/accounts')} />
               <NavLink to="/noisyphocus/revenue"  icon={<Store size={16} />}      label="KidClub"  active={isActive('/noisyphocus/revenue')} />
+              <NavLink to="/noisyphocus/vat"      icon={<ReceiptVat size={16} />} label="IVA"      active={isActive('/noisyphocus/vat')} />
               <NavLink to="/noisyphocus/payroll"  icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
             </Section>
 

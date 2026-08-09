@@ -20,6 +20,7 @@ export interface RecurringEntryDoc {
   reimbursable?: boolean;    // true = paid from a personal account on behalf of this entity
   paidByAccountId?: string;  // e.g. 'private-revolut' — account that actually pays; entity derived by prefix
   lastReimbursedYM?: string; // "YYYY-MM" — month through which reimbursement was settled
+  ivaRatePct?: number;       // 0 | 6 | 13 | 23 — IVA rate applied to this entry (base amount is IVA-exclusive)
   createdAt?: Date;
 }
 

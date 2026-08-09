@@ -18,6 +18,7 @@ const from = (raw: any, id: string): EcContractDoc => ({
   halfDays: Array.isArray(raw?.halfDays) ? (raw.halfDays as string[]) : undefined,
   daysToPayment: raw?.daysToPayment != null ? Number(raw.daysToPayment) : undefined,
   paymentAccountId: raw?.paymentAccountId || undefined,
+  ivaRatePct: typeof raw?.ivaRatePct === 'number' ? raw.ivaRatePct : undefined,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
 

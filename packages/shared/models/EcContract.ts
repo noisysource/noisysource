@@ -12,6 +12,7 @@ export interface EcContractDoc {
   halfDays?: string[];         // ISO date strings — half day off (counts as 0.5 day)
   daysToPayment?: number;      // calendar days from TS submission to expected payment
   paymentAccountId?: string;   // account that receives EC payments
+  ivaRatePct?: number;         // IVA rate charged on invoices (default 23 in PT for B2B services)
   createdAt?: Date;
 }
 
