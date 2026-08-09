@@ -483,6 +483,43 @@ const CREDITS = [
   },
 ];
 
+// ── Loans  (finances_entities/private/loans/{id}) ─────────────────────────────
+// Counterparty: Parents — running balance of money lent and repayments received.
+// Initial entries use 2024-01-01 as a placeholder date (exact dates unknown).
+const LOANS = [
+  // ── Initial loans (money paid on behalf of parents) ──
+  {
+    id: 'parents-credito-lcp',
+    data: { counterparty: 'Parents', amountCents: 5435326, description: 'Crédito LCP',      date: '2024-01-01', kind: 'lent' },
+  },
+  {
+    id: 'parents-mais-valias-bar',
+    data: { counterparty: 'Parents', amountCents: 1776900, description: 'Mais Valias Bar',   date: '2024-01-01', kind: 'lent' },
+  },
+  {
+    id: 'parents-imi-carvalhais',
+    data: { counterparty: 'Parents', amountCents:   89667, description: 'IMI Carvalhais',    date: '2024-01-01', kind: 'lent' },
+  },
+
+  // ── Repayments ──
+  { id: 'parents-rep-2024-05', data: { counterparty: 'Parents', amountCents: -100000, description: 'Reembolso',  date: '2024-05-01', kind: 'repayment_in', notes: 'Transferência' } },
+  { id: 'parents-rep-2024-08', data: { counterparty: 'Parents', amountCents: -700000, description: 'Reembolso',  date: '2024-08-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2024-09', data: { counterparty: 'Parents', amountCents: -300000, description: 'Reembolso',  date: '2024-09-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2024-11', data: { counterparty: 'Parents', amountCents: -250000, description: 'Reembolso',  date: '2024-11-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2024-12', data: { counterparty: 'Parents', amountCents:  -89000, description: 'Reembolso',  date: '2024-12-01', kind: 'repayment_in', notes: 'Transferência' } },
+  { id: 'parents-rep-2025-01', data: { counterparty: 'Parents', amountCents: -200000, description: 'Reembolso',  date: '2025-01-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-02', data: { counterparty: 'Parents', amountCents: -150000, description: 'Reembolso',  date: '2025-02-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-04', data: { counterparty: 'Parents', amountCents: -200000, description: 'Reembolso',  date: '2025-04-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-05', data: { counterparty: 'Parents', amountCents: -200000, description: 'Reembolso',  date: '2025-05-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-06', data: { counterparty: 'Parents', amountCents: -190000, description: 'Reembolso',  date: '2025-06-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-08', data: { counterparty: 'Parents', amountCents: -100000, description: 'Reembolso',  date: '2025-08-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-09', data: { counterparty: 'Parents', amountCents: -100000, description: 'Reembolso',  date: '2025-09-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2025-10', data: { counterparty: 'Parents', amountCents: -100000, description: 'Reembolso',  date: '2025-10-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2026-01', data: { counterparty: 'Parents', amountCents: -100000, description: 'Reembolso',  date: '2026-01-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+  { id: 'parents-rep-2026-05', data: { counterparty: 'Parents', amountCents: -200000, description: 'Reembolso',  date: '2026-05-01', kind: 'repayment_in', notes: 'Dinheiro' } },
+];
+// Expected balance: 73,018.93 − 29,790.00 = 43,228.93€ owed by Parents
+
 // ── Seed ──────────────────────────────────────────────────────────────────────
 async function seed() {
   console.log('── People ───────────────────────────────────────');
@@ -549,6 +586,17 @@ async function seed() {
     const amount = (c.data.loanAmountCents / 100).toLocaleString('pt-PT');
     console.log(`  ✓ ${c.entity}/${c.id} — ${c.data.creditor} ${c.data.description}, €${amount}, ${c.data.annualRatePct}% TAN, ${c.data.termMonths}mo`);
   }
+
+  console.log('\n── Loans ────────────────────────────────────────');
+  for (const l of LOANS) {
+    const ref = db.collection('finances_entities').doc('private').collection('loans').doc(l.id);
+    await upsert(ref, l.data);
+    const sign   = l.data.amountCents >= 0 ? '+' : '';
+    const amount = (l.data.amountCents / 100).toFixed(2);
+    console.log(`  ✓ ${l.id} — ${l.data.counterparty} ${sign}€${amount} (${l.data.kind})`);
+  }
+  const balance = LOANS.reduce((s, l) => s + l.data.amountCents, 0);
+  console.log(`  → Balance: €${(balance / 100).toFixed(2)}`);
 
   if (!dryRun) console.log(`\nDone — ${written} documents written.`);
   else console.log('\n[dry-run] No documents written.');
