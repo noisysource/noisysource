@@ -166,7 +166,7 @@ function CounterpartyRow({
         </div>
         <div className="flex items-center gap-3">
           <span className={`font-mono text-sm font-semibold ${balanceColor(balance)}`}>
-            {balance > 0 ? '+' : ''}{formatEUR(balance / 100)}
+            {balance > 0 ? '+' : ''}{formatEUR(balance)}
           </span>
           <span className={`text-xs px-1.5 py-0.5 rounded ${
             balance > 0 ? 'bg-emerald-900/40 text-emerald-400' :
@@ -195,7 +195,7 @@ function CounterpartyRow({
                 </div>
                 <div className="flex items-center gap-3 ml-3 shrink-0">
                   <span className={`font-mono text-sm ${e.amountCents >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {e.amountCents >= 0 ? '+' : ''}{formatEUR(e.amountCents / 100)}
+                    {e.amountCents >= 0 ? '+' : ''}{formatEUR(e.amountCents)}
                   </span>
                   <button onClick={() => onEdit(e)} className="text-zinc-600 hover:text-zinc-300 transition-colors">
                     <Pencil size={13} />
@@ -310,11 +310,11 @@ export default function LoansPage() {
         <div className="grid grid-cols-2 gap-3">
           <Card className="p-3">
             <div className="text-xs text-zinc-400 mb-1">A receber</div>
-            <div className="text-lg font-bold text-emerald-400">{formatEUR(totalOwedToMe / 100)}</div>
+            <div className="text-lg font-bold text-emerald-400">{formatEUR(totalOwedToMe)}</div>
           </Card>
           <Card className="p-3">
             <div className="text-xs text-zinc-400 mb-1">A pagar</div>
-            <div className="text-lg font-bold text-amber-400">{formatEUR(Math.abs(totalIOwe) / 100)}</div>
+            <div className="text-lg font-bold text-amber-400">{formatEUR(Math.abs(totalIOwe))}</div>
           </Card>
         </div>
       )}

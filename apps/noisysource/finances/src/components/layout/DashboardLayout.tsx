@@ -2,13 +2,15 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store, Handshake, Receipt as ReceiptVat,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store, Handshake, Receipt as ReceiptVat, Shield,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
 import { useUser } from '@shared/hooks';
 import { logout } from '@shared/firebase/auth';
 import { GcpCostCard } from '../GcpCostCard';
+import { NotificationBell } from '../NotificationBell';
+import { runInsuranceRenewalNotifications } from '../../lib/notificationGenerators';
 
 function usePersistedToggle(key: string, def = true) {
   const [open, setOpen] = useState<boolean>(() => {
@@ -68,6 +70,10 @@ export default function DashboardLayout() {
   const pathEntity = location.pathname.split('/').filter(Boolean)[0] ?? '';
   const currentEntity = VALID_ENTITIES.includes(pathEntity) ? pathEntity : 'noisysource';
 
+  useEffect(() => {
+    runInsuranceRenewalNotifications().catch(console.error);
+  }, []);
+
   const isOwner = user.roles?.owner;
 
   const handleLogout = async () => {
@@ -80,10 +86,11 @@ export default function DashboardLayout() {
     <div className="h-screen flex text-white">
       <aside className="w-60 bg-zinc-900 p-3 flex flex-col justify-between overflow-y-auto shrink-0">
         <div>
-          <div className="mb-4 px-2">
+          <div className="mb-4 px-2 flex items-center justify-between">
             <h1 className="text-lg font-bold flex items-center gap-2">
               <span>💰</span> FinHub
             </h1>
+            <NotificationBell />
           </div>
 
           <nav className="space-y-1">
@@ -96,8 +103,9 @@ export default function DashboardLayout() {
             <Section title="Private" emoji="🏠" storeKey="entity:private" defaultOpen>
               <NavLink to="/private/accounts" icon={<Banknote size={16} />}   label="Contas"            active={isActive('/private/accounts')} />
               <NavLink to="/private/income"   icon={<Briefcase size={16} />}  label="Rendimento"        active={isActive('/private/income')} />
-              <NavLink to="/private/loans"    icon={<Handshake size={16} />}  label="Empréstimos"       active={isActive('/private/loans')} />
-              <NavLink to="/private/irs"      icon={<Receipt size={16} />}    label="IRS"               active={isActive('/private/irs')} />
+              <NavLink to="/private/loans"      icon={<Handshake size={16} />}  label="Empréstimos"       active={isActive('/private/loans')} />
+              <NavLink to="/private/insurances" icon={<Shield size={16} />}   label="Seguros"           active={isActive('/private/insurances')} />
+              <NavLink to="/private/irs"        icon={<Receipt size={16} />}  label="IRS"               active={isActive('/private/irs')} />
             </Section>
 
             {/* NoisySource */}
@@ -107,6 +115,7 @@ export default function DashboardLayout() {
               <NavLink to="/noisysource/contracts"    icon={<FileText size={16} />}     label="Contratos"    active={isActive('/noisysource/contracts')} />
               <NavLink to="/noisysource/payroll"      icon={<Calculator size={16} />}   label="Payroll"      active={isActive('/noisysource/payroll')} />
               <NavLink to="/noisysource/vat"          icon={<ReceiptVat size={16} />}   label="IVA"          active={isActive('/noisysource/vat')} />
+              <NavLink to="/noisysource/insurances"   icon={<Shield size={16} />}       label="Seguros"      active={isActive('/noisysource/insurances')} />
             </Section>
 
             {/* NoisyPhocus */}
@@ -114,7 +123,8 @@ export default function DashboardLayout() {
               <NavLink to="/noisyphocus/accounts" icon={<Banknote size={16} />}   label="Contas"   active={isActive('/noisyphocus/accounts')} />
               <NavLink to="/noisyphocus/revenue"  icon={<Store size={16} />}      label="KidClub"  active={isActive('/noisyphocus/revenue')} />
               <NavLink to="/noisyphocus/vat"      icon={<ReceiptVat size={16} />} label="IVA"      active={isActive('/noisyphocus/vat')} />
-              <NavLink to="/noisyphocus/payroll"  icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
+              <NavLink to="/noisyphocus/payroll"    icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
+              <NavLink to="/noisyphocus/insurances" icon={<Shield size={16} />}   label="Seguros"  active={isActive('/noisyphocus/insurances')} />
             </Section>
 
             {/* Gestão — cross-entity features, entity context preserved from URL */}

@@ -128,7 +128,7 @@ const ACCOUNTS = [
     data: {
       name: 'BPI', code: 'bank:bpi', type: 'bank',
       currency: 'EUR', active: true, bankName: 'BPI',
-      iban: 'TODO_IBAN', bic: 'TODO_BIC', // TODO: real IBAN/BIC
+      iban: 'PT50001000006055211000193', bic: 'BBPIPTPL',
     },
   },
   {

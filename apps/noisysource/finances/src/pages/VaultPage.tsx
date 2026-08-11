@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useUser } from '@shared/hooks';
 import {
   createVaultConfig, unlockVault, encrypt, decrypt, generatePassword,
-  type VaultConfig,
 } from '../lib/crypto';
 import {
   loadVaultConfig, saveVaultConfig, loadEntries,
@@ -12,93 +12,55 @@ import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import {
-  Lock, Unlock, Plus, Eye, EyeOff, Copy, Pencil, Trash2,
+  Plus, Eye, EyeOff, Copy, Pencil, Trash2,
   RefreshCw, Search, ShieldCheck,
 } from 'lucide-react';
 
-// ── constants ─────────────────────────────────────────────────────────────────
-
-type Screen = 'loading' | 'setup' | 'unlock' | 'vault';
 const CATEGORIES = ['Banco', 'Email', 'Dev', 'Social', 'Serviços', 'Geral'];
 
-// ── VaultPage ─────────────────────────────────────────────────────────────────
-
 export default function VaultPage() {
-  const [screen, setScreen]       = useState<Screen>('loading');
-  const [vaultConfig, setVaultConfig] = useState<VaultConfig | null>(null);
-  const [cryptoKey,   setCryptoKey]   = useState<CryptoKey | null>(null);
-  const [entries,     setEntries]     = useState<VaultEntryDoc[]>([]);
+  const user = useUser();
+  const [ready, setReady]         = useState(false);
+  const [cryptoKey, setCryptoKey] = useState<CryptoKey | null>(null);
+  const [entries,   setEntries]   = useState<VaultEntryDoc[]>([]);
 
-  // search / filter
-  const [search,     setSearch]     = useState('');
-  const [category,   setCategory]   = useState<string | null>(null);
-  const [copiedId,   setCopiedId]   = useState<string | null>(null);
-  const [revealedId, setRevealedId] = useState<string | null>(null);
+  const [search,      setSearch]      = useState('');
+  const [category,    setCategory]    = useState<string | null>(null);
+  const [copiedId,    setCopiedId]    = useState<string | null>(null);
+  const [revealedId,  setRevealedId]  = useState<string | null>(null);
   const [revealedPwd, setRevealedPwd] = useState('');
 
-  // modal
-  const [modal,     setModal]     = useState<'add' | 'edit' | null>(null);
-  const [editEntry, setEditEntry] = useState<VaultEntryDoc | null>(null);
-  const [form,      setForm]      = useState(emptyForm());
+  const [modal,       setModal]       = useState<'add' | 'edit' | null>(null);
+  const [editEntry,   setEditEntry]   = useState<VaultEntryDoc | null>(null);
+  const [form,        setForm]        = useState(emptyForm());
   const [showFormPwd, setShowFormPwd] = useState(false);
-  const [formBusy,  setFormBusy]  = useState(false);
-  const [formErr,   setFormErr]   = useState<string | null>(null);
+  const [formBusy,    setFormBusy]    = useState(false);
+  const [formErr,     setFormErr]     = useState<string | null>(null);
 
-  // passphrase
-  const [passphrase,      setPassphrase]      = useState('');
-  const [confirmPass,     setConfirmPass]     = useState('');
-  const [showPass,        setShowPass]        = useState(false);
-  const [passphraseErr,   setPassphraseErr]   = useState<string | null>(null);
-  const [passphraseBusy,  setPassphraseBusy]  = useState(false);
-
-  // ── init ────────────────────────────────────────────────────────────────────
+  // ── auto-unlock from Firebase Auth uid ───────────────────────────────────────
 
   useEffect(() => {
-    loadVaultConfig().then(cfg => {
-      if (!cfg) { setScreen('setup'); return; }
-      setVaultConfig(cfg as VaultConfig);
-      setScreen('unlock');
-    });
-  }, []);
+    if (!user?.uid) return;
+    void initVault(user.uid);
+  }, [user?.uid]);
 
-  // ── setup / unlock ──────────────────────────────────────────────────────────
-
-  async function handleSetup(e: React.FormEvent) {
-    e.preventDefault();
-    if (passphrase !== confirmPass) { setPassphraseErr('As frases não coincidem.'); return; }
-    if (passphrase.length < 8)      { setPassphraseErr('Mínimo 8 caracteres.'); return; }
-    setPassphraseBusy(true); setPassphraseErr(null);
-    try {
-      const { config, key } = await createVaultConfig(passphrase);
-      await saveVaultConfig(config);
-      setVaultConfig(config); setCryptoKey(key); setEntries([]);
-      setPassphrase(''); setConfirmPass('');
-      setScreen('vault');
-    } catch (err: any) { setPassphraseErr(err?.message ?? 'Erro'); }
-    finally { setPassphraseBusy(false); }
+  async function initVault(uid: string) {
+    setReady(false);
+    let cfg = await loadVaultConfig(uid);
+    let key: CryptoKey;
+    if (!cfg) {
+      const result = await createVaultConfig(uid);
+      await saveVaultConfig(uid, result.config);
+      key = result.key;
+    } else {
+      key = (await unlockVault(uid, cfg))!;
+    }
+    setCryptoKey(key);
+    setEntries(await loadEntries(uid));
+    setReady(true);
   }
 
-  async function handleUnlock(e: React.FormEvent) {
-    e.preventDefault();
-    if (!vaultConfig) return;
-    setPassphraseBusy(true); setPassphraseErr(null);
-    try {
-      const key = await unlockVault(passphrase, vaultConfig);
-      if (!key) { setPassphraseErr('Frase-passe incorreta.'); return; }
-      setCryptoKey(key);
-      setEntries(await loadEntries());
-      setPassphrase('');
-      setScreen('vault');
-    } catch (err: any) { setPassphraseErr(err?.message ?? 'Erro'); }
-    finally { setPassphraseBusy(false); }
-  }
-
-  function handleLock() {
-    setCryptoKey(null); setEntries([]); setRevealedId(null);
-    setPassphrase(''); setScreen('unlock');
-  }
-
-  // ── entry actions ───────────────────────────────────────────────────────────
+  // ── entry actions ─────────────────────────────────────────────────────────────
 
   async function handleReveal(entry: VaultEntryDoc) {
     if (!cryptoKey) return;
@@ -128,13 +90,13 @@ export default function VaultPage() {
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!cryptoKey) return;
+    if (!cryptoKey || !user?.uid) return;
     setFormBusy(true); setFormErr(null);
     try {
       const sealed = await encrypt(cryptoKey, JSON.stringify({ password: form.password, notes: form.notes } as SensitivePayload));
       if (modal === 'add') {
-        const e = await addVaultEntry(form.title.trim(), form.category, form.username.trim(), form.url.trim() || undefined, sealed);
-        setEntries(prev => [...prev, e].sort((a, b) => a.title.localeCompare(b.title)));
+        const entry = await addVaultEntry(user.uid, form.title.trim(), form.category, form.username.trim(), form.url.trim() || undefined, sealed);
+        setEntries(prev => [...prev, entry].sort((a, b) => a.title.localeCompare(b.title)));
       } else if (modal === 'edit' && editEntry) {
         await updateVaultEntry(editEntry.id, form.title.trim(), form.category, form.username.trim(), form.url.trim() || undefined, sealed);
         setEntries(prev => prev.map(x => x.id === editEntry.id
@@ -153,64 +115,18 @@ export default function VaultPage() {
     if (revealedId === id) setRevealedId(null);
   }
 
-  // ── filtered list ───────────────────────────────────────────────────────────
+  // ── filtered list ─────────────────────────────────────────────────────────────
 
   const filtered = useMemo(() => entries.filter(e =>
     (!category || e.category === category) &&
     (!search || e.title.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase()))
   ), [entries, category, search]);
 
-  // ── screens ─────────────────────────────────────────────────────────────────
+  // ── render ────────────────────────────────────────────────────────────────────
 
-  if (screen === 'loading') {
+  if (!ready) {
     return <div className="text-zinc-500 text-sm pt-8 text-center">A carregar vault…</div>;
   }
-
-  if (screen === 'setup') {
-    return (
-      <div className="max-w-sm mx-auto pt-16 space-y-5">
-        <div className="text-center space-y-2">
-          <div className="text-4xl">🔐</div>
-          <h1 className="text-xl font-bold">Configurar Vault</h1>
-          <p className="text-zinc-500 text-sm">Cria uma frase-passe para cifrar os dados. Não é guardada em lado nenhum — não a percas.</p>
-        </div>
-        <Card className="p-4">
-          <form onSubmit={handleSetup} className="space-y-3">
-            <PassField label="Frase-passe" value={passphrase} onChange={setPassphrase} show={showPass} onToggle={() => setShowPass(s => !s)} autoFocus />
-            <PassField label="Confirmar" value={confirmPass} onChange={setConfirmPass} show={showPass} onToggle={() => setShowPass(s => !s)} />
-            {passphraseErr && <div className="text-sm text-red-400">{passphraseErr}</div>}
-            <Button type="submit" className="w-full" disabled={passphraseBusy || !passphrase}>
-              {passphraseBusy ? 'A configurar…' : 'Criar Vault'}
-            </Button>
-          </form>
-        </Card>
-      </div>
-    );
-  }
-
-  if (screen === 'unlock') {
-    return (
-      <div className="max-w-sm mx-auto pt-16 space-y-5">
-        <div className="text-center space-y-2">
-          <div className="text-4xl">🔐</div>
-          <h1 className="text-xl font-bold">Vault</h1>
-          <p className="text-zinc-500 text-sm">Introduz a frase-passe para desbloquear.</p>
-        </div>
-        <Card className="p-4">
-          <form onSubmit={handleUnlock} className="space-y-3">
-            <PassField label="Frase-passe" value={passphrase} onChange={setPassphrase} show={showPass} onToggle={() => setShowPass(s => !s)} autoFocus />
-            {passphraseErr && <div className="text-sm text-red-400">{passphraseErr}</div>}
-            <Button type="submit" className="w-full" disabled={passphraseBusy || !passphrase}>
-              <Unlock size={14} className="mr-1.5" />
-              {passphraseBusy ? 'A verificar…' : 'Desbloquear'}
-            </Button>
-          </form>
-        </Card>
-      </div>
-    );
-  }
-
-  // ── vault main ───────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-4">
@@ -224,10 +140,6 @@ export default function VaultPage() {
         <Button onClick={openAdd} variant="secondary" className="shrink-0">
           <Plus size={14} className="mr-1" /> Nova entrada
         </Button>
-        <button onClick={handleLock} title="Bloquear vault"
-          className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors shrink-0">
-          <Lock size={16} />
-        </button>
       </div>
 
       {/* Category filter */}
@@ -351,28 +263,10 @@ export default function VaultPage() {
   );
 }
 
-// ── small helpers ─────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 function emptyForm() {
   return { title: '', category: CATEGORIES[5], username: '', url: '', password: '', notes: '' };
-}
-
-function PassField({ label, value, onChange, show, onToggle, autoFocus }: {
-  label: string; value: string; onChange: (v: string) => void;
-  show: boolean; onToggle: () => void; autoFocus?: boolean;
-}) {
-  return (
-    <LabeledField label={label}>
-      <div className="relative">
-        <Input type={show ? 'text' : 'password'} value={value}
-          onChange={e => onChange(e.target.value)} autoFocus={autoFocus} className="pr-9" />
-        <button type="button" onClick={onToggle}
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white">
-          {show ? <EyeOff size={13} /> : <Eye size={13} />}
-        </button>
-      </div>
-    </LabeledField>
-  );
 }
 
 function LabeledField({ label, children }: { label: string; children: React.ReactNode }) {

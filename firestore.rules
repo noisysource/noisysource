@@ -203,9 +203,46 @@ service cloud.firestore {
     }
 
     // ── Domotics app ──────────────────────────────────────────────────────────
-    // No Firebase Auth — access is gated by GCP IAP at the network level.
+    // The app has no Firebase Auth, so the client is unauthenticated here. It
+    // only ever touches `customization` (room/device display names — harmless).
+    //
+    // `netatmo` holds the OAuth client secret + refresh token and must never be
+    // client-readable: a Hosting-level gate (IAP/login) does not protect
+    // Firestore, which is reachable directly at firestore.googleapis.com. Only
+    // legrandGetStatus/legrandSetState read it, via the Admin SDK, which
+    // bypasses rules entirely — so denying it here costs nothing.
+    //
+    // Rules are permissive-OR: a separate, more specific `if false` match on a
+    // secret doc would NOT override this wildcard, so the restriction has to
+    // live in the condition below.
+    //
+    // Allowlist, not denylist: `netatmo` and `tuya` hold vendor credentials and
+    // are read only by Cloud Functions through the Admin SDK, which bypasses
+    // rules. Naming the two *safe* docs means every future vendor secret is
+    // denied by default instead of depending on someone remembering to add it.
     match /domotics_config/{docId} {
-      allow read, write: if true;
+      allow read, write: if docId in ['customization', 'floorplan'];
+    }
+
+    // ── Vault (Finances app) ─────────────────────────────────────────────────
+    match /vault_config/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
+    }
+    match /vault_entries/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
+    }
+
+    // ── Notifications (Finances app) ─────────────────────────────────────────
+    match /finances_notifications/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
+    }
+
+    // ── Bank statements (Finances app) ───────────────────────────────────────
+    match /finances_bank_transactions/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
+    }
+    match /finances_bank_imports/{docId} {
+      allow read, write: if isFinhubAdmin() || isOwner();
     }
 
     // Shared Ledger collections (Finances app, legacy root-level)

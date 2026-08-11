@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { useEntity } from '../hooks/EntityContext';
 import { api } from '../lib/api';
 import { formatEUR } from '@shared/lib/money';
 import { Card } from '../components/ui/card';
 import type { RecurringEntryDoc } from '@shared/models/RecurringEntry';
-import type { EcContractDoc } from '@shared/models/EcContract';
-import type { KidclubBillingRecord } from '@shared/lib/eventGenerators';
 
 // ── Quarter helpers ────────────────────────────────────────────────────────────
 
@@ -43,8 +42,6 @@ function lastQuarters(n = 5): { year: number; q: number }[] {
 
 // ── IVA calculation helpers ────────────────────────────────────────────────────
 
-const KIDCLUB_IVA_RATE = 23; // NoisyPhocus charges 23% IVA
-
 function recurringIvaInQuarter(
   entries: RecurringEntryDoc[],
   months: string[],
@@ -64,7 +61,6 @@ function recurringIvaInQuarter(
       if (e.frequency === 'monthly')  { baseCents += e.amountCents; continue; }
       if (e.frequency === 'once' && e.onceYearMonth === ym) { baseCents += e.amountCents; continue; }
       if (e.frequency === 'quarterly') {
-        // fires on month 1, 4, 7, 10 by default, or whichever quarter month matches dayOfMonth
         const [, m] = ym.split('-').map(Number);
         if ((m - 1) % 3 === 0) baseCents += e.amountCents;
         continue;
@@ -84,48 +80,17 @@ function recurringIvaInQuarter(
   return result;
 }
 
-function ecIvaInQuarter(
-  contracts: EcContractDoc[],
-  months: string[],
-): { description: string; baseCents: number; ivaCents: number }[] {
-  return contracts
-    .filter(c => c.active && (c.ivaRatePct ?? 0) > 0)
-    .map(c => {
-      const rate = c.ivaRatePct!;
-      let baseCents = 0;
-      for (const ym of months) {
-        const start = c.startDate ? new Date(c.startDate as any).toISOString().slice(0, 7) : null;
-        const end   = c.endDate   ? new Date(c.endDate   as any).toISOString().slice(0, 7) : null;
-        if (start && ym < start) continue;
-        if (end   && ym > end)   continue;
-        baseCents += c.dailyRateCents * c.expectedDaysPerMonth;
-      }
-      return {
-        description: `${c.clientName}${c.projectName ? ` — ${c.projectName}` : ''}`,
-        baseCents,
-        ivaCents: Math.round(baseCents * rate / 100),
-      };
-    })
-    .filter(r => r.baseCents > 0);
+// ── Vendus VAT summary types ───────────────────────────────────────────────────
+
+interface VatByRate {
+  [rate: number]: { baseCents: number; ivaCents: number };
 }
 
-function kidclubIvaInQuarter(
-  billing: KidclubBillingRecord[],
-  months: string[],
-): { description: string; baseCents: number; ivaCents: number }[] {
-  const paid = billing.filter(r => {
-    if (!['paid', 'invoiced'].includes(r.status)) return false;
-    const date = (r.paidAt ?? r.dueDate).toDate();
-    const ym = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    return months.includes(ym);
-  });
-
-  const totalCents = Math.round(paid.reduce((s, r) => s + r.total, 0) * 100);
-  if (!totalCents) return [];
-
-  const ivaCents = Math.round(totalCents * KIDCLUB_IVA_RATE / (100 + KIDCLUB_IVA_RATE));
-  const baseCents = totalCents - ivaCents;
-  return [{ description: `KidClub — subscrições (${paid.length} registos)`, baseCents, ivaCents }];
+interface KidclubVatResult {
+  year: number;
+  quarter: number;
+  docCount: number;
+  byRate: VatByRate;
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -152,16 +117,16 @@ function IvaTable({
         {rows.map((r, i) => (
           <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-zinc-800/50">
             <span className="text-zinc-400 flex-1 truncate pr-3">{r.description}</span>
-            <span className="text-zinc-500 tabular-nums mr-3">{formatEUR(r.baseCents / 100)}</span>
+            <span className="text-zinc-500 tabular-nums mr-3">{formatEUR(r.baseCents)}</span>
             <span className={`tabular-nums font-medium ${color === 'green' ? 'text-emerald-400' : 'text-red-400'}`}>
-              {formatEUR(r.ivaCents / 100)}
+              {formatEUR(r.ivaCents)}
             </span>
           </div>
         ))}
         <div className="flex justify-between text-xs font-semibold pt-1">
           <span className="text-zinc-300">Total IVA</span>
           <span className={color === 'green' ? 'text-emerald-300' : 'text-red-300'}>
-            {formatEUR(totalIva / 100)}
+            {formatEUR(totalIva)}
           </span>
         </div>
       </div>
@@ -175,10 +140,11 @@ export default function VatPage() {
   const { selectedEntity } = useEntity();
   const entityId = selectedEntity.id;
 
-  const [recurring, setRecurring]   = useState<RecurringEntryDoc[]>([]);
-  const [ecContracts, setEcContracts] = useState<EcContractDoc[]>([]);
-  const [billing, setBilling]       = useState<KidclubBillingRecord[]>([]);
-  const [loading, setLoading]       = useState(true);
+  const [recurring, setRecurring] = useState<RecurringEntryDoc[]>([]);
+  const [kidclubVat, setKidclubVat] = useState<KidclubVatResult | null>(null);
+  const [kidclubLoading, setKidclubLoading] = useState(false);
+  const [kidclubError, setKidclubError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const quarters = useMemo(() => lastQuarters(5), []);
   const [selQ, setSelQ] = useState<{ year: number; q: number }>(quarters[0]);
@@ -186,26 +152,47 @@ export default function VatPage() {
   useEffect(() => {
     setLoading(true);
     api.setEntity(entityId);
-    const loaders: Promise<any>[] = [
-      api.recurring.list().then(setRecurring),
-    ];
-    if (entityId === 'noisysource') {
-      loaders.push(api.ecContracts.list().then(setEcContracts));
-    }
-    if (entityId === 'noisyphocus') {
-      loaders.push(api.kidclub.listBilling().then(setBilling));
-    }
-    Promise.all(loaders).finally(() => setLoading(false));
+    api.recurring.list().then(setRecurring).finally(() => setLoading(false));
   }, [entityId]);
+
+  // Fetch KidClub VAT from Vendus when quarter changes (noisyphocus only)
+  useEffect(() => {
+    if (entityId !== 'noisyphocus') return;
+    setKidclubLoading(true);
+    setKidclubError(null);
+    setKidclubVat(null);
+    const fn = httpsCallable<{ year: number; quarter: number }, KidclubVatResult>(
+      getFunctions(undefined, 'europe-west3'),
+      'getKidclubVatSummary',
+    );
+    fn({ year: selQ.year, quarter: selQ.q })
+      .then(r => setKidclubVat(r.data))
+      .catch(e => setKidclubError(e?.message ?? 'Erro ao obter dados do Vendus'))
+      .finally(() => setKidclubLoading(false));
+  }, [entityId, selQ.year, selQ.q]);
 
   const months = useMemo(() => quarterMonths(selQ.year, selQ.q), [selQ]);
 
+  // IVA liquidado rows
   const collectedRows = useMemo(() => {
     const rows = recurringIvaInQuarter(recurring, months, 'income');
-    if (entityId === 'noisysource') rows.push(...ecIvaInQuarter(ecContracts, months));
-    if (entityId === 'noisyphocus') rows.push(...kidclubIvaInQuarter(billing, months));
+
+    // NoisyPhocus: add KidClub rows from Vendus (one row per VAT rate)
+    if (entityId === 'noisyphocus' && kidclubVat) {
+      const RATE_LABELS: Record<number, string> = { 23: 'NOR 23%', 6: 'RED 6%', 0: 'ISE 0%' };
+      for (const [rateStr, amounts] of Object.entries(kidclubVat.byRate)) {
+        const rate = Number(rateStr);
+        if (amounts.ivaCents === 0) continue;
+        rows.push({
+          description: `KidClub — ${RATE_LABELS[rate] ?? `${rate}%`} (${kidclubVat.docCount} faturas)`,
+          baseCents: amounts.baseCents,
+          ivaCents: amounts.ivaCents,
+        });
+      }
+    }
+
     return rows;
-  }, [recurring, ecContracts, billing, months, entityId]);
+  }, [recurring, months, entityId, kidclubVat]);
 
   const deductibleRows = useMemo(() =>
     recurringIvaInQuarter(recurring, months, 'expense'),
@@ -257,21 +244,32 @@ export default function VatPage() {
         <div className="text-zinc-500 text-sm">A carregar...</div>
       ) : (
         <>
+          {kidclubLoading && (
+            <div className="text-zinc-500 text-xs flex items-center gap-2">
+              <span className="animate-spin">⟳</span> A consultar Vendus…
+            </div>
+          )}
+          {kidclubError && (
+            <div className="text-red-400 text-xs bg-red-950/30 px-3 py-2 rounded">
+              Erro Vendus: {kidclubError}
+            </div>
+          )}
+
           {/* Net summary */}
           <Card className="p-4">
             <div className="grid grid-cols-3 gap-4 text-center">
               <div>
                 <div className="text-xs text-zinc-400 mb-1">IVA liquidado</div>
-                <div className="text-lg font-bold text-emerald-400">{formatEUR(totalCollected / 100)}</div>
+                <div className="text-lg font-bold text-emerald-400">{formatEUR(totalCollected)}</div>
               </div>
               <div>
                 <div className="text-xs text-zinc-400 mb-1">IVA dedutível</div>
-                <div className="text-lg font-bold text-red-400">{formatEUR(totalDeductible / 100)}</div>
+                <div className="text-lg font-bold text-red-400">{formatEUR(totalDeductible)}</div>
               </div>
               <div>
                 <div className="text-xs text-zinc-400 mb-1">{net >= 0 ? 'A pagar AT' : 'A recuperar'}</div>
                 <div className={`text-lg font-bold ${net >= 0 ? 'text-amber-400' : 'text-blue-400'}`}>
-                  {formatEUR(Math.abs(net) / 100)}
+                  {formatEUR(Math.abs(net))}
                 </div>
               </div>
             </div>
@@ -285,12 +283,15 @@ export default function VatPage() {
             <IvaTable title="IVA dedutível (pago em despesas)" color="red" rows={deductibleRows} />
           </Card>
 
-          {collectedRows.length === 0 && deductibleRows.length === 0 && (
+          {collectedRows.length === 0 && deductibleRows.length === 0 && !kidclubLoading && (
             <div className="text-center text-zinc-500 text-sm py-6">
               <div>Nenhuma entrada tem taxa de IVA configurada.</div>
-              <div className="text-xs mt-1">
-                Edita as entradas em Recorrentes ou em Contratos EC para adicionar a taxa de IVA.
-              </div>
+              {entityId === 'noisysource' && (
+                <div className="text-xs mt-1">
+                  Edita as entradas em Recorrentes para adicionar a taxa de IVA.
+                  Contratos EC são isentos (intracomunitário).
+                </div>
+              )}
             </div>
           )}
         </>

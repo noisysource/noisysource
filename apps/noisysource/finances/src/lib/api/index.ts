@@ -14,6 +14,9 @@ import { makeIncomeSourcesDomain } from "./domains/incomeSources";
 import { makeCreditsDomain } from "./domains/credits";
 import { makeKidclubDomain } from "./domains/kidclub";
 import { makeLoansDomain } from "./domains/loans";
+import { makeInsurancesDomain } from "./domains/insurances";
+import { makeNotificationsDomain } from "./domains/notifications";
+import { makeBankTransactionsDomain } from "./domains/bankTransactions";
 
 export const api = (() => {
   let _entityId = "private";
@@ -38,6 +41,9 @@ export const api = (() => {
     incomeSources: makeIncomeSourcesDomain(getEntityId),
     credits: makeCreditsDomain(getEntityId),
     loans: makeLoansDomain(getEntityId),
+    insurances: makeInsurancesDomain(getEntityId),
+    notifications: makeNotificationsDomain(),
+    bankTransactions: makeBankTransactionsDomain(),
     kidclub: makeKidclubDomain(),
   };
 })();

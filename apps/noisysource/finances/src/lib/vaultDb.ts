@@ -1,6 +1,6 @@
 import {
   collection, doc, getDoc, setDoc, getDocs,
-  addDoc, updateDoc, deleteDoc, serverTimestamp, query, orderBy,
+  addDoc, updateDoc, deleteDoc, serverTimestamp, query, where,
 } from 'firebase/firestore';
 import { db } from '@shared/firebase';
 import type { Sealed } from './crypto';
@@ -13,6 +13,7 @@ export interface VaultConfigDoc {
 
 export interface VaultEntryDoc {
   id:            string;
+  uid:           string;
   title:         string;
   category:      string;
   username:      string;
@@ -28,34 +29,37 @@ export interface SensitivePayload {
   notes:    string;
 }
 
-const CONFIG_REF = () => doc(db, 'vault_config', 'default');
-const ENTRIES    = () => collection(db, 'vault_entries');
+const CONFIG_REF = (uid: string) => doc(db, 'vault_config', uid);
+const ENTRIES    = (uid: string) => query(collection(db, 'vault_entries'), where('uid', '==', uid));
 const ENTRY_REF  = (id: string) => doc(db, 'vault_entries', id);
 
-export async function loadVaultConfig(): Promise<VaultConfigDoc | null> {
-  const snap = await getDoc(CONFIG_REF());
+export async function loadVaultConfig(uid: string): Promise<VaultConfigDoc | null> {
+  const snap = await getDoc(CONFIG_REF(uid));
   return snap.exists() ? (snap.data() as VaultConfigDoc) : null;
 }
 
-export async function saveVaultConfig(cfg: VaultConfigDoc): Promise<void> {
-  await setDoc(CONFIG_REF(), cfg);
+export async function saveVaultConfig(uid: string, cfg: VaultConfigDoc): Promise<void> {
+  await setDoc(CONFIG_REF(uid), cfg);
 }
 
-export async function loadEntries(): Promise<VaultEntryDoc[]> {
-  const snap = await getDocs(query(ENTRIES(), orderBy('title')));
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }) as VaultEntryDoc);
+export async function loadEntries(uid: string): Promise<VaultEntryDoc[]> {
+  const snap = await getDocs(ENTRIES(uid));
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }) as VaultEntryDoc)
+    .sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export async function addVaultEntry(
+  uid: string,
   title: string, category: string, username: string, url: string | undefined,
   sealed: Sealed,
 ): Promise<VaultEntryDoc> {
-  const ref = await addDoc(ENTRIES(), {
-    title, category, username, url: url || null,
+  const ref = await addDoc(collection(db, 'vault_entries'), {
+    uid, title, category, username, url: url || null,
     encryptedData: sealed.ciphertext, iv: sealed.iv,
     createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
   });
-  return { id: ref.id, title, category, username, url, encryptedData: sealed.ciphertext, iv: sealed.iv, createdAt: null, updatedAt: null };
+  return { id: ref.id, uid, title, category, username, url, encryptedData: sealed.ciphertext, iv: sealed.iv, createdAt: null, updatedAt: null };
 }
 
 export async function updateVaultEntry(
