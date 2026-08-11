@@ -19,5 +19,8 @@ export const db = getFirestore(app);
 
 export const getStatusFn = httpsCallable(fns, 'legrandGetStatus');
 export const setStateFn = httpsCallable<{
-  modules: Array<{ id: string; on?: boolean; target_position?: number }>;
+  // `bridge` is required by Netatmo's /setstate — omitting it returns 400.
+  modules: Array<{
+    id: string; bridge?: string; on?: boolean; target_position?: number;
+  }>;
 }>(fns, 'legrandSetState');

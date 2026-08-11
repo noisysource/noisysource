@@ -48,7 +48,12 @@ export const legrandGetStatus = onCall({ region: "europe-west3" }, async () => {
 });
 
 export const legrandSetState = onCall<{
-  modules: Array<{ id: string; on?: boolean; target_position?: number }>;
+  // Netatmo's /setstate answers 400 unless each module carries the id of the
+  // gateway it sits behind — and 400 again if `type` is included. The modules
+  // array is forwarded verbatim, so the caller supplies `bridge`.
+  modules: Array<{
+    id: string; bridge?: string; on?: boolean; target_position?: number;
+  }>;
 }>({ region: "europe-west3" }, async ({ data }) => {
   const { token, homeId } = await getAccessToken();
   const resp = await fetch(`${API_BASE}/setstate`, {

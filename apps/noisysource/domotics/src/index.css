@@ -56,3 +56,32 @@ input[type='range']::-moz-range-thumb {
   border: none;
   box-shadow: 0 0 6px rgba(251, 191, 36, 0.5);
 }
+
+/*
+ * Blind position slider. The rule above sets a 4px height, which is a fine
+ * track but a hopeless touch target — and being an element+attribute selector
+ * it out-specifies Tailwind's `.h-*` utilities, so the height has to be beaten
+ * here rather than from a class. The box grows to 2rem for the finger while a
+ * gradient keeps the *visible* track thin.
+ */
+input[type='range'].slider-blind {
+  height: 2rem;
+  border-radius: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(50% - 2px),
+    #3f3f46 calc(50% - 2px),
+    #3f3f46 calc(50% + 2px),
+    transparent calc(50% + 2px)
+  );
+}
+
+input[type='range'].slider-blind::-webkit-slider-thumb {
+  background: #3b82f6; /* blue-500, matching the blind markers */
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+}
+
+input[type='range'].slider-blind::-moz-range-thumb {
+  background: #3b82f6;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+}

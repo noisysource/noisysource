@@ -73,15 +73,24 @@ const DIMMABLE_IDS = new Set([
   '00:04:74:00:01:73:e6:68',
 ]);
 
+/**
+ * `statusModules` is absent whenever the Legrand gateway is unreachable —
+ * Netatmo answers `status: "ok"` with an `errors` array and no `modules` at
+ * all. Treat that as "every device unknown" rather than throwing, so the app
+ * still renders with the house laid out and controls simply inert.
+ */
 export function buildDevices(
-  statusModules: Array<{ id: string; on?: boolean; current_position?: number }>
+  statusModules?: Array<{
+    id: string; on?: boolean; current_position?: number; bridge?: string;
+  }> | null
 ): Device[] {
-  const statusMap = new Map(statusModules.map(m => [m.id, m]));
+  const statusMap = new Map((statusModules ?? []).map(m => [m.id, m]));
   return deviceMeta.map(meta => {
     const s = statusMap.get(meta.id);
     if (meta.type === 'light') {
       return {
         ...meta,
+        bridge: s?.bridge,
         state: {
           on: s?.on ?? false,
           brightness: 100,
@@ -91,6 +100,7 @@ export function buildDevices(
     }
     return {
       ...meta,
+      bridge: s?.bridge,
       state: {
         position: s?.current_position ?? 0,
         isMoving: false,

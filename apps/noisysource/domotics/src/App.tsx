@@ -1,16 +1,26 @@
 import { useEffect, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import type { Device, LightCommand, BlindCommand } from '@shared/models/Device';
-import type { Room } from '@shared/models/Room';
-import { rooms as baseRooms, buildDevices } from './data/legrandData';
+import type {
+  Device, DevicePlacement, LightCommand, BlindCommand,
+} from '@shared/models/Device';
+import type { FloorPlan, PlanRoom, Room } from '@shared/models/Room';
+import type { EditTarget } from './components/FloorPlan';
+import { buildDevices } from './data/legrandData';
+import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
-import HomeScreen from './components/HomeScreen';
+import PlanScreen from './components/PlanScreen';
 import RoomDetail from './components/RoomDetail';
 
+/**
+ * Per-device overrides. Room names used to live here too; they now belong to
+ * the floor plan document, which is the single source of truth for a room's
+ * identity. Older `roomNames` keys still on disk are simply ignored.
+ */
 export interface Customization {
-  roomNames: Record<string, string>;
   deviceNames: Record<string, string>;
   deviceRooms: Record<string, string>;
+  /** Where each device sits inside its room. Absent = auto-arranged. */
+  devicePositions: Record<string, DevicePlacement>;
 }
 
 export interface EditProps {
@@ -24,77 +34,149 @@ export interface EditProps {
   onDeviceRoomChange: (deviceId: string, roomId: string) => void;
 }
 
-const EMPTY: Customization = { roomNames: {}, deviceNames: {}, deviceRooms: {} };
+interface Draft {
+  plan: FloorPlan;
+  customization: Customization;
+}
+
+/** 'offline' means the Legrand gateway didn't answer — the plan still renders. */
+export type DeviceStatus = 'loading' | 'ok' | 'offline';
+
+const EMPTY: Customization = { deviceNames: {}, deviceRooms: {}, devicePositions: {} };
 const CONFIG_REF = () => doc(db, 'domotics_config', 'customization');
+const PLAN_REF = () => doc(db, 'domotics_config', 'floorplan');
 
 export default function App() {
   const [devices, setDevices] = useState<Device[]>([]);
+  const [plan, setPlan] = useState<FloorPlan>(defaultFloorPlan);
   const [customization, setCustomization] = useState<Customization>(EMPTY);
-  const [editDraft, setEditDraft] = useState<Customization | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('loading');
+  const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
+  const [openRoomId, setOpenRoomId] = useState<string | null>(null);
+  const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load devices — drives the loading spinner
+    // Nothing here blocks the first paint: the plan comes from local seed data
+    // and renders immediately, so a slow or unreachable gateway costs device
+    // state but never the whole UI.
     getStatusFn()
       .then(r => {
-        const data = r.data as { body: { home: { modules: any[] } } };
-        setDevices(buildDevices(data.body.home.modules));
+        const data = r.data as {
+          body?: { home?: { modules?: any[]; errors?: Array<{ code: number; id: string }> } };
+        };
+        const modules = data?.body?.home?.modules;
+        setDevices(buildDevices(modules));
+        // Netatmo reports an unreachable gateway as status "ok" with an errors
+        // array and no modules — absence of modules is the real signal.
+        setDeviceStatus(modules && modules.length > 0 ? 'ok' : 'offline');
       })
-      .catch(err => console.error('Failed to load devices:', err))
-      .finally(() => setLoading(false));
+      .catch(err => {
+        console.error('Failed to load devices:', err);
+        setDevices(buildDevices());
+        setDeviceStatus('offline');
+      });
 
-    // Load saved customization — non-fatal, empty defaults if missing
     getDoc(CONFIG_REF())
       .then(snap => {
-        if (snap.exists()) setCustomization(snap.data() as Customization);
+        if (snap.exists()) {
+          const d = snap.data() as Partial<Customization>;
+          setCustomization({
+            deviceNames: d.deviceNames ?? {},
+            deviceRooms: d.deviceRooms ?? {},
+            devicePositions: d.devicePositions ?? {},
+          });
+        }
+      })
+      .catch(() => {});
+
+    // Fall back to the traced seed plan until the house has been laid out once.
+    getDoc(PLAN_REF())
+      .then(snap => {
+        if (snap.exists()) setPlan(snap.data() as FloorPlan);
       })
       .catch(() => {});
   }, []);
 
-  const editMode = editDraft !== null;
-  const draft = editDraft ?? customization;
-
-  const effectiveRooms = baseRooms.map(r => ({
-    ...r,
-    name: draft.roomNames[r.id] ?? r.name,
-  }));
+  const editMode = draft !== null;
+  const activePlan = draft?.plan ?? plan;
+  const activeCustom = draft?.customization ?? customization;
 
   const effectiveDevices = devices.map(d => ({
     ...d,
-    name: draft.deviceNames[d.id] ?? d.name,
-    roomId: draft.deviceRooms[d.id] ?? d.roomId,
+    name: activeCustom.deviceNames[d.id] ?? d.name,
+    roomId: activeCustom.deviceRooms[d.id] ?? d.roomId,
   }));
 
   function startEdit() {
-    setEditDraft({ ...customization });
+    setDraft({ plan: structuredClone(plan), customization: structuredClone(customization) });
   }
 
   function cancelEdit() {
-    setEditDraft(null);
+    setDraft(null);
+    setPlanSelectedId(null);
   }
 
   async function saveEdit() {
-    if (!editDraft) return;
+    if (!draft) return;
     try {
-      await setDoc(CONFIG_REF(), editDraft);
-      setCustomization(editDraft);
+      await Promise.all([
+        setDoc(PLAN_REF(), draft.plan),
+        setDoc(CONFIG_REF(), draft.customization),
+      ]);
+      setPlan(draft.plan);
+      setCustomization(draft.customization);
     } catch (err) {
       console.error('Failed to save config:', err);
     }
-    setEditDraft(null);
+    setDraft(null);
+    setPlanSelectedId(null);
+  }
+
+  function changeRooms(rooms: PlanRoom[]) {
+    setDraft(d => (d ? { ...d, plan: { ...d.plan, rooms } } : d));
   }
 
   function updateRoomName(roomId: string, name: string) {
-    setEditDraft(d => d ? { ...d, roomNames: { ...d.roomNames, [roomId]: name } } : d);
+    setDraft(d => d ? {
+      ...d,
+      plan: {
+        ...d.plan,
+        rooms: d.plan.rooms.map(r => (r.id === roomId ? { ...r, name } : r)),
+      },
+    } : d);
   }
 
   function updateDeviceName(deviceId: string, name: string) {
-    setEditDraft(d => d ? { ...d, deviceNames: { ...d.deviceNames, [deviceId]: name } } : d);
+    setDraft(d => d ? {
+      ...d,
+      customization: {
+        ...d.customization,
+        deviceNames: { ...d.customization.deviceNames, [deviceId]: name },
+      },
+    } : d);
+  }
+
+  /** Drag-drop from the plan: room assignment and position move together. */
+  function placeDevice(deviceId: string, roomId: string, rx: number, ry: number) {
+    setDraft(d => d ? {
+      ...d,
+      customization: {
+        ...d.customization,
+        deviceRooms: { ...d.customization.deviceRooms, [deviceId]: roomId },
+        devicePositions: { ...d.customization.devicePositions, [deviceId]: { rx, ry } },
+      },
+    } : d);
   }
 
   function moveDevice(deviceId: string, roomId: string) {
-    setEditDraft(d => d ? { ...d, deviceRooms: { ...d.deviceRooms, [deviceId]: roomId } } : d);
+    setDraft(d => d ? {
+      ...d,
+      customization: {
+        ...d.customization,
+        deviceRooms: { ...d.customization.deviceRooms, [deviceId]: roomId },
+      },
+    } : d);
   }
 
   async function handleLightCommand(deviceId: string, command: LightCommand) {
@@ -112,13 +194,14 @@ export default function App() {
     ));
 
     try {
-      await setStateFn({ modules: [{ id: deviceId, on }] });
+      await setStateFn({ modules: [{ id: deviceId, bridge: current?.bridge, on }] });
     } catch (err) {
       console.error('Legrand setstate failed:', err);
     }
   }
 
   async function handleBlindCommand(deviceId: string, command: BlindCommand) {
+    const blindDev = devices.find(d => d.id === deviceId && d.type === 'blind');
     let target_position: number | undefined;
     let isMoving = false;
     let movingDirection: 'up' | 'down' | null = null;
@@ -132,7 +215,6 @@ export default function App() {
       isMoving = true;
       movingDirection = 'down';
     } else if (command.action === 'stop') {
-      const blindDev = devices.find(d => d.id === deviceId && d.type === 'blind');
       const cur = blindDev?.type === 'blind' ? blindDev.state.position : 50;
       target_position = cur;
     } else {
@@ -146,7 +228,9 @@ export default function App() {
 
     if (target_position !== undefined) {
       try {
-        await setStateFn({ modules: [{ id: deviceId, target_position }] });
+        await setStateFn({
+          modules: [{ id: deviceId, bridge: blindDev?.bridge, target_position }],
+        });
       } catch (err) {
         console.error('Legrand setstate failed:', err);
       }
@@ -155,7 +239,7 @@ export default function App() {
 
   const editProps: EditProps = {
     editMode,
-    allRooms: effectiveRooms,
+    allRooms: activePlan.rooms,
     onStartEdit: startEdit,
     onCancelEdit: cancelEdit,
     onSaveEdit: saveEdit,
@@ -164,24 +248,16 @@ export default function App() {
     onDeviceRoomChange: moveDevice,
   };
 
-  const selectedRoom = selectedRoomId != null
-    ? (effectiveRooms.find(r => r.id === selectedRoomId) ?? null)
+  const openRoom = openRoomId != null
+    ? (activePlan.rooms.find(r => r.id === openRoomId) ?? null)
     : null;
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-400 text-lg">
-        A carregar dispositivos…
-      </div>
-    );
-  }
-
-  if (selectedRoom) {
+  if (openRoom) {
     return (
       <RoomDetail
-        room={selectedRoom}
-        devices={effectiveDevices.filter(d => d.roomId === selectedRoom.id)}
-        onBack={() => setSelectedRoomId(null)}
+        room={openRoom}
+        devices={effectiveDevices.filter(d => d.roomId === openRoom.id)}
+        onBack={() => setOpenRoomId(null)}
         onLightCommand={handleLightCommand}
         onBlindCommand={handleBlindCommand}
         {...editProps}
@@ -190,11 +266,25 @@ export default function App() {
   }
 
   return (
-    <HomeScreen
-      rooms={effectiveRooms}
+    <PlanScreen
+      plan={activePlan}
       devices={effectiveDevices}
-      onSelectRoom={setSelectedRoomId}
-      {...editProps}
+      placements={activeCustom.devicePositions}
+      deviceStatus={deviceStatus}
+      editMode={editMode}
+      editTarget={editTarget}
+      selectedId={planSelectedId}
+      onEditTargetChange={setEditTarget}
+      onSelect={setPlanSelectedId}
+      onOpenRoom={setOpenRoomId}
+      onChangeRooms={changeRooms}
+      onPlaceDevice={placeDevice}
+      onDeviceNameChange={updateDeviceName}
+      onLightCommand={handleLightCommand}
+      onBlindCommand={handleBlindCommand}
+      onStartEdit={startEdit}
+      onCancelEdit={cancelEdit}
+      onSaveEdit={saveEdit}
     />
   );
 }
