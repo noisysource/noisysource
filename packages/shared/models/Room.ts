@@ -58,6 +58,27 @@ export type InfraKind =
   | 'battery'
   | 'panels';
 
+/**
+ * Where a piece of equipment sits relative to the building.
+ *
+ * The floor plan is a section through one storey, so anything above or outside
+ * it cannot be drawn honestly on the same plane: roof panels sit over the
+ * ceiling lights, and the inverter and batteries are outside the walls
+ * entirely. Without this they all pile onto the same flat drawing and read as
+ * though they were in the living room.
+ */
+export type InfraLayer = 'interior' | 'exterior' | 'roof';
+
+/** Sensible default per kind, so most equipment needs no manual choice. */
+export const DEFAULT_LAYER: Record<InfraKind, InfraLayer> = {
+  router: 'interior',
+  repeater: 'interior',
+  gateway: 'interior',
+  inverter: 'exterior',
+  battery: 'exterior',
+  panels: 'roof',
+};
+
 export interface InfraItem {
   id: string;
   kind: InfraKind;
@@ -72,6 +93,8 @@ export interface InfraItem {
    * silently moved from .50 to .117 between sessions.
    */
   host?: string;
+  /** Defaults per DEFAULT_LAYER when absent. */
+  layer?: InfraLayer;
 }
 
 /**

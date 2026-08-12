@@ -3,7 +3,8 @@ import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { InfraItem, InfraKind, PlanRoom, Wall } from '@shared/models/Room';
+import type { InfraItem, InfraKind, InfraLayer, PlanRoom, Wall } from '@shared/models/Room';
+import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallLength } from '../data/walls';
 
 /** Which layer the edit gestures act on. */
@@ -28,6 +29,8 @@ interface Props {
   onChangeWalls: (walls: Wall[]) => void;
   /** Toggles wall length labels. */
   showMeasures: boolean;
+  /** Which layer is in focus; others render faded rather than hidden. */
+  viewLayer: InfraLayer | 'all';
   onPlaceDevice: (deviceId: string, roomId: string, rx: number, ry: number) => void;
   onExternalDragEnd: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
@@ -160,7 +163,7 @@ export default function FloorPlan({
   rooms, devices, placements, grid, editMode, editTarget, selectedId, externalDragId,
   onSelect, onOpenRoom, onChange, onPlaceDevice, onExternalDragEnd,
   onLightCommand, onBlindCommand, onThermostatCommand, onHeatPumpCommand,
-  infrastructure, onChangeInfra, walls, onChangeWalls, showMeasures,
+  infrastructure, onChangeInfra, walls, onChangeWalls, showMeasures, viewLayer,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -429,6 +432,9 @@ export default function FloorPlan({
         <rect x={view.x} y={view.y} width={view.w} height={view.h} fill="url(#grid)" />
       )}
 
+      {/* The building fades when attention is on another layer, so roof and
+          outdoor equipment can be read against it without competing with it. */}
+      <g opacity={viewLayer === 'roof' || viewLayer === 'exterior' ? 0.28 : 1}>
       {rooms.map(room => {
         const stats = roomStats(devices, room.id);
         const isSelected = selectedId === room.id;
@@ -848,7 +854,10 @@ export default function FloorPlan({
         );
       })}
 
+      </g>
+
       {/* Walls: the real structure, drawn over the room fills. */}
+      <g opacity={viewLayer === 'roof' || viewLayer === 'exterior' ? 0.28 : 1}>
       {walls.map(w => {
         const kind = w.kind ?? 'interior';
         const isSelected = selectedId === w.id;
@@ -907,13 +916,18 @@ export default function FloorPlan({
       {/* Network hardware. Drawn above rooms so it stays visible, and only
           draggable while editing rooms — it is part of the building, not a
           controllable device. */}
+      </g>
+
       {infrastructure.map(item => {
         const isSelected = selectedId === item.id;
         const style = INFRA_STYLE[item.kind] ?? INFRA_STYLE.router;
+        const layer = item.layer ?? DEFAULT_LAYER[item.kind] ?? 'interior';
+        const dimmed = viewLayer !== 'all' && layer !== viewLayer;
         return (
           <g
             key={item.id}
-            className={editingRooms ? 'cursor-move' : 'pointer-events-none'}
+            opacity={dimmed ? 0.2 : 1}
+            className={editingRooms && !dimmed ? 'cursor-move' : 'pointer-events-none'}
             onPointerDown={e => {
               if (!editingRooms) return;
               e.stopPropagation();
@@ -934,6 +948,18 @@ export default function FloorPlan({
                 strokeDasharray="0.3 0.25"
               />
             )}
+            {/* Anything not on this storey gets a halo, so it reads as "not in
+                that room" even when every layer is shown at once. */}
+            {layer !== 'interior' && (
+              <circle
+                cx={item.x} cy={item.y} r={0.66}
+                fill="none"
+                stroke={style.stroke}
+                strokeWidth={0.05}
+                strokeDasharray={layer === 'roof' ? '0.16 0.14' : '0.5 0.2'}
+                opacity={0.75}
+              />
+            )}
             <circle
               cx={item.x} cy={item.y} r={0.42}
               fill={style.fill}
@@ -951,6 +977,7 @@ export default function FloorPlan({
               fill={style.label} className="pointer-events-none"
             >
               {item.name}{item.band ? ` · ${item.band}` : ''}
+              {layer === 'roof' ? '  ▲' : layer === 'exterior' ? '  ◇' : ''}
             </text>
           </g>
         );

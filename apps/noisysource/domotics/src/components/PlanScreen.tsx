@@ -4,7 +4,8 @@ import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { FloorPlan, InfraItem, InfraKind, PlanRoom, Wall } from '@shared/models/Room';
+import type { FloorPlan, InfraItem, InfraKind, InfraLayer, PlanRoom, Wall } from '@shared/models/Room';
+import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
 import type { User } from 'firebase/auth';
@@ -67,6 +68,12 @@ export default function PlanScreen({
   const [externalDragId, setExternalDragId] = useState<string | null>(null);
   /** Wall length labels — off by default, they are dense enough to obscure the plan. */
   const [showMeasures, setShowMeasures] = useState(false);
+  /**
+   * Which layer is in focus. 'all' shows everything at once, which is fine for
+   * a glance; picking one fades the rest so roof or outdoor equipment can be
+   * read without the floor plan competing with it.
+   */
+  const [viewLayer, setViewLayer] = useState<InfraLayer | 'all'>('all');
 
   const selectedRoom = plan.rooms.find(r => r.id === selectedId) ?? null;
   const infra = plan.infrastructure ?? [];
@@ -310,6 +317,26 @@ export default function PlanScreen({
             </>
           ) : (
             <>
+              <div className="flex rounded-xl bg-zinc-900 border border-zinc-800 p-0.5 mr-1">
+                {([
+                  ['all', 'Tudo'],
+                  ['interior', 'Casa'],
+                  ['roof', 'Cobertura'],
+                  ['exterior', 'Exterior'],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setViewLayer(key)}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
+                      viewLayer === key
+                        ? 'bg-zinc-100 text-zinc-900 font-semibold'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <button
                 onClick={() => setShowMeasures(v => !v)}
                 className={`flex items-center justify-center w-10 h-10 rounded-xl transition-colors mr-1 ${
@@ -362,6 +389,7 @@ export default function PlanScreen({
             walls={walls}
             onChangeWalls={onChangeWalls}
             showMeasures={showMeasures}
+            viewLayer={viewLayer}
             onPlaceDevice={onPlaceDevice}
             onExternalDragEnd={() => setExternalDragId(null)}
             onLightCommand={onLightCommand}
@@ -513,6 +541,28 @@ export default function PlanScreen({
                   onChange={e => updateInfra({ band: e.target.value })}
                 />
               </label>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Camada</span>
+                <div className="flex rounded-lg bg-zinc-900 border border-zinc-700 p-0.5">
+                  {([
+                    ['interior', 'Casa'],
+                    ['roof', 'Cobertura'],
+                    ['exterior', 'Exterior'],
+                  ] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      onClick={() => updateInfra({ layer: k })}
+                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                        (selectedInfra.layer ?? DEFAULT_LAYER[selectedInfra.kind]) === k
+                          ? 'bg-zinc-100 text-zinc-900 font-semibold'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="flex flex-col gap-1.5 w-36">
                 <span className="text-xs uppercase tracking-widest text-zinc-500">Endereço</span>
                 <input
