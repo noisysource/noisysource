@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { readAll, sendCommands, type DeviceConfig, type DeviceState, type DpValue } from './tuya';
@@ -11,11 +13,14 @@ import { startHttp } from './http';
  * HTTP API. While the app runs on the same network, that is the whole story:
  * no cloud is in the path of a light switch or a thermostat.
  *
- * Firestore is used for exactly one thing — reading the device list and local
- * keys once at startup, because they are secrets and belong somewhere sealed
- * rather than in the repo. Relaying state and commands through Firestore is a
- * separate concern that only matters for reaching the house from outside it,
- * and is deliberately not wired up yet.
+ * Firestore is consulted for one thing only — the device list and local keys —
+ * and even that is cached to disk, so a cloud outage or an expired credential
+ * cannot stop the house being controlled. That is the entire point of this
+ * service; depending on Google to turn on a radiator would defeat it.
+ *
+ * Relaying state and commands through Firestore is a separate concern that only
+ * matters for reaching the house from outside it, and is deliberately not wired
+ * up yet.
  */
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT ?? 'kidclub-dev';
@@ -51,12 +56,42 @@ function noteResult(id: string, ok: boolean) {
   console.warn(`[tuya] backing off ${id} for ${Math.round(delay / 1000)}s (${failures} failures)`);
 }
 
+/** Local keys live here too, so it is gitignored alongside service-account keys. */
+const CACHE_PATH = join(__dirname, '..', 'device-cache.json');
+
+function readCache(): DeviceConfig[] | null {
+  try {
+    const list = JSON.parse(readFileSync(CACHE_PATH, 'utf8')) as DeviceConfig[];
+    return Array.isArray(list) && list.length > 0 ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Firestore first (it is authoritative — keys rotate when a device is
+ * re-paired), disk second. An expired credential or a dead network must not
+ * prevent startup: the devices are on the LAN and perfectly reachable without
+ * Google's involvement.
+ */
 async function loadConfig(): Promise<DeviceConfig[]> {
-  const snap = await CONFIG_DOC.get();
-  if (!snap.exists) throw new Error('domotics_config/tuya_devices missing — run key sync');
-  const list = (snap.data()?.devices ?? []) as DeviceConfig[];
-  if (list.length === 0) throw new Error('no devices in config');
-  return list;
+  try {
+    const snap = await CONFIG_DOC.get();
+    const list = (snap.data()?.devices ?? []) as DeviceConfig[];
+    if (list.length === 0) throw new Error('config document is empty');
+    writeFileSync(CACHE_PATH, JSON.stringify(list, null, 2));
+    console.log('[config] loaded from Firestore and cached');
+    return list;
+  } catch (err) {
+    const cached = readCache();
+    if (!cached) {
+      throw new Error(
+        `cannot reach Firestore (${(err as Error).message}) and no local cache at ${CACHE_PATH}`,
+      );
+    }
+    console.warn(`[config] Firestore unavailable (${(err as Error).message}) — using cached device list`);
+    return cached;
+  }
 }
 
 async function poll() {
