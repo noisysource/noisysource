@@ -42,14 +42,36 @@ export interface PlanRoom extends Room, RoomRect {
  * is absolute plan metres rather than room-relative, because an access point
  * often sits in a hallway or against a wall rather than inside one room.
  */
+/**
+ * Kinds of fixed equipment worth recording on the plan.
+ *
+ * Wireless kinds get a coverage ring drawn; the rest are single points. The
+ * energy kinds exist because a photovoltaic system is as much part of the
+ * house's layout as a room is — and knowing where the inverter physically sits
+ * matters for both cabling and signal.
+ */
+export type InfraKind =
+  | 'router'
+  | 'repeater'
+  | 'gateway'
+  | 'inverter'
+  | 'battery'
+  | 'panels';
+
 export interface InfraItem {
   id: string;
-  kind: 'router' | 'repeater';
+  kind: InfraKind;
   name: string;
   x: number;
   y: number;
   /** 2.4 / 5 GHz, free text — a repeater may be one band only. */
   band?: string;
+  /**
+   * LAN address, where the thing has one. Recorded because tracking down which
+   * box answers on which IP has already cost real time here: the inverter
+   * silently moved from .50 to .117 between sessions.
+   */
+  host?: string;
 }
 
 /**

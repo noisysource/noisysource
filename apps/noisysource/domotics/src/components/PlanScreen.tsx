@@ -4,7 +4,7 @@ import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { FloorPlan, InfraItem, PlanRoom, Wall } from '@shared/models/Room';
+import type { FloorPlan, InfraItem, InfraKind, PlanRoom, Wall } from '@shared/models/Room';
 import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
 import type { User } from 'firebase/auth';
@@ -104,6 +104,11 @@ export default function PlanScreen({
   }
   const selectedInfra = infra.find(i => i.id === selectedId) ?? null;
 
+  const INFRA_LABEL: Record<InfraKind, string> = {
+    router: 'Router', repeater: 'Repetidor', gateway: 'Gateway',
+    inverter: 'Inversor', battery: 'Bateria', panels: 'Painéis',
+  };
+
   function addInfra(kind: InfraItem['kind']) {
     // Dropped in the middle of the plan; it gets dragged to its real spot.
     const xs = plan.rooms.map(r => r.x + r.w / 2);
@@ -111,8 +116,9 @@ export default function PlanScreen({
     const item: InfraItem = {
       id: `infra-${Date.now()}`,
       kind,
-      name: kind === 'router' ? 'Router MEO' : 'Repetidor Xiaomi',
-      band: kind === 'router' ? '2.4/5 GHz' : '2.4 GHz',
+      name: INFRA_LABEL[kind],
+      ...(kind === 'router' ? { band: '2.4/5 GHz' } : {}),
+      ...(kind === 'repeater' ? { band: '2.4 GHz' } : {}),
       x: xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 5,
       y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : 5,
     };
@@ -278,22 +284,14 @@ export default function PlanScreen({
                 </>
               )}
               {editTarget === 'rooms' && (
-                <>
-                  <button
-                    onClick={() => addInfra('router')}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-sky-950 hover:bg-sky-900 text-sky-300 text-sm transition-colors"
-                  >
-                    <Plus size={15} strokeWidth={2} />
-                    Router
-                  </button>
-                  <button
-                    onClick={() => addInfra('repeater')}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-violet-950 hover:bg-violet-900 text-violet-300 text-sm transition-colors"
-                  >
-                    <Plus size={15} strokeWidth={2} />
-                    Repetidor
-                  </button>
-                </>
+                <button
+                  onClick={() => addInfra('inverter')}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-emerald-300 text-sm transition-colors"
+                  title="Adiciona equipamento; escolha o tipo em baixo"
+                >
+                  <Plus size={15} strokeWidth={2} />
+                  Equipamento
+                </button>
               )}
               <button
                 onClick={onCancelEdit}
@@ -489,12 +487,39 @@ export default function PlanScreen({
                   onChange={e => updateInfra({ name: e.target.value })}
                 />
               </label>
-              <label className="flex flex-col gap-1.5 w-32">
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Tipo</span>
+                <div className="flex flex-wrap rounded-lg bg-zinc-900 border border-zinc-700 p-0.5">
+                  {(Object.keys(INFRA_LABEL) as InfraKind[]).map(k => (
+                    <button
+                      key={k}
+                      onClick={() => updateInfra({ kind: k })}
+                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                        selectedInfra.kind === k
+                          ? 'bg-zinc-100 text-zinc-900 font-semibold'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {INFRA_LABEL[k]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="flex flex-col gap-1.5 w-28">
                 <span className="text-xs uppercase tracking-widest text-zinc-500">Banda</span>
                 <input
                   className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 transition-colors"
                   value={selectedInfra.band ?? ''}
                   onChange={e => updateInfra({ band: e.target.value })}
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 w-36">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Endereço</span>
+                <input
+                  className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 transition-colors"
+                  placeholder="192.168.1.117"
+                  value={selectedInfra.host ?? ''}
+                  onChange={e => updateInfra({ host: e.target.value })}
                 />
               </label>
               <div className="flex flex-col gap-1.5">

@@ -3,7 +3,7 @@ import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { InfraItem, PlanRoom, Wall } from '@shared/models/Room';
+import type { InfraItem, InfraKind, PlanRoom, Wall } from '@shared/models/Room';
 import { wallLength } from '../data/walls';
 
 /** Which layer the edit gestures act on. */
@@ -66,6 +66,22 @@ type Drag =
   | { kind: 'infra'; id: string; grabX: number; grabY: number }
   /** Dragging one end of a wall; the other end stays put. */
   | { kind: 'wallEnd'; id: string; end: 1 | 2 };
+
+/**
+ * Appearance per equipment kind. Wireless kinds get a coverage ring; the rest
+ * are point markers, because drawing a radius around an inverter would imply a
+ * relationship that isn't there.
+ */
+const INFRA_STYLE: Record<InfraKind, {
+  icon: string; fill: string; stroke: string; label: string; reach?: number;
+}> = {
+  router:   { icon: '📶', fill: '#0c4a6e', stroke: '#38bdf8', label: '#7dd3fc', reach: 7 },
+  repeater: { icon: '📡', fill: '#3b0764', stroke: '#a78bfa', label: '#c4b5fd', reach: 5 },
+  gateway:  { icon: '🔌', fill: '#451a03', stroke: '#f59e0b', label: '#fcd34d' },
+  inverter: { icon: '⚡', fill: '#064e3b', stroke: '#10b981', label: '#6ee7b7' },
+  battery:  { icon: '🔋', fill: '#1a2e05', stroke: '#84cc16', label: '#bef264' },
+  panels:   { icon: '☀️', fill: '#422006', stroke: '#eab308', label: '#fde047' },
+};
 
 /** Rendered thickness per wall kind, in plan metres. */
 const WALL_WIDTH = { exterior: 0.26, interior: 0.13, glass: 0.1 } as const;
@@ -893,7 +909,7 @@ export default function FloorPlan({
           controllable device. */}
       {infrastructure.map(item => {
         const isSelected = selectedId === item.id;
-        const isRouter = item.kind === 'router';
+        const style = INFRA_STYLE[item.kind] ?? INFRA_STYLE.router;
         return (
           <g
             key={item.id}
@@ -908,29 +924,31 @@ export default function FloorPlan({
             }}
           >
             {/* Coverage hint, not a measurement — a rough visual reach so the
-                relationship between hardware and devices is legible. */}
-            <circle
-              cx={item.x} cy={item.y} r={isRouter ? 7 : 5}
-              fill={isRouter ? 'rgba(56, 189, 248, 0.045)' : 'rgba(167, 139, 250, 0.045)'}
-              stroke={isRouter ? 'rgba(56, 189, 248, 0.28)' : 'rgba(167, 139, 250, 0.28)'}
-              strokeWidth={0.04}
-              strokeDasharray="0.3 0.25"
-            />
+                relationship between wireless hardware and devices is legible. */}
+            {style.reach !== undefined && (
+              <circle
+                cx={item.x} cy={item.y} r={style.reach}
+                fill={`${style.stroke}0d`}
+                stroke={`${style.stroke}47`}
+                strokeWidth={0.04}
+                strokeDasharray="0.3 0.25"
+              />
+            )}
             <circle
               cx={item.x} cy={item.y} r={0.42}
-              fill={isRouter ? '#0c4a6e' : '#3b0764'}
-              stroke={isSelected ? '#fafafa' : isRouter ? '#38bdf8' : '#a78bfa'}
+              fill={style.fill}
+              stroke={isSelected ? '#fafafa' : style.stroke}
               strokeWidth={isSelected ? 0.08 : 0.05}
             />
             <text
               x={item.x} y={item.y + 0.14} textAnchor="middle" fontSize={0.4}
               className="pointer-events-none"
             >
-              {isRouter ? '📶' : '📡'}
+              {style.icon}
             </text>
             <text
               x={item.x} y={item.y + 0.82} textAnchor="middle" fontSize={0.26}
-              fill={isRouter ? '#7dd3fc' : '#c4b5fd'} className="pointer-events-none"
+              fill={style.label} className="pointer-events-none"
             >
               {item.name}{item.band ? ` · ${item.band}` : ''}
             </text>
