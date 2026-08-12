@@ -5,6 +5,7 @@ import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { readAll, sendCommands, type DeviceConfig, type DeviceState, type DpValue } from './tuya';
 import { dpForCode } from './dpmap';
 import { startHttp } from './http';
+import { readInverter, type InverterReading } from './inverter';
 
 /**
  * Domotics bridge.
@@ -89,7 +90,11 @@ let lastRelayFingerprint = '';
 let lastRelayAt = 0;
 let totalFailureStreak = 0;
 const TOTAL_FAILURE_LIMIT = Number(process.env.TOTAL_FAILURE_LIMIT ?? 5);
-let state: { devices: DeviceState[]; updatedAt: number } = { devices: [], updatedAt: 0 };
+let state: {
+  devices: DeviceState[];
+  inverter?: InverterReading;
+  updatedAt: number;
+} = { devices: [], updatedAt: 0 };
 /** Per-device cool-off after failures. Absent means "due now". */
 const backoff = new Map<string, { failures: number; nextAt: number }>();
 
@@ -247,8 +252,12 @@ async function poll(force = false) {
       };
     });
 
+    // The inverter is mains-powered, on ethernet, and answers in milliseconds —
+    // so unlike the sleepy valve heads it can simply be read every cycle.
+    const inverter = await readInverter();
+
     const changed = JSON.stringify(next) !== JSON.stringify(state.devices);
-    state = { devices: next, updatedAt: Date.now() };
+    state = { devices: next, inverter, updatedAt: Date.now() };
     if (changed) {
       const online = next.filter(d => d.online).length;
       console.log(`[state] ${online}/${next.length} online (changed)`);

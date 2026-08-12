@@ -15,7 +15,7 @@ import type { DeviceState } from './tuya';
  */
 
 export interface HttpDeps {
-  getState: () => { devices: DeviceState[]; updatedAt: number };
+  getState: () => { devices: DeviceState[]; inverter?: unknown; updatedAt: number };
   sendCommand: (deviceId: string, commands: Array<{ code: string; value: unknown }>) => Promise<void>;
   refresh: () => Promise<void>;
 }

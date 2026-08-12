@@ -135,7 +135,17 @@ export default function PlanScreen({
 
   function updateInfra(patch: Partial<InfraItem>) {
     if (!selectedInfra) return;
-    onChangeInfra(infra.map(i => (i.id === selectedInfra.id ? { ...i, ...patch } : i)));
+    const next = { ...selectedInfra, ...patch };
+    // Changing the kind should rename it too — but only while the name is still
+    // an untouched default. Otherwise every item added here ends up called
+    // "Inversor" regardless of what it actually is, which is exactly what
+    // happened before this existed.
+    if (patch.kind && patch.kind !== selectedInfra.kind) {
+      const wasDefault = Object.values(INFRA_LABEL).includes(selectedInfra.name);
+      if (wasDefault) next.name = INFRA_LABEL[patch.kind];
+      if (!patch.layer) next.layer = DEFAULT_LAYER[patch.kind];
+    }
+    onChangeInfra(infra.map(i => (i.id === selectedInfra.id ? next : i)));
   }
 
   function deleteInfra() {
