@@ -17,3 +17,5 @@ export { sendBillingNotice, backfillBillingSchedules, initiateMbwayPayment, init
 export { onStudyroomCreated, onTransportCreated, onStudyroomStatusNotify, onTransportStatusNotify, onCampSubscriptionCreated } from "./kidclub/notifications";
 export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
 export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
+export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
+export { getKidclubVatSummary } from "./kidclub/vatSummary";

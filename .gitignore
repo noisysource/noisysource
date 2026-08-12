@@ -33,3 +33,12 @@ apps/noisyphocus/kidclub/src/lib/featureFlags.ts
 
 # macOS
 .DS_Store
+
+# Bank statements — contain real financial data, never commit
+*.pdf
+*.xlsx
+*.xls
+
+# App env files — project-specific, not committed
+apps/noisysource/finances/.env.*
+apps/noisysource/domotics/.env.*

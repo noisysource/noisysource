@@ -98,8 +98,9 @@ locals {
     "wipeOrgData",
     "createRecurringExpenses",
     "impersonateUser",
-    # KidClub — invoicing
+    # KidClub — invoicing / VAT
     "triggerInvoiceGeneration",
+    "getKidclubVatSummary",
     # KidClub — billing
     "sendBillingNotice",
     "backfillBillingSchedules",
@@ -119,6 +120,8 @@ locals {
     # Domotics
     "legrandGetStatus",
     "legrandSetState",
+    "tuyaGetDevices",
+    "tuyaSetState",
   ])
 }
 
