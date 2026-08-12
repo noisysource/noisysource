@@ -11,3 +11,5 @@ gmail_sender_sa_id = "gmail-sender-kidclub-dev"
 gcp_region = "europe-west3"
 
 firestore_database_name = "(default)"
+
+storage_cors_extra_origins = ["http://localhost:5174"]

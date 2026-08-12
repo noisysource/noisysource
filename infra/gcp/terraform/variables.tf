@@ -25,3 +25,9 @@ variable "firestore_database_name" {
   default     = "kidclub"
 }
 
+variable "storage_cors_extra_origins" {
+  type        = list(string)
+  description = "Extra CORS origins for Firebase Storage (e.g. localhost for dev)."
+  default     = []
+}
+
