@@ -148,6 +148,40 @@ export async function createOrUpdateClient(familyId: string, payload: VendusClie
   }
 }
 
+export interface VendusTaxLine {
+  id: number;
+  title: string;
+  value: number;      // tax rate, e.g. 23 or 6
+  incidence: string;  // base amount (before tax), as decimal string
+  total: string;      // tax amount, as decimal string
+}
+
+export interface VendusDocumentFull extends VendusDocument {
+  taxes?: VendusTaxLine[];
+}
+
+/** List FR documents in a date range. Handles Vendus pagination automatically. */
+export async function listDocuments(dateFrom: string, dateTo: string): Promise<VendusDocument[]> {
+  const all: VendusDocument[] = [];
+  let page = 1;
+  while (true) {
+    const chunk = await request<VendusDocument[] | { data?: VendusDocument[] }>(
+      "GET", `/documents/?date_from=${dateFrom}&date_to=${dateTo}&type=FR&page=${page}`
+    );
+    const rows = Array.isArray(chunk) ? chunk : (chunk as any).data ?? [];
+    if (!rows.length) break;
+    all.push(...rows);
+    if (rows.length < 50) break;
+    page++;
+  }
+  return all;
+}
+
+/** Fetch a single document with full tax breakdown. */
+export async function getDocumentFull(id: number): Promise<VendusDocumentFull> {
+  return request<VendusDocumentFull>("GET", `/documents/${id}/`);
+}
+
 export async function createInvoice(
   client: VendusClient,
   items: VendusLineItem[],

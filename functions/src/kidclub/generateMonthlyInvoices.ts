@@ -332,7 +332,7 @@ function buildInvoiceEmail(opts: {
             <td style="padding:16px;background:#4f46e5;border-radius:8px;">
               <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
-                  <td style="color:#c4b5fd;font-size:14px;">Total a pagar (isento de IVA)</td>
+                  <td style="color:#c4b5fd;font-size:14px;">Total a pagar (IVA incluído)</td>
                   <td style="color:#ffffff;font-size:24px;font-weight:700;text-align:right;">€${subtotal.toFixed(2)}</td>
                 </tr>
               </table>
