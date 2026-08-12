@@ -1,0 +1,37 @@
+[Unit]
+Description=NoisySource domotics bridge (Tuya over LAN)
+Documentation=https://github.com/noisysource/noisysource
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/domotics-bridge
+ExecStart=/usr/bin/node lib/index.js
+
+# The bridge deliberately exits when every device fails several polls running,
+# because a wedged process reporting a house full of sleeping thermostats is
+# worse than one that stops. That design only works with a supervisor, so this
+# must always restart.
+Restart=always
+RestartSec=10
+
+# Give up trying only if it fails constantly for five minutes — otherwise
+# systemd's default burst limit would stop restarting during a router reboot.
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+# Service accounts, not ADC: `gcloud auth application-default login` is
+# interactive and its credentials expire, which already took the bridge down
+# once.
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/home/pi/domotics-bridge/service-account.json
+Environment=GCLOUD_PROJECT=kidclub-dev
+Environment=NODE_ENV=production
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=domotics-bridge
+
+[Install]
+WantedBy=multi-user.target

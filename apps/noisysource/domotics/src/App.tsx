@@ -11,6 +11,8 @@ import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import { fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
+import { watchAuth, signIn, signOutUser } from './lib/auth';
+import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
 import RoomDetail from './components/RoomDetail';
 
@@ -60,6 +62,15 @@ export default function App() {
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
+  /**
+   * Only needed for the relay — the LAN path works signed out, and being
+   * unable to sign in should never stop you controlling the house from inside
+   * it. So this gates nothing in the UI; it just supplies an identity when one
+   * is available.
+   */
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => watchAuth(setUser), []);
 
   useEffect(() => {
     // Nothing here blocks the first paint: the plan comes from local seed data
@@ -367,6 +378,9 @@ export default function App() {
       placements={activeCustom.devicePositions}
       deviceStatus={deviceStatus}
       bridgeStatus={bridgeStatus}
+      user={user}
+      onSignIn={signIn}
+      onSignOut={signOutUser}
       editMode={editMode}
       editTarget={editTarget}
       selectedId={planSelectedId}

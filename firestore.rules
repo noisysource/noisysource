@@ -224,6 +224,34 @@ service cloud.firestore {
       allow read, write: if docId in ['customization', 'floorplan'];
     }
 
+    // Relay between the house and the app when away from the LAN. At home the
+    // app talks to the bridge directly over HTTP and none of this is touched;
+    // these documents exist only because a bridge behind NAT cannot be reached
+    // from outside.
+    //
+    // Unlike the rest of the domotics collections, these MUST require auth:
+    // `domotics_commands` is a channel that turns heating on and off, and it is
+    // reachable from the public internet. The email check is a deliberate
+    // belt-and-braces alongside isOwner(), so a missing role document cannot
+    // lock the owner out of their own house.
+    function isDomoticsOwner() {
+      return isAuthenticated() &&
+        (isOwner() || request.auth.token.email == 'admin@kidclub.pt');
+    }
+
+    // Written by the bridge via the Admin SDK, which bypasses rules entirely —
+    // so no client ever needs write access here.
+    match /domotics_state/{docId} {
+      allow read: if isDomoticsOwner();
+      allow write: if false;
+    }
+
+    match /domotics_commands/{docId} {
+      allow read, create: if isDomoticsOwner();
+      // The bridge deletes commands once executed, again via the Admin SDK.
+      allow update, delete: if false;
+    }
+
     // ── Vault (Finances app) ─────────────────────────────────────────────────
     match /vault_config/{docId} {
       allow read, write: if isFinhubAdmin() || isOwner();

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { readAll, sendCommands, type DeviceConfig, type DeviceState, type DpValue } from './tuya';
 import { dpForCode } from './dpmap';
 import { startHttp } from './http';
@@ -18,9 +18,11 @@ import { startHttp } from './http';
  * cannot stop the house being controlled. That is the entire point of this
  * service; depending on Google to turn on a radiator would defeat it.
  *
- * Relaying state and commands through Firestore is a separate concern that only
- * matters for reaching the house from outside it, and is deliberately not wired
- * up yet.
+ * It also relays state and commands through Firestore, which is what makes the
+ * house reachable from outside it. That path is outbound-only — the bridge
+ * publishes and subscribes, never listens — so it needs no port forwarding and
+ * works behind CGNAT. On the LAN the app prefers the direct HTTP API, which is
+ * an order of magnitude faster; the relay is the fallback when away.
  */
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT ?? 'kidclub-dev';
@@ -48,10 +50,20 @@ const ACTIVE_WINDOW_MS = 120_000;
 const BASE_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 const HTTP_PORT = Number(process.env.PORT ?? 8787);
+/** Set RELAY=0 to keep everything on the LAN and publish nothing. */
+const RELAY = process.env.RELAY !== '0';
+/**
+ * Relay writes are throttled independently of polling: Firestore is billed per
+ * write and the free tier is finite, whereas LAN reads are free. State only
+ * goes up when it has actually changed, and never more often than this.
+ */
+const RELAY_MIN_INTERVAL_MS = 20_000;
 
 initializeApp({ credential: applicationDefault(), projectId: PROJECT_ID });
 const db = getFirestore();
 const CONFIG_DOC = db.doc('domotics_config/tuya_devices');
+const STATE_DOC = db.doc('domotics_state/tuya');
+const COMMANDS = db.collection('domotics_commands');
 
 let devices: DeviceConfig[] = [];
 /** Last time a client asked for state — drives the polling rate. */
@@ -73,6 +85,8 @@ let polling = false;
  * restarted. Total failure across several polls is treated as "we are broken"
  * rather than "the house vanished".
  */
+let lastRelayFingerprint = '';
+let lastRelayAt = 0;
 let totalFailureStreak = 0;
 const TOTAL_FAILURE_LIMIT = Number(process.env.TOTAL_FAILURE_LIMIT ?? 5);
 let state: { devices: DeviceState[]; updatedAt: number } = { devices: [], updatedAt: 0 };
@@ -129,6 +143,65 @@ async function loadConfig(): Promise<DeviceConfig[]> {
 }
 
 /**
+ * Mirror state to Firestore so the app can read it from outside the house.
+ *
+ * Change-driven and rate-limited, because this is the one part of the system
+ * that costs money: LAN polling is free, Firestore writes are not. A quiet
+ * house should produce almost no writes at all.
+ */
+async function publish() {
+  const fingerprint = JSON.stringify(state.devices);
+  if (fingerprint === lastRelayFingerprint) return;
+  if (Date.now() - lastRelayAt < RELAY_MIN_INTERVAL_MS) return;
+  try {
+    await STATE_DOC.set({ devices: state.devices, updatedAt: Timestamp.now() });
+    lastRelayFingerprint = fingerprint;
+    lastRelayAt = Date.now();
+  } catch (err) {
+    // Losing the relay must never affect LAN control, so this is only logged.
+    console.warn('[relay] publish failed:', (err as Error).message);
+  }
+}
+
+/**
+ * Commands queued remotely. Executed exactly like a local POST, then deleted.
+ *
+ * Anything older than a couple of minutes is discarded rather than run: after a
+ * restart or a network gap, replaying a stale queue could set the heating from
+ * decisions someone made long ago.
+ */
+const COMMAND_TTL_MS = 2 * 60_000;
+
+function watchCommands() {
+  COMMANDS.onSnapshot(snap => {
+    for (const change of snap.docChanges()) {
+      if (change.type !== 'added') continue;
+      void handleRelayCommand(change.doc.id, change.doc.data());
+    }
+  }, err => console.warn('[relay] command listener error:', err.message));
+}
+
+async function handleRelayCommand(docId: string, data: FirebaseFirestore.DocumentData) {
+  const ref = COMMANDS.doc(docId);
+  const createdAt = data.createdAt as Timestamp | undefined;
+  const age = createdAt ? Date.now() - createdAt.toMillis() : 0;
+  if (age > COMMAND_TTL_MS) {
+    console.warn(`[relay] dropping stale command (${Math.round(age / 1000)}s old)`);
+    await ref.delete().catch(() => {});
+    return;
+  }
+  try {
+    await runCommand(data.deviceId as string, data.commands ?? []);
+    await ref.delete();
+    await poll(true);
+    await publish();
+  } catch (err) {
+    console.error('[relay] command failed:', (err as Error).message);
+    await ref.set({ error: (err as Error).message }, { merge: true }).catch(() => {});
+  }
+}
+
+/**
  * `force` bypasses backoff. Used when a client turns up after an idle period:
  * a person opening the app is a strong enough signal to be worth one immediate
  * attempt on everything, rather than making them wait out a 5-minute cool-off.
@@ -180,6 +253,7 @@ async function poll(force = false) {
       const online = next.filter(d => d.online).length;
       console.log(`[state] ${online}/${next.length} online (changed)`);
     }
+    if (RELAY) void publish();
   } catch (err) {
     console.error('[poll] failed:', (err as Error).message);
   } finally {
@@ -253,6 +327,11 @@ async function main() {
     sendCommand: runCommand,
     refresh: poll,
   });
+
+  if (RELAY) {
+    watchCommands();
+    console.log('[relay] publishing state and watching for remote commands');
+  }
 
   void loop();
 }

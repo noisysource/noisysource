@@ -12,6 +12,18 @@ interface NetatmoConfig {
   homeId: string;
 }
 
+/**
+ * These callables control the lights and blinds of a private home and were
+ * reachable by anyone who knew the project id — a plain unauthenticated `curl`
+ * against /legrandSetState worked. `onCall` does not reject anonymous callers
+ * on its own; the check has to be explicit.
+ */
+function requireOwner(auth: { uid?: string; token?: { email?: string } } | undefined) {
+  if (!auth?.uid) {
+    throw new HttpsError("unauthenticated", "Sign-in required");
+  }
+}
+
 async function getAccessToken(): Promise<{ token: string; homeId: string }> {
   const snap = await admin.firestore().doc(CONFIG_DOC).get();
   if (!snap.exists) throw new HttpsError("not-found", "Netatmo config missing — run setup");
@@ -38,7 +50,8 @@ async function getAccessToken(): Promise<{ token: string; homeId: string }> {
   return { token: data.access_token, homeId: config.homeId };
 }
 
-export const legrandGetStatus = onCall({ region: "europe-west3" }, async () => {
+export const legrandGetStatus = onCall({ region: "europe-west3" }, async (request) => {
+  requireOwner(request.auth);
   const { token, homeId } = await getAccessToken();
   const resp = await fetch(`${API_BASE}/homestatus?home_id=${homeId}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -54,7 +67,9 @@ export const legrandSetState = onCall<{
   modules: Array<{
     id: string; bridge?: string; on?: boolean; target_position?: number;
   }>;
-}>({ region: "europe-west3" }, async ({ data }) => {
+}>({ region: "europe-west3" }, async (request) => {
+  requireOwner(request.auth);
+  const { data } = request;
   const { token, homeId } = await getAccessToken();
   const resp = await fetch(`${API_BASE}/setstate`, {
     method: "POST",

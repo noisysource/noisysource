@@ -7,6 +7,7 @@ import type {
 import type { FloorPlan, InfraItem, PlanRoom, Wall } from '@shared/models/Room';
 import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
+import type { User } from 'firebase/auth';
 import Clock from './Clock';
 import FloorPlanSvg, { type EditTarget } from './FloorPlan';
 
@@ -31,6 +32,9 @@ interface Props {
   deviceStatus: DeviceStatus;
   /** Local LAN bridge serving the Tuya climate devices. */
   bridgeStatus: DeviceStatus;
+  user: User | null;
+  onSignIn: () => Promise<void>;
+  onSignOut: () => Promise<void>;
   editMode: boolean;
   editTarget: EditTarget;
   selectedId: string | null;
@@ -52,7 +56,8 @@ interface Props {
 }
 
 export default function PlanScreen({
-  plan, devices, placements, deviceStatus, bridgeStatus, editMode, editTarget, selectedId,
+  plan, devices, placements, deviceStatus, bridgeStatus, user, onSignIn, onSignOut,
+  editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
   onThermostatCommand, onHeatPumpCommand,
@@ -318,6 +323,14 @@ export default function PlanScreen({
                 title="Medidas das paredes"
               >
                 <Ruler size={16} strokeWidth={2} />
+              </button>
+              {/* Only meaningful away from home, so it stays understated. */}
+              <button
+                onClick={() => (user ? onSignOut() : onSignIn())}
+                className="text-xs px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors mr-1"
+                title={user ? `Sessão: ${user.email}` : 'Entrar para aceder fora de casa'}
+              >
+                {user ? (user.email?.split('@')[0] ?? 'sessão') : 'Entrar'}
               </button>
               <Clock />
               <button
