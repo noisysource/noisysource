@@ -103,11 +103,21 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // The bridge is on the LAN, so polling it is nearly free — which finally
-  // makes climate state live rather than a snapshot taken at mount.
+  /**
+   * Climate state refresh.
+   *
+   * Thermostats change slowly, and each fetch tells the bridge someone is
+   * watching — which is what makes it poll the actual hardware faster. So this
+   * interval is deliberately unhurried, and stops entirely when the tab is
+   * hidden: a forgotten background tab should not keep the radiator valves
+   * awake. Setting a temperature does not wait for it, because the command
+   * response carries freshly read state.
+   */
   useEffect(() => {
     let cancelled = false;
+
     async function tick() {
+      if (document.hidden) return;
       try {
         const state = await fetchBridgeState();
         if (cancelled) return;
@@ -117,9 +127,21 @@ export default function App() {
         if (!cancelled) setBridgeStatus('offline');
       }
     }
+
+    // Refresh immediately on return, rather than leaving stale numbers on
+    // screen until the next tick.
+    function onVisible() {
+      if (!document.hidden) void tick();
+    }
+
     void tick();
-    const id = setInterval(() => void tick(), 5000);
-    return () => { cancelled = true; clearInterval(id); };
+    const id = setInterval(() => void tick(), 30_000);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   const editMode = draft !== null;

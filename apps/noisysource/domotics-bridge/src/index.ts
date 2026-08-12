@@ -24,7 +24,20 @@ import { startHttp } from './http';
  */
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT ?? 'kidclub-dev';
-const POLL_MS = Number(process.env.POLL_MS ?? 15_000);
+/**
+ * Polling is demand-driven. These devices have very few connection slots and
+ * degrade under pressure, and thermostats barely change minute to minute — so
+ * there is nothing to gain from reading them constantly while nobody is
+ * looking. A client fetching /state is taken as the signal that someone is
+ * watching; otherwise the bridge idles at a slow keep-warm rate.
+ *
+ * This cuts device load roughly tenfold when the app is closed, which is the
+ * bulk of the time.
+ */
+const ACTIVE_POLL_MS = Number(process.env.POLL_MS ?? 30_000);
+const IDLE_POLL_MS = Number(process.env.IDLE_POLL_MS ?? 300_000);
+/** How long after a request we still consider someone to be watching. */
+const ACTIVE_WINDOW_MS = 120_000;
 /**
  * These devices allow only a couple of local connections and get *worse* the
  * harder you push. Polling a failing device every 15s with retries was enough
@@ -41,6 +54,10 @@ const db = getFirestore();
 const CONFIG_DOC = db.doc('domotics_config/tuya_devices');
 
 let devices: DeviceConfig[] = [];
+/** Last time a client asked for state — drives the polling rate. */
+let lastClientAt = 0;
+/** Guards against overlapping polls, which would compete for device sockets. */
+let polling = false;
 let state: { devices: DeviceState[]; updatedAt: number } = { devices: [], updatedAt: 0 };
 /** Per-device cool-off after failures. Absent means "due now". */
 const backoff = new Map<string, { failures: number; nextAt: number }>();
@@ -95,6 +112,8 @@ async function loadConfig(): Promise<DeviceConfig[]> {
 }
 
 async function poll() {
+  if (polling) return;
+  polling = true;
   try {
     const now = Date.now();
     const due = devices.filter(d => (backoff.get(d.id)?.nextAt ?? 0) <= now);
@@ -127,6 +146,8 @@ async function poll() {
     }
   } catch (err) {
     console.error('[poll] failed:', (err as Error).message);
+  } finally {
+    polling = false;
   }
 }
 
@@ -158,19 +179,43 @@ async function runCommand(
   console.log(`[command] ${config.name} <- ${JSON.stringify(dps)}`);
 }
 
+function isWatched() {
+  return Date.now() - lastClientAt < ACTIVE_WINDOW_MS;
+}
+
+/**
+ * Self-scheduling rather than setInterval, so the interval can change between
+ * ticks and a slow poll can never overlap the next one.
+ */
+async function loop() {
+  await poll();
+  setTimeout(() => void loop(), isWatched() ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+}
+
 async function main() {
   devices = await loadConfig();
-  console.log(`[bridge] ${devices.length} devices, polling every ${POLL_MS / 1000}s`);
+  console.log(
+    `[bridge] ${devices.length} devices, polling every ${ACTIVE_POLL_MS / 1000}s while watched, ` +
+    `${IDLE_POLL_MS / 1000}s idle`,
+  );
   for (const d of devices) console.log(`         ${d.name} @ ${d.ip} v${d.version}`);
 
-  await poll();
-  setInterval(() => void poll(), POLL_MS);
-
   startHttp(HTTP_PORT, {
-    getState: () => state,
+    getState: () => {
+      lastClientAt = Date.now();
+      // Waking from idle, the next poll may be minutes away — the interval is
+      // fixed when the previous one finishes. So a request for stale data
+      // triggers a refresh straight away. Deliberately not awaited: /state
+      // always answers instantly from cache, and the fresh values arrive on the
+      // caller's next tick.
+      if (Date.now() - state.updatedAt > ACTIVE_POLL_MS) void poll();
+      return state;
+    },
     sendCommand: runCommand,
     refresh: poll,
   });
+
+  void loop();
 }
 
 /**
