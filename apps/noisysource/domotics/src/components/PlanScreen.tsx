@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Pencil, Check, X, Plus, Trash2, GripVertical } from 'lucide-react';
+import { Pencil, Check, X, Plus, Trash2, GripVertical, Ruler } from 'lucide-react';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { FloorPlan, PlanRoom } from '@shared/models/Room';
+import type { FloorPlan, InfraItem, PlanRoom, Wall } from '@shared/models/Room';
+import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
 import Clock from './Clock';
 import FloorPlanSvg, { type EditTarget } from './FloorPlan';
@@ -37,6 +38,8 @@ interface Props {
   onSelect: (id: string | null) => void;
   onOpenRoom: (id: string) => void;
   onChangeRooms: (rooms: PlanRoom[]) => void;
+  onChangeInfra: (items: InfraItem[]) => void;
+  onChangeWalls: (walls: Wall[]) => void;
   onPlaceDevice: (deviceId: string, roomId: string, rx: number, ry: number) => void;
   onDeviceNameChange: (deviceId: string, name: string) => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
@@ -50,15 +53,78 @@ interface Props {
 
 export default function PlanScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, editMode, editTarget, selectedId,
-  onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onPlaceDevice,
+  onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
   onThermostatCommand, onHeatPumpCommand,
   onStartEdit, onCancelEdit, onSaveEdit,
 }: Props) {
   /** Device being dragged from the sidebar onto the plan. */
   const [externalDragId, setExternalDragId] = useState<string | null>(null);
+  /** Wall length labels — off by default, they are dense enough to obscure the plan. */
+  const [showMeasures, setShowMeasures] = useState(false);
 
   const selectedRoom = plan.rooms.find(r => r.id === selectedId) ?? null;
+  const infra = plan.infrastructure ?? [];
+  const walls = plan.walls ?? [];
+  const selectedWall = walls.find(w => w.id === selectedId) ?? null;
+
+  /** Seed the wall layer from the room blocks, then delete what isn't real. */
+  function generateWalls() {
+    onChangeWalls(wallsFromRooms(plan.rooms));
+    onSelect(null);
+  }
+
+  function addWall() {
+    const xs = plan.rooms.map(r => r.x + r.w / 2);
+    const cx = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 5;
+    const ys = plan.rooms.map(r => r.y + r.h / 2);
+    const cy = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : 5;
+    const wall: Wall = {
+      id: `wall-${Date.now()}`,
+      x1: cx - 1, y1: cy, x2: cx + 1, y2: cy, kind: 'interior',
+    };
+    onChangeWalls([...walls, wall]);
+    onSelect(wall.id);
+  }
+
+  function updateWall(patch: Partial<Wall>) {
+    if (!selectedWall) return;
+    onChangeWalls(walls.map(w => (w.id === selectedWall.id ? { ...w, ...patch } : w)));
+  }
+
+  function deleteWall() {
+    if (!selectedWall) return;
+    onChangeWalls(walls.filter(w => w.id !== selectedWall.id));
+    onSelect(null);
+  }
+  const selectedInfra = infra.find(i => i.id === selectedId) ?? null;
+
+  function addInfra(kind: InfraItem['kind']) {
+    // Dropped in the middle of the plan; it gets dragged to its real spot.
+    const xs = plan.rooms.map(r => r.x + r.w / 2);
+    const ys = plan.rooms.map(r => r.y + r.h / 2);
+    const item: InfraItem = {
+      id: `infra-${Date.now()}`,
+      kind,
+      name: kind === 'router' ? 'Router MEO' : 'Repetidor Xiaomi',
+      band: kind === 'router' ? '2.4/5 GHz' : '2.4 GHz',
+      x: xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 5,
+      y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : 5,
+    };
+    onChangeInfra([...infra, item]);
+    onSelect(item.id);
+  }
+
+  function updateInfra(patch: Partial<InfraItem>) {
+    if (!selectedInfra) return;
+    onChangeInfra(infra.map(i => (i.id === selectedInfra.id ? { ...i, ...patch } : i)));
+  }
+
+  function deleteInfra() {
+    if (!selectedInfra) return;
+    onChangeInfra(infra.filter(i => i.id !== selectedInfra.id));
+    onSelect(null);
+  }
   const showSidebar = editMode && editTarget === 'devices';
 
   const groups = useMemo(() => {
@@ -164,7 +230,7 @@ export default function PlanScreen({
               {/* Rooms and devices are separate drag layers — editing both at
                   once means every gesture is ambiguous. */}
               <div className="flex rounded-xl bg-zinc-900 border border-zinc-800 p-0.5 mr-1">
-                {(['rooms', 'devices'] as const).map(target => (
+                {(['rooms', 'walls', 'devices'] as const).map(target => (
                   <button
                     key={target}
                     onClick={() => { onEditTargetChange(target); onSelect(null); }}
@@ -174,7 +240,7 @@ export default function PlanScreen({
                         : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                   >
-                    {target === 'rooms' ? 'Divisões' : 'Dispositivos'}
+                    {target === 'rooms' ? 'Divisões' : target === 'walls' ? 'Paredes' : 'Dispositivos'}
                   </button>
                 ))}
               </div>
@@ -187,6 +253,42 @@ export default function PlanScreen({
                   <Plus size={15} strokeWidth={2} />
                   Divisão
                 </button>
+              )}
+              {editTarget === 'walls' && (
+                <>
+                  <button
+                    onClick={generateWalls}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+                    title="Cria paredes a partir das divisões; apague as que não existem"
+                  >
+                    Gerar das divisões
+                  </button>
+                  <button
+                    onClick={addWall}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+                  >
+                    <Plus size={15} strokeWidth={2} />
+                    Parede
+                  </button>
+                </>
+              )}
+              {editTarget === 'rooms' && (
+                <>
+                  <button
+                    onClick={() => addInfra('router')}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-sky-950 hover:bg-sky-900 text-sky-300 text-sm transition-colors"
+                  >
+                    <Plus size={15} strokeWidth={2} />
+                    Router
+                  </button>
+                  <button
+                    onClick={() => addInfra('repeater')}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-violet-950 hover:bg-violet-900 text-violet-300 text-sm transition-colors"
+                  >
+                    <Plus size={15} strokeWidth={2} />
+                    Repetidor
+                  </button>
+                </>
               )}
               <button
                 onClick={onCancelEdit}
@@ -205,6 +307,18 @@ export default function PlanScreen({
             </>
           ) : (
             <>
+              <button
+                onClick={() => setShowMeasures(v => !v)}
+                className={`flex items-center justify-center w-10 h-10 rounded-xl transition-colors mr-1 ${
+                  showMeasures
+                    ? 'bg-zinc-100 text-zinc-900'
+                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200'
+                }`}
+                aria-label="Mostrar medidas"
+                title="Medidas das paredes"
+              >
+                <Ruler size={16} strokeWidth={2} />
+              </button>
               <Clock />
               <button
                 onClick={onStartEdit}
@@ -232,6 +346,11 @@ export default function PlanScreen({
             onSelect={onSelect}
             onOpenRoom={onOpenRoom}
             onChange={onChangeRooms}
+            infrastructure={plan.infrastructure ?? []}
+            onChangeInfra={onChangeInfra}
+            walls={walls}
+            onChangeWalls={onChangeWalls}
+            showMeasures={showMeasures}
             onPlaceDevice={onPlaceDevice}
             onExternalDragEnd={() => setExternalDragId(null)}
             onLightCommand={onLightCommand}
@@ -309,10 +428,84 @@ export default function PlanScreen({
                 Apagar
               </button>
             </div>
+          ) : selectedWall ? (
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Comprimento</span>
+                <span className="text-sm text-zinc-300 py-1.5 tabular-nums">
+                  {wallLength(selectedWall).toFixed(2)} m
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Tipo</span>
+                <div className="flex rounded-lg bg-zinc-900 border border-zinc-700 p-0.5">
+                  {(['exterior', 'interior', 'glass'] as const).map(k => (
+                    <button
+                      key={k}
+                      onClick={() => updateWall({ kind: k })}
+                      className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                        (selectedWall.kind ?? 'interior') === k
+                          ? 'bg-zinc-100 text-zinc-900 font-semibold'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {k === 'exterior' ? 'Exterior' : k === 'interior' ? 'Interior' : 'Vidro'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex-1" />
+              <span className="text-xs text-zinc-500 py-2">
+                Arraste as pontas. Apague as paredes que não existem — como entre a cozinha e as salas.
+              </span>
+              <button
+                onClick={deleteWall}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-950 hover:bg-red-900 text-red-300 text-sm transition-colors"
+              >
+                <Trash2 size={15} strokeWidth={2} />
+                Apagar
+              </button>
+            </div>
+          ) : selectedInfra ? (
+            <div className="flex flex-wrap items-end gap-4">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Equipamento</span>
+                <input
+                  className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 transition-colors"
+                  value={selectedInfra.name}
+                  onChange={e => updateInfra({ name: e.target.value })}
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 w-32">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Banda</span>
+                <input
+                  className="bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 transition-colors"
+                  value={selectedInfra.band ?? ''}
+                  onChange={e => updateInfra({ band: e.target.value })}
+                />
+              </label>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs uppercase tracking-widest text-zinc-500">Posição</span>
+                <span className="text-sm text-zinc-300 py-1.5 tabular-nums">
+                  {selectedInfra.x.toFixed(2)}, {selectedInfra.y.toFixed(2)} m
+                </span>
+              </div>
+              <div className="flex-1" />
+              <span className="text-xs text-zinc-500 py-2">Arraste para o sítio real.</span>
+              <button
+                onClick={deleteInfra}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-950 hover:bg-red-900 text-red-300 text-sm transition-colors"
+              >
+                <Trash2 size={15} strokeWidth={2} />
+                Apagar
+              </button>
+            </div>
           ) : (
             <p className="text-sm text-zinc-500">
               {editTarget === 'rooms'
-                ? 'Toque numa divisão para a mover, redimensionar ou renomear.'
+                ? 'Toque numa divisão ou equipamento de rede para o mover ou renomear.'
+                : editTarget === 'walls'
+                ? `${walls.length} paredes. Toque numa para a editar, ou gere-as a partir das divisões.`
                 : `Arraste da lista para a planta, ou mova os marcadores já colocados.${
                     groups.unplaced.length ? ` ${groups.unplaced.length} sem divisão.` : ''
                   }`}

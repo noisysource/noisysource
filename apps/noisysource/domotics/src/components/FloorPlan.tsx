@@ -3,10 +3,11 @@ import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { PlanRoom } from '@shared/models/Room';
+import type { InfraItem, PlanRoom, Wall } from '@shared/models/Room';
+import { wallLength } from '../data/walls';
 
 /** Which layer the edit gestures act on. */
-export type EditTarget = 'rooms' | 'devices';
+export type EditTarget = 'rooms' | 'devices' | 'walls';
 
 interface Props {
   rooms: PlanRoom[];
@@ -21,6 +22,12 @@ interface Props {
   onSelect: (id: string | null) => void;
   onOpenRoom: (id: string) => void;
   onChange: (rooms: PlanRoom[]) => void;
+  infrastructure: InfraItem[];
+  onChangeInfra: (items: InfraItem[]) => void;
+  walls: Wall[];
+  onChangeWalls: (walls: Wall[]) => void;
+  /** Toggles wall length labels. */
+  showMeasures: boolean;
   onPlaceDevice: (deviceId: string, roomId: string, rx: number, ry: number) => void;
   onExternalDragEnd: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
@@ -55,7 +62,14 @@ const TEMP_STEP = 0.5;
 type Drag =
   | { kind: 'move'; id: string; grabX: number; grabY: number }
   | { kind: 'resize'; id: string }
-  | { kind: 'device'; id: string };
+  | { kind: 'device'; id: string }
+  | { kind: 'infra'; id: string; grabX: number; grabY: number }
+  /** Dragging one end of a wall; the other end stays put. */
+  | { kind: 'wallEnd'; id: string; end: 1 | 2 };
+
+/** Rendered thickness per wall kind, in plan metres. */
+const WALL_WIDTH = { exterior: 0.26, interior: 0.13, glass: 0.1 } as const;
+const WALL_COLOUR = { exterior: '#a1a1aa', interior: '#71717a', glass: '#38bdf8' } as const;
 
 function snapTo(value: number, grid: number) {
   return Math.round(value / grid) * grid;
@@ -130,6 +144,7 @@ export default function FloorPlan({
   rooms, devices, placements, grid, editMode, editTarget, selectedId, externalDragId,
   onSelect, onOpenRoom, onChange, onPlaceDevice, onExternalDragEnd,
   onLightCommand, onBlindCommand, onThermostatCommand, onHeatPumpCommand,
+  infrastructure, onChangeInfra, walls, onChangeWalls, showMeasures,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -147,6 +162,7 @@ export default function FloorPlan({
 
   const editingRooms = editMode && editTarget === 'rooms';
   const editingDevices = editMode && editTarget === 'devices';
+  const editingWalls = editMode && editTarget === 'walls';
 
   const roomById = useMemo(() => new Map(rooms.map(r => [r.id, r])), [rooms]);
 
@@ -316,6 +332,24 @@ export default function FloorPlan({
     if (!drag) return;
     const p = toPlan(e);
 
+    if (drag.kind === 'wallEnd') {
+      const x = snapTo(p.x, grid), y = snapTo(p.y, grid);
+      onChangeWalls(walls.map(w => (
+        w.id !== drag.id ? w
+          : drag.end === 1 ? { ...w, x1: x, y1: y } : { ...w, x2: x, y2: y }
+      )));
+      return;
+    }
+
+    if (drag.kind === 'infra') {
+      onChangeInfra(infrastructure.map(i => (
+        i.id === drag.id
+          ? { ...i, x: snapTo(p.x - drag.grabX, grid), y: snapTo(p.y - drag.grabY, grid) }
+          : i
+      )));
+      return;
+    }
+
     if (drag.kind === 'device') {
       // Dropping a marker inside another room reassigns it to that room.
       const room = roomAt(p.x, p.y);
@@ -406,6 +440,10 @@ export default function FloorPlan({
               stroke={
                 isTarget ? '#60a5fa'
                   : isSelected && editingRooms ? '#fafafa'
+                  // Once a wall layer exists it owns the structure. Keeping the
+                  // room outline would redraw partitions the house doesn't
+                  // have — exactly the open-plan problem.
+                  : walls.length > 0 && !editingRooms ? 'transparent'
                   : !room.controllable ? '#232326'
                   : isLit ? 'rgba(251, 191, 36, 0.5)'
                   : '#4b4b52'
@@ -790,6 +828,112 @@ export default function FloorPlan({
                 </g>
               );
             })()}
+          </g>
+        );
+      })}
+
+      {/* Walls: the real structure, drawn over the room fills. */}
+      {walls.map(w => {
+        const kind = w.kind ?? 'interior';
+        const isSelected = selectedId === w.id;
+        const len = wallLength(w);
+        const mx = (w.x1 + w.x2) / 2, my = (w.y1 + w.y2) / 2;
+        // Keep length labels upright: flip any wall that would read upside down.
+        let angle = (Math.atan2(w.y2 - w.y1, w.x2 - w.x1) * 180) / Math.PI;
+        if (angle > 90 || angle < -90) angle += 180;
+
+        return (
+          <g key={w.id}>
+            <line
+              x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2}
+              stroke={isSelected && editingWalls ? '#fafafa' : WALL_COLOUR[kind]}
+              strokeWidth={WALL_WIDTH[kind]}
+              strokeLinecap="round"
+              strokeDasharray={kind === 'glass' ? '0.4 0.25' : undefined}
+              className={editingWalls ? 'cursor-pointer' : 'pointer-events-none'}
+              onClick={e => {
+                if (!editingWalls) return;
+                e.stopPropagation();
+                onSelect(w.id);
+              }}
+            />
+            {editingWalls && isSelected && ([1, 2] as const).map(end => (
+              <circle
+                key={end}
+                cx={end === 1 ? w.x1 : w.x2}
+                cy={end === 1 ? w.y1 : w.y2}
+                r={0.22}
+                fill="#fafafa"
+                className="cursor-move"
+                onPointerDown={e => {
+                  e.stopPropagation();
+                  (e.target as Element).setPointerCapture(e.pointerId);
+                  setDrag({ kind: 'wallEnd', id: w.id, end });
+                }}
+              />
+            ))}
+            {showMeasures && len > 0.4 && (
+              <text
+                x={mx} y={my - 0.16}
+                textAnchor="middle"
+                fontSize={0.26}
+                fill="#a1a1aa"
+                transform={`rotate(${angle} ${mx} ${my})`}
+                className="pointer-events-none"
+              >
+                {len.toFixed(2)} m
+              </text>
+            )}
+          </g>
+        );
+      })}
+
+      {/* Network hardware. Drawn above rooms so it stays visible, and only
+          draggable while editing rooms — it is part of the building, not a
+          controllable device. */}
+      {infrastructure.map(item => {
+        const isSelected = selectedId === item.id;
+        const isRouter = item.kind === 'router';
+        return (
+          <g
+            key={item.id}
+            className={editingRooms ? 'cursor-move' : 'pointer-events-none'}
+            onPointerDown={e => {
+              if (!editingRooms) return;
+              e.stopPropagation();
+              (e.target as Element).setPointerCapture(e.pointerId);
+              const p = toPlan(e);
+              onSelect(item.id);
+              setDrag({ kind: 'infra', id: item.id, grabX: p.x - item.x, grabY: p.y - item.y });
+            }}
+          >
+            {/* Coverage hint, not a measurement — a rough visual reach so the
+                relationship between hardware and devices is legible. */}
+            <circle
+              cx={item.x} cy={item.y} r={isRouter ? 7 : 5}
+              fill={isRouter ? 'rgba(56, 189, 248, 0.045)' : 'rgba(167, 139, 250, 0.045)'}
+              stroke={isRouter ? 'rgba(56, 189, 248, 0.28)' : 'rgba(167, 139, 250, 0.28)'}
+              strokeWidth={0.04}
+              strokeDasharray="0.3 0.25"
+            />
+            <circle
+              cx={item.x} cy={item.y} r={0.42}
+              fill={isRouter ? '#0c4a6e' : '#3b0764'}
+              stroke={isSelected ? '#fafafa' : isRouter ? '#38bdf8' : '#a78bfa'}
+              strokeWidth={isSelected ? 0.08 : 0.05}
+            />
+            <text
+              x={item.x} y={item.y + 0.14} textAnchor="middle" fontSize={0.4}
+              className="pointer-events-none"
+            >
+              {isRouter ? '📶' : '📡'}
+            </text>
+            <text
+              x={item.x} y={item.y + 0.82} textAnchor="middle" fontSize={0.26}
+              fill={isRouter ? '#7dd3fc' : '#c4b5fd'} className="pointer-events-none"
+            >
+              {item.name}{item.band ? ` · ${item.band}` : ''}
+            </text>
           </g>
         );
       })}

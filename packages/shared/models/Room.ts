@@ -34,8 +34,50 @@ export interface PlanRoom extends Room, RoomRect {
   controllable?: boolean;
 }
 
+/**
+ * Network hardware placed on the plan.
+ *
+ * Not a Device: these are never controlled, they are recorded so signal
+ * problems can be reasoned about against where things physically sit. Position
+ * is absolute plan metres rather than room-relative, because an access point
+ * often sits in a hallway or against a wall rather than inside one room.
+ */
+export interface InfraItem {
+  id: string;
+  kind: 'router' | 'repeater';
+  name: string;
+  x: number;
+  y: number;
+  /** 2.4 / 5 GHz, free text — a repeater may be one band only. */
+  band?: string;
+}
+
+/**
+ * A physical wall segment, in plan metres.
+ *
+ * Walls are modelled separately from rooms because the two are not the same
+ * thing. A room rectangle implies four walls, which is wrong for an open plan:
+ * the kitchen, dining and living areas are one continuous space, and drawing a
+ * border between them invents structure that isn't there.
+ *
+ * The distinction matters beyond looks — wireless attenuation depends on what
+ * physically stands between an access point and a device, so an accurate wall
+ * layer is what makes signal reasoning meaningful rather than guesswork.
+ */
+export interface Wall {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** Exterior walls are thicker and attenuate far more than interior ones. */
+  kind?: 'exterior' | 'interior' | 'glass';
+}
+
 export interface FloorPlan {
   /** Snap step in metres. */
   grid: number;
   rooms: PlanRoom[];
+  infrastructure?: InfraItem[];
+  walls?: Wall[];
 }

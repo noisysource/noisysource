@@ -4,7 +4,7 @@ import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
-import type { FloorPlan, PlanRoom, Room } from '@shared/models/Room';
+import type { FloorPlan, InfraItem, PlanRoom, Room, Wall } from '@shared/models/Room';
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
@@ -183,6 +183,14 @@ export default function App() {
 
   function changeRooms(rooms: PlanRoom[]) {
     setDraft(d => (d ? { ...d, plan: { ...d.plan, rooms } } : d));
+  }
+
+  function changeInfra(items: InfraItem[]) {
+    setDraft(d => (d ? { ...d, plan: { ...d.plan, infrastructure: items } } : d));
+  }
+
+  function changeWalls(walls: Wall[]) {
+    setDraft(d => (d ? { ...d, plan: { ...d.plan, walls } } : d));
   }
 
   function updateRoomName(roomId: string, name: string) {
@@ -366,6 +374,8 @@ export default function App() {
       onSelect={setPlanSelectedId}
       onOpenRoom={setOpenRoomId}
       onChangeRooms={changeRooms}
+      onChangeInfra={changeInfra}
+      onChangeWalls={changeWalls}
       onPlaceDevice={placeDevice}
       onDeviceNameChange={updateDeviceName}
       onLightCommand={handleLightCommand}
