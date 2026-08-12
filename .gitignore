@@ -26,7 +26,8 @@ yarn-error.log*
 
 # Compiled output
 
-# Firebase cache
+# Firebase cache — deploy artifacts, not source
+.firebase/
 apps/noisyphocus/kidclub/.env
 functions/lib
 apps/noisyphocus/kidclub/src/lib/featureFlags.ts
