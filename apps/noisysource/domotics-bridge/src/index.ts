@@ -58,6 +58,23 @@ let devices: DeviceConfig[] = [];
 let lastClientAt = 0;
 /** Guards against overlapping polls, which would compete for device sockets. */
 let polling = false;
+/**
+ * Consecutive polls in which *every* device failed.
+ *
+ * Observed after ~2h uptime: every connect returned EHOSTUNREACH while a fresh
+ * Node process on the same machine connected to the same devices instantly, and
+ * netcat did too. Restarting the bridge cured it immediately. The cause is
+ * something process-level rather than the network or our socket handling (fd
+ * count was 25, nowhere near any limit), and it is not something this process
+ * can reason its way out of.
+ *
+ * Since the whole point is to run unattended for months, a wedged process that
+ * quietly reports every thermostat asleep is worse than one that exits and is
+ * restarted. Total failure across several polls is treated as "we are broken"
+ * rather than "the house vanished".
+ */
+let totalFailureStreak = 0;
+const TOTAL_FAILURE_LIMIT = Number(process.env.TOTAL_FAILURE_LIMIT ?? 5);
 let state: { devices: DeviceState[]; updatedAt: number } = { devices: [], updatedAt: 0 };
 /** Per-device cool-off after failures. Absent means "due now". */
 const backoff = new Map<string, { failures: number; nextAt: number }>();
@@ -111,14 +128,33 @@ async function loadConfig(): Promise<DeviceConfig[]> {
   }
 }
 
-async function poll() {
+/**
+ * `force` bypasses backoff. Used when a client turns up after an idle period:
+ * a person opening the app is a strong enough signal to be worth one immediate
+ * attempt on everything, rather than making them wait out a 5-minute cool-off.
+ */
+async function poll(force = false) {
   if (polling) return;
   polling = true;
   try {
     const now = Date.now();
-    const due = devices.filter(d => (backoff.get(d.id)?.nextAt ?? 0) <= now);
+    const due = force
+      ? devices
+      : devices.filter(d => (backoff.get(d.id)?.nextAt ?? 0) <= now);
     const results = await readAll(due);
     for (const r of results) noteResult(r.id, r.online);
+
+    if (results.length > 0) {
+      totalFailureStreak = results.every(r => !r.online) ? totalFailureStreak + 1 : 0;
+      if (totalFailureStreak >= TOTAL_FAILURE_LIMIT) {
+        console.error(
+          `[bridge] every device failed ${totalFailureStreak} polls running — exiting so a ` +
+          'supervisor can restart. If this recurs without a network outage, suspect the ' +
+          'process-level wedge described above.',
+        );
+        process.exit(1);
+      }
+    }
     const byId = new Map(results.map(r => [r.id, r]));
 
     // Devices that are sleeping, backed off, or simply not due keep their last
@@ -208,7 +244,10 @@ async function main() {
       // triggers a refresh straight away. Deliberately not awaited: /state
       // always answers instantly from cache, and the fresh values arrive on the
       // caller's next tick.
-      if (Date.now() - state.updatedAt > ACTIVE_POLL_MS) void poll();
+      const age = Date.now() - state.updatedAt;
+      // Waking from a long idle also bypasses backoff; a routine refresh does
+      // not, so genuinely dead devices keep their cool-off.
+      if (age > ACTIVE_POLL_MS) void poll(age > ACTIVE_WINDOW_MS);
       return state;
     },
     sendCommand: runCommand,

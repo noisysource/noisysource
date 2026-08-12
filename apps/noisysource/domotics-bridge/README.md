@@ -55,6 +55,19 @@ app runs on the same network. A relay becomes necessary only for reaching the
 house from outside it, or once the app is served over HTTPS (browsers block
 `http://` calls from an `https://` page).
 
+## If every device suddenly reads asleep, restart the bridge
+
+Seen after ~2h uptime: every connect returned `EHOSTUNREACH`, while a fresh Node
+process on the same machine — and `netcat` — reached the same devices instantly.
+Not a socket leak (25 fds open, limit 1M) and not the network. Restarting cured
+it at once.
+
+The cause is process-level and unidentified. Rather than sit there reporting a
+house full of sleeping thermostats, the bridge now exits after
+`TOTAL_FAILURE_LIMIT` (default 5) consecutive polls in which *every* device
+failed, so a supervisor can restart it. On the Pi that means systemd with
+`Restart=always`. Run under a supervisor, or this turns a wedge into an outage.
+
 ## Things learned the hard way
 
 - **tuyapi reports socket failures by emitting `error` on the device object, not
