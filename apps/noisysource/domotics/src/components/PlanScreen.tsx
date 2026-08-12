@@ -2,15 +2,25 @@ import { useMemo, useState } from 'react';
 import { Pencil, Check, X, Plus, Trash2, GripVertical } from 'lucide-react';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
+  ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
 import type { FloorPlan, PlanRoom } from '@shared/models/Room';
 import type { DeviceStatus } from '../App';
 import Clock from './Clock';
 import FloorPlanSvg, { type EditTarget } from './FloorPlan';
 
+const DEVICE_ICON: Record<Device['type'], string> = {
+  light: '💡', blind: '🪟', thermostat: '🌡️', heatpump: '🔥',
+};
+
 const STATUS_LABEL: Record<Exclude<DeviceStatus, 'ok'>, string> = {
   loading: 'A ligar…',
   offline: 'Gateway offline',
+};
+
+const BRIDGE_LABEL: Record<Exclude<DeviceStatus, 'ok'>, string> = {
+  loading: 'Bridge…',
+  offline: 'Bridge offline',
 };
 
 interface Props {
@@ -18,6 +28,8 @@ interface Props {
   devices: Device[];
   placements: Record<string, DevicePlacement>;
   deviceStatus: DeviceStatus;
+  /** Local LAN bridge serving the Tuya climate devices. */
+  bridgeStatus: DeviceStatus;
   editMode: boolean;
   editTarget: EditTarget;
   selectedId: string | null;
@@ -29,15 +41,18 @@ interface Props {
   onDeviceNameChange: (deviceId: string, name: string) => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
   onBlindCommand: (deviceId: string, command: BlindCommand) => void;
+  onThermostatCommand: (deviceId: string, command: ThermostatCommand) => void;
+  onHeatPumpCommand: (deviceId: string, command: HeatPumpCommand) => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaveEdit: () => Promise<void>;
 }
 
 export default function PlanScreen({
-  plan, devices, placements, deviceStatus, editMode, editTarget, selectedId,
+  plan, devices, placements, deviceStatus, bridgeStatus, editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
+  onThermostatCommand, onHeatPumpCommand,
   onStartEdit, onCancelEdit, onSaveEdit,
 }: Props) {
   /** Device being dragged from the sidebar onto the plan. */
@@ -101,7 +116,7 @@ export default function PlanScreen({
           <GripVertical size={14} strokeWidth={2} />
         </button>
         <span className="text-sm shrink-0" aria-hidden="true">
-          {device.type === 'light' ? '💡' : '🪟'}
+          {DEVICE_ICON[device.type]}
         </span>
         <input
           className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-zinc-700 focus:border-zinc-500 rounded px-1.5 py-0.5 text-sm text-zinc-200 outline-none transition-colors"
@@ -128,6 +143,17 @@ export default function PlanScreen({
               }`}
             >
               {STATUS_LABEL[deviceStatus]}
+            </span>
+          )}
+          {bridgeStatus !== 'ok' && (
+            <span
+              className={`text-xs px-2 py-1 rounded-lg ${
+                bridgeStatus === 'offline'
+                  ? 'bg-red-950 text-red-300'
+                  : 'bg-zinc-800 text-zinc-400'
+              }`}
+            >
+              {BRIDGE_LABEL[bridgeStatus]}
             </span>
           )}
         </div>
@@ -210,6 +236,8 @@ export default function PlanScreen({
             onExternalDragEnd={() => setExternalDragId(null)}
             onLightCommand={onLightCommand}
             onBlindCommand={onBlindCommand}
+            onThermostatCommand={onThermostatCommand}
+            onHeatPumpCommand={onHeatPumpCommand}
           />
         </main>
 

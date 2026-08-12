@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
+  ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
 import type { PlanRoom } from '@shared/models/Room';
 
@@ -24,17 +25,32 @@ interface Props {
   onExternalDragEnd: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
   onBlindCommand: (deviceId: string, command: BlindCommand) => void;
+  onThermostatCommand: (deviceId: string, command: ThermostatCommand) => void;
+  onHeatPumpCommand: (deviceId: string, command: HeatPumpCommand) => void;
 }
 
 /** Smallest block we allow, in metres — below this a room can't be grabbed. */
 const MIN_SIZE = 0.75;
-const MARGIN = 1;
-/** Marker geometry, in plan metres. */
-const DOT = 0.26;
-const HIT = 0.42;
+/** Padding around the plan. Kept tight — the house's aspect ratio already
+ *  letterboxes it against a wide viewport, so every spare metre counts. */
+const MARGIN = 0.4;
+/** Marker geometry, in plan metres. Sized for fingers, not cursors. */
+const DOT = 0.34;
+const HIT = 0.58;
 /** Blind popover: overall height, and the slider track inside it. */
 const POP_H = 2.7;
 const TRACK_H = 1.6;
+/** Climate popovers. Roomier than the blind one because they carry readings,
+ *  not just a control — the current temperature is the number you actually look
+ *  at, and it was unreadably small when this was 2.0m tall. */
+const THERMO_H = 3.3;
+const THERMO_W = 3.8;
+const TRACK_W = 2.9;
+const PUMP_H = 1.7;
+/** Range the TR01-WF accepts, and the granularity it steps in. */
+const TEMP_MIN = 5;
+const TEMP_MAX = 35;
+const TEMP_STEP = 0.5;
 
 type Drag =
   | { kind: 'move'; id: string; grabX: number; grabY: number }
@@ -49,15 +65,26 @@ function clamp01(v: number) {
   return Math.max(0.04, Math.min(0.96, v));
 }
 
+/** Below this, text is unreadable; truncate rather than shrink further. */
+const MIN_LABEL = 0.2;
+/** Rough average glyph width as a fraction of font size. */
+const GLYPH = 0.55;
+
 /**
- * Pick a label size that actually fits the block. Capped by the room's width
- * and by its height, then shrunk further for long names — "Casa de Banho
- * Miúdos" in a 3 m room otherwise runs straight out of its rectangle. The 0.55
- * factor approximates average glyph width relative to font size.
+ * Fit a room name inside its block.
+ *
+ * Shrinking alone isn't enough: past a point the text is too small to read, and
+ * shrinking indefinitely still let "Casa de Banho Miúdos" spill over its
+ * neighbours. So the size has a floor and the *text* gives way instead —
+ * truncated with an ellipsis, which never overflows regardless of room size.
  */
-function labelSize(name: string, w: number, h: number) {
-  const byName = w / ((name.length + 2) * 0.55);
-  return Math.max(0.14, Math.min(0.42, w / 8, h / 3, byName));
+function fitLabel(name: string, w: number, h: number) {
+  const size = Math.max(MIN_LABEL, Math.min(0.4, w / 7, h / 3.2));
+  const maxChars = Math.floor((w * 0.92) / (size * GLYPH));
+  const text = name.length > maxChars
+    ? `${name.slice(0, Math.max(1, maxChars - 1))}…`
+    : name;
+  return { size, text, fits: name.length <= maxChars };
 }
 
 /**
@@ -67,6 +94,9 @@ function labelSize(name: string, w: number, h: number) {
  */
 function autoPlace(kind: Device['type'], i: number, total: number): DevicePlacement {
   if (kind === 'blind') return { rx: (i + 0.5) / total, ry: 0.86 };
+  // Climate devices get their own band so they don't land under the lights.
+  if (kind === 'thermostat') return { rx: (i + 0.5) / total, ry: 0.68 };
+  if (kind === 'heatpump') return { rx: (i + 0.5) / total, ry: 0.5 };
   const cols = Math.ceil(Math.sqrt(total));
   const rows = Math.ceil(total / cols);
   return {
@@ -80,20 +110,37 @@ function roomStats(devices: Device[], roomId: string) {
   const lights = inRoom.filter(d => d.type === 'light');
   const lit = lights.filter(d => d.type === 'light' && d.state.on).length;
   const blinds = inRoom.filter(d => d.type === 'blind');
-  return { count: inRoom.length, lights: lights.length, lit, blinds: blinds.length };
+  // Only a reachable thermostat contributes a reading; an unreachable one
+  // reports 0 °C, which must never be shown as though it were real.
+  const thermo = inRoom.find(
+    (d): d is Extract<Device, { type: 'thermostat' }> =>
+      d.type === 'thermostat' && d.online !== false,
+  );
+  return {
+    count: inRoom.length,
+    lights: lights.length,
+    lit,
+    blinds: blinds.length,
+    temp: thermo?.state.current,
+    heating: thermo?.state.heating ?? false,
+  };
 }
 
 export default function FloorPlan({
   rooms, devices, placements, grid, editMode, editTarget, selectedId, externalDragId,
   onSelect, onOpenRoom, onChange, onPlaceDevice, onExternalDragEnd,
-  onLightCommand, onBlindCommand,
+  onLightCommand, onBlindCommand, onThermostatCommand, onHeatPumpCommand,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [openBlind, setOpenBlind] = useState<string | null>(null);
+  const [openPopover, setOpenPopover] = useState<string | null>(null);
   /** Live thumb position while a blind slider is held, committed on release. */
   const [blindDrag, setBlindDrag] = useState<
     { id: string; pos: number; top: number; height: number } | null
+  >(null);
+  /** Live target while a thermostat slider is held, committed on release. */
+  const [thermoDrag, setThermoDrag] = useState<
+    { id: string; cx: number; target: number } | null
   >(null);
   /** Live pointer position, in plan metres, while dragging in from the sidebar. */
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
@@ -134,6 +181,8 @@ export default function FloorPlan({
       const sameKind: Record<Device['type'], Device[]> = {
         light: list.filter(d => d.type === 'light'),
         blind: list.filter(d => d.type === 'blind'),
+        thermostat: list.filter(d => d.type === 'thermostat'),
+        heatpump: list.filter(d => d.type === 'heatpump'),
       };
       for (const device of list) {
         const peers = sameKind[device.type];
@@ -232,10 +281,21 @@ export default function FloorPlan({
    * or below the marker without the track semantics changing. Blinds in the top
    * row have no room above them and would otherwise render outside the viewBox.
    */
+  function popoverBase(cy: number, height: number) {
+    const above = cy - height - 0.3 >= view.y;
+    return above ? cy - height - 0.3 : cy + 0.3;
+  }
+
   function popoverOf(cy: number) {
-    const above = cy - POP_H - 0.3 >= view.y;
-    const baseY = above ? cy - POP_H - 0.3 : cy + 0.3;
+    const baseY = popoverBase(cy, POP_H);
     return { baseY, top: baseY + 0.55, height: TRACK_H };
+  }
+
+  /** Slider x -> temperature, snapped to the half degrees the unit accepts. */
+  function targetFromX(x: number, cx: number) {
+    const frac = (x - (cx - TRACK_W / 2)) / TRACK_W;
+    const raw = TEMP_MIN + Math.max(0, Math.min(1, frac)) * (TEMP_MAX - TEMP_MIN);
+    return Math.round(raw / TEMP_STEP) * TEMP_STEP;
   }
 
   function posFromY(y: number, top: number, height: number) {
@@ -243,6 +303,11 @@ export default function FloorPlan({
   }
 
   function onPointerMove(e: React.PointerEvent) {
+    if (thermoDrag) {
+      const p = toPlan(e);
+      setThermoDrag({ ...thermoDrag, target: targetFromX(p.x, thermoDrag.cx) });
+      return;
+    }
     if (blindDrag) {
       const p = toPlan(e);
       setBlindDrag({ ...blindDrag, pos: posFromY(p.y, blindDrag.top, blindDrag.height) });
@@ -286,16 +351,22 @@ export default function FloorPlan({
       onPointerMove={onPointerMove}
       onPointerUp={() => {
         // One command on release, rather than one per step of the drag.
+        if (thermoDrag) {
+          onThermostatCommand(thermoDrag.id, {
+            action: 'setTarget', target: thermoDrag.target,
+          });
+          setThermoDrag(null);
+        }
         if (blindDrag) {
           onBlindCommand(blindDrag.id, { action: 'setPosition', position: blindDrag.pos });
           setBlindDrag(null);
         }
         setDrag(null);
       }}
-      onPointerCancel={() => { setBlindDrag(null); setDrag(null); }}
+      onPointerCancel={() => { setBlindDrag(null); setThermoDrag(null); setDrag(null); }}
       onPointerDown={() => {
         if (editMode) onSelect(null);
-        setOpenBlind(null);
+        setOpenPopover(null);
       }}
     >
       <defs>
@@ -325,17 +396,25 @@ export default function FloorPlan({
               rx={0.12}
               fill={
                 isTarget ? 'rgba(96, 165, 250, 0.22)'
-                  : !room.controllable ? '#18181b'
-                  : isLit ? `rgba(251, 191, 36, ${0.1 + litRatio * 0.2})`
+                  // Storage recedes almost into the background: it gives the
+                  // house its shape but should never compete for attention with
+                  // the rooms you actually control.
+                  : !room.controllable ? '#0f0f11'
+                  : isLit ? `rgba(251, 191, 36, ${0.1 + litRatio * 0.22})`
                   : '#1f1f23'
               }
               stroke={
                 isTarget ? '#60a5fa'
                   : isSelected && editingRooms ? '#fafafa'
-                  : isLit ? 'rgba(251, 191, 36, 0.45)'
-                  : '#3f3f46'
+                  : !room.controllable ? '#232326'
+                  : isLit ? 'rgba(251, 191, 36, 0.5)'
+                  : '#4b4b52'
               }
-              strokeWidth={isTarget || (isSelected && editingRooms) ? 0.09 : 0.05}
+              strokeWidth={
+                isTarget || (isSelected && editingRooms) ? 0.09
+                  : !room.controllable ? 0.03
+                  : 0.05
+              }
               className={
                 editingRooms ? 'cursor-move'
                   : !editMode && room.controllable ? 'cursor-pointer' : ''
@@ -348,20 +427,45 @@ export default function FloorPlan({
               }}
             />
 
-            {/* Room name sits at the top when markers are present so the two
-                don't collide; centred otherwise. */}
-            {room.w > 1.6 && room.h > 1.0 && (
-              <text
-                x={room.x + room.w / 2}
-                y={editMode || stats.count > 0 ? room.y + 0.42 : room.y + room.h / 2}
-                textAnchor="middle"
-                fill={room.controllable ? '#e4e4e7' : '#52525b'}
-                fontSize={labelSize(room.name, room.w, room.h)}
-                className="pointer-events-none"
-              >
-                {room.icon} {room.name}
-              </text>
-            )}
+            {/* Name at the top when markers are present so the two don't
+                collide; centred otherwise. Storage gets a smaller, dimmer
+                label and never a summary line. */}
+            {room.w > 1.3 && room.h > 0.8 && (() => {
+              const label = fitLabel(room.name, room.w, room.h);
+              const size = room.controllable ? label.size : label.size * 0.72;
+              const hasSummary = room.controllable && stats.count > 0;
+              const y = hasSummary || editMode
+                ? room.y + size + 0.18
+                : room.y + room.h / 2 + size * 0.35;
+              return (
+                <g className="pointer-events-none">
+                  <text
+                    x={room.x + room.w / 2}
+                    y={y}
+                    textAnchor="middle"
+                    fill={room.controllable ? '#e4e4e7' : '#3f3f46'}
+                    fontSize={size}
+                  >
+                    {label.text}
+                  </text>
+                  {hasSummary && !editMode && (
+                    <text
+                      x={room.x + room.w / 2}
+                      y={y + size * 1.15}
+                      textAnchor="middle"
+                      fontSize={size * 0.8}
+                      fill={stats.heating ? '#fdba74' : isLit ? '#fbbf24' : '#71717a'}
+                    >
+                      {[
+                        stats.temp !== undefined && Number.isFinite(stats.temp)
+                          ? `${stats.temp.toFixed(1)}°` : null,
+                        stats.lights > 0 ? `${stats.lit}/${stats.lights}` : null,
+                      ].filter(Boolean).join('  ·  ')}
+                    </text>
+                  )}
+                </g>
+              );
+            })()}
 
             {editingRooms && isSelected && (
               <rect
@@ -400,6 +504,49 @@ export default function FloorPlan({
                 stroke={isSelected ? '#fafafa' : on ? '#fcd34d' : '#52525b'}
                 strokeWidth={isSelected ? 0.07 : 0.04}
               />
+            ) : device.type === 'thermostat' ? (
+              // Wider than the dots because it carries a number. Orange only
+              // when the valve is actually open, not merely when target > current.
+              <g opacity={device.online === false ? 0.4 : 1}>
+                <rect
+                  x={cx - 0.54} y={cy - 0.31} width={1.08} height={0.62} rx={0.12}
+                  fill={device.state.heating ? 'rgba(249, 115, 22, 0.28)' : '#27272a'}
+                  stroke={
+                    isSelected ? '#fafafa'
+                      : device.state.heating ? '#f97316' : '#52525b'
+                  }
+                  strokeWidth={isSelected ? 0.07 : 0.04}
+                />
+                <text
+                  x={cx} y={cy + 0.11} textAnchor="middle" fontSize={0.32}
+                  fill={device.state.heating ? '#fdba74' : '#d4d4d8'}
+                  className="pointer-events-none"
+                >
+                  {/* A sleeping valve head keeps its last reading, shown dimmed
+                      by the group opacity above. Only a device we have never
+                      reached shows nothing at all. */}
+                  {Number.isFinite(device.state.current)
+                    ? `${device.state.current.toFixed(1)}°`
+                    : '—'}
+                </text>
+              </g>
+            ) : device.type === 'heatpump' ? (
+              <g opacity={device.online === false ? 0.4 : 1}>
+                <rect
+                  x={cx - 0.34} y={cy - 0.34} width={0.68} height={0.68} rx={0.34}
+                  fill={device.state.on ? 'rgba(239, 68, 68, 0.25)' : '#27272a'}
+                  stroke={
+                    isSelected ? '#fafafa' : device.state.on ? '#ef4444' : '#52525b'
+                  }
+                  strokeWidth={isSelected ? 0.07 : 0.04}
+                />
+                <text
+                  x={cx} y={cy + 0.11} textAnchor="middle" fontSize={0.34}
+                  className="pointer-events-none"
+                >
+                  🔥
+                </text>
+              </g>
             ) : (
               <g>
                 <rect
@@ -428,11 +575,11 @@ export default function FloorPlan({
                 if (editingDevices) return onSelect(device.id);
                 if (editMode) return;
                 if (device.type === 'light') onLightCommand(device.id, { action: 'toggle' });
-                else setOpenBlind(openBlind === device.id ? null : device.id);
+                else setOpenPopover(openPopover === device.id ? null : device.id);
               }}
             />
 
-            {openBlind === device.id && device.type === 'blind' && !editMode && (() => {
+            {openPopover === device.id && device.type === 'blind' && !editMode && (() => {
               const { baseY, top, height } = popoverOf(cy);
               const live = blindDrag?.id === device.id ? blindDrag.pos : device.state.position;
               const thumbY = top + (1 - live / 100) * height;
@@ -487,7 +634,7 @@ export default function FloorPlan({
                     onClick={e => {
                       e.stopPropagation();
                       onBlindCommand(device.id, { action: 'stop' });
-                      setOpenBlind(null);
+                      setOpenPopover(null);
                     }}
                   />
                   <text
@@ -495,6 +642,150 @@ export default function FloorPlan({
                     fontSize={0.24} fill="#e4e4e7" className="pointer-events-none"
                   >
                     Parar
+                  </text>
+                </g>
+              );
+            })()}
+
+            {openPopover === device.id && device.type === 'thermostat' && !editMode && (() => {
+              const baseY = popoverBase(cy, THERMO_H);
+              const t = device.state;
+              const live = thermoDrag?.id === device.id ? thermoDrag.target : t.target;
+              const trackY = baseY + 1.62;
+              const frac = (live - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
+              const thumbX = cx - TRACK_W / 2 + frac * TRACK_W;
+
+              return (
+                <g>
+                  <rect
+                    x={cx - THERMO_W / 2} y={baseY} width={THERMO_W} height={THERMO_H} rx={0.16}
+                    fill="#18181b" stroke="#52525b" strokeWidth={0.04}
+                  />
+
+                  {/* What the room actually is, stated plainly and large — this
+                      is the number you look at; the target is the one you set. */}
+                  <text
+                    x={cx} y={baseY + 0.62} textAnchor="middle" fontSize={0.52}
+                    fill={device.online === false ? '#71717a' : '#fafafa'}
+                    className="pointer-events-none"
+                  >
+                    {Number.isFinite(t.current) ? `${t.current.toFixed(1)}°` : '—'}
+                  </text>
+                  <text
+                    x={cx} y={baseY + 0.98} textAnchor="middle" fontSize={0.26}
+                    fill="#a1a1aa" className="pointer-events-none"
+                  >
+                    {device.online === false ? 'última leitura' : 'agora'}
+                    {t.humidity ? `  ·  ${t.humidity}% humidade` : ''}
+                    {t.battery ? `  ·  ${t.battery}% bat` : ''}
+                  </text>
+
+                  <text
+                    x={cx} y={baseY + 1.48} textAnchor="middle" fontSize={0.36}
+                    fill={t.heating ? '#fdba74' : '#e4e4e7'} className="pointer-events-none"
+                  >
+                    alvo {live.toFixed(1)}°
+                  </text>
+
+                  {/* Slider track. Wider hit area than it looks: the visible bar
+                      is 0.2m but the grab zone is 0.66m tall. */}
+                  <rect
+                    x={cx - TRACK_W / 2 - 0.1} y={trackY - 0.33}
+                    width={TRACK_W + 0.2} height={0.66}
+                    fill="transparent"
+                    className="cursor-pointer"
+                    onPointerDown={e => {
+                      e.stopPropagation();
+                      (e.target as Element).setPointerCapture(e.pointerId);
+                      const p = toPlan(e);
+                      setThermoDrag({ id: device.id, cx, target: targetFromX(p.x, cx) });
+                    }}
+                  />
+                  <rect
+                    x={cx - TRACK_W / 2} y={trackY - 0.1} width={TRACK_W} height={0.2} rx={0.1}
+                    fill="#3f3f46" className="pointer-events-none"
+                  />
+                  <rect
+                    x={cx - TRACK_W / 2} y={trackY - 0.1}
+                    width={Math.max(0, frac * TRACK_W)} height={0.2} rx={0.1}
+                    fill="#f97316" className="pointer-events-none"
+                  />
+                  <circle
+                    cx={thumbX} cy={trackY} r={0.2}
+                    fill="#fafafa" className="pointer-events-none"
+                  />
+
+                  <text
+                    x={cx - TRACK_W / 2} y={trackY + 0.58} textAnchor="middle"
+                    fontSize={0.22} fill="#71717a" className="pointer-events-none"
+                  >
+                    {TEMP_MIN}°
+                  </text>
+                  <text
+                    x={cx + TRACK_W / 2} y={trackY + 0.58} textAnchor="middle"
+                    fontSize={0.22} fill="#71717a" className="pointer-events-none"
+                  >
+                    {TEMP_MAX}°
+                  </text>
+
+                  <rect
+                    x={cx - 0.75} y={baseY + THERMO_H - 0.66} width={1.5} height={0.5} rx={0.1}
+                    fill="#3f3f46" stroke="#71717a" strokeWidth={0.03}
+                    className="cursor-pointer"
+                    onClick={e => {
+                      e.stopPropagation();
+                      onThermostatCommand(device.id, {
+                        action: 'setMode',
+                        mode: t.mode === 'auto' ? 'manual' : 'auto',
+                      });
+                    }}
+                  />
+                  <text
+                    x={cx} y={baseY + THERMO_H - 0.3} textAnchor="middle"
+                    fontSize={0.26} fill="#e4e4e7" className="pointer-events-none"
+                  >
+                    {t.mode === 'auto' ? 'Auto' : 'Manual'}
+                  </text>
+                </g>
+              );
+            })()}
+            {openPopover === device.id && device.type === 'heatpump' && !editMode && (() => {
+              const baseY = popoverBase(cy, PUMP_H);
+              const p = device.state;
+              return (
+                <g>
+                  <rect
+                    x={cx - 1.4} y={baseY} width={2.8} height={PUMP_H} rx={0.14}
+                    fill="#18181b" stroke="#52525b" strokeWidth={0.04}
+                  />
+                  <text
+                    x={cx} y={baseY + 0.4} textAnchor="middle" fontSize={0.24}
+                    fill="#a1a1aa" className="pointer-events-none"
+                  >
+                    Topo {p.tankTop?.toFixed(1) ?? '—'}° · Fundo {p.tankBottom?.toFixed(1) ?? '—'}°
+                  </text>
+                  <text
+                    x={cx} y={baseY + 0.78} textAnchor="middle" fontSize={0.24}
+                    fill="#a1a1aa" className="pointer-events-none"
+                  >
+                    {p.power !== undefined ? `${p.power} W` : 'consumo —'}
+                  </text>
+
+                  <rect
+                    x={cx - 0.75} y={baseY + 1.0} width={1.5} height={0.48} rx={0.1}
+                    fill={p.on ? '#7f1d1d' : '#3f3f46'} stroke="#71717a" strokeWidth={0.03}
+                    className="cursor-pointer"
+                    onClick={e => {
+                      e.stopPropagation();
+                      onHeatPumpCommand(device.id, { action: 'setOn', on: !p.on });
+                      setOpenPopover(null);
+                    }}
+                  />
+                  <text
+                    x={cx} y={baseY + 1.33} textAnchor="middle" fontSize={0.24}
+                    fill="#e4e4e7" className="pointer-events-none"
+                  >
+                    {p.on ? 'Desligar' : 'Ligar'}
                   </text>
                 </g>
               );

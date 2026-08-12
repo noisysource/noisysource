@@ -20,11 +20,18 @@ export interface BlindState {
   movingDirection: 'up' | 'down' | null;
 }
 
+/** Which cloud a device is reached through. Decides the command path. */
+export type Vendor = 'legrand' | 'tuya';
+
 interface DeviceBase {
   id: string;
   roomId: string;
   name: string;
   circuit?: string;
+  /** Absent means 'legrand' — the original single-vendor devices. */
+  vendor?: Vendor;
+  /** False when the cloud reports the device unreachable. */
+  online?: boolean;
   /**
    * Id of the gateway this module sits behind, read from `homestatus`.
    * Netatmo's /setstate answers 400 unless every module carries its `bridge`
@@ -43,7 +50,41 @@ export interface BlindDevice extends DeviceBase {
   state: BlindState;
 }
 
-export type Device = LightDevice | BlindDevice;
+/**
+ * Tuya TR01-WF radiator thermostat. Temperatures here are DEGREES — the API
+ * speaks tenths (`temp_set: 215` = 21.5 °C) and the conversion happens once, at
+ * the data layer, so nothing downstream has to remember the scale.
+ */
+export interface ThermostatState {
+  current: number;
+  target: number;
+  mode: 'manual' | 'auto';
+  /** True while the valve is actually open, i.e. calling for heat. */
+  heating: boolean;
+  humidity?: number;
+  battery?: number;
+}
+
+export interface ThermostatDevice extends DeviceBase {
+  type: 'thermostat';
+  state: ThermostatState;
+}
+
+/** Tuya MTATWHP-5C heat pump. Tank probes, not a room temperature. */
+export interface HeatPumpState {
+  on: boolean;
+  tankTop?: number;
+  tankBottom?: number;
+  /** Instantaneous draw as reported by the unit, in watts. */
+  power?: number;
+}
+
+export interface HeatPumpDevice extends DeviceBase {
+  type: 'heatpump';
+  state: HeatPumpState;
+}
+
+export type Device = LightDevice | BlindDevice | ThermostatDevice | HeatPumpDevice;
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -72,3 +113,10 @@ export type BlindCommand =
   | { action: 'moveDown' }
   | { action: 'stop' }
   | { action: 'setPosition'; position: number };
+
+/** `target` is in degrees; the data layer converts to Tuya's tenths. */
+export type ThermostatCommand =
+  | { action: 'setTarget'; target: number }
+  | { action: 'setMode'; mode: 'manual' | 'auto' };
+
+export type HeatPumpCommand = { action: 'setOn'; on: boolean };

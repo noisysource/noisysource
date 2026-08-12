@@ -1,0 +1,136 @@
+import TuyAPI from 'tuyapi';
+import { dpsToStatus } from './dpmap';
+
+/** Tuya datapoints only ever carry these; tuyapi's `set` rejects anything wider. */
+export type DpValue = string | number | boolean;
+
+export interface DeviceConfig {
+  id: string;
+  name: string;
+  category: string;
+  localKey: string;
+  ip: string;
+  version: string;
+}
+
+export interface DeviceState {
+  id: string;
+  name: string;
+  category: string;
+  online: boolean;
+  status: Array<{ code: string; value: unknown }>;
+  /** When `status` was last read successfully. Set while a device is offline. */
+  lastSeen?: number;
+}
+
+/**
+ * Tuya devices accept only a couple of concurrent local connections and
+ * regularly refuse one outright — errors 901/905 were seen repeatedly during
+ * the spike, with the same device succeeding on a later attempt. Retrying is
+ * therefore normal operation, not exception handling.
+ */
+const ATTEMPTS = 2;
+const RETRY_DELAY_MS = 2500;
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Build a device with an `error` listener already attached.
+ *
+ * tuyapi reports socket failures by emitting `error` on the device, not by
+ * rejecting the promise you are awaiting — a timeout fires asynchronously, well
+ * outside the try/catch around `connect()`. An EventEmitter with no `error`
+ * listener is fatal in Node, so without this the whole bridge dies the first
+ * time a device is slow. These devices are slow often; this killed the process
+ * after seven polls in testing.
+ *
+ * The listener is intentionally near-silent: the retry path already reports
+ * what matters, and logging every transient socket blip would bury real news.
+ */
+function openDevice(config: DeviceConfig): TuyAPI {
+  const device = new TuyAPI({
+    id: config.id,
+    key: config.localKey,
+    ip: config.ip,
+    version: config.version,
+    issueGetOnConnect: false,
+  });
+  device.on('error', () => { /* handled by the retry logic below */ });
+  return device;
+}
+
+async function readOnce(config: DeviceConfig): Promise<Record<string, unknown>> {
+  const device = openDevice(config);
+  try {
+    await device.connect();
+    const data = await device.get({ schema: true });
+    const dps = (data as { dps?: Record<string, unknown> })?.dps;
+    if (!dps) throw new Error('no dps in response');
+    return dps;
+  } finally {
+    // Always hang up: a leaked socket consumes one of the device's few slots
+    // and makes the *next* poll fail.
+    try { device.disconnect(); } catch { /* already gone */ }
+  }
+}
+
+export async function readDevice(config: DeviceConfig): Promise<DeviceState> {
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    try {
+      const dps = await readOnce(config);
+      return {
+        id: config.id,
+        name: config.name,
+        category: config.category,
+        online: true,
+        status: dpsToStatus(config.category, dps),
+      };
+    } catch (err) {
+      if (attempt === ATTEMPTS) {
+        console.warn(`[tuya] ${config.name}: unreachable after ${ATTEMPTS} attempts —`,
+          (err as Error).message);
+        break;
+      }
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+  return {
+    id: config.id,
+    name: config.name,
+    category: config.category,
+    online: false,
+    status: [],
+  };
+}
+
+/**
+ * Read every device. Sequential on purpose — hitting seven devices at once
+ * competes for the same scarce connection slots and measurably increases the
+ * failure rate.
+ */
+export async function readAll(configs: DeviceConfig[]): Promise<DeviceState[]> {
+  const out: DeviceState[] = [];
+  for (const config of configs) out.push(await readDevice(config));
+  return out;
+}
+
+export async function sendCommands(
+  config: DeviceConfig,
+  dps: Record<string, DpValue>,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const device = openDevice(config);
+    try {
+      await device.connect();
+      await device.set({ multiple: true, data: dps });
+      return;
+    } catch (err) {
+      lastError = err;
+      await sleep(RETRY_DELAY_MS);
+    } finally {
+      try { device.disconnect(); } catch { /* already gone */ }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}

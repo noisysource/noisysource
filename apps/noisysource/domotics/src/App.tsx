@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
+  ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
 import type { FloorPlan, PlanRoom, Room } from '@shared/models/Room';
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
+import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
+import { fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
 import PlanScreen from './components/PlanScreen';
@@ -48,10 +51,12 @@ const PLAN_REF = () => doc(db, 'domotics_config', 'floorplan');
 
 export default function App() {
   const [devices, setDevices] = useState<Device[]>([]);
+  const [tuyaDevices, setTuyaDevices] = useState<Device[]>([]);
   const [plan, setPlan] = useState<FloorPlan>(defaultFloorPlan);
   const [customization, setCustomization] = useState<Customization>(EMPTY);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('loading');
+  const [bridgeStatus, setBridgeStatus] = useState<DeviceStatus>('loading');
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
@@ -98,11 +103,32 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // The bridge is on the LAN, so polling it is nearly free — which finally
+  // makes climate state live rather than a snapshot taken at mount.
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const state = await fetchBridgeState();
+        if (cancelled) return;
+        setTuyaDevices(buildTuyaDevices(state.devices ?? []));
+        setBridgeStatus('ok');
+      } catch {
+        if (!cancelled) setBridgeStatus('offline');
+      }
+    }
+    void tick();
+    const id = setInterval(() => void tick(), 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   const editMode = draft !== null;
   const activePlan = draft?.plan ?? plan;
   const activeCustom = draft?.customization ?? customization;
 
-  const effectiveDevices = devices.map(d => ({
+  const allDevices = [...devices, ...tuyaDevices];
+
+  const effectiveDevices = allDevices.map(d => ({
     ...d,
     name: activeCustom.deviceNames[d.id] ?? d.name,
     roomId: activeCustom.deviceRooms[d.id] ?? d.roomId,
@@ -237,6 +263,45 @@ export default function App() {
     }
   }
 
+  async function handleThermostatCommand(deviceId: string, command: ThermostatCommand) {
+    setTuyaDevices(prev => prev.map(d =>
+      d.id !== deviceId || d.type !== 'thermostat' ? d
+        : {
+            ...d,
+            state: command.action === 'setTarget'
+              ? { ...d.state, target: command.target }
+              : { ...d.state, mode: command.mode },
+          }
+    ));
+
+    const commands = command.action === 'setTarget'
+      ? [{ code: 'temp_set', value: toTuyaTemp(command.target) }]
+      : [{ code: 'mode', value: command.mode }];
+
+    try {
+      // The bridge answers with freshly read state, so the optimistic guess is
+      // replaced by the truth immediately rather than at the next poll.
+      const state = await sendBridgeCommand(deviceId, commands);
+      if (state) setTuyaDevices(buildTuyaDevices(state.devices));
+    } catch (err) {
+      console.error('Bridge command failed:', err);
+    }
+  }
+
+  async function handleHeatPumpCommand(deviceId: string, command: HeatPumpCommand) {
+    setTuyaDevices(prev => prev.map(d =>
+      d.id !== deviceId || d.type !== 'heatpump' ? d
+        : { ...d, state: { ...d.state, on: command.on } }
+    ));
+
+    try {
+      const state = await sendBridgeCommand(deviceId, [{ code: 'switch', value: command.on }]);
+      if (state) setTuyaDevices(buildTuyaDevices(state.devices));
+    } catch (err) {
+      console.error('Bridge command failed:', err);
+    }
+  }
+
   const editProps: EditProps = {
     editMode,
     allRooms: activePlan.rooms,
@@ -271,6 +336,7 @@ export default function App() {
       devices={effectiveDevices}
       placements={activeCustom.devicePositions}
       deviceStatus={deviceStatus}
+      bridgeStatus={bridgeStatus}
       editMode={editMode}
       editTarget={editTarget}
       selectedId={planSelectedId}
@@ -282,6 +348,8 @@ export default function App() {
       onDeviceNameChange={updateDeviceName}
       onLightCommand={handleLightCommand}
       onBlindCommand={handleBlindCommand}
+      onThermostatCommand={handleThermostatCommand}
+      onHeatPumpCommand={handleHeatPumpCommand}
       onStartEdit={startEdit}
       onCancelEdit={cancelEdit}
       onSaveEdit={saveEdit}
