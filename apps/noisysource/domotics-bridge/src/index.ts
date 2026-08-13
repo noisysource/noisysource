@@ -178,11 +178,28 @@ async function loadConfig(): Promise<DeviceConfig[]> {
  */
 async function publish() {
   if (!db) return;
-  const fingerprint = JSON.stringify(state.devices);
+  // The inverter belongs in the fingerprint, not just the payload: solar and
+  // battery figures are the part of this that actually moves minute to minute,
+  // and keying only on the thermostats meant a quiet house never republished,
+  // leaving the relayed energy numbers frozen wherever they happened to be.
+  //
+  // That does make a write likely on every poll, since watts are never quite
+  // still. It stays cheap because the poll rate is the real limit — 30s while
+  // someone is watching, 300s otherwise — so this is a few hundred writes on a
+  // normal day and a few thousand on a heavily watched one, against a free tier
+  // of twenty thousand.
+  const fingerprint = JSON.stringify({ devices: state.devices, inverter: state.inverter });
   if (fingerprint === lastRelayFingerprint) return;
   if (Date.now() - lastRelayAt < RELAY_MIN_INTERVAL_MS) return;
   try {
-    await db.setDoc(STATE_DOC, { devices: state.devices, updatedAt: new Date() });
+    await db.setDoc(STATE_DOC, {
+      devices: state.devices,
+      // Explicitly null rather than omitted: an absent field is left untouched
+      // by the update mask, so a failed inverter read would otherwise leave the
+      // last good figures on display as though they were current.
+      inverter: state.inverter ?? null,
+      updatedAt: new Date(),
+    });
     lastRelayFingerprint = fingerprint;
     lastRelayAt = Date.now();
   } catch (err) {
