@@ -81,7 +81,19 @@ export default function App() {
 
   useEffect(() => watchAuth(u => { setUser(u); setAuthReady(true); }), []);
 
+  /**
+   * Gated pages must not do any work.
+   *
+   * An early return does not stop effects — hooks run on every render — so
+   * without this the sign-in screen still called the gateway and polled
+   * Firestore, where every relay read is denied and the SDK retries the
+   * connection indefinitely. The visible symptom was the browser's network
+   * panel filling with failures fast enough to lock up devtools.
+   */
+  const gated = requiresSignIn() && !user;
+
   useEffect(() => {
+    if (gated) return;
     // Nothing here blocks the first paint: the plan comes from local seed data
     // and renders immediately, so a slow or unreachable gateway costs device
     // state but never the whole UI.
@@ -121,7 +133,7 @@ export default function App() {
         if (snap.exists()) setPlan(snap.data() as FloorPlan);
       })
       .catch(() => {});
-  }, []);
+  }, [gated]);
 
   /**
    * Climate state refresh.
@@ -134,6 +146,7 @@ export default function App() {
    * response carries freshly read state.
    */
   useEffect(() => {
+    if (gated) return;
     let cancelled = false;
 
     async function tick() {
@@ -163,7 +176,7 @@ export default function App() {
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, []);
+  }, [gated]);
 
   const editMode = draft !== null;
   const activePlan = draft?.plan ?? plan;
@@ -370,7 +383,7 @@ export default function App() {
 
   // Served from the public internet, the house is not shown to anyone who has
   // not signed in. On the LAN this is skipped entirely — see requiresSignIn.
-  if (requiresSignIn() && !user) {
+  if (gated) {
     return authReady
       ? <SignInScreen onSignIn={signIn} />
       : <div className="h-screen bg-zinc-950" />;
