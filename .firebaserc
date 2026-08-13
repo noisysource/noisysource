@@ -18,7 +18,8 @@
     "kidclub-dev": {
       "hosting": {
         "finances": ["kidclub-dev-finhub"],
-        "kidclub":  ["kidclub-dev-arcoiris"]
+        "kidclub":  ["kidclub-dev-arcoiris"],
+        "domotics": ["kidclub-dev-domotics"]
       }
     },
     "rainbow-prod-2454b": {
