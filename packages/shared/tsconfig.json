@@ -7,7 +7,10 @@
     "outDir": "dist",
     "rootDir": ".",
     "module": "CommonJS",
-    "target": "ES2020",
+    // ES2023 for Array.prototype.findLast, which amortization.ts already uses.
+    // Node 22 runs all of this, so the old ES2020 target only ever hid the
+    // method from the type checker.
+    "target": "ES2023",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true

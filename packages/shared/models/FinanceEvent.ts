@@ -21,6 +21,7 @@ export type FinanceEventStatus = 'planned' | 'confirmed' | 'cancelled' | 'correc
 
 export type FinanceEventSource =
   | 'ec_contract'
+  | 'credit_contract'
   | 'employment_contract'
   | 'recurring'
   | 'manual'
