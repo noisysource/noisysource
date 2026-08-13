@@ -124,7 +124,20 @@ async function getToken(config: TuyaConfig & { host: string }): Promise<string> 
  * `switch`, …) vary per product, so the UI can only be built once we have seen
  * what these particular thermostats actually report.
  */
-export const tuyaGetDevices = onCall({ region: "europe-west3" }, async () => {
+/**
+ * Same hole the Legrand callables had, and worse here: this one returns every
+ * device's `local_key`, which is all anyone on the network needs to command the
+ * heating directly. A plain unauthenticated `curl` retrieved the full set.
+ * `onCall` does not reject anonymous callers by itself.
+ */
+function requireOwner(auth: { uid?: string } | undefined) {
+  if (!auth?.uid) {
+    throw new HttpsError("unauthenticated", "Sign-in required");
+  }
+}
+
+export const tuyaGetDevices = onCall({ region: "europe-west3" }, async ({ auth }) => {
+  requireOwner(auth);
   const config = await loadConfig();
   const token = await getToken(config);
   const result = await tuyaFetch(
@@ -139,7 +152,8 @@ export const tuyaGetDevices = onCall({ region: "europe-west3" }, async () => {
 export const tuyaSetState = onCall<{
   deviceId: string;
   commands: Array<{ code: string; value: unknown }>;
-}>({ region: "europe-west3" }, async ({ data }) => {
+}>({ region: "europe-west3" }, async ({ data, auth }) => {
+  requireOwner(auth);
   if (!data?.deviceId || !Array.isArray(data.commands) || data.commands.length === 0) {
     throw new HttpsError("invalid-argument", "deviceId and a non-empty commands array are required");
   }
