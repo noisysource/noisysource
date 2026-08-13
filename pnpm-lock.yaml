@@ -126,9 +126,6 @@ importers:
 
   apps/noisysource/domotics-bridge:
     dependencies:
-      firebase-admin:
-        specifier: ^12.7.0
-        version: 12.7.0
       tuyapi:
         specifier: ^7.7.1
         version: 7.7.1

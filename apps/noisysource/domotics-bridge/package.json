@@ -9,7 +9,6 @@
     "dev": "tsc -p tsconfig.json && node lib/index.js"
   },
   "dependencies": {
-    "firebase-admin": "^12.7.0",
     "tuyapi": "^7.7.1"
   },
   "devDependencies": {

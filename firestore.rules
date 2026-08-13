@@ -222,6 +222,11 @@ service cloud.firestore {
     // denied by default instead of depending on someone remembering to add it.
     match /domotics_config/{docId} {
       allow read, write: if docId in ['customization', 'floorplan'];
+      // The bridge additionally reads its own device list, which holds the Tuya
+      // local keys. Added as a separate `allow` so the allowlist above is left
+      // exactly as it is: rules are permissive-OR, so this grants the bridge one
+      // more document and widens nothing for anyone else.
+      allow read: if isBridge() && docId == 'tuya_devices';
     }
 
     // Relay between the house and the app when away from the LAN. At home the
@@ -239,17 +244,27 @@ service cloud.firestore {
         (isOwner() || request.auth.token.email == 'admin@kidclub.pt');
     }
 
-    // Written by the bridge via the Admin SDK, which bypasses rules entirely —
-    // so no client ever needs write access here.
+    // The bridge on the Raspberry Pi. It signs in as an ordinary Firebase Auth
+    // user rather than using a service account, because the org policy
+    // `iam.disableServiceAccountKeyCreation` forbids the key — and because the
+    // role that path needed (roles/datastore.user) would have given a device in
+    // the hall cupboard read/write over every collection here, including the
+    // finances bank data. Identified by email, matching isDomoticsOwner above.
+    function isBridge() {
+      return isAuthenticated() &&
+        request.auth.token.email == 'domotics-bridge@kidclub.pt';
+    }
+
     match /domotics_state/{docId} {
       allow read: if isDomoticsOwner();
-      allow write: if false;
+      allow write: if isBridge();
     }
 
     match /domotics_commands/{docId} {
       allow read, create: if isDomoticsOwner();
-      // The bridge deletes commands once executed, again via the Admin SDK.
-      allow update, delete: if false;
+      // The bridge lists the queue, deletes each command once executed, and
+      // writes an `error` field back onto the ones that fail.
+      allow read, update, delete: if isBridge();
     }
 
     // ── Vault (Finances app) ─────────────────────────────────────────────────

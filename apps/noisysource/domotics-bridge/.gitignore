@@ -1,4 +1,7 @@
 lib/
 node_modules/
-*-service-account.json
 device-cache.json
+
+# Holds the bridge account's password.
+bridge.env
+*.env

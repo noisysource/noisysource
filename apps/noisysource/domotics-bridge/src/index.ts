@@ -1,7 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { initializeApp, applicationDefault } from 'firebase-admin/app';
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { FirestoreRest } from './firestore-rest';
 import { readAll, sendCommands, type DeviceConfig, type DeviceState, type DpValue } from './tuya';
 import { dpForCode } from './dpmap';
 import { startHttp } from './http';
@@ -59,12 +58,34 @@ const RELAY = process.env.RELAY !== '0';
  * goes up when it has actually changed, and never more often than this.
  */
 const RELAY_MIN_INTERVAL_MS = 20_000;
+/**
+ * The REST API cannot watch a collection, so remote commands are polled.
+ *
+ * This is the one cost the move off firebase-admin introduces. An empty query
+ * still bills one read, so at 10s that is ~8.6k reads/day against a 50k free
+ * tier — comfortable, and the ceiling on remote command latency is 10s, which
+ * for heating nobody will notice.
+ */
+const COMMAND_POLL_MS = Number(process.env.COMMAND_POLL_MS ?? 10_000);
 
-initializeApp({ credential: applicationDefault(), projectId: PROJECT_ID });
-const db = getFirestore();
-const CONFIG_DOC = db.doc('domotics_config/tuya_devices');
-const STATE_DOC = db.doc('domotics_state/tuya');
-const COMMANDS = db.collection('domotics_commands');
+const CONFIG_DOC = 'domotics_config/tuya_devices';
+const STATE_DOC = 'domotics_state/tuya';
+const COMMANDS = 'domotics_commands';
+
+/**
+ * Absent when credentials are not configured. Everything Firestore-related is
+ * then skipped and the bridge runs purely on the LAN off its cached device
+ * list, which is the behaviour that matters: the house must not stop working
+ * because a password is missing.
+ */
+const db = process.env.FIREBASE_API_KEY && process.env.BRIDGE_EMAIL && process.env.BRIDGE_PASSWORD
+  ? new FirestoreRest({
+      projectId: PROJECT_ID,
+      apiKey: process.env.FIREBASE_API_KEY,
+      email: process.env.BRIDGE_EMAIL,
+      password: process.env.BRIDGE_PASSWORD,
+    })
+  : undefined;
 
 let devices: DeviceConfig[] = [];
 /** Last time a client asked for state — drives the polling rate. */
@@ -129,8 +150,9 @@ function readCache(): DeviceConfig[] | null {
  */
 async function loadConfig(): Promise<DeviceConfig[]> {
   try {
-    const snap = await CONFIG_DOC.get();
-    const list = (snap.data()?.devices ?? []) as DeviceConfig[];
+    if (!db) throw new Error('no Firestore credentials configured');
+    const doc = await db.getDoc(CONFIG_DOC);
+    const list = (doc?.devices ?? []) as DeviceConfig[];
     if (list.length === 0) throw new Error('config document is empty');
     writeFileSync(CACHE_PATH, JSON.stringify(list, null, 2));
     console.log('[config] loaded from Firestore and cached');
@@ -155,11 +177,12 @@ async function loadConfig(): Promise<DeviceConfig[]> {
  * house should produce almost no writes at all.
  */
 async function publish() {
+  if (!db) return;
   const fingerprint = JSON.stringify(state.devices);
   if (fingerprint === lastRelayFingerprint) return;
   if (Date.now() - lastRelayAt < RELAY_MIN_INTERVAL_MS) return;
   try {
-    await STATE_DOC.set({ devices: state.devices, updatedAt: Timestamp.now() });
+    await db.setDoc(STATE_DOC, { devices: state.devices, updatedAt: new Date() });
     lastRelayFingerprint = fingerprint;
     lastRelayAt = Date.now();
   } catch (err) {
@@ -177,32 +200,50 @@ async function publish() {
  */
 const COMMAND_TTL_MS = 2 * 60_000;
 
-function watchCommands() {
-  COMMANDS.onSnapshot(snap => {
-    for (const change of snap.docChanges()) {
-      if (change.type !== 'added') continue;
-      void handleRelayCommand(change.doc.id, change.doc.data());
+async function pollCommands() {
+  if (!db) return;
+  try {
+    const docs = await db.listDocs(COMMANDS);
+    // Sequential on purpose: each command ends in a device write, and these
+    // devices have very few connection slots.
+    for (const doc of docs) {
+      // A command that failed keeps its error for the app to display. Under a
+      // listener that document was "added" once and never seen again; under
+      // polling it comes back every cycle, so without this guard a broken
+      // command would be retried against the hardware forever.
+      if (doc.data.error) continue;
+      await handleRelayCommand(doc.id, doc.data);
     }
-  }, err => console.warn('[relay] command listener error:', err.message));
+  } catch (err) {
+    console.warn('[relay] command poll failed:', (err as Error).message);
+  }
 }
 
-async function handleRelayCommand(docId: string, data: FirebaseFirestore.DocumentData) {
-  const ref = COMMANDS.doc(docId);
-  const createdAt = data.createdAt as Timestamp | undefined;
-  const age = createdAt ? Date.now() - createdAt.toMillis() : 0;
+async function commandLoop() {
+  await pollCommands();
+  setTimeout(() => void commandLoop(), COMMAND_POLL_MS);
+}
+
+async function handleRelayCommand(docId: string, data: Record<string, unknown>) {
+  const path = `${COMMANDS}/${docId}`;
+  const createdAt = data.createdAt;
+  const age = createdAt instanceof Date ? Date.now() - createdAt.getTime() : 0;
   if (age > COMMAND_TTL_MS) {
     console.warn(`[relay] dropping stale command (${Math.round(age / 1000)}s old)`);
-    await ref.delete().catch(() => {});
+    await db!.deleteDoc(path).catch(() => {});
     return;
   }
   try {
-    await runCommand(data.deviceId as string, data.commands ?? []);
-    await ref.delete();
+    await runCommand(
+      data.deviceId as string,
+      (data.commands ?? []) as Array<{ code: string; value: unknown }>,
+    );
+    await db!.deleteDoc(path);
     await poll(true);
     await publish();
   } catch (err) {
     console.error('[relay] command failed:', (err as Error).message);
-    await ref.set({ error: (err as Error).message }, { merge: true }).catch(() => {});
+    await db!.setDoc(path, { error: (err as Error).message }).catch(() => {});
   }
 }
 
@@ -337,9 +378,16 @@ async function main() {
     refresh: poll,
   });
 
-  if (RELAY) {
-    watchCommands();
-    console.log('[relay] publishing state and watching for remote commands');
+  if (RELAY && db) {
+    void commandLoop();
+    console.log(
+      `[relay] publishing state, polling for remote commands every ${COMMAND_POLL_MS / 1000}s`,
+    );
+  } else if (RELAY) {
+    console.warn(
+      '[relay] disabled — set FIREBASE_API_KEY, BRIDGE_EMAIL and BRIDGE_PASSWORD to reach the ' +
+      'house from outside it. LAN control is unaffected.',
+    );
   }
 
   void loop();
