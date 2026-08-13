@@ -1,6 +1,7 @@
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { app } from './firebase';
+import { isLanOrigin } from './origin';
 
 /**
  * Sign-in for the domotics app.
@@ -29,14 +30,7 @@ export const auth = getAuth(app);
  * it does not care where the page was served from.
  */
 export function requiresSignIn(): boolean {
-  const { hostname } = window.location;
-  const onLan =
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname.endsWith('.local') ||
-    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
-  return !onLan;
+  return !isLanOrigin();
 }
 
 export function watchAuth(cb: (user: User | null) => void) {

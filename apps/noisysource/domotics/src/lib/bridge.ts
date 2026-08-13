@@ -4,6 +4,7 @@ import {
 import type { TuyaDevice } from '../data/tuyaData';
 import type { EnergyReading } from '../data/energy';
 import { db } from './firebase';
+import { isLanOrigin } from './origin';
 
 /**
  * Client for the local domotics bridge.
@@ -13,9 +14,12 @@ import { db } from './firebase';
  * trip measured in milliseconds.
  *
  * Away from home the bridge is unreachable — it sits behind NAT on the house
- * LAN — so these calls fail and we fall back to the Firestore relay, which the
- * bridge publishes to outbound. Same for an HTTPS-served app, where browsers
- * block http:// calls to the LAN as mixed content.
+ * LAN — so we fall back to the Firestore relay, which the bridge publishes to
+ * outbound. The same applies to the hosted build: browsers block http:// calls
+ * to a private address from an https:// page as mixed content. Note the one
+ * exception, which cost some confusion — http://localhost is a trustworthy
+ * origin in Chrome and is *not* blocked, so a hosted page will happily dial it
+ * and get ERR_CONNECTION_REFUSED instead. Hence DIRECT_ENABLED below.
  *
  * The direct path is preferred whenever it works: it is roughly an order of
  * magnitude faster than a round trip through a datacentre, and it keeps working
@@ -24,6 +28,18 @@ import { db } from './firebase';
 
 const BRIDGE_URL =
   (import.meta.env.VITE_BRIDGE_URL as string | undefined) ?? 'http://localhost:8787';
+
+/**
+ * Whether the direct LAN path is worth attempting at all.
+ *
+ * Served from anywhere but the LAN it never is. The bridge sits on a private
+ * address behind NAT, and the one host a browser would still dial —
+ * http://localhost — is treated by Chrome as a trustworthy origin, so the
+ * request is not blocked as mixed content but simply refused, once per poll,
+ * loudly, in the console. Off the LAN the relay is the only route, so ask for
+ * it directly.
+ */
+const DIRECT_ENABLED = BRIDGE_URL !== '' && isLanOrigin();
 
 /** Fail fast: an unreachable bridge should show as offline, not hang the UI. */
 const TIMEOUT_MS = 4000;
@@ -54,7 +70,7 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
  * falling back — four seconds of dead air on each refresh. One failure is
  * enough to switch to the relay; a later success switches back.
  */
-let directWorks = true;
+let directWorks = DIRECT_ENABLED;
 
 export async function fetchBridgeState(): Promise<BridgeState> {
   if (directWorks) {
@@ -68,7 +84,10 @@ export async function fetchBridgeState(): Promise<BridgeState> {
   if (relayed) return relayed;
 
   // Relay empty or unreachable too: retry the direct path once, in case we are
-  // simply back on the home network.
+  // simply back on the home network. Off the LAN there is nothing to retry, and
+  // throwing the LAN error here would report the house offline for what is
+  // really a missing sign-in.
+  if (!DIRECT_ENABLED) throw new Error('bridge unreachable: no relayed state');
   const direct = await request('/state') as BridgeState;
   directWorks = true;
   return direct;
