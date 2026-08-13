@@ -8,6 +8,8 @@ import type { FloorPlan, InfraItem, InfraKind, InfraLayer, PlanRoom, Wall } from
 import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
+import type { EnergyReading } from '../data/energy';
+import { batteryFlow, gridFlow, solarShare, formatWatts } from '../data/energy';
 import type { User } from 'firebase/auth';
 import Clock from './Clock';
 import FloorPlanSvg, { type EditTarget } from './FloorPlan';
@@ -33,6 +35,8 @@ interface Props {
   deviceStatus: DeviceStatus;
   /** Local LAN bridge serving the Tuya climate devices. */
   bridgeStatus: DeviceStatus;
+  /** Live photovoltaic figures; null when the inverter is unreachable. */
+  energy: EnergyReading | null;
   user: User | null;
   onSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
@@ -57,7 +61,7 @@ interface Props {
 }
 
 export default function PlanScreen({
-  plan, devices, placements, deviceStatus, bridgeStatus, user, onSignIn, onSignOut,
+  plan, devices, placements, deviceStatus, bridgeStatus, energy, user, onSignIn, onSignOut,
   editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
@@ -396,6 +400,7 @@ export default function PlanScreen({
             onChange={onChangeRooms}
             infrastructure={plan.infrastructure ?? []}
             onChangeInfra={onChangeInfra}
+            energy={energy}
             walls={walls}
             onChangeWalls={onChangeWalls}
             showMeasures={showMeasures}
@@ -440,6 +445,66 @@ export default function PlanScreen({
           </aside>
         )}
       </div>
+
+      {!editMode && energy?.online && (() => {
+        const battery = batteryFlow(energy);
+        const grid = gridFlow(energy);
+        const share = solarShare(energy);
+        const cell = 'flex flex-col gap-0.5 min-w-[104px]';
+        const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
+        return (
+          <footer className="border-t border-zinc-800/60 px-6 py-3 shrink-0 flex items-center gap-7 flex-wrap">
+            <div className={cell}>
+              <span className={label}>Solar</span>
+              <span className="text-lg text-amber-300 tabular-nums">
+                {formatWatts(energy.pvPowerW)}
+              </span>
+            </div>
+
+            <div className={cell}>
+              <span className={label}>Casa</span>
+              <span className="text-lg text-zinc-100 tabular-nums">
+                {formatWatts(energy.consumptionW)}
+              </span>
+            </div>
+
+            <div className={cell}>
+              <span className={label}>
+                Bateria {battery === 'in' ? '· a carregar' : battery === 'out' ? '· a descarregar' : ''}
+              </span>
+              <span className={`text-lg tabular-nums ${
+                battery === 'in' ? 'text-lime-300' : battery === 'out' ? 'text-orange-300' : 'text-zinc-400'
+              }`}>
+                {formatWatts(energy.batteryPowerW === undefined ? undefined : Math.abs(energy.batteryPowerW))}
+                <span className="text-sm text-zinc-500"> · {energy.soc ?? '—'}%</span>
+              </span>
+            </div>
+
+            <div className={cell}>
+              <span className={label}>
+                Rede {grid === 'out' ? '· a exportar' : grid === 'in' ? '· a importar' : ''}
+              </span>
+              <span className={`text-lg tabular-nums ${
+                grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'
+              }`}>
+                {formatWatts(energy.gridPowerW === undefined ? undefined : Math.abs(energy.gridPowerW))}
+              </span>
+            </div>
+
+            {share !== undefined && (
+              <div className="flex-1 min-w-[160px] flex flex-col gap-1.5">
+                <span className={label}>{Math.round(share * 100)}% do consumo vem do sol</span>
+                <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-all duration-700"
+                    style={{ width: `${share * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </footer>
+        );
+      })()}
 
       {editMode && (
         <footer className="border-t border-zinc-800/60 px-6 py-4 shrink-0">

@@ -2,6 +2,7 @@ import {
   addDoc, collection, doc, getDoc, serverTimestamp,
 } from 'firebase/firestore';
 import type { TuyaDevice } from '../data/tuyaData';
+import type { EnergyReading } from '../data/energy';
 import { db } from './firebase';
 
 /**
@@ -29,6 +30,8 @@ const TIMEOUT_MS = 4000;
 
 export interface BridgeState {
   devices: TuyaDevice[];
+  /** Absent if the bridge could not reach the inverter. */
+  inverter?: EnergyReading;
   updatedAt: number;
 }
 
@@ -105,12 +108,14 @@ async function fetchRelayState(): Promise<BridgeState | null> {
   try {
     const snap = await getDoc(doc(db, 'domotics_state', 'tuya'));
     if (!snap.exists()) return null;
-    const data = snap.data() as { devices?: TuyaDevice[]; updatedAt?: { toMillis(): number } };
+    const data = snap.data() as {
+      devices?: TuyaDevice[]; inverter?: EnergyReading; updatedAt?: { toMillis(): number };
+    };
     const updatedAt = data.updatedAt?.toMillis?.() ?? 0;
     // A bridge that stopped days ago should read as offline, not as a house
     // frozen at whatever it last saw.
     if (!data.devices || Date.now() - updatedAt > RELAY_MAX_AGE_MS) return null;
-    return { devices: data.devices, updatedAt };
+    return { devices: data.devices, inverter: data.inverter, updatedAt };
   } catch {
     return null;
   }

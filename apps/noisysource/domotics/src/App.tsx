@@ -8,6 +8,7 @@ import type { FloorPlan, InfraItem, PlanRoom, Room, Wall } from '@shared/models/
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
+import type { EnergyReading } from './data/energy';
 import { fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
@@ -59,6 +60,7 @@ export default function App() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('loading');
   const [bridgeStatus, setBridgeStatus] = useState<DeviceStatus>('loading');
+  const [energy, setEnergy] = useState<EnergyReading | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
@@ -133,6 +135,7 @@ export default function App() {
         const state = await fetchBridgeState();
         if (cancelled) return;
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
+        setEnergy(state.inverter ?? null);
         setBridgeStatus('ok');
       } catch {
         if (!cancelled) setBridgeStatus('offline');
@@ -378,6 +381,7 @@ export default function App() {
       placements={activeCustom.devicePositions}
       deviceStatus={deviceStatus}
       bridgeStatus={bridgeStatus}
+      energy={energy}
       user={user}
       onSignIn={signIn}
       onSignOut={signOutUser}

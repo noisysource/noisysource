@@ -6,6 +6,8 @@ import type {
 import type { InfraItem, InfraKind, InfraLayer, PlanRoom, Wall } from '@shared/models/Room';
 import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallLength } from '../data/walls';
+import type { EnergyReading } from '../data/energy';
+import { formatWatts } from '../data/energy';
 
 /** Which layer the edit gestures act on. */
 export type EditTarget = 'rooms' | 'devices' | 'walls';
@@ -31,6 +33,7 @@ interface Props {
   showMeasures: boolean;
   /** Which layer is in focus; others render faded rather than hidden. */
   viewLayer: InfraLayer | 'all';
+  energy: EnergyReading | null;
   onPlaceDevice: (deviceId: string, roomId: string, rx: number, ry: number) => void;
   onExternalDragEnd: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
@@ -163,7 +166,7 @@ export default function FloorPlan({
   rooms, devices, placements, grid, editMode, editTarget, selectedId, externalDragId,
   onSelect, onOpenRoom, onChange, onPlaceDevice, onExternalDragEnd,
   onLightCommand, onBlindCommand, onThermostatCommand, onHeatPumpCommand,
-  infrastructure, onChangeInfra, walls, onChangeWalls, showMeasures, viewLayer,
+  infrastructure, onChangeInfra, walls, onChangeWalls, showMeasures, viewLayer, energy,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -923,6 +926,8 @@ export default function FloorPlan({
         const style = INFRA_STYLE[item.kind] ?? INFRA_STYLE.router;
         const layer = item.layer ?? DEFAULT_LAYER[item.kind] ?? 'interior';
         const dimmed = viewLayer !== 'all' && layer !== viewLayer;
+        const hasReading = !editMode && !!energy?.online
+          && (item.kind === 'inverter' || item.kind === 'battery');
         return (
           <g
             key={item.id}
@@ -937,9 +942,11 @@ export default function FloorPlan({
               setDrag({ kind: 'infra', id: item.id, grabX: p.x - item.x, grabY: p.y - item.y });
             }}
           >
-            {/* Coverage hint, not a measurement — a rough visual reach so the
-                relationship between wireless hardware and devices is legible. */}
-            {style.reach !== undefined && (
+            {/* Coverage hint, not a measurement. Shown only while the item is
+                selected: as permanent furniture these rings swamped the plan,
+                and having established that signal geometry is not the problem
+                here, they have not earned the space. */}
+            {style.reach !== undefined && isSelected && (
               <circle
                 cx={item.x} cy={item.y} r={style.reach}
                 fill={`${style.stroke}0d`}
@@ -972,13 +979,31 @@ export default function FloorPlan({
             >
               {style.icon}
             </text>
+            {/* Names matter while arranging things; once placed, the reading is
+                what you actually look at. Equipment often sits close together —
+                inverter beside battery — so showing both collides. */}
             <text
-              x={item.x} y={item.y + 0.82} textAnchor="middle" fontSize={0.26}
+              x={item.x} y={item.y + 0.8} textAnchor="middle" fontSize={0.23}
               fill={style.label} className="pointer-events-none"
             >
-              {item.name}{item.band ? ` · ${item.band}` : ''}
-              {layer === 'roof' ? '  ▲' : layer === 'exterior' ? '  ◇' : ''}
+              {editMode
+                ? `${item.name}${item.band ? ` · ${item.band}` : ''}`
+                : hasReading ? '' : item.name}
+              {editMode && (layer === 'roof' ? '  ▲' : layer === 'exterior' ? '  ◇' : '')}
             </text>
+            {/* Live figure beneath the thing that produces it. Panels share one
+                array total between them rather than each claiming it, so the
+                number sits on the inverter and the panels stay unlabelled. */}
+            {hasReading && (
+              <text
+                x={item.x} y={item.y + 0.86} textAnchor="middle" fontSize={0.3}
+                fill="#fafafa" className="pointer-events-none"
+              >
+                {item.kind === 'inverter'
+                  ? formatWatts(energy.pvPowerW)
+                  : `${energy.soc ?? '—'}%`}
+              </text>
+            )}
           </g>
         );
       })}
