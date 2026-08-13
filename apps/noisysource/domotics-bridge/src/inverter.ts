@@ -27,13 +27,24 @@ const TIMEOUT_MS = 5000;
  * energy counters, so they are deliberately absent here rather than reported
  * as watts.
  *
- * PV power itself is still unmapped: it reads zero after dark, which is
- * indistinguishable from every other zero register, so it needs a daylight
- * correlation against the Renac app before it can be trusted.
+ * The PV registers were found by diffing a midnight dump against a morning one:
+ * 5, 6, 7, 8, 11 and 12 were all zero in the dark and alive at sunrise. The
+ * mapping then verified itself arithmetically — string voltage times current
+ * matches the string power register on both strings, across samples taken
+ * twenty seconds apart, with the values drifting together as the sun rose.
+ *
+ * There is no single "PV total" register on this model; the total is the sum of
+ * the two strings.
  */
 const REG = {
   acVoltage: 1,     // ×0.1 V — moves with the mains, unlike reg 42
   load: 3,          // W — tracks the house
+  pv1Voltage: 5,    // ×0.1 V
+  pv2Voltage: 6,    // ×0.1 V
+  pv1Current: 7,    // ×0.1 A — 0.1 A resolution, so V×I lands a few % low
+  pv2Current: 8,    // ×0.1 A
+  pv1Power: 11,     // W
+  pv2Power: 12,     // W
   gridPower: 22,    // signed W — near zero off-grid
   epsLoad: 50,      // VA — matches the documented map
   batteryPower: 72, // signed W, negative = discharging
@@ -48,8 +59,9 @@ export interface InverterReading {
   epsLoadVA?: number;
   batteryPowerW?: number;
   soc?: number;
-  /** Present until a daylight correlation pins the PV register down. */
+  /** Sum of both strings — this model has no combined register. */
   pvPowerW?: number;
+  pvStrings?: Array<{ voltageV: number; currentA: number; powerW: number }>;
   readAt: number;
 }
 
@@ -106,10 +118,25 @@ export async function readInverter(): Promise<InverterReading> {
     const regs = await readInputRegisters(0, 90);
     const at = (i: number) => regs[i];
 
+    const pvStrings = [
+      {
+        voltageV: at(REG.pv1Voltage) / 10,
+        currentA: at(REG.pv1Current) / 10,
+        powerW: at(REG.pv1Power),
+      },
+      {
+        voltageV: at(REG.pv2Voltage) / 10,
+        currentA: at(REG.pv2Current) / 10,
+        powerW: at(REG.pv2Power),
+      },
+    ];
+
     return {
       online: true,
       acVoltageV: at(REG.acVoltage) / 10,
       loadW: at(REG.load),
+      pvPowerW: pvStrings.reduce((sum, s) => sum + s.powerW, 0),
+      pvStrings,
       gridPowerW: signed16(at(REG.gridPower)),
       epsLoadVA: at(REG.epsLoad),
       batteryPowerW: signed16(at(REG.batteryPower)),
