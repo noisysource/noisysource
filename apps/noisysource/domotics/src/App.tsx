@@ -12,7 +12,8 @@ import type { EnergyReading } from './data/energy';
 import { fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
-import { watchAuth, signIn, signOutUser } from './lib/auth';
+import { watchAuth, signIn, signOutUser, requiresSignIn } from './lib/auth';
+import { SignInScreen } from './components/SignInScreen';
 import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
 import RoomDetail from './components/RoomDetail';
@@ -71,8 +72,14 @@ export default function App() {
    * is available.
    */
   const [user, setUser] = useState<User | null>(null);
+  /**
+   * Firebase restores an existing session asynchronously, so `user` is null for
+   * a moment on every load. Without this the sign-in screen flashes up in front
+   * of someone who is already signed in.
+   */
+  const [authReady, setAuthReady] = useState(false);
 
-  useEffect(() => watchAuth(setUser), []);
+  useEffect(() => watchAuth(u => { setUser(u); setAuthReady(true); }), []);
 
   useEffect(() => {
     // Nothing here blocks the first paint: the plan comes from local seed data
@@ -360,6 +367,14 @@ export default function App() {
   const openRoom = openRoomId != null
     ? (activePlan.rooms.find(r => r.id === openRoomId) ?? null)
     : null;
+
+  // Served from the public internet, the house is not shown to anyone who has
+  // not signed in. On the LAN this is skipped entirely — see requiresSignIn.
+  if (requiresSignIn() && !user) {
+    return authReady
+      ? <SignInScreen onSignIn={signIn} />
+      : <div className="h-screen bg-zinc-950" />;
+  }
 
   if (openRoom) {
     return (
