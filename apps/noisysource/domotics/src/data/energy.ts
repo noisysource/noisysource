@@ -11,8 +11,8 @@ export interface EnergyReading {
   acVoltageV?: number;
   /** Whole house. Derived by the inverter's own arithmetic, not a register. */
   consumptionW?: number;
-  /** EPS-backed circuits only — a subset, roughly 250 W below the house total. */
-  epsLoadW?: number;
+  /** A real but partial load measurement, ~25% below the house total. */
+  subLoadW?: number;
   pvPowerW?: number;
   pvStrings?: Array<{ voltageV: number; currentA: number; powerW: number }>;
   /** Negative while discharging. */

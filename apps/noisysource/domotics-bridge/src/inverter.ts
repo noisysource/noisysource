@@ -38,7 +38,7 @@ const TIMEOUT_MS = 5000;
  */
 const REG = {
   acVoltage: 1,     // ×0.1 V — moves with the mains, unlike reg 42
-  epsLoad: 3,       // W — EPS-backed circuits only, NOT the whole house
+  subLoad: 3,       // W — a subset of house load, ~25% low. NOT the total.
   pv1Voltage: 5,    // ×0.1 V
   pv2Voltage: 6,    // ×0.1 V
   pv1Current: 7,    // ×0.1 A — 0.1 A resolution, so V×I lands a few % low
@@ -46,7 +46,7 @@ const REG = {
   pv1Power: 11,     // W
   pv2Power: 12,     // W
   gridPower: 22,    // signed W — near zero off-grid
-  epsLoadVa: 50,    // VA — same circuits as reg 3, expressed in VA
+  subLoadVa: 50,    // VA — tracks reg 3 closely; same subset, different unit
   batteryPower: 72, // signed W, negative = discharging
   soc: 80,          // %
 } as const;
@@ -58,10 +58,15 @@ export interface InverterReading {
    * Whole-house consumption. Derived, not measured — see readInverter().
    */
   consumptionW?: number;
-  /** EPS-backed circuits only; consistently ~250 W below the house total. */
-  epsLoadW?: number;
+  /**
+   * A real load measurement, but only part of the house — consistently ~25%
+   * below the true total (1090 W against 1450 W when checked against the
+   * vendor app). It tracks load faithfully, so it measures *something* real;
+   * exactly which circuits is unconfirmed. Never present this as consumption.
+   */
+  subLoadW?: number;
   gridPowerW?: number;
-  epsLoadVA?: number;
+  subLoadVA?: number;
   batteryPowerW?: number;
   soc?: number;
   /** Sum of both strings — this model has no combined register. */
@@ -148,16 +153,18 @@ export async function readInverter(): Promise<InverterReading> {
       pvStrings,
       gridPowerW,
       batteryPowerW,
-      epsLoadW: at(REG.epsLoad),
-      epsLoadVA: at(REG.epsLoadVa),
+      subLoadW: at(REG.subLoad),
+      subLoadVA: at(REG.subLoadVa),
       // House consumption has no register on this model — the vendor app
       // derives it, and its own displayed figures balance to the watt:
       // PV 570 + battery 880 - export 50 = 1400, exactly what it showed.
       //
-      // Registers 3 and 50 look like consumption and are not: they track each
-      // other and sit ~250 W below the true total, because they measure only
-      // the EPS-backed circuits. Reporting either as "house consumption" would
-      // understate every bill this eventually feeds.
+      // Registers 3 and 50 look like consumption and are not. Checked against
+      // the vendor app at the same moment: app 1450 W, derived 1406 W (3% off,
+      // explained by the app lagging), reg 3 just 1090 W — 25% low. A scan of
+      // all 400 input registers, 16- and 32-bit, found no register matching the
+      // derived figure, so no whole-house total is exposed at all. Reporting
+      // reg 3 as consumption would understate every bill this eventually feeds.
       //
       // Signs: battery is negative while discharging, grid positive while
       // exporting, so both are subtracted.
