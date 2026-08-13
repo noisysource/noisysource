@@ -38,7 +38,7 @@ const TIMEOUT_MS = 5000;
  */
 const REG = {
   acVoltage: 1,     // ×0.1 V — moves with the mains, unlike reg 42
-  load: 3,          // W — tracks the house
+  epsLoad: 3,       // W — EPS-backed circuits only, NOT the whole house
   pv1Voltage: 5,    // ×0.1 V
   pv2Voltage: 6,    // ×0.1 V
   pv1Current: 7,    // ×0.1 A — 0.1 A resolution, so V×I lands a few % low
@@ -46,7 +46,7 @@ const REG = {
   pv1Power: 11,     // W
   pv2Power: 12,     // W
   gridPower: 22,    // signed W — near zero off-grid
-  epsLoad: 50,      // VA — matches the documented map
+  epsLoadVa: 50,    // VA — same circuits as reg 3, expressed in VA
   batteryPower: 72, // signed W, negative = discharging
   soc: 80,          // %
 } as const;
@@ -54,7 +54,12 @@ const REG = {
 export interface InverterReading {
   online: boolean;
   acVoltageV?: number;
-  loadW?: number;
+  /**
+   * Whole-house consumption. Derived, not measured — see readInverter().
+   */
+  consumptionW?: number;
+  /** EPS-backed circuits only; consistently ~250 W below the house total. */
+  epsLoadW?: number;
   gridPowerW?: number;
   epsLoadVA?: number;
   batteryPowerW?: number;
@@ -118,6 +123,9 @@ export async function readInverter(): Promise<InverterReading> {
     const regs = await readInputRegisters(0, 90);
     const at = (i: number) => regs[i];
 
+    const gridPowerW = signed16(at(REG.gridPower));
+    const batteryPowerW = signed16(at(REG.batteryPower));
+
     const pvStrings = [
       {
         voltageV: at(REG.pv1Voltage) / 10,
@@ -131,15 +139,29 @@ export async function readInverter(): Promise<InverterReading> {
       },
     ];
 
+    const pvPowerW = pvStrings.reduce((sum, str) => sum + str.powerW, 0);
+
     return {
       online: true,
       acVoltageV: at(REG.acVoltage) / 10,
-      loadW: at(REG.load),
-      pvPowerW: pvStrings.reduce((sum, s) => sum + s.powerW, 0),
+      pvPowerW,
       pvStrings,
-      gridPowerW: signed16(at(REG.gridPower)),
-      epsLoadVA: at(REG.epsLoad),
-      batteryPowerW: signed16(at(REG.batteryPower)),
+      gridPowerW,
+      batteryPowerW,
+      epsLoadW: at(REG.epsLoad),
+      epsLoadVA: at(REG.epsLoadVa),
+      // House consumption has no register on this model — the vendor app
+      // derives it, and its own displayed figures balance to the watt:
+      // PV 570 + battery 880 - export 50 = 1400, exactly what it showed.
+      //
+      // Registers 3 and 50 look like consumption and are not: they track each
+      // other and sit ~250 W below the true total, because they measure only
+      // the EPS-backed circuits. Reporting either as "house consumption" would
+      // understate every bill this eventually feeds.
+      //
+      // Signs: battery is negative while discharging, grid positive while
+      // exporting, so both are subtracted.
+      consumptionW: pvPowerW - batteryPowerW - gridPowerW,
       soc: at(REG.soc),
       readAt: Date.now(),
     };
