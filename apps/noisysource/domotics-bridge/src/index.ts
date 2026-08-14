@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FirestoreRest } from './firestore-rest';
+import { isAdminAction, runAdminAction } from './admin';
 import { readAll, sendCommands, type DeviceConfig, type DeviceState, type DpValue } from './tuya';
 import { dpForCode } from './dpmap';
 import { startHttp } from './http';
@@ -71,6 +72,13 @@ const COMMAND_POLL_MS = Number(process.env.COMMAND_POLL_MS ?? 10_000);
 const CONFIG_DOC = 'domotics_config/tuya_devices';
 const STATE_DOC = 'domotics_state/tuya';
 const COMMANDS = 'domotics_commands';
+/**
+ * Administration requests. Kept apart from device commands because they are a
+ * different kind of thing with a different blast radius, and mixing them would
+ * make the security rules harder to read than the extra polled collection is
+ * worth.
+ */
+const ADMIN = 'domotics_admin';
 
 /**
  * Absent when credentials are not configured. Everything Firestore-related is
@@ -217,6 +225,11 @@ async function publish() {
  */
 const COMMAND_TTL_MS = 2 * 60_000;
 
+/** Requests older than this are discarded unanswered rather than executed. */
+const ADMIN_TTL_MS = 5 * 60_000;
+/** How long an answered request is left in place for the app to read. */
+const ADMIN_KEEP_MS = 10 * 60_000;
+
 async function pollCommands() {
   if (!db) return;
   try {
@@ -236,8 +249,83 @@ async function pollCommands() {
   }
 }
 
+/**
+ * Administration requests, answered in place.
+ *
+ * The result is written back onto the same document rather than deleted, so the
+ * app can show it. Whoever asked is responsible for clearing it up; anything
+ * left behind is swept once it ages out, below.
+ */
+async function pollAdmin() {
+  if (!db) return;
+  try {
+    const docs = await db.listDocs(ADMIN);
+    for (const doc of docs) {
+      // Already answered.
+      if (doc.data.result !== undefined || doc.data.error !== undefined) {
+        const done = doc.data.completedAt;
+        if (done instanceof Date && Date.now() - done.getTime() > ADMIN_KEEP_MS) {
+          await db.deleteDoc(`${ADMIN}/${doc.id}`).catch(() => {});
+        }
+        continue;
+      }
+      await handleAdmin(doc.id, doc.data);
+    }
+  } catch (err) {
+    console.warn('[admin] poll failed:', (err as Error).message);
+  }
+}
+
+async function handleAdmin(docId: string, data: Record<string, unknown>) {
+  const path = `${ADMIN}/${docId}`;
+  const action = data.action;
+  const createdAt = data.createdAt;
+  const age = createdAt instanceof Date ? Date.now() - createdAt.getTime() : 0;
+
+  // A request that has been sitting around is not worth acting on — nobody is
+  // still watching for the answer, and restarting the bridge because of
+  // something asked for an hour ago would be surprising.
+  if (age > ADMIN_TTL_MS) {
+    console.warn(`[admin] dropping stale request (${Math.round(age / 1000)}s old)`);
+    await db!.deleteDoc(path).catch(() => {});
+    return;
+  }
+
+  if (!isAdminAction(action)) {
+    await db!.setDoc(path, {
+      error: `unknown action ${JSON.stringify(action)}`,
+      completedAt: new Date(),
+    }).catch(() => {});
+    return;
+  }
+
+  console.log(`[admin] ${action}`);
+  try {
+    const lines = typeof data.lines === 'number' ? data.lines : undefined;
+    const result = await runAdminAction(action, { lines }, {
+      getState: () => state,
+      refresh: () => poll(true),
+      requestRestart: () => {
+        // Answer first, then go. Exiting before the write lands would leave the
+        // caller watching a request that is never answered.
+        setTimeout(() => {
+          console.log('[admin] exiting for restart');
+          process.exit(0);
+        }, 2000);
+      },
+    });
+    await db!.setDoc(path, { result, completedAt: new Date() });
+  } catch (err) {
+    await db!.setDoc(path, {
+      error: (err as Error).message,
+      completedAt: new Date(),
+    }).catch(() => {});
+  }
+}
+
 async function commandLoop() {
   await pollCommands();
+  await pollAdmin();
   setTimeout(() => void commandLoop(), COMMAND_POLL_MS);
 }
 

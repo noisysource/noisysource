@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pencil, Check, X, Plus, Trash2, GripVertical, Ruler } from 'lucide-react';
+import { Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server } from 'lucide-react';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
@@ -40,6 +40,7 @@ interface Props {
   user: User | null;
   onSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
+  onOpenAdmin: () => void;
   editMode: boolean;
   editTarget: EditTarget;
   selectedId: string | null;
@@ -62,6 +63,7 @@ interface Props {
 
 export default function PlanScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, energy, user, onSignIn, onSignOut,
+  onOpenAdmin,
   editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
@@ -363,6 +365,19 @@ export default function PlanScreen({
               >
                 <Ruler size={16} strokeWidth={2} />
               </button>
+              {/* Signed in only: every action behind it needs an identity the
+                  rules will accept, so offering it signed out would only ever
+                  produce a permission error. */}
+              {user && (
+                <button
+                  onClick={onOpenAdmin}
+                  className="flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors mr-1"
+                  aria-label="Estado da ponte"
+                  title="Estado da ponte (Raspberry Pi)"
+                >
+                  <Server size={15} strokeWidth={2} />
+                </button>
+              )}
               {/* Only meaningful away from home, so it stays understated. */}
               <button
                 onClick={() => (user ? onSignOut() : onSignIn())}

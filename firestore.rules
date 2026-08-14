@@ -267,6 +267,20 @@ service cloud.firestore {
       allow read, update, delete: if isBridge();
     }
 
+    // Administration of the bridge itself — status, logs, restart — travelling
+    // the same outbound path as commands, because the Pi accepts no inbound
+    // connection and is otherwise unreachable from outside the house.
+    //
+    // This is a remote-execution channel into a private home, so it is held to
+    // the same rule as the heating: only the owner may ask, and the bridge
+    // enforces a fixed allowlist of actions on top of this. Delete is granted
+    // to the owner as well so a finished request can be cleared from the app.
+    match /domotics_admin/{docId} {
+      allow read, create, delete: if isDomoticsOwner();
+      // The bridge reads requests and writes the answer back onto the document.
+      allow read, update, delete: if isBridge();
+    }
+
     // ── Vault (Finances app) ─────────────────────────────────────────────────
     match /vault_config/{docId} {
       allow read, write: if isFinhubAdmin() || isOwner();

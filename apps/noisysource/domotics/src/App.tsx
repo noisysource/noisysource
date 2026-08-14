@@ -14,6 +14,7 @@ import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
 import { watchAuth, signIn, signOutUser, requiresSignIn } from './lib/auth';
 import { SignInScreen } from './components/SignInScreen';
+import { AdminScreen } from './components/AdminScreen';
 import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
 import RoomDetail from './components/RoomDetail';
@@ -61,6 +62,9 @@ export default function App() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('loading');
   const [bridgeStatus, setBridgeStatus] = useState<DeviceStatus>('loading');
+  /** When the bridge last published, so the admin screen can flag it offline. */
+  const [bridgeUpdatedAt, setBridgeUpdatedAt] = useState<number | undefined>();
+  const [showAdmin, setShowAdmin] = useState(false);
   const [energy, setEnergy] = useState<EnergyReading | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
@@ -156,6 +160,7 @@ export default function App() {
         if (cancelled) return;
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
         setEnergy(state.inverter ?? null);
+        setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
       } catch {
         if (!cancelled) setBridgeStatus('offline');
@@ -389,6 +394,15 @@ export default function App() {
       : <div className="h-screen bg-zinc-950" />;
   }
 
+  if (showAdmin) {
+    return (
+      <AdminScreen
+        onBack={() => setShowAdmin(false)}
+        bridgeUpdatedAt={bridgeUpdatedAt}
+      />
+    );
+  }
+
   if (openRoom) {
     return (
       <RoomDetail
@@ -413,6 +427,7 @@ export default function App() {
       user={user}
       onSignIn={signIn}
       onSignOut={signOutUser}
+      onOpenAdmin={() => setShowAdmin(true)}
       editMode={editMode}
       editTarget={editTarget}
       selectedId={planSelectedId}
