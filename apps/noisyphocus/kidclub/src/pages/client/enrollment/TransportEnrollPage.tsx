@@ -7,6 +7,7 @@ import { familyService } from '../../../services/familyService';
 import { getTransportationConfig } from '../../../services/transportationService';
 import { addDoc } from 'firebase/firestore';
 import { col } from '../../../lib/db';
+import PlacesInput from '../../../components/PlacesInput';
 
 const WEEKDAYS = [
   { label: 'Segunda-feira', value: 'monday' },
@@ -254,23 +255,21 @@ export default function TransportEnrollPage() {
 
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Local de recolha *</label>
-                            <input
-                              type="text"
+                            <PlacesInput
                               required
                               placeholder="Morada ou local"
                               value={slot.pickupLocation}
-                              onChange={e => updateSlot(value, i, 'pickupLocation', e.target.value)}
+                              onChange={v => updateSlot(value, i, 'pickupLocation', v)}
                               className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                             />
                           </div>
 
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Destino</label>
-                            <input
-                              type="text"
+                            <PlacesInput
                               placeholder="Arco-Íris da Pequenada"
                               value={slot.dropoffLocation}
-                              onChange={e => updateSlot(value, i, 'dropoffLocation', e.target.value)}
+                              onChange={v => updateSlot(value, i, 'dropoffLocation', v)}
                               className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                             />
                           </div>

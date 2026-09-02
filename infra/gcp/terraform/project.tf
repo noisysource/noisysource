@@ -10,6 +10,8 @@ resource "google_project_service" "apis" {
     "run.googleapis.com",
     "firestore.googleapis.com",
     "orgpolicy.googleapis.com",
+    "routes.googleapis.com",
+    "places.googleapis.com",
   ])
   service                    = each.key
   disable_on_destroy         = false
