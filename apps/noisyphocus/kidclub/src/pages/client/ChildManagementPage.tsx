@@ -4,6 +4,7 @@ import { Family, Child, StudyRoomEntry, TransportationSubscription } from '@shar
 import { Link } from 'react-router-dom';
 import { calculateAge } from '../../lib/utils';
 import { familyService } from '../../services/familyService';
+import PlacesInput from '../../components/PlacesInput';
 
 interface ChildWithSubs {
   child: Child;
@@ -304,10 +305,11 @@ function AddChildForm({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Escola</label>
-            <input
-              type="text"
+            <PlacesInput
               value={form.schoolName}
-              onChange={e => setForm({ ...form, schoolName: e.target.value })}
+              onChange={v => setForm({ ...form, schoolName: v })}
+              types={['school', 'primary_school', 'secondary_school']}
+              nameOnly
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             />
           </div>
