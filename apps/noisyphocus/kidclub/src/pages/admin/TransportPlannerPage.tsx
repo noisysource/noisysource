@@ -43,7 +43,6 @@ interface Settings {
   vanMonthlyCost: number;
   consumptionPer100km: number;
   electricityPricePerKwh: number;
-  avgKmPerRun: number;
 }
 interface AutoStop { kidId: string; kidName: string; pickupAddr: string; dropoffAddr: string; requestedTime: number }
 interface AutoRun {
@@ -66,6 +65,8 @@ interface AddressOverride { pickup?: string; dropoff?: string }
 interface DriverOverride {
   departureOffsetMin: number;
   waypointOrder?: number[];
+  // Extra dwell time (min) added after each waypoint (by display position), pushing subsequent ETAs forward.
+  waypointExtraMin?: number[];
 }
 interface SavedPlan {
   settings: Settings;
@@ -74,6 +75,8 @@ interface SavedPlan {
   runRemovals?: Record<string, string[]>;
   runAddressOverrides?: Record<string, Record<string, AddressOverride>>;
   driverOverrides?: Record<string, DriverOverride>;
+  driverHourOverrides?: Record<string, number>;
+  locked?: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -85,9 +88,8 @@ const DEFAULT_SETTINGS: Settings = {
   vanMonthlyCost: 200,
   consumptionPer100km: 20,
   electricityPricePerKwh: 0.22,
-  avgKmPerRun: 15,
 };
-const LS_KEY = 'transport_planner_v7';
+const LS_KEY = 'transport_planner_v8';
 const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string;
 const MORNING_DEADLINE_MIN = 8 * 60 + 50;
 const LUNCH_CUTOFF_MIN = 15 * 60;
@@ -124,6 +126,14 @@ function saveToStorage(p: SavedPlan) {
 }
 function eur(n: number) {
   return new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n);
+}
+function fmtHours(h: number): string {
+  const totalMin = Math.round(h * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  if (hh === 0) return `${mm}min`;
+  if (mm === 0) return `${hh}h`;
+  return `${hh}h ${mm}min`;
 }
 function shiftTime(hhmm: string, offsetMin: number): string {
   const [h, m] = hhmm.split(':').map(Number);
@@ -193,8 +203,10 @@ async function optimizeAutoRun(run: AutoRun, vanCapacity: number): Promise<Optim
     kidId: s.kidId, kidName: s.kidName,
     pickupAddress: s.pickupAddr,
     dropoffAddress: s.dropoffAddr.trim() ? s.dropoffAddr : SOLVER_DEPOT,
-    deadlineMin: isMorning ? MORNING_DEADLINE_MIN : s.requestedTime + 45,
-    maxRideMin: isMorning ? 60 : 45,
+    // Morning: must arrive at school by the deadline, max 60 min in van.
+    // Afternoon/lunch: going home — no arrival deadline, no ride-time cap.
+    deadlineMin: isMorning ? MORNING_DEADLINE_MIN : 23 * 60,
+    maxRideMin: isMorning ? 60 : 180,
   }));
   if (!kids.length) return null;
   const result = await solveRoutes(kids, vanCapacity, MAPS_KEY, isMorning ? 'morning' : 'afternoon', isMorning ? undefined : run.targetArrival);
@@ -237,23 +249,38 @@ function Field({ label, value, step, onChange, width = 'w-14' }: { label: string
 function SettingsPanel({ settings, onChange }: { settings: Settings; onChange: (s: Settings) => void }) {
   const set = (k: keyof Settings, v: number) => onChange({ ...settings, [k]: v });
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-3 border-t border-gray-100 mt-3">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-500">Motorista</span>
-        <Field label="€/h" value={settings.driverRatePerHour} step={0.5} onChange={v => set('driverRatePerHour', v)} />
+    <div className="pt-3 border-t border-gray-100 mt-3 space-y-3">
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
+        {/* Driver */}
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Motorista</p>
+          <div className="flex items-center gap-3">
+            <Field label="€/hora" value={settings.driverRatePerHour} step={0.5} onChange={v => set('driverRatePerHour', v)} width="w-14" />
+            <Field label="semanas/mês" value={settings.weeksPerMonth} step={0.01} onChange={v => set('weeksPerMonth', v)} width="w-14" />
+          </div>
+          <p className="text-xs text-gray-300">Custo = horas × tarifa × semanas/mês</p>
+        </div>
+
+        {/* Van */}
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Carrinha</p>
+          <div className="flex items-center gap-3">
+            <Field label="lugares" value={settings.vanCapacity} step={1} onChange={v => set('vanCapacity', v)} width="w-12" />
+            <Field label="€/mês fixo" value={settings.vanMonthlyCost} step={10} onChange={v => set('vanMonthlyCost', v)} width="w-16" />
+          </div>
+          <p className="text-xs text-gray-300">"Lugares" afecta o algoritmo de rotas · custo fixo mensal (seguro, leasing…)</p>
+        </div>
+
+        {/* Energy */}
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Energia</p>
+          <div className="flex items-center gap-3">
+            <Field label="kWh/100km" value={settings.consumptionPer100km} step={0.5} onChange={v => set('consumptionPer100km', v)} width="w-14" />
+            <Field label="€/kWh" value={settings.electricityPricePerKwh} step={0.01} onChange={v => set('electricityPricePerKwh', v)} width="w-14" />
+          </div>
+          <p className="text-xs text-gray-300">Custo calculado com base nos km reais das rotas optimizadas</p>
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-500">Carrinha</span>
-        <Field label="lugares" value={settings.vanCapacity} step={1} onChange={v => set('vanCapacity', v)} />
-        <Field label="€/mês" value={settings.vanMonthlyCost} step={10} onChange={v => set('vanMonthlyCost', v)} width="w-16" />
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-500">Energia</span>
-        <Field label="kWh/100km" value={settings.consumptionPer100km} step={1} onChange={v => set('consumptionPer100km', v)} />
-        <Field label="€/kWh" value={settings.electricityPricePerKwh} step={0.01} onChange={v => set('electricityPricePerKwh', v)} />
-        <Field label="km/viagem" value={settings.avgKmPerRun} step={1} onChange={v => set('avgKmPerRun', v)} />
-      </div>
-      <Field label="semanas/mês" value={settings.weeksPerMonth} step={0.01} onChange={v => set('weeksPerMonth', v)} />
     </div>
   );
 }
@@ -405,6 +432,9 @@ function DriverOverrideModal({ run, route, override, onSave, onClose }: {
   const [order, setOrder] = useState<number[]>(
     override.waypointOrder ?? route.waypoints.map((_, i) => i)
   );
+  const [extraMin, setExtraMin] = useState<number[]>(
+    override.waypointExtraMin ?? route.waypoints.map(() => 0)
+  );
 
   const dirLabel = run.direction === 'morning' ? '🌅 Manhã' : run.direction === 'lunch' ? '🍽 Almoço' : '🌆 Tarde';
   const isDefaultOrder = order.every((v, i) => v === i);
@@ -412,15 +442,32 @@ function DriverOverrideModal({ run, route, override, onSave, onClose }: {
   function moveUp(i: number) {
     if (i === 0) return;
     setOrder(prev => { const a = [...prev]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; return a; });
+    setExtraMin(prev => { const a = [...prev]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; return a; });
   }
   function moveDown(i: number) {
     if (i === order.length - 1) return;
     setOrder(prev => { const a = [...prev]; [a[i], a[i + 1]] = [a[i + 1], a[i]]; return a; });
+    setExtraMin(prev => { const a = [...prev]; [a[i], a[i + 1]] = [a[i + 1], a[i]]; return a; });
   }
+  function adjustExtra(i: number, delta: number) {
+    setExtraMin(prev => { const a = [...prev]; a[i] = Math.max(0, (a[i] ?? 0) + delta); return a; });
+  }
+
+  // Compute display ETAs with departure offset and cumulative per-waypoint extra time
+  const displayEtas = (() => {
+    let cum = offset;
+    return order.map((wpIdx, i) => {
+      const eta = shiftTime(route.waypoints[wpIdx].eta, cum);
+      cum += extraMin[i] ?? 0;
+      return eta;
+    });
+  })();
+
+  const hasExtra = extraMin.some(v => v > 0);
 
   return (
     <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-[420px] max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-[440px] max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <h3 className="font-semibold text-gray-800">🚗 Motorista — {dirLabel}, {DAY_PT[run.day]}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
@@ -446,41 +493,63 @@ function DriverOverrideModal({ run, route, override, onSave, onClose }: {
             </p>
           </div>
 
-          {/* Stop reorder */}
+          {/* Stop reorder + per-waypoint buffer */}
           <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">Ordem das paragens</p>
-            <div className="space-y-1">
+            <p className="text-sm font-medium text-gray-700 mb-2">Paragens e folgas</p>
+            <p className="text-xs text-gray-400 mb-3">Reordene as paragens e adicione tempo extra entre elas.</p>
+            <div className="space-y-0">
               {order.map((wpIdx, i) => {
                 const wp = route.waypoints[wpIdx];
+                const extra = extraMin[i] ?? 0;
                 return (
-                  <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                    <span className={`font-mono text-xs font-semibold shrink-0 ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
-                      {isDefaultOrder ? wp.eta : '~' + shiftTime(wp.eta, offset)}
-                    </span>
-                    <span className={`text-xs shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>
-                      {wp.type === 'pickup' ? '↑' : '↓'}
-                    </span>
-                    <span className="text-sm text-gray-700 flex-1 truncate">
-                      {wp.kidNames.map(n => n.split(' ')[0]).join(', ')}
-                    </span>
-                    <div className="flex gap-0.5 shrink-0">
-                      <button onClick={() => moveUp(i)} disabled={i === 0}
-                        className="px-1 text-gray-300 hover:text-gray-600 disabled:opacity-20 text-sm">↑</button>
-                      <button onClick={() => moveDown(i)} disabled={i === order.length - 1}
-                        className="px-1 text-gray-300 hover:text-gray-600 disabled:opacity-20 text-sm">↓</button>
+                  <div key={i}>
+                    {/* Waypoint row */}
+                    <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                      <span className={`font-mono text-xs font-semibold shrink-0 ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
+                        {(!isDefaultOrder || hasExtra) ? '~' : ''}{displayEtas[i]}
+                      </span>
+                      <span className={`text-xs shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>
+                        {wp.type === 'pickup' ? '↑' : '↓'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</div>
+                        <div className="text-xs text-gray-400 truncate">{wp.address.split(',').slice(0, 2).join(',')}</div>
+                      </div>
+                      <div className="flex gap-0.5 shrink-0">
+                        <button onClick={() => moveUp(i)} disabled={i === 0}
+                          className="px-1 text-gray-300 hover:text-gray-600 disabled:opacity-20 text-sm">↑</button>
+                        <button onClick={() => moveDown(i)} disabled={i === order.length - 1}
+                          className="px-1 text-gray-300 hover:text-gray-600 disabled:opacity-20 text-sm">↓</button>
+                      </div>
                     </div>
+                    {/* Buffer between this stop and the next */}
+                    {i < order.length - 1 && (
+                      <div className="flex items-center gap-2 px-3 py-1">
+                        <div className="flex-1 border-l-2 border-dashed border-gray-200 ml-2" style={{ height: 1 }} />
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => adjustExtra(i, -5)} disabled={extra === 0}
+                            className="w-5 h-5 text-xs rounded border border-gray-200 text-gray-400 hover:text-gray-600 disabled:opacity-20 leading-none">−</button>
+                          <span className={`text-xs font-mono w-12 text-center ${extra > 0 ? 'text-amber-600 font-semibold' : 'text-gray-300'}`}>
+                            {extra > 0 ? `+${extra}min` : '—'}
+                          </span>
+                          <button onClick={() => adjustExtra(i, 5)}
+                            className="w-5 h-5 text-xs rounded border border-gray-200 text-gray-400 hover:text-gray-600 leading-none">+</button>
+                        </div>
+                        <div className="flex-1 border-l-2 border-dashed border-gray-200 ml-2" style={{ height: 1 }} />
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
             {!isDefaultOrder && (
-              <button onClick={() => setOrder(route.waypoints.map((_, i) => i))}
+              <button onClick={() => { setOrder(route.waypoints.map((_, i) => i)); setExtraMin(route.waypoints.map(() => 0)); }}
                 className="text-xs text-gray-400 hover:text-gray-600 mt-2">
-                Repor ordem original
+                Repor tudo
               </button>
             )}
-            {!isDefaultOrder && (
-              <p className="text-xs text-amber-500 mt-1">Os horários (~) são aproximados após reordenação.</p>
+            {(!isDefaultOrder || hasExtra) && (
+              <p className="text-xs text-amber-500 mt-1">Os horários (~) são aproximados após ajustes.</p>
             )}
           </div>
         </div>
@@ -488,7 +557,11 @@ function DriverOverrideModal({ run, route, override, onSave, onClose }: {
         <div className="px-5 py-4 border-t border-gray-100 flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
           <button
-            onClick={() => onSave({ departureOffsetMin: offset, waypointOrder: isDefaultOrder ? undefined : order })}
+            onClick={() => onSave({
+              departureOffsetMin: offset,
+              waypointOrder: isDefaultOrder ? undefined : order,
+              waypointExtraMin: hasExtra ? extraMin : undefined,
+            })}
             className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
             Guardar
           </button>
@@ -499,7 +572,7 @@ function DriverOverrideModal({ run, route, override, onSave, onClose }: {
 }
 
 // ─── RouteCell ────────────────────────────────────────────────────────────────
-function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasOverrides, driverOverride }: {
+function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasOverrides, driverOverride, locked }: {
   run: AutoRun;
   route?: OptimizedRoute | null;
   loading?: boolean;
@@ -508,13 +581,16 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
   onDriverEdit: () => void;
   hasOverrides?: boolean;
   driverOverride?: DriverOverride;
+  locked?: boolean;
 }) {
   const [showAddresses, setShowAddresses] = useState(false);
   const isMorning = run.direction === 'morning';
   const anchorShort = run.anchor.split(',')[0];
   const uniqueDestinations = [...new Set(run.stops.map(s => s.dropoffAddr.split(',')[0]).filter(Boolean))];
 
-  const hasDriverOverride = !!(driverOverride && (driverOverride.departureOffsetMin !== 0 || driverOverride.waypointOrder));
+  const hasDriverOverride = !!(driverOverride && (
+    driverOverride.departureOffsetMin !== 0 || driverOverride.waypointOrder || driverOverride.waypointExtraMin
+  ));
   const displayedWaypoints = route
     ? (driverOverride?.waypointOrder
         ? driverOverride.waypointOrder.map(i => route.waypoints[i])
@@ -524,6 +600,17 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
     ? shiftTime(route.driverStartTime, driverOverride.departureOffsetMin)
     : route?.driverStartTime ?? '';
   const offsetMin = driverOverride?.departureOffsetMin ?? 0;
+
+  // Compute per-waypoint ETAs with cumulative extra dwell time
+  const displayEtas = (() => {
+    let cum = offsetMin;
+    return displayedWaypoints.map((wp, i) => {
+      const eta = shiftTime(wp.eta, cum);
+      cum += driverOverride?.waypointExtraMin?.[i] ?? 0;
+      return eta;
+    });
+  })();
+  const hasAnyOverride = !!(driverOverride?.waypointOrder || driverOverride?.waypointExtraMin);
 
   return (
     <div className={`bg-white rounded-lg border p-2.5 text-xs ${hasDriverOverride ? 'border-blue-200' : hasOverrides ? 'border-amber-200' : 'border-gray-200'}`}>
@@ -565,7 +652,7 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
           {displayedWaypoints.map((wp, i) => (
             <div key={i} className="flex items-start gap-1.5">
               <span className={`font-mono shrink-0 font-semibold ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
-                {driverOverride?.waypointOrder ? '~' : ''}{shiftTime(wp.eta, offsetMin)}
+                {hasAnyOverride ? '~' : ''}{displayEtas[i]}
               </span>
               <span className={`shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>{wp.type === 'pickup' ? '↑' : '↓'}</span>
               {showAddresses
@@ -584,10 +671,16 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
         </div>
       )}
 
-      <button onClick={onOptimize} disabled={loading}
-        className="w-full py-1 text-indigo-500 hover:text-indigo-700 border border-indigo-100 hover:border-indigo-300 rounded bg-indigo-50 hover:bg-indigo-100 transition-colors disabled:opacity-40">
-        {loading ? '…' : route ? '↻ Recalcular' : '🗺 Calcular rota'}
-      </button>
+      {locked ? (
+        <div className="w-full py-1 text-center text-xs text-amber-500 border border-amber-100 rounded bg-amber-50">
+          🔒 bloqueado
+        </div>
+      ) : (
+        <button onClick={onOptimize} disabled={loading}
+          className="w-full py-1 text-indigo-500 hover:text-indigo-700 border border-indigo-100 hover:border-indigo-300 rounded bg-indigo-50 hover:bg-indigo-100 transition-colors disabled:opacity-40">
+          {loading ? '…' : route ? '↻ Recalcular' : '🗺 Calcular rota'}
+        </button>
+      )}
     </div>
   );
 }
@@ -607,6 +700,10 @@ export default function TransportPlannerPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showActiveKids, setShowActiveKids] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [locked, setLocked] = useState<boolean>(saved.locked ?? false);
+  const [driverHourOverrides, setDriverHourOverrides] = useState<Record<string, number>>(saved.driverHourOverrides ?? {});
+  const [driverBreakdownOpen, setDriverBreakdownOpen] = useState(false);
+  const [energyBreakdownOpen, setEnergyBreakdownOpen] = useState(false);
 
   // Manual overrides
   const [runRemovals, setRunRemovals] = useState<Record<string, string[]>>(saved.runRemovals ?? {});
@@ -644,8 +741,8 @@ export default function TransportPlannerPage() {
   }, []);
 
   useEffect(() => {
-    saveToStorage({ settings, manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides });
-  }, [settings, manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides]);
+    saveToStorage({ settings, manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked });
+  }, [settings, manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked]);
 
   const allKids = useMemo(() => {
     const dbIds = new Set(dbKids.map(k => k.id));
@@ -698,7 +795,6 @@ export default function TransportPlannerPage() {
   }
 
   async function handleOptimizeAll() {
-    const allRuns = (Object.values(allAutoRuns).flat() as AutoRun[]).filter(r => r.stops.length > 0);
     for (const run of allRuns) await handleOptimizeRun(run);
   }
 
@@ -720,23 +816,39 @@ export default function TransportPlannerPage() {
     setManualKids(prev => prev.filter(k => k.id !== kidId));
   }
 
+  const effectiveStopCount = (run: AutoRun) =>
+    run.stops.filter(s => !(runRemovals[run.id] ?? []).includes(s.kidId)).length;
+
+  const allRuns = useMemo(
+    () => (Object.values(allAutoRuns).flat() as AutoRun[]).filter(r => effectiveStopCount(r) > 0),
+    [allAutoRuns, runRemovals]
+  );
+
+  const effectiveRunHours = (run: AutoRun): number => {
+    if (driverHourOverrides[run.id] != null) return driverHourOverrides[run.id];
+    if (cellRoutes[run.id]) return cellRoutes[run.id]!.totalDurationMin / 60;
+    return HOURS_PER_RUN;
+  };
+
   const { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyProfit } = useMemo(() => {
-    const allRuns = (Object.values(allAutoRuns).flat() as AutoRun[]).filter(r => r.stops.length > 0);
-    const driverCost = allRuns.reduce((sum, run) => {
-      const hours = cellRoutes[run.id]
-        ? cellRoutes[run.id]!.totalDurationMin / 60
-        : HOURS_PER_RUN;
-      return sum + hours * settings.driverRatePerHour;
-    }, 0) * settings.weeksPerMonth;
+    const driverCost = allRuns.reduce((sum, run) =>
+      sum + effectiveRunHours(run) * settings.driverRatePerHour, 0) * settings.weeksPerMonth;
     const vanCost = settings.vanMonthlyCost;
+
+    // Derive average km from routes that have been calculated; use it as fallback for uncalculated ones.
+    const calculatedKms = allRuns.map(r => cellRoutes[r.id]?.totalDistanceKm).filter((km): km is number => km != null);
+    const avgKmFallback = calculatedKms.length > 0
+      ? calculatedKms.reduce((s, v) => s + v, 0) / calculatedKms.length
+      : 0;
+
     const electricityCost = allRuns.reduce((sum, run) => {
-      const km = cellRoutes[run.id]?.totalDistanceKm ?? settings.avgKmPerRun;
+      const km = cellRoutes[run.id]?.totalDistanceKm ?? avgKmFallback;
       return sum + (km / 100) * settings.consumptionPer100km * settings.electricityPricePerKwh;
     }, 0) * settings.weeksPerMonth;
     const monthlyCost = driverCost + vanCost + electricityCost;
     const monthlyRevenue = allKids.reduce((sum, kid) => sum + kid.requestedSchedule.length * pricePerTrip * settings.weeksPerMonth, 0);
     return { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyProfit: monthlyRevenue - monthlyCost };
-  }, [allAutoRuns, cellRoutes, settings, allKids, pricePerTrip]);
+  }, [allRuns, cellRoutes, settings, allKids, pricePerTrip, driverHourOverrides]);
 
   // For each kid: which (day-period) slots are they actually in (respecting manual removals)
   const kidAssignments = useMemo(() => {
@@ -753,12 +865,12 @@ export default function TransportPlannerPage() {
     return map;
   }, [allAutoRuns, runRemovals]);
 
-  const totalRunCount = useMemo(() => (Object.values(allAutoRuns).flat() as AutoRun[]).filter(r => r.stops.length > 0).length, [allAutoRuns]);
+  const totalRunCount = allRuns.length;
   const totalKidCount = useMemo(() => {
     const ids = new Set<string>();
-    (Object.values(allAutoRuns).flat() as AutoRun[]).forEach(run => run.stops.forEach(s => ids.add(s.kidId)));
+    allRuns.forEach(run => run.stops.forEach(s => ids.add(s.kidId)));
     return ids.size;
-  }, [allAutoRuns]);
+  }, [allRuns]);
 
   const anyLoading = Object.values(cellLoading).some(Boolean);
   const profitColor = monthlyProfit >= 0 ? 'text-green-600' : 'text-red-600';
@@ -773,9 +885,15 @@ export default function TransportPlannerPage() {
               <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Custo mensal</div>
               <div className="text-lg font-bold text-red-600">{eur(monthlyCost)}</div>
               <div className="text-xs text-gray-400 space-x-1.5">
-                <span>{eur(driverCost)} motorista</span><span>·</span>
+                <button onClick={() => setDriverBreakdownOpen(v => !v)}
+                  className={`underline decoration-dashed underline-offset-2 hover:text-gray-600 transition-colors ${driverBreakdownOpen ? 'text-gray-600' : ''}`}>
+                  {eur(driverCost)} motorista
+                </button><span>·</span>
                 <span>{eur(vanCost)} van</span><span>·</span>
-                <span>{eur(electricityCost)} energia</span>
+                <button onClick={() => setEnergyBreakdownOpen(v => !v)}
+                  className={`underline decoration-dashed underline-offset-2 hover:text-gray-600 transition-colors ${energyBreakdownOpen ? 'text-gray-600' : ''}`}>
+                  {eur(electricityCost)} energia
+                </button>
               </div>
             </div>
             <div className="pl-5">
@@ -797,13 +915,211 @@ export default function TransportPlannerPage() {
               className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${settingsOpen ? 'bg-gray-100 border-gray-300 text-gray-700' : 'border-gray-200 hover:bg-gray-50 text-gray-600'}`}>
               ⚙ Definições
             </button>
-            <button onClick={handleOptimizeAll} disabled={anyLoading}
-              className="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60 font-medium">
-              {anyLoading ? '…' : '🗺 Calcular todas as rotas'}
+            {!locked && (
+              <button onClick={handleOptimizeAll} disabled={anyLoading}
+                className="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60 font-medium">
+                {anyLoading ? '…' : '🗺 Calcular todas as rotas'}
+              </button>
+            )}
+            <button
+              onClick={() => setLocked(v => !v)}
+              title={locked ? 'Desbloquear para recalcular rotas' : 'Bloquear setup — congela rotas e cálculos'}
+              className={`text-sm px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                locked
+                  ? 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
+                  : 'border-gray-200 hover:bg-gray-50 text-gray-600'
+              }`}
+            >
+              {locked ? '🔓 Desbloquear' : '🔒 Bloquear'}
             </button>
           </div>
         </div>
         {settingsOpen && <SettingsPanel settings={settings} onChange={setSettings} />}
+        {driverBreakdownOpen && (
+          <div className="pt-3 border-t border-gray-100 mt-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Horas motorista por viagem</span>
+              {Object.keys(driverHourOverrides).length > 0 && (
+                <button onClick={() => setDriverHourOverrides({})} className="text-xs text-gray-400 hover:text-gray-600">repor tudo</button>
+              )}
+            </div>
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr>
+                  <th className="w-10" />
+                  {DAYS.map(d => (
+                    <th key={d} className="text-center font-semibold text-gray-500 pb-1 px-1">{DAY_SHORT[d]}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PERIODS.map(period => (
+                  <tr key={period.id}>
+                    <td className="pr-2 text-right text-gray-400 py-1 align-middle">{period.emoji}</td>
+                    {DAYS.map(day => {
+                      const run = (allAutoRuns[day] ?? []).find(r => r.direction === period.id && effectiveStopCount(r) > 0);
+                      if (!run) return <td key={day} className="px-1 py-1 text-center text-gray-200">—</td>;
+                      const fromRoute = cellRoutes[run.id] != null ? cellRoutes[run.id]!.totalDurationMin / 60 : null;
+                      const override = driverHourOverrides[run.id];
+                      const hours = effectiveRunHours(run);
+                      const isOverridden = override != null;
+                      return (
+                        <td key={day} className="px-1 py-1">
+                          <div className={`rounded border px-1.5 py-1 flex flex-col items-center gap-0.5 ${isOverridden ? 'border-blue-200 bg-blue-50' : 'border-gray-100 bg-gray-50'}`}>
+                            <span className={`font-mono font-semibold tabular-nums ${isOverridden ? 'text-blue-600' : 'text-gray-700'}`}>
+                              {fmtHours(hours)}
+                            </span>
+                            <div className="flex items-center gap-0.5">
+                              <button
+                                onClick={() => setDriverHourOverrides(prev => ({ ...prev, [run.id]: Math.max(0.25, (prev[run.id] ?? hours) - 0.25) }))}
+                                className="w-4 h-4 rounded border border-gray-200 bg-white text-gray-400 hover:text-gray-700 leading-none">−</button>
+                              <button
+                                onClick={() => setDriverHourOverrides(prev => ({ ...prev, [run.id]: (prev[run.id] ?? hours) + 0.25 }))}
+                                className="w-4 h-4 rounded border border-gray-200 bg-white text-gray-400 hover:text-gray-700 leading-none">+</button>
+                              {isOverridden && (
+                                <button
+                                  onClick={() => setDriverHourOverrides(prev => { const { [run.id]: _, ...rest } = prev; return rest; })}
+                                  className="text-blue-300 hover:text-blue-600 leading-none" title="Repor">↺</button>
+                              )}
+                              {!isOverridden && fromRoute == null && (
+                                <span className="text-gray-300 italic">est</span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                  {/* Totals row */}
+                <tr className="border-t border-gray-200">
+                  <td className="pr-2 text-right text-gray-400 py-1.5 font-semibold text-xs">Σ/dia</td>
+                  {DAYS.map(day => {
+                    const dayRuns = allRuns.filter(r => r.day === day);
+                    if (!dayRuns.length) return <td key={day} className="px-1 py-1.5 text-center text-gray-200 text-xs">—</td>;
+                    const total = dayRuns.reduce((s, r) => s + effectiveRunHours(r), 0);
+                    return (
+                      <td key={day} className="px-1 py-1.5 text-center">
+                        <span className="font-mono font-semibold text-gray-700 text-xs">{fmtHours(total)}</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
+
+            {/* Weekly / monthly summary */}
+            {(() => {
+              const weeklyH = allRuns.reduce((s, r) => s + effectiveRunHours(r), 0);
+              const monthlyH = weeklyH * settings.weeksPerMonth;
+              return (
+                <div className="flex items-center gap-5 mt-3 pt-2 border-t border-gray-100 text-xs">
+                  <div>
+                    <span className="text-gray-400">Por semana</span>
+                    <span className="font-mono font-semibold text-gray-700 ml-1.5">{fmtHours(weeklyH)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Por mês</span>
+                    <span className="font-mono font-semibold text-gray-700 ml-1.5">{fmtHours(monthlyH)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Custo motorista</span>
+                    <span className="font-semibold text-red-600 ml-1.5">{eur(driverCost)}/mês</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <p className="text-xs text-gray-400 mt-2">Azul = manual · ↺ repõe o calculado · "est" = rota não calculada</p>
+          </div>
+        )}
+
+        {energyBreakdownOpen && (
+          <div className="pt-3 border-t border-gray-100 mt-3">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalhe energia por viagem</span>
+            <table className="w-full text-xs border-collapse mt-2">
+              <thead>
+                <tr>
+                  <th className="w-10" />
+                  {DAYS.map(d => (
+                    <th key={d} className="text-center font-semibold text-gray-500 pb-1 px-1">{DAY_SHORT[d]}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PERIODS.map(period => (
+                  <tr key={period.id}>
+                    <td className="pr-2 text-right text-gray-400 py-1 align-middle">{period.emoji}</td>
+                    {DAYS.map(day => {
+                      const run = (allAutoRuns[day] ?? []).find(r => r.direction === period.id && effectiveStopCount(r) > 0);
+                      if (!run) return <td key={day} className="px-1 py-1 text-center text-gray-200">—</td>;
+                      const km = cellRoutes[run.id]?.totalDistanceKm;
+                      const hasRoute = km != null;
+                      const kWh = hasRoute ? (km! / 100) * settings.consumptionPer100km : null;
+                      return (
+                        <td key={day} className="px-1 py-1">
+                          <div className={`rounded border px-1.5 py-1 flex flex-col items-center gap-0.5 ${hasRoute ? 'border-gray-100 bg-gray-50' : 'border-dashed border-gray-200 bg-white'}`}>
+                            {hasRoute ? (
+                              <>
+                                <span className="font-mono font-semibold text-gray-700 tabular-nums">{km!.toFixed(1)}km</span>
+                                <span className="text-gray-400 tabular-nums">{kWh!.toFixed(1)}kWh</span>
+                              </>
+                            ) : (
+                              <span className="text-gray-300 italic">est</span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {/* Totals row */}
+                <tr className="border-t border-gray-200">
+                  <td className="pr-2 text-right text-gray-400 py-1.5 font-semibold text-xs">Σ/dia</td>
+                  {DAYS.map(day => {
+                    const dayRuns = allRuns.filter(r => r.day === day);
+                    if (!dayRuns.length) return <td key={day} className="px-1 py-1.5 text-center text-gray-200 text-xs">—</td>;
+                    const totalKm = dayRuns.reduce((s, r) => s + (cellRoutes[r.id]?.totalDistanceKm ?? 0), 0);
+                    return (
+                      <td key={day} className="px-1 py-1.5 text-center">
+                        <span className="font-mono font-semibold text-gray-700 text-xs tabular-nums">{totalKm.toFixed(1)}km</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
+
+            {/* Energy summary footer */}
+            {(() => {
+              const weeklyKm = allRuns.reduce((s, r) => s + (cellRoutes[r.id]?.totalDistanceKm ?? 0), 0);
+              const weeklyKwh = (weeklyKm / 100) * settings.consumptionPer100km;
+              const weeklyEnergyCost = weeklyKwh * settings.electricityPricePerKwh;
+              return (
+                <div className="flex items-center gap-5 mt-3 pt-2 border-t border-gray-100 text-xs flex-wrap">
+                  <div>
+                    <span className="text-gray-400">km/semana</span>
+                    <span className="font-mono font-semibold text-gray-700 ml-1.5 tabular-nums">{weeklyKm.toFixed(1)} km</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">kWh/semana</span>
+                    <span className="font-mono font-semibold text-gray-700 ml-1.5 tabular-nums">{weeklyKwh.toFixed(1)} kWh</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">€/semana</span>
+                    <span className="font-mono font-semibold text-gray-700 ml-1.5 tabular-nums">€{weeklyEnergyCost.toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Custo energia</span>
+                    <span className="font-semibold text-red-600 ml-1.5">{eur(electricityCost)}/mês</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <p className="text-xs text-gray-400 mt-2">"est" = rota não calculada, km não contabilizados · {settings.consumptionPer100km} kWh/100km · €{settings.electricityPricePerKwh}/kWh</p>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -874,7 +1190,7 @@ export default function TransportPlannerPage() {
                         </div>
                       </td>
                       {DAYS.map(day => {
-                        const runsForCell = (allAutoRuns[day] ?? []).filter(r => r.direction === period.id);
+                        const runsForCell = (allAutoRuns[day] ?? []).filter(r => r.direction === period.id && effectiveStopCount(r) > 0);
                         return (
                           <td key={day} className={`p-1 align-top ${pi > 0 ? 'border-t border-gray-100' : ''}`}>
                             {runsForCell.length === 0 ? (
@@ -891,6 +1207,7 @@ export default function TransportPlannerPage() {
                                     loading={cellLoading[run.id]}
                                     hasOverrides={!!(runRemovals[run.id]?.length || runAddressOverrides[run.id])}
                                     driverOverride={driverOverrides[run.id]}
+                                    locked={locked}
                                     onOptimize={() => handleOptimizeRun(run)}
                                     onEdit={() => setEditingRun(run)}
                                     onDriverEdit={() => setDriverEditingRun(run)}

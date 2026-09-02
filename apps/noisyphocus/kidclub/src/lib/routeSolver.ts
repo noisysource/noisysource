@@ -58,9 +58,20 @@ function parseDurMin(d: unknown): number {
   return 0;
 }
 
+// Returns an RFC3339 timestamp for next Tuesday at the given minute-of-day.
+// Tuesday is a stable mid-week reference for historical traffic patterns.
+function nextTuesdayAt(minutesFromMidnight: number): string {
+  const d = new Date();
+  const daysUntilTuesday = ((2 - d.getDay() + 7) % 7) || 7;
+  d.setDate(d.getDate() + daysUntilTuesday);
+  d.setHours(Math.floor(minutesFromMidnight / 60), minutesFromMidnight % 60, 0, 0);
+  return d.toISOString();
+}
+
 async function fetchMatrix(
   addresses: string[],
   mapsKey: string,
+  departureMin?: number, // minutes from midnight — pins departure time for stable traffic results
 ): Promise<{ time: number[][]; dist: number[][] }> {
   const n = addresses.length;
   const time: number[][] = Array.from({ length: n }, (_, i) =>
@@ -69,6 +80,21 @@ async function fetchMatrix(
   const dist: number[][] = Array.from({ length: n }, (_, i) =>
     Array.from({ length: n }, (_, j) => (i === j ? 0 : Infinity)),
   );
+
+  // TRAFFIC_AWARE_OPTIMAL requires origins×destinations ≤ 100 (n ≤ 10).
+  // Fall back to TRAFFIC_AWARE for larger matrices.
+  const routingPreference = n <= 10 ? 'TRAFFIC_AWARE_OPTIMAL' : 'TRAFFIC_AWARE';
+
+  const body: Record<string, unknown> = {
+    origins: addresses.map(a => ({ waypoint: { address: a } })),
+    destinations: addresses.map(a => ({ waypoint: { address: a } })),
+    travelMode: 'DRIVE',
+    routingPreference,
+  };
+  // Pin departure time so results don't change based on when the button is clicked.
+  if (departureMin != null) {
+    body.departureTime = nextTuesdayAt(departureMin);
+  }
 
   const resp = await fetch(
     'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
@@ -79,12 +105,7 @@ async function fetchMatrix(
         'X-Goog-Api-Key': mapsKey,
         'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,distanceMeters,status',
       },
-      body: JSON.stringify({
-        origins: addresses.map(a => ({ waypoint: { address: a } })),
-        destinations: addresses.map(a => ({ waypoint: { address: a } })),
-        travelMode: 'DRIVE',
-        routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
-      }),
+      body: JSON.stringify(body),
     },
   );
 
@@ -254,7 +275,9 @@ export async function solveRoutes(
     }
   }
 
-  const matrix = await fetchMatrix(addresses, mapsKey);
+  // For morning runs use 07:30 as the reference departure time for traffic modelling.
+  const trafficDepartureMin = direction === 'morning' ? 7 * 60 + 30 : (departureMin ?? 16 * 60);
+  const matrix = await fetchMatrix(addresses, mapsKey, trafficDepartureMin);
 
   // ── Map kids to location indices ────────────────────────────────────────────
   const mappedKids: KidWithIdx[] = kids.map(k => ({
