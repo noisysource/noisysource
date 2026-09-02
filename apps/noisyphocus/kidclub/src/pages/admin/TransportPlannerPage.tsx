@@ -241,9 +241,10 @@ function Field({ label, value, step, onChange, width = 'w-14' }: { label: string
   );
 }
 function SettingsModal({
-  initial, onClose, onSave, onApply, saving, applying, applyResult,
+  initial, allKids, onClose, onSave, onApply, saving, applying, applyResult,
 }: {
   initial: TransportationConfig;
+  allKids: PlannerKid[];
   onClose: () => void;
   onSave: (c: TransportationConfig) => Promise<void>;
   onApply: (c: TransportationConfig) => Promise<void>;
@@ -252,9 +253,59 @@ function SettingsModal({
   applyResult: string | null;
 }) {
   const [cfg, setCfg] = useState<TransportationConfig>(initial);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const set = (k: keyof TransportationConfig, v: any) => setCfg(prev => ({ ...prev, [k]: v }));
   const pct = (fraction: number) => Math.round(fraction * 100);
   const frac = (pct: number) => pct / 100;
+
+  // Compute per-family price preview from current cfg + allKids
+  const familyPreview = useMemo(() => {
+    if (!previewOpen || allKids.length === 0) return [];
+    const periodOrder: Record<Period, number> = { morning: 0, lunch: 1, afternoon: 2 };
+
+    // Group and rank siblings
+    const famGroups: Record<string, PlannerKid[]> = {};
+    allKids.forEach(k => { const key = k.familyId ?? k.contactEmail; if (key) (famGroups[key] ??= []).push(k); });
+    Object.values(famGroups).forEach(g => g.sort((a, b) => a.name.localeCompare(b.name)));
+    const sibRank: Record<string, number> = {};
+    Object.values(famGroups).forEach(group => group.forEach((k, i) => { sibRank[k.id] = i + 1; }));
+
+    type KidRow = { kidId: string; name: string; siblingRank: number; slotsPerWeek: number; discounts: string[]; monthlyFee: number };
+    type FamilyRow = { key: string; label: string; kids: KidRow[]; total: number };
+
+    return Object.entries(famGroups).map(([key, kids]) => {
+      const kidRows: KidRow[] = kids.map(kid => {
+        const rank = sibRank[kid.id] ?? 1;
+        const slotsByDay: Record<string, ScheduleSlot[]> = {};
+        for (const slot of kid.requestedSchedule) (slotsByDay[slot.day] ??= []).push(slot);
+        Object.values(slotsByDay).forEach(g => g.sort((a, b) => periodOrder[slotPeriod(a.time)] - periodOrder[slotPeriod(b.time)]));
+
+        let fee = 0;
+        const appliedDiscounts = new Set<string>();
+        for (const [, slots] of Object.entries(slotsByDay)) {
+          slots.forEach((slot, idx) => {
+            const tripRank = idx + 1;
+            let discount = 0;
+            if (rank >= 2) { discount += cfg.siblingDiscountPercentage; if (cfg.siblingDiscountPercentage > 0) appliedDiscounts.add(`irmãos -${pct(cfg.siblingDiscountPercentage)}%`); }
+            for (const sd of (cfg.schoolDiscounts ?? [])) {
+              if (kid.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === kid.schoolName.toLowerCase()) {
+                discount += sd.discountPercentage;
+                if (sd.discountPercentage > 0) appliedDiscounts.add(`escola -${pct(sd.discountPercentage)}%`);
+              }
+            }
+            if (tripRank >= cfg.minTripsForDiscount) { discount += cfg.multiTripDiscountPercentage; if (cfg.multiTripDiscountPercentage > 0) appliedDiscounts.add(`2.ª viagem -${pct(cfg.multiTripDiscountPercentage)}%`); }
+            discount = Math.min(1, discount);
+            fee += cfg.flatRatePerTrip * (1 - discount) * cfg.weeksPerMonth;
+          });
+        }
+        const slotsPerWeek = kid.requestedSchedule.length;
+        return { kidId: kid.id, name: kid.name, siblingRank: rank, slotsPerWeek, discounts: [...appliedDiscounts], monthlyFee: fee };
+      });
+      const total = kidRows.reduce((s, r) => s + r.monthlyFee, 0);
+      const label = key.includes('@') ? key : kids[0]?.name ?? key;
+      return { key, label, kids: kidRows, total } as FamilyRow;
+    }).sort((a, b) => b.total - a.total);
+  }, [previewOpen, cfg, allKids]);
 
   const schoolDiscounts = cfg.schoolDiscounts ?? [];
   const addSchool = () => setCfg(prev => ({ ...prev, schoolDiscounts: [...(prev.schoolDiscounts ?? []), { schoolName: '', discountPercentage: 0 }] }));
@@ -324,7 +375,15 @@ function SettingsModal({
 
           {/* Descontos */}
           <div className="border-t border-gray-100 pt-5 space-y-4">
-            {sectionTitle('Descontos')}
+            <div className="flex items-center justify-between">
+              {sectionTitle('Descontos')}
+              <button
+                onClick={() => setPreviewOpen(v => !v)}
+                className={`text-xs font-medium transition-colors ${previewOpen ? 'text-indigo-600' : 'text-gray-400 hover:text-indigo-500'}`}
+              >
+                {previewOpen ? '▲ Fechar preview' : '▼ Preview por família'}
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Multi-viagem */}
               <div className="bg-gray-50 rounded-lg p-3 space-y-2">
@@ -369,6 +428,45 @@ function SettingsModal({
               </div>
               {hint('Correspondência exacta (sem maiúsculas/minúsculas) com o campo "Escola" da inscrição')}
             </div>
+
+            {/* Family price preview */}
+            {previewOpen && (
+              <div className="border-t border-gray-100 pt-4 space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Preview de preços {cfg.flatRatePerTrip > 0 ? `· €${cfg.flatRatePerTrip}/viagem × ${cfg.weeksPerMonth} sem` : '(configure o preço por viagem)'}
+                </p>
+                {familyPreview.length === 0 && (
+                  <p className="text-xs text-gray-400">Sem alunos carregados.</p>
+                )}
+                <div className="space-y-2">
+                  {familyPreview.map(fam => (
+                    <div key={fam.key} className="bg-gray-50 rounded-lg px-3 py-2.5">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-gray-700 truncate">{fam.label}</span>
+                        <span className="text-sm font-bold text-indigo-700 shrink-0 ml-2">€{fam.total.toFixed(2)}/mês</span>
+                      </div>
+                      <div className="space-y-1">
+                        {fam.kids.map(kid => (
+                          <div key={kid.kidId} className="flex items-center gap-2 text-xs text-gray-500">
+                            <span className="truncate flex-1">{kid.name}</span>
+                            <span className="text-gray-400">{kid.slotsPerWeek} viagem{kid.slotsPerWeek !== 1 ? 's' : ''}/sem</span>
+                            {kid.discounts.map(d => (
+                              <span key={d} className="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-xs shrink-0">{d}</span>
+                            ))}
+                            <span className="font-semibold text-gray-700 tabular-nums shrink-0">€{kid.monthlyFee.toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {familyPreview.length > 0 && (
+                  <p className="text-xs text-gray-400 pt-1">
+                    Total previsto: <strong className="text-gray-600">€{familyPreview.reduce((s, f) => s + f.total, 0).toFixed(2)}/mês</strong>
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1175,6 +1273,7 @@ export default function TransportPlannerPage() {
         {settingsOpen && (
           <SettingsModal
             initial={config}
+            allKids={allKids}
             onClose={() => setSettingsOpen(false)}
             onSave={handleSaveConfig}
             onApply={handleApplyToSubscriptions}
