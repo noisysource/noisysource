@@ -1,8 +1,10 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { getDocs, getDoc, deleteDoc } from 'firebase/firestore';
+import { getDocs, getDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { solveRoutes, SolverKid, DEPOT_ADDRESS as SOLVER_DEPOT } from '../../lib/routeSolver';
+import { TransportationConfig, SchoolDiscount } from '@shared/models/Transportation';
+import { saveTransportationConfig, getActiveTransportationSubscriptions } from '../../services/transportationService';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Day = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri';
@@ -30,19 +32,13 @@ interface PlannerKid {
   id: string;
   source: 'db' | 'manual';
   name: string;
+  familyId?: string;
+  schoolName?: string;
   monthlyFee: number;
   requestedSchedule: ScheduleSlot[];
   notes?: string;
   status?: 'pending' | 'active';
   contactEmail?: string;
-}
-interface Settings {
-  driverRatePerHour: number;
-  vanCapacity: number;
-  weeksPerMonth: number;
-  vanMonthlyCost: number;
-  consumptionPer100km: number;
-  electricityPricePerKwh: number;
 }
 interface AutoStop { kidId: string; kidName: string; pickupAddr: string; dropoffAddr: string; requestedTime: number }
 interface AutoRun {
@@ -69,7 +65,6 @@ interface DriverOverride {
   waypointExtraMin?: number[];
 }
 interface SavedPlan {
-  settings: Settings;
   manualKids: PlannerKid[];
   cellRoutes?: Record<string, OptimizedRoute | null>;
   runRemovals?: Record<string, string[]>;
@@ -81,15 +76,14 @@ interface SavedPlan {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const HOURS_PER_RUN = 2;
-const DEFAULT_SETTINGS: Settings = {
-  driverRatePerHour: 7,
-  vanCapacity: 8,
-  weeksPerMonth: 4.33,
-  vanMonthlyCost: 200,
-  consumptionPer100km: 20,
-  electricityPricePerKwh: 0.22,
+const DEFAULT_CONFIG: TransportationConfig = {
+  flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23,
+  multiTripDiscountPercentage: 0, minTripsForDiscount: 2,
+  siblingDiscountPercentage: 0, schoolDiscounts: [],
+  driverRatePerHour: 7, vanCapacity: 8, weeksPerMonth: 4.33,
+  vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22,
 };
-const LS_KEY = 'transport_planner_v8';
+const LS_KEY = 'transport_planner_v10';
 const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string;
 const MORNING_DEADLINE_MIN = 8 * 60 + 50;
 const LUNCH_CUTOFF_MIN = 15 * 60;
@@ -119,7 +113,7 @@ function parseSchedule(raw: any[]): ScheduleSlot[] {
 }
 function loadFromStorage(): SavedPlan {
   try { const r = localStorage.getItem(LS_KEY); if (r) return JSON.parse(r); } catch { /* ignore */ }
-  return { settings: DEFAULT_SETTINGS, manualKids: [] };
+  return { manualKids: [] };
 }
 function saveToStorage(p: SavedPlan) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
@@ -246,39 +240,162 @@ function Field({ label, value, step, onChange, width = 'w-14' }: { label: string
     </label>
   );
 }
-function SettingsPanel({ settings, onChange }: { settings: Settings; onChange: (s: Settings) => void }) {
-  const set = (k: keyof Settings, v: number) => onChange({ ...settings, [k]: v });
+function SettingsModal({
+  initial, onClose, onSave, onApply, saving, applying, applyResult,
+}: {
+  initial: TransportationConfig;
+  onClose: () => void;
+  onSave: (c: TransportationConfig) => Promise<void>;
+  onApply: (c: TransportationConfig) => Promise<void>;
+  saving: boolean;
+  applying: boolean;
+  applyResult: string | null;
+}) {
+  const [cfg, setCfg] = useState<TransportationConfig>(initial);
+  const set = (k: keyof TransportationConfig, v: any) => setCfg(prev => ({ ...prev, [k]: v }));
+  const pct = (fraction: number) => Math.round(fraction * 100);
+  const frac = (pct: number) => pct / 100;
+
+  const schoolDiscounts = cfg.schoolDiscounts ?? [];
+  const addSchool = () => setCfg(prev => ({ ...prev, schoolDiscounts: [...(prev.schoolDiscounts ?? []), { schoolName: '', discountPercentage: 0 }] }));
+  const updSchool = (i: number, v: Partial<SchoolDiscount>) =>
+    setCfg(prev => ({ ...prev, schoolDiscounts: (prev.schoolDiscounts ?? []).map((d, j) => j === i ? { ...d, ...v } : d) }));
+  const delSchool = (i: number) =>
+    setCfg(prev => ({ ...prev, schoolDiscounts: (prev.schoolDiscounts ?? []).filter((_, j) => j !== i) }));
+
+  const sectionTitle = (t: string) => (
+    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t}</p>
+  );
+  const hint = (t: string) => <p className="text-xs text-gray-400 mt-1">{t}</p>;
+
   return (
-    <div className="pt-3 border-t border-gray-100 mt-3 space-y-3">
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
-        {/* Driver */}
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Motorista</p>
-          <div className="flex items-center gap-3">
-            <Field label="€/hora" value={settings.driverRatePerHour} step={0.5} onChange={v => set('driverRatePerHour', v)} width="w-14" />
-            <Field label="semanas/mês" value={settings.weeksPerMonth} step={0.01} onChange={v => set('weeksPerMonth', v)} width="w-14" />
-          </div>
-          <p className="text-xs text-gray-300">Custo = horas × tarifa × semanas/mês</p>
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center overflow-y-auto py-6 px-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-bold text-gray-900">⚙ Configuração de Transporte</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
-        {/* Van */}
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Carrinha</p>
-          <div className="flex items-center gap-3">
-            <Field label="lugares" value={settings.vanCapacity} step={1} onChange={v => set('vanCapacity', v)} width="w-12" />
-            <Field label="€/mês fixo" value={settings.vanMonthlyCost} step={10} onChange={v => set('vanMonthlyCost', v)} width="w-16" />
+        {/* Body */}
+        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+
+            {/* Preços */}
+            <div>
+              {sectionTitle('Preços')}
+              <div className="space-y-2">
+                <Field label="€/viagem" value={cfg.flatRatePerTrip} step={0.5} onChange={v => set('flatRatePerTrip', v)} width="w-20" />
+                <Field label="IVA (%)" value={pct(cfg.vatRate)} step={1} onChange={v => set('vatRate', frac(v))} width="w-16" />
+              </div>
+              {hint('Preço base por viagem, antes de descontos')}
+            </div>
+
+            {/* Motorista */}
+            <div>
+              {sectionTitle('Motorista')}
+              <div className="space-y-2">
+                <Field label="€/hora" value={cfg.driverRatePerHour} step={0.5} onChange={v => set('driverRatePerHour', v)} width="w-16" />
+                <Field label="semanas/mês" value={cfg.weeksPerMonth} step={0.01} onChange={v => set('weeksPerMonth', v)} width="w-16" />
+              </div>
+              {hint('Custo mensal = horas × tarifa × semanas')}
+            </div>
+
+            {/* Carrinha */}
+            <div>
+              {sectionTitle('Carrinha')}
+              <div className="space-y-2">
+                <Field label="lugares" value={cfg.vanCapacity} step={1} onChange={v => set('vanCapacity', v)} width="w-14" />
+                <Field label="€/mês fixo" value={cfg.vanMonthlyCost} step={10} onChange={v => set('vanMonthlyCost', v)} width="w-20" />
+              </div>
+              {hint('"Lugares" afecta o algoritmo de rotas · custo fixo mensal (seguro, leasing…)')}
+            </div>
+
+            {/* Energia */}
+            <div>
+              {sectionTitle('Energia')}
+              <div className="space-y-2">
+                <Field label="kWh/100km" value={cfg.consumptionPer100km} step={0.5} onChange={v => set('consumptionPer100km', v)} width="w-16" />
+                <Field label="€/kWh" value={cfg.electricityPricePerKwh} step={0.01} onChange={v => set('electricityPricePerKwh', v)} width="w-16" />
+              </div>
+              {hint('Custo calculado com base nos km reais das rotas optimizadas')}
+            </div>
           </div>
-          <p className="text-xs text-gray-300">"Lugares" afecta o algoritmo de rotas · custo fixo mensal (seguro, leasing…)</p>
+
+          {/* Descontos */}
+          <div className="border-t border-gray-100 pt-5 space-y-4">
+            {sectionTitle('Descontos')}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Multi-viagem */}
+              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                <p className="text-xs font-medium text-gray-700">Viagem extra (mesmo dia)</p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Field label="a partir da viagem n.º" value={cfg.minTripsForDiscount} step={1} onChange={v => set('minTripsForDiscount', v)} width="w-10" />
+                  <Field label="desconto (%)" value={pct(cfg.multiTripDiscountPercentage)} step={1} onChange={v => set('multiTripDiscountPercentage', frac(v))} width="w-14" />
+                </div>
+                {hint('Ex: a partir da 2.ª viagem no dia, 30% de desconto')}
+              </div>
+
+              {/* Irmãos */}
+              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                <p className="text-xs font-medium text-gray-700">Irmãos (2.º filho+)</p>
+                <Field label="desconto (%)" value={pct(cfg.siblingDiscountPercentage)} step={1} onChange={v => set('siblingDiscountPercentage', frac(v))} width="w-14" />
+                {hint('Aplica-se ao 2.º e 3.º filho da mesma família (por email ou familyId)')}
+              </div>
+            </div>
+
+            {/* Por escola */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-gray-700">Por escola</p>
+                <button onClick={addSchool} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">+ Adicionar escola</button>
+              </div>
+              {schoolDiscounts.length === 0 && (
+                <p className="text-xs text-gray-400">Nenhuma escola configurada.</p>
+              )}
+              <div className="space-y-2">
+                {schoolDiscounts.map((sd, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                    <input
+                      type="text" placeholder="Nome da escola"
+                      value={sd.schoolName}
+                      onChange={e => updSchool(i, { schoolName: e.target.value })}
+                      className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                    <Field label="%" value={pct(sd.discountPercentage)} step={1} onChange={v => updSchool(i, { discountPercentage: frac(v) })} width="w-12" />
+                    <button onClick={() => delSchool(i)} className="text-gray-400 hover:text-red-500 text-sm shrink-0">×</button>
+                  </div>
+                ))}
+              </div>
+              {hint('Correspondência exacta (sem maiúsculas/minúsculas) com o campo "Escola" da inscrição')}
+            </div>
+          </div>
         </div>
 
-        {/* Energy */}
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Energia</p>
-          <div className="flex items-center gap-3">
-            <Field label="kWh/100km" value={settings.consumptionPer100km} step={0.5} onChange={v => set('consumptionPer100km', v)} width="w-14" />
-            <Field label="€/kWh" value={settings.electricityPricePerKwh} step={0.01} onChange={v => set('electricityPricePerKwh', v)} width="w-14" />
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <button
+              onClick={() => onApply(cfg)}
+              disabled={applying || saving}
+              className="text-sm px-4 py-2 rounded-lg border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 disabled:opacity-50 transition font-medium"
+            >
+              {applying ? 'A aplicar…' : '↻ Aplicar a todas as inscrições'}
+            </button>
+            {applyResult && <p className="text-xs text-gray-500">{applyResult}</p>}
           </div>
-          <p className="text-xs text-gray-300">Custo calculado com base nos km reais das rotas optimizadas</p>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="text-sm px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition">
+              Cancelar
+            </button>
+            <button
+              onClick={() => onSave(cfg)}
+              disabled={saving || applying}
+              className="text-sm px-5 py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50 transition"
+            >
+              {saving ? 'A guardar…' : '💾 Guardar'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -691,9 +808,11 @@ export default function TransportPlannerPage() {
 
   const [dbKids, setDbKids] = useState<PlannerKid[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pricePerTrip, setPricePerTrip] = useState(0);
+  const [config, setConfig] = useState<TransportationConfig>(DEFAULT_CONFIG);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsApplying, setSettingsApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState<string | null>(null);
 
-  const [settings, setSettings] = useState<Settings>(saved.settings);
   const [manualKids, setManualKids] = useState<PlannerKid[]>(saved.manualKids);
   const [cellRoutes, setCellRoutes] = useState<Record<string, OptimizedRoute | null>>(saved.cellRoutes ?? {});
   const [cellLoading, setCellLoading] = useState<Record<string, boolean>>({});
@@ -725,13 +844,18 @@ export default function TransportPlannerPage() {
           return {
             id: d.id, source: (x.source === 'manual' ? 'manual' : 'db') as 'manual' | 'db',
             name: x.childName || '(sem nome)', monthlyFee: x.monthlyFee ?? 0,
+            familyId: x.familyId || undefined,
+            schoolName: x.schoolName || undefined,
             requestedSchedule: parseSchedule(x.schedule || []),
             contactEmail: x.contactEmail, notes: x.note || undefined,
             status: x.status === 'confirmed' ? 'active' : x.status === 'planned' ? 'pending' : (x.status as any) || 'pending',
           };
         }).filter(Boolean) as PlannerKid[];
         setDbKids(kids);
-        if (configSnap.exists()) setPricePerTrip(configSnap.data().flatRatePerTrip ?? 0);
+        if (configSnap.exists()) {
+          const d = configSnap.data();
+          setConfig({ ...DEFAULT_CONFIG, ...d });
+        }
       } catch (e) {
         console.error('Failed to load transport data', e);
       } finally {
@@ -741,8 +865,8 @@ export default function TransportPlannerPage() {
   }, []);
 
   useEffect(() => {
-    saveToStorage({ settings, manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked });
-  }, [settings, manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked]);
+    saveToStorage({ manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked });
+  }, [manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked]);
 
   const allKids = useMemo(() => {
     const dbIds = new Set(dbKids.map(k => k.id));
@@ -779,7 +903,7 @@ export default function TransportPlannerPage() {
       return { ...prev, [runId]: next };
     });
     try {
-      const result = await optimizeAutoRun(effectiveRun, settings.vanCapacity);
+      const result = await optimizeAutoRun(effectiveRun, config.vanCapacity);
       setCellRoutes(p => ({ ...p, [runId]: result }));
       if (result?.unassigned.length) console.warn(`[optimizeAutoRun] ${runId}: sem encaixe para`, result.unassigned);
     } catch (e) {
@@ -830,12 +954,11 @@ export default function TransportPlannerPage() {
     return HOURS_PER_RUN;
   };
 
-  const { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyProfit } = useMemo(() => {
+  const { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyDiscountTotal, monthlyProfit } = useMemo(() => {
     const driverCost = allRuns.reduce((sum, run) =>
-      sum + effectiveRunHours(run) * settings.driverRatePerHour, 0) * settings.weeksPerMonth;
-    const vanCost = settings.vanMonthlyCost;
+      sum + effectiveRunHours(run) * config.driverRatePerHour, 0) * config.weeksPerMonth;
+    const vanCost = config.vanMonthlyCost;
 
-    // Derive average km from routes that have been calculated; use it as fallback for uncalculated ones.
     const calculatedKms = allRuns.map(r => cellRoutes[r.id]?.totalDistanceKm).filter((km): km is number => km != null);
     const avgKmFallback = calculatedKms.length > 0
       ? calculatedKms.reduce((s, v) => s + v, 0) / calculatedKms.length
@@ -843,12 +966,50 @@ export default function TransportPlannerPage() {
 
     const electricityCost = allRuns.reduce((sum, run) => {
       const km = cellRoutes[run.id]?.totalDistanceKm ?? avgKmFallback;
-      return sum + (km / 100) * settings.consumptionPer100km * settings.electricityPricePerKwh;
-    }, 0) * settings.weeksPerMonth;
+      return sum + (km / 100) * config.consumptionPer100km * config.electricityPricePerKwh;
+    }, 0) * config.weeksPerMonth;
     const monthlyCost = driverCost + vanCost + electricityCost;
-    const monthlyRevenue = allKids.reduce((sum, kid) => sum + kid.requestedSchedule.length * pricePerTrip * settings.weeksPerMonth, 0);
-    return { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyProfit: monthlyRevenue - monthlyCost };
-  }, [allRuns, cellRoutes, settings, allKids, pricePerTrip, driverHourOverrides]);
+
+    // Sibling ranking: group allKids by familyId ?? contactEmail, sort alphabetically
+    const familyGroups: Record<string, PlannerKid[]> = {};
+    allKids.forEach(kid => { const key = kid.familyId ?? kid.contactEmail; if (key) (familyGroups[key] ??= []).push(kid); });
+    Object.values(familyGroups).forEach(g => g.sort((a, b) => a.name.localeCompare(b.name)));
+    const siblingRankMap: Record<string, number> = {};
+    Object.values(familyGroups).forEach(group => group.forEach((kid, i) => { siblingRankMap[kid.id] = i + 1; }));
+
+    const periodOrder: Record<Period, number> = { morning: 0, lunch: 1, afternoon: 2 };
+    const pricePerTrip = config.flatRatePerTrip;
+
+    let monthlyRevenue = 0;
+    let monthlyRevenueGross = 0;
+    for (const kid of allKids) {
+      const siblingRank = siblingRankMap[kid.id] ?? 1;
+      const slotsByDay: Record<string, ScheduleSlot[]> = {};
+      for (const slot of kid.requestedSchedule) (slotsByDay[slot.day] ??= []).push(slot);
+      Object.values(slotsByDay).forEach(g => g.sort((a, b) => periodOrder[slotPeriod(a.time)] - periodOrder[slotPeriod(b.time)]));
+
+      for (const slot of kid.requestedSchedule) {
+        const tripRank = (slotsByDay[slot.day].indexOf(slot) ?? 0) + 1;
+        let totalDiscount = 0;
+        // Sibling discount applies to 2nd+ child in the same family
+        if (siblingRank >= 2) totalDiscount += config.siblingDiscountPercentage;
+        // School discount: match by school name (case-insensitive)
+        for (const sd of (config.schoolDiscounts ?? [])) {
+          if (kid.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === kid.schoolName.toLowerCase()) {
+            totalDiscount += sd.discountPercentage;
+          }
+        }
+        // Multi-trip discount: applies to 2nd+ trip on the same day
+        if (tripRank >= config.minTripsForDiscount) totalDiscount += config.multiTripDiscountPercentage;
+        totalDiscount = Math.min(1, totalDiscount);
+        monthlyRevenue += pricePerTrip * (1 - totalDiscount) * config.weeksPerMonth;
+        monthlyRevenueGross += pricePerTrip * config.weeksPerMonth;
+      }
+    }
+    const monthlyDiscountTotal = monthlyRevenueGross - monthlyRevenue;
+
+    return { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyRevenueGross, monthlyDiscountTotal, monthlyProfit: monthlyRevenue - monthlyCost };
+  }, [allRuns, cellRoutes, config, allKids, driverHourOverrides, runRemovals]);
 
   // For each kid: which (day-period) slots are they actually in (respecting manual removals)
   const kidAssignments = useMemo(() => {
@@ -865,6 +1026,80 @@ export default function TransportPlannerPage() {
     return map;
   }, [allAutoRuns, runRemovals]);
 
+  async function handleSaveConfig(cfg: TransportationConfig) {
+    setSettingsSaving(true);
+    try {
+      await saveTransportationConfig(cfg);
+      setConfig(cfg);
+      setSettingsOpen(false);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  async function handleApplyToSubscriptions(cfg: TransportationConfig) {
+    setSettingsApplying(true);
+    setApplyResult(null);
+    try {
+      await saveTransportationConfig(cfg);
+      setConfig(cfg);
+      const subs = await getActiveTransportationSubscriptions();
+      // Rebuild sibling rank map from all subscriptions
+      const famGroups: Record<string, typeof subs> = {};
+      subs.forEach(s => { const k = s.familyId ?? s.contactEmail; if (k) (famGroups[k] ??= []).push(s); });
+      Object.values(famGroups).forEach(g => g.sort((a, b) => a.childName.localeCompare(b.childName)));
+      const sibRank: Record<string, number> = {};
+      Object.values(famGroups).forEach(group => group.forEach((s, i) => { sibRank[s.id] = i + 1; }));
+
+      const periodOrder: Record<string, number> = { morning: 0, lunch: 1, afternoon: 2 };
+      const slotPeriodFrom = (time: string) => {
+        const h = parseInt(time.split(':')[0], 10);
+        return h < 12 ? 'morning' : h < 15 ? 'lunch' : 'afternoon';
+      };
+
+      let updated = 0;
+      const batch: Array<{ id: string; monthlyFee: number }> = [];
+      for (const sub of subs) {
+        const rank = sibRank[sub.id] ?? 1;
+        const slotsByDay: Record<string, typeof sub.schedule> = {};
+        for (const slot of sub.schedule) (slotsByDay[slot.dayOfWeek] ??= []).push(slot);
+        Object.values(slotsByDay).forEach(g =>
+          g.sort((a, b) => (periodOrder[slotPeriodFrom(a.pickupTime)] ?? 0) - (periodOrder[slotPeriodFrom(b.pickupTime)] ?? 0))
+        );
+
+        let totalSlotFee = 0;
+        for (const [, slots] of Object.entries(slotsByDay)) {
+          slots.forEach((slot, idx) => {
+            const tripRank = idx + 1;
+            let discount = 0;
+            if (rank >= 2) discount += cfg.siblingDiscountPercentage;
+            for (const sd of (cfg.schoolDiscounts ?? [])) {
+              if (sub.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === sub.schoolName.toLowerCase()) {
+                discount += sd.discountPercentage;
+              }
+            }
+            if (tripRank >= cfg.minTripsForDiscount) discount += cfg.multiTripDiscountPercentage;
+            discount = Math.min(1, discount);
+            totalSlotFee += cfg.flatRatePerTrip * (1 - discount) * cfg.weeksPerMonth;
+          });
+        }
+        if (Math.abs(totalSlotFee - sub.monthlyFee) > 0.01) {
+          batch.push({ id: sub.id, monthlyFee: totalSlotFee });
+          updated++;
+        }
+      }
+      // Write updates
+      for (const { id, monthlyFee } of batch) {
+        await updateDoc(docRef('transportationSubscriptions', id), { monthlyFee, updatedAt: new Date() });
+      }
+      setApplyResult(`${updated} inscrições actualizadas de ${subs.length} no total.`);
+    } catch (e) {
+      setApplyResult(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSettingsApplying(false);
+    }
+  }
+
   const totalRunCount = allRuns.length;
   const totalKidCount = useMemo(() => {
     const ids = new Set<string>();
@@ -878,7 +1113,7 @@ export default function TransportPlannerPage() {
   return (
     <div className="flex flex-col h-full -m-6">
       {/* Summary bar */}
-      <div className="bg-white border-b border-gray-200 px-6 pt-3 pb-3">
+      <div className="bg-white border-b border-gray-200 px-6 pt-3 pb-3 overflow-y-auto max-h-[80vh]">
         <div className="flex items-center gap-5 flex-wrap">
           <div className="flex items-center gap-5 divide-x divide-gray-200">
             <div>
@@ -899,7 +1134,10 @@ export default function TransportPlannerPage() {
             <div className="pl-5">
               <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Receita mensal</div>
               <div className="text-lg font-bold text-blue-600">{eur(monthlyRevenue)}</div>
-              {pricePerTrip > 0 && <div className="text-xs text-gray-400">€{pricePerTrip}/viagem</div>}
+              <div className="text-xs text-gray-400 space-x-1">
+                {config.flatRatePerTrip > 0 && <span>€{config.flatRatePerTrip}/viagem</span>}
+                {monthlyDiscountTotal > 0 && <span className="text-orange-500">· -{eur(monthlyDiscountTotal)} desc.</span>}
+              </div>
             </div>
             <div className="pl-5">
               <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Lucro mensal</div>
@@ -911,8 +1149,8 @@ export default function TransportPlannerPage() {
             <span className="font-semibold text-gray-700">{totalKidCount}</span> alunos
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setSettingsOpen(v => !v)}
-              className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${settingsOpen ? 'bg-gray-100 border-gray-300 text-gray-700' : 'border-gray-200 hover:bg-gray-50 text-gray-600'}`}>
+            <button onClick={() => setSettingsOpen(true)}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition-colors">
               ⚙ Definições
             </button>
             {!locked && (
@@ -934,7 +1172,17 @@ export default function TransportPlannerPage() {
             </button>
           </div>
         </div>
-        {settingsOpen && <SettingsPanel settings={settings} onChange={setSettings} />}
+        {settingsOpen && (
+          <SettingsModal
+            initial={config}
+            onClose={() => setSettingsOpen(false)}
+            onSave={handleSaveConfig}
+            onApply={handleApplyToSubscriptions}
+            saving={settingsSaving}
+            applying={settingsApplying}
+            applyResult={applyResult}
+          />
+        )}
         {driverBreakdownOpen && (
           <div className="pt-3 border-t border-gray-100 mt-3">
             <div className="flex items-center justify-between mb-2">
@@ -1011,7 +1259,7 @@ export default function TransportPlannerPage() {
             {/* Weekly / monthly summary */}
             {(() => {
               const weeklyH = allRuns.reduce((s, r) => s + effectiveRunHours(r), 0);
-              const monthlyH = weeklyH * settings.weeksPerMonth;
+              const monthlyH = weeklyH * config.weeksPerMonth;
               return (
                 <div className="flex items-center gap-5 mt-3 pt-2 border-t border-gray-100 text-xs">
                   <div>
@@ -1055,7 +1303,7 @@ export default function TransportPlannerPage() {
                       if (!run) return <td key={day} className="px-1 py-1 text-center text-gray-200">—</td>;
                       const km = cellRoutes[run.id]?.totalDistanceKm;
                       const hasRoute = km != null;
-                      const kWh = hasRoute ? (km! / 100) * settings.consumptionPer100km : null;
+                      const kWh = hasRoute ? (km! / 100) * config.consumptionPer100km : null;
                       return (
                         <td key={day} className="px-1 py-1">
                           <div className={`rounded border px-1.5 py-1 flex flex-col items-center gap-0.5 ${hasRoute ? 'border-gray-100 bg-gray-50' : 'border-dashed border-gray-200 bg-white'}`}>
@@ -1093,8 +1341,8 @@ export default function TransportPlannerPage() {
             {/* Energy summary footer */}
             {(() => {
               const weeklyKm = allRuns.reduce((s, r) => s + (cellRoutes[r.id]?.totalDistanceKm ?? 0), 0);
-              const weeklyKwh = (weeklyKm / 100) * settings.consumptionPer100km;
-              const weeklyEnergyCost = weeklyKwh * settings.electricityPricePerKwh;
+              const weeklyKwh = (weeklyKm / 100) * config.consumptionPer100km;
+              const weeklyEnergyCost = weeklyKwh * config.electricityPricePerKwh;
               return (
                 <div className="flex items-center gap-5 mt-3 pt-2 border-t border-gray-100 text-xs flex-wrap">
                   <div>
@@ -1117,7 +1365,7 @@ export default function TransportPlannerPage() {
               );
             })()}
 
-            <p className="text-xs text-gray-400 mt-2">"est" = rota não calculada, km não contabilizados · {settings.consumptionPer100km} kWh/100km · €{settings.electricityPricePerKwh}/kWh</p>
+            <p className="text-xs text-gray-400 mt-2">"est" = rota não calculada, km não contabilizados · {config.consumptionPer100km} kWh/100km · €{config.electricityPricePerKwh}/kWh</p>
           </div>
         )}
       </div>

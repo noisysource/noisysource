@@ -31,7 +31,7 @@ export default function AdminTransportationConfig() {
           setMinTripsForDiscount(data.minTripsForDiscount || 2);
         } else {
           // Initialize with default empty config if not found
-          setConfig({ flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23, multiTripDiscountPercentage: 0.3, minTripsForDiscount: 2 });
+          setConfig({ flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23, multiTripDiscountPercentage: 0.3, minTripsForDiscount: 2, siblingDiscountPercentage: 0, schoolDiscounts: [], driverRatePerHour: 7, weeksPerMonth: 4.33, vanCapacity: 8, vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22 });
         }
       } catch (err) {
         console.error("Error fetching transportation config:", err);

@@ -2,12 +2,28 @@
  * Transportation Subscription - linked to Family and Child
  */
 
+export interface SchoolDiscount {
+  schoolName: string;
+  discountPercentage: number; // 0–1
+}
+
 export interface TransportationConfig {
+  // Pricing
   flatRatePerTrip: number;
-  pricePerTrip: number;
+  pricePerTrip: number;  // legacy alias
   vatRate: number;
+  // Discounts (fractions 0–1)
   multiTripDiscountPercentage: number;
   minTripsForDiscount: number;
+  siblingDiscountPercentage: number;
+  schoolDiscounts: SchoolDiscount[];
+  // Operations (planner cost model)
+  driverRatePerHour: number;
+  weeksPerMonth: number;
+  vanCapacity: number;
+  vanMonthlyCost: number;
+  consumptionPer100km: number;
+  electricityPricePerKwh: number;
 }
 
 export interface Location {
@@ -37,6 +53,7 @@ export interface TransportationSubscription {
   // Contact information (from family, but can be overridden)
   contactMobile: string;
   contactEmail: string;
+  schoolName?: string;
 
   // Subscription dates
   startDate: string; // YYYY-MM-DD
