@@ -8,9 +8,11 @@ interface Props {
   placeholder?: string;
   className?: string;
   required?: boolean;
+  types?: string[]; // includedPrimaryTypes filter, e.g. ['school']
+  nameOnly?: boolean; // use structuredFormat.mainText (place name) instead of full text
 }
 
-export default function PlacesInput({ value, onChange, placeholder, className, required }: Props) {
+export default function PlacesInput({ value, onChange, placeholder, className, required, types, nameOnly }: Props) {
   const [suggestions, setSuggestions] = useState<{ id: string; label: string }[]>([]);
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -34,7 +36,12 @@ export default function PlacesInput({ value, onChange, placeholder, className, r
           'X-Goog-Api-Key': MAPS_KEY,
           'X-Goog-FieldMask': '*',
         },
-        body: JSON.stringify({ input, includedRegionCodes: ['pt'], languageCode: 'pt' }),
+        body: JSON.stringify({
+          input,
+          includedRegionCodes: ['pt'],
+          languageCode: 'pt',
+          ...(types?.length ? { includedPrimaryTypes: types } : {}),
+        }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -43,7 +50,12 @@ export default function PlacesInput({ value, onChange, placeholder, className, r
       }
       const list: any[] = data.suggestions ?? [];
       if (list.length) {
-        setSuggestions(list.map(s => ({ id: s.placePrediction.placeId, label: s.placePrediction.text.text })));
+        setSuggestions(list.map(s => ({
+          id: s.placePrediction.placeId,
+          label: nameOnly
+            ? (s.placePrediction.structuredFormat?.mainText?.text ?? s.placePrediction.text.text)
+            : s.placePrediction.text.text,
+        })));
         setOpen(true);
       } else {
         setSuggestions([]); setOpen(false);

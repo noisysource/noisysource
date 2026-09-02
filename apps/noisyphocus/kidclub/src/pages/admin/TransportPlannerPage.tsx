@@ -5,6 +5,7 @@ import { col, docRef } from '../../lib/db';
 import { solveRoutes, SolverKid, DEPOT_ADDRESS as SOLVER_DEPOT } from '../../lib/routeSolver';
 import { TransportationConfig, SchoolDiscount } from '@shared/models/Transportation';
 import { saveTransportationConfig, getActiveTransportationSubscriptions } from '../../services/transportationService';
+import PlacesInput from '../../components/PlacesInput';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Day = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri';
@@ -258,11 +259,6 @@ function SettingsModal({
   const pct = (fraction: number) => Math.round(fraction * 100);
   const frac = (pct: number) => pct / 100;
 
-  // Distinct school names from enrolled kids — same values parents entered
-  const knownSchools = useMemo(
-    () => [...new Set(allKids.map(k => k.schoolName).filter((s): s is string => !!s))].sort(),
-    [allKids]
-  );
 
   // Compute per-family price preview from current cfg + allKids
   const familyPreview = useMemo(() => {
@@ -418,17 +414,15 @@ function SettingsModal({
               {schoolDiscounts.length === 0 && (
                 <p className="text-xs text-gray-400">Nenhuma escola configurada.</p>
               )}
-              <datalist id="known-schools">
-                {knownSchools.map(s => <option key={s} value={s} />)}
-              </datalist>
               <div className="space-y-2">
                 {schoolDiscounts.map((sd, i) => (
                   <div key={i} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                    <input
-                      type="text" placeholder="Nome da escola"
-                      list="known-schools"
+                    <PlacesInput
+                      placeholder="Nome da escola"
                       value={sd.schoolName}
-                      onChange={e => updSchool(i, { schoolName: e.target.value })}
+                      onChange={v => updSchool(i, { schoolName: v })}
+                      types={['school', 'primary_school', 'secondary_school']}
+                      nameOnly
                       className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                     />
                     <Field label="%" value={pct(sd.discountPercentage)} step={1} onChange={v => updSchool(i, { discountPercentage: frac(v) })} width="w-12" />
