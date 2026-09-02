@@ -13,12 +13,13 @@ interface SubItem {
   id: string;
   _type: 'study' | 'transport';
   childName: string;
+  childId?: string;
   familyId?: string;
   contactName?: string;
   contactEmail?: string;
   contactPhone?: string;
   source?: string;
-  // Study
+  // Study + Transport (school name lives on the children doc)
   schoolName?: string;
   schoolYear?: string;
   days?: any[];
@@ -148,7 +149,7 @@ function TripEditor({ trips, onChange, accent = 'indigo' }: { trips: TripTemplat
 }
 
 // ─── Edit Form ────────────────────────────────────────────────────────────────
-function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: TransportationConfig | null; onSave: (updated: Partial<SubItem>) => void; onCancel: () => void }) {
+function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: TransportationConfig | null; onSave: (updated: Partial<SubItem>) => void; onCancel: () => void; }) {
   const [name, setName] = useState(item.childName);
   const [parentName, setParentName] = useState(item.contactName ?? '');
   const [email, setEmail] = useState(item.contactEmail ?? '');
@@ -180,6 +181,10 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
         patch.contactMobile = phone.trim() || null;
         patch.schedule = tripsToSchedule(trips);
         if (config) patch.monthlyFee = patch.schedule.length * config.flatRatePerTrip * 4;
+        // Save schoolName to the children doc (canonical source for transport)
+        if (item.childId) {
+          await updateDoc(docRef('children', item.childId), { schoolName: schoolName.trim() || null, updatedAt: new Date() });
+        }
       } else {
         patch.contactPhone = phone.trim() || null;
         patch.schoolName = schoolName.trim() || null;
@@ -212,9 +217,20 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
       </div>
       {item._type === 'study' && (
         <div className="grid grid-cols-2 gap-2">
-          <input value={schoolName} onChange={e => setSchoolName(e.target.value)} placeholder="Escola" className={fieldCls} />
+          <PlacesInput
+            value={schoolName} onChange={setSchoolName} placeholder="Escola"
+            types={['school', 'primary_school', 'secondary_school']} nameOnly
+            className={fieldCls}
+          />
           <input value={schoolYear} onChange={e => setSchoolYear(e.target.value)} placeholder="Ano escolar" className={fieldCls} />
         </div>
+      )}
+      {item._type === 'transport' && (
+        <PlacesInput
+          value={schoolName} onChange={setSchoolName} placeholder="Escola da criança"
+          types={['school', 'primary_school', 'secondary_school']} nameOnly
+          className={fieldCls}
+        />
       )}
       {item._type === 'study' && (
         <div>
@@ -404,12 +420,15 @@ export default function SubscriptionsAdminPage() {
   const load = async () => {
     setIsLoading(true); setError(null);
     try {
-      const [studySnap, transportSnap, cfg] = await Promise.all([
+      const [studySnap, transportSnap, childrenSnap, cfg] = await Promise.all([
         getDocs(col('studyroom')),
         getDocs(col('transportationSubscriptions')),
+        getDocs(col('children')),
         getTransportationConfig(),
       ]);
       if (cfg) setTransportConfig(cfg);
+      const childSchoolMap: Record<string, string> = {};
+      childrenSnap.docs.forEach(d => { const s = d.data().schoolName; if (s) childSchoolMap[d.id] = s; });
       const study: SubItem[] = studySnap.docs.map(d => {
         const x = d.data();
         return {
@@ -430,9 +449,11 @@ export default function SubscriptionsAdminPage() {
         return {
           id: d.id, _type: 'transport',
           childName: x.childName || '—',
+          childId: x.childId || undefined,
           familyId: x.familyId, contactName: x.contactName,
           contactEmail: x.contactEmail, contactPhone: x.contactMobile,
           source: x.source,
+          schoolName: x.childId ? (childSchoolMap[x.childId] ?? x.schoolName) : x.schoolName,
           schedule: x.schedule || [], monthlyFee: x.monthlyFee ?? 0,
           status: x.status as SubStatus,
           statusReason: x.statusReason, note: x.note,
@@ -666,7 +687,7 @@ export default function SubscriptionsAdminPage() {
 
                           <MiniWeekCalendar item={item} />
 
-                          {item._type === 'study' && (item.schoolName || item.schoolYear) && (
+                          {(item.schoolName || item.schoolYear) && (
                             <p className="text-xs text-gray-500 mt-1.5">{[item.schoolName, item.schoolYear].filter(Boolean).join(' · ')}</p>
                           )}
                           {((item._type === 'study' && (item.monthlyPrice ?? 0) > 0) || (item._type === 'transport' && (item.monthlyFee ?? 0) > 0)) && (
