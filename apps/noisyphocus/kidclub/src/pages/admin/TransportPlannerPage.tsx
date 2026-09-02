@@ -936,10 +936,17 @@ export default function TransportPlannerPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [snap, configSnap] = await Promise.all([
+        const [snap, childrenSnap, configSnap] = await Promise.all([
           getDocs(col('transportationSubscriptions')),
+          getDocs(col('children')),
           getDoc(docRef('config', 'transportation')),
         ]);
+        // Build childId → schoolName lookup from the children collection
+        const childSchoolMap: Record<string, string> = {};
+        childrenSnap.docs.forEach(d => {
+          const s = d.data().schoolName;
+          if (s) childSchoolMap[d.id] = s;
+        });
         const kids: PlannerKid[] = snap.docs.map(d => {
           const x = d.data();
           if (x.status === 'cancelled') return null;
@@ -947,7 +954,7 @@ export default function TransportPlannerPage() {
             id: d.id, source: (x.source === 'manual' ? 'manual' : 'db') as 'manual' | 'db',
             name: x.childName || '(sem nome)', monthlyFee: x.monthlyFee ?? 0,
             familyId: x.familyId || undefined,
-            schoolName: x.schoolName || undefined,
+            schoolName: childSchoolMap[x.childId] || x.schoolName || undefined,
             requestedSchedule: parseSchedule(x.schedule || []),
             contactEmail: x.contactEmail, notes: x.note || undefined,
             status: x.status === 'confirmed' ? 'active' : x.status === 'planned' ? 'pending' : (x.status as any) || 'pending',
@@ -1145,7 +1152,14 @@ export default function TransportPlannerPage() {
     try {
       await saveTransportationConfig(cfg);
       setConfig(cfg);
-      const subs = await getActiveTransportationSubscriptions();
+      const [subs, childrenSnap] = await Promise.all([
+        getActiveTransportationSubscriptions(),
+        getDocs(col('children')),
+      ]);
+      const childSchoolMap: Record<string, string> = {};
+      childrenSnap.docs.forEach(d => { const s = d.data().schoolName; if (s) childSchoolMap[d.id] = s; });
+      // Enrich subs with school name from children collection
+      subs.forEach(s => { if (!s.schoolName && (s as any).childId) s.schoolName = childSchoolMap[(s as any).childId]; });
       // Rebuild sibling rank map from all subscriptions
       const famGroups: Record<string, typeof subs> = {};
       subs.forEach(s => { const k = s.familyId ?? s.contactEmail; if (k) (famGroups[k] ??= []).push(s); });
