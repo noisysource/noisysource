@@ -9,6 +9,14 @@ import { col } from '../../lib/db';
 import { format } from 'date-fns';
 import { pt } from 'date-fns/locale';
 
+interface EmailLinkedSub {
+  id: string;
+  childName: string;
+  monthlyFee: number;
+  status: string;
+  schedule: any[];
+}
+
 type SubStatus = 'active' | 'pending' | 'cancelled' | 'suspended';
 
 const statusLabel: Record<SubStatus, string> = {
@@ -48,6 +56,7 @@ export default function MySubscriptionsPage() {
   const [family, setFamily] = useState<Family | null>(null);
   const [childSubs, setChildSubs] = useState<ChildSubs[]>([]);
   const [campSubs, setCampSubs] = useState<CampSubscription[]>([]);
+  const [emailSubs, setEmailSubs] = useState<EmailLinkedSub[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -73,6 +82,31 @@ export default function MySubscriptionsPage() {
         setChildSubs(data);
       } catch (e) {
         console.error('[MySubscriptionsPage] family load failed:', e);
+      }
+
+      // Load transport subscriptions created by admin with this email (no family link yet)
+      try {
+        if (user.email) {
+          const emailSnap = await getDocs(
+            query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))
+          );
+          // Only show subscriptions still awaiting claim (no familyId) as a fallback
+          const subs: EmailLinkedSub[] = emailSnap.docs
+            .filter(d => !d.data().familyId && d.data().status !== 'cancelled')
+            .map(d => {
+              const data = d.data();
+              return {
+                id: d.id,
+                childName: data.childName ?? data.kidName ?? 'Criança',
+                monthlyFee: data.monthlyFee ?? 0,
+                status: data.status ?? 'pending',
+                schedule: data.schedule ?? [],
+              };
+            });
+          setEmailSubs(subs);
+        }
+      } catch (e) {
+        console.error('[MySubscriptionsPage] email-linked subs load failed:', e);
       }
 
       // Load camp subscriptions independently so a family error doesn't block this
@@ -107,6 +141,47 @@ export default function MySubscriptionsPage() {
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">As minhas inscrições</h1>
       </div>
+
+      {/* Admin-created transport subscriptions linked by email */}
+      {emailSubs.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
+            <h2 className="font-semibold text-gray-900">Transporte Escolar</h2>
+            <p className="text-sm text-gray-500">Inscrições de transporte geridas pelo Arco-Íris</p>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {emailSubs.map(sub => {
+              const statusMap: Record<string, { label: string; cls: string }> = {
+                active:    { label: 'Ativo',      cls: 'bg-green-100 text-green-800' },
+                planned:   { label: 'Em análise', cls: 'bg-blue-100 text-blue-800' },
+                pending:   { label: 'Pendente',   cls: 'bg-yellow-100 text-yellow-800' },
+                cancelled: { label: 'Cancelado',  cls: 'bg-gray-100 text-gray-600' },
+              };
+              const st = statusMap[sub.status] ?? { label: sub.status, cls: 'bg-gray-100 text-gray-600' };
+              const tripCount = sub.schedule.reduce((n: number, s: any) => n + (s.days?.length ?? 1), 0);
+              return (
+                <Link key={sub.id} to={`/client/transport/${sub.id}`}
+                  className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <span className="text-2xl">🚌</span>
+                    <div>
+                      <p className="font-medium text-gray-900">{sub.childName}</p>
+                      <p className="text-sm text-gray-500">{tripCount} viagem{tripCount !== 1 ? 's' : ''}/semana</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    {sub.monthlyFee > 0 && (
+                      <span className="font-semibold text-gray-900">€{sub.monthlyFee.toFixed(2)}/mês</span>
+                    )}
+                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${st.cls}`}>{st.label}</span>
+                    <span className="text-gray-300 text-lg">›</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Camps section — shown regardless of children */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">

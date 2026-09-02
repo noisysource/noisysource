@@ -25,5 +25,13 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "transportationSubscriptions",
+      "fieldPath": "contactEmail",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" }
+      ]
+    }
+  ]
 }

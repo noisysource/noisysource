@@ -29,9 +29,6 @@ export default function ClientSidebar() {
         <Link to="/client/children" className={linkClass('/client/children')}>
           <span>👧</span> As minhas crianças
         </Link>
-        <Link to="/client/subscriptions" className={linkClass('/client/subscriptions')}>
-          <span>📋</span> Inscrições
-        </Link>
 
         <Link to="/client/parties" className={linkClass('/client/parties')}>
           <span>🎈</span> Festas

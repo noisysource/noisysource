@@ -10,15 +10,22 @@ interface ChildWithSubs {
   transport: TransportationSubscription[];
 }
 
-const statusBadge = (status: string) => {
-  const map: Record<string, string> = {
-    active: 'bg-green-100 text-green-800',
-    pending: 'bg-yellow-100 text-yellow-800',
-    cancelled: 'bg-gray-100 text-gray-600',
-    suspended: 'bg-red-100 text-red-800',
-  };
-  return map[status] ?? 'bg-gray-100 text-gray-600';
+const STATUS_LABEL: Record<string, string> = {
+  active: 'Ativo', confirmed: 'Ativo',
+  pending: 'Pendente', planned: 'Pendente',
+  cancelled: 'Cancelado', canceled: 'Cancelado', archived: 'Cancelado', inactive: 'Cancelado',
+  suspended: 'Suspenso',
 };
+const STATUS_CLASS: Record<string, string> = {
+  active: 'bg-green-100 text-green-800', confirmed: 'bg-green-100 text-green-800',
+  pending: 'bg-yellow-100 text-yellow-800', planned: 'bg-yellow-100 text-yellow-800',
+  cancelled: 'bg-gray-100 text-gray-600', canceled: 'bg-gray-100 text-gray-600',
+  archived: 'bg-gray-100 text-gray-600', inactive: 'bg-gray-100 text-gray-600',
+  suspended: 'bg-red-100 text-red-800',
+};
+const isActive = (s: string) => s === 'active' || s === 'confirmed';
+const isPending = (s: string) => s === 'pending' || s === 'planned';
+const isCancelled = (s: string) => ['cancelled', 'canceled', 'archived', 'inactive'].includes(s);
 
 export default function FamilyDashboardPage() {
   const user = useUser();
@@ -77,18 +84,18 @@ export default function FamilyDashboardPage() {
 
   const totalMonthly = childData.reduce((sum, { study, transport }) =>
     sum +
-    study.filter(s => s.status === 'confirmed').reduce((s, x) => s + (x.monthlyPrice ?? 0), 0) +
-    transport.filter(t => t.status === 'active').reduce((s, x) => s + (x.monthlyFee ?? 0), 0),
+    study.filter(s => !isCancelled(s.status ?? '')).reduce((s, x) => s + (x.monthlyPrice ?? 0), 0) +
+    transport.filter(t => !isCancelled(t.status ?? '')).reduce((s, x) => s + (x.monthlyFee ?? 0), 0),
     0
   );
 
   const activeCount = childData.reduce((sum, { study, transport }) =>
-    sum + study.filter(s => s.status === 'confirmed').length + transport.filter(t => t.status === 'active').length,
+    sum + study.filter(s => isActive(s.status ?? '')).length + transport.filter(t => isActive(t.status ?? '')).length,
     0
   );
 
   const pendingCount = childData.reduce((sum, { study, transport }) =>
-    sum + study.filter(s => s.status === 'pending').length + transport.filter(t => t.status === 'pending').length,
+    sum + study.filter(s => isPending(s.status ?? '')).length + transport.filter(t => isPending(t.status ?? '')).length,
     0
   );
 
@@ -153,12 +160,12 @@ export default function FamilyDashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {childData.map(({ child, study, transport }) => {
               const monthly =
-                study.filter(s => s.status === 'confirmed').reduce((s, x) => s + (x.monthlyPrice ?? 0), 0) +
-                transport.filter(t => t.status === 'active').reduce((s, x) => s + (x.monthlyFee ?? 0), 0);
+                study.filter(s => !isCancelled(s.status ?? '')).reduce((s, x) => s + (x.monthlyPrice ?? 0), 0) +
+                transport.filter(t => !isCancelled(t.status ?? '')).reduce((s, x) => s + (x.monthlyFee ?? 0), 0);
 
               const allSubs = [
-                ...study.map(s => ({ type: 'Sala de Estudo', status: s.status === 'confirmed' ? 'active' : s.status, price: s.monthlyPrice })),
-                ...transport.map(t => ({ type: 'Transporte', status: t.status, price: t.monthlyFee })),
+                ...study.map(s => ({ type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice })),
+                ...transport.map(t => ({ type: 'Transporte', status: t.status ?? '', price: t.monthlyFee })),
               ];
 
               return (
@@ -183,11 +190,11 @@ export default function FamilyDashboardPage() {
                         <div key={i} className="flex items-center justify-between text-sm">
                           <span className="text-gray-700">{sub.type}</span>
                           <div className="flex items-center gap-2">
-                            {sub.status === 'active' && (
+                            {!isCancelled(sub.status) && (
                               <span className="text-gray-600">€{(sub.price ?? 0).toFixed(2)}/mês</span>
                             )}
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusBadge(sub.status ?? '')}`}>
-                              {sub.status === 'active' ? 'Ativo' : sub.status === 'pending' ? 'Pendente' : sub.status}
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_CLASS[sub.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                              {STATUS_LABEL[sub.status] ?? sub.status}
                             </span>
                           </div>
                         </div>
@@ -198,10 +205,10 @@ export default function FamilyDashboardPage() {
                   <div className="pt-4 border-t flex justify-between items-center">
                     <span className="font-bold">€{monthly.toFixed(2)}/mês</span>
                     <Link
-                      to="/client/subscriptions"
+                      to={`/client/children/${child.id}`}
                       className="text-blue-600 text-sm hover:underline"
                     >
-                      + Adicionar serviço
+                      Ver detalhes →
                     </Link>
                   </div>
                 </div>
@@ -213,10 +220,10 @@ export default function FamilyDashboardPage() {
 
       {/* Quick actions */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Link to="/client/subscriptions" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-          <div className="text-2xl mb-2">📋</div>
-          <div className="font-semibold text-sm">As minhas inscrições</div>
-          <div className="text-xs text-gray-500 mt-1">Ver e gerir todos os serviços</div>
+        <Link to="/client/children" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+          <div className="text-2xl mb-2">👧</div>
+          <div className="font-semibold text-sm">As minhas crianças</div>
+          <div className="text-xs text-gray-500 mt-1">Crianças e inscrições</div>
         </Link>
         <Link to="/client/invoices" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
           <div className="text-2xl mb-2">🧾</div>
