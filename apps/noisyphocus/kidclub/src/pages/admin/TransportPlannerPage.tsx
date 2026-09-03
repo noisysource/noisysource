@@ -901,25 +901,44 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
             const dev = wp.type === 'pickup' ? wp.deviationMin : undefined;
             const devClass = dev == null ? '' : dev > 10 ? 'text-red-500' : dev > 0 ? 'text-amber-500' : 'text-green-500';
             const devLabel = dev == null ? null : dev === 0 ? null : `${dev > 0 ? '+' : ''}${dev}min`;
-            // Ride-time badges per kid at dropoff
-            const rideBadges = wp.type === 'dropoff' && wp.rideTimesMin
-              ? wp.rideTimesMin.map((rt, ri) => {
-                  const cls = rt > 45 ? 'text-red-500' : rt > 30 ? 'text-amber-500' : 'text-gray-400';
-                  return <span key={ri} className={`shrink-0 text-[10px] font-medium ${cls}`}>{rt}min</span>;
-                })
-              : null;
+            const hasRideTimes = wp.type === 'dropoff' && wp.rideTimesMin && wp.rideTimesMin.length > 0;
+            const multiKid = hasRideTimes && wp.kidNames.length > 1;
             return (
-              <div key={i} className="flex items-start gap-1.5">
-                <span className={`font-mono shrink-0 font-semibold ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
-                  {hasAnyOverride ? '~' : ''}{displayEtas[i]}
-                </span>
-                <span className={`shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>{wp.type === 'pickup' ? '↑' : '↓'}</span>
-                {showAddresses
-                  ? <span className="text-gray-500 truncate">{wp.address.split(',')[0]}</span>
-                  : <span className="text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</span>
-                }
-                {devLabel && <span className={`shrink-0 text-[10px] font-medium ml-auto ${devClass}`}>{devLabel}</span>}
-                {rideBadges && <span className="ml-auto flex gap-1">{rideBadges}</span>}
+              <div key={i}>
+                <div className="flex items-start gap-1.5">
+                  <span className={`font-mono shrink-0 font-semibold ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
+                    {hasAnyOverride ? '~' : ''}{displayEtas[i]}
+                  </span>
+                  <span className={`shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>{wp.type === 'pickup' ? '↑' : '↓'}</span>
+                  {showAddresses
+                    ? <span className="text-gray-500 truncate">{wp.address.split(',')[0]}</span>
+                    : multiKid
+                      ? <span className="text-gray-500 truncate">{wp.kidNames.length} alunos</span>
+                      : <span className="text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</span>
+                  }
+                  {devLabel && <span className={`shrink-0 text-[10px] font-medium ml-auto ${devClass}`}>{devLabel}</span>}
+                  {/* single-kid ride time stays inline */}
+                  {hasRideTimes && !multiKid && (() => {
+                    const rt = wp.rideTimesMin![0];
+                    const cls = rt > 45 ? 'text-red-500' : rt > 30 ? 'text-amber-500' : 'text-gray-400';
+                    return <span className={`shrink-0 text-[10px] font-medium ml-auto ${cls}`}>{rt}min</span>;
+                  })()}
+                </div>
+                {/* multi-kid sub-rows: name + ride time */}
+                {multiKid && !showAddresses && (
+                  <div className="ml-8 mt-0.5 space-y-0.5">
+                    {wp.kidNames.map((name, ki) => {
+                      const rt = wp.rideTimesMin![ki];
+                      const cls = rt > 45 ? 'text-red-500 font-semibold' : rt > 30 ? 'text-amber-500' : 'text-gray-400';
+                      return (
+                        <div key={ki} className="flex justify-between text-[10px]">
+                          <span className="text-gray-600">{name.split(' ')[0]}</span>
+                          <span className={cls}>{rt}min</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}
