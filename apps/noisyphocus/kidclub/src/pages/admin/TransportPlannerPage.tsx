@@ -139,6 +139,22 @@ function hhmmToMin(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
 }
+// Mirrors the route card's displayed duration exactly:
+// waypointExtraMin[i] shifts ETA of waypoint i+1 onwards, so the last stop's extra never counts.
+function routeWallClockMin(route: OptimizedRoute, override?: DriverOverride): number {
+  const offsetMin = override?.departureOffsetMin ?? 0;
+  const wps = override?.waypointOrder ? override.waypointOrder.map(i => route.waypoints[i]) : route.waypoints;
+  let cum = offsetMin;
+  const etas: string[] = [];
+  wps.forEach((wp, i) => {
+    etas.push(shiftTime(wp.eta, cum));
+    cum += override?.waypointExtraMin?.[i] ?? 0;
+  });
+  const last = etas[etas.length - 1];
+  const start = offsetMin !== 0 ? shiftTime(route.driverStartTime, offsetMin) : route.driverStartTime;
+  if (last && start) return (hhmmToMin(last) - hhmmToMin(start) + 1440) % 1440;
+  return route.totalDurationMin;
+}
 function formatTimeSec(seconds: number): string {
   const total = Math.round(seconds / 60);
   const h = Math.floor(total / 60);
@@ -892,13 +908,7 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
             </div>
           ))}
           <div className="text-gray-400 pt-0.5 border-t border-gray-50">
-            {(() => {
-              const lastEta = displayEtas[displayEtas.length - 1];
-              const wallMin = lastEta && displayedStartTime
-                ? ((hhmmToMin(lastEta) - hhmmToMin(displayedStartTime) + 1440) % 1440)
-                : route.totalDurationMin;
-              return fmtHours(wallMin / 60);
-            })()}
+            {fmtHours(routeWallClockMin(route, driverOverride) / 60)}
             {' · '}{route.totalDistanceKm}km
           </div>
           {route.unassigned.length > 0 && (
@@ -1080,10 +1090,7 @@ export default function TransportPlannerPage() {
   const effectiveRunHours = (run: AutoRun): number => {
     if (driverHourOverrides[run.id] != null) return driverHourOverrides[run.id];
     const route = cellRoutes[run.id];
-    if (route) {
-      const extraMin = driverOverrides[run.id]?.waypointExtraMin?.reduce((s, x) => s + x, 0) ?? 0;
-      return (route.totalDurationMin + extraMin) / 60;
-    }
+    if (route) return routeWallClockMin(route, driverOverrides[run.id]) / 60;
     return HOURS_PER_RUN;
   };
 
@@ -1349,7 +1356,7 @@ export default function TransportPlannerPage() {
                       const run = (allAutoRuns[day] ?? []).find(r => r.direction === period.id && effectiveStopCount(r) > 0);
                       if (!run) return <td key={day} className="px-1 py-1 text-center text-gray-200">—</td>;
                       const fromRoute = cellRoutes[run.id] != null
-                        ? (cellRoutes[run.id]!.totalDurationMin + (driverOverrides[run.id]?.waypointExtraMin?.reduce((s, x) => s + x, 0) ?? 0)) / 60
+                        ? routeWallClockMin(cellRoutes[run.id]!, driverOverrides[run.id]) / 60
                         : null;
                       const override = driverHourOverrides[run.id];
                       const hours = effectiveRunHours(run);
