@@ -181,7 +181,9 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
         patch.contactMobile = phone.trim() || null;
         patch.schedule = tripsToSchedule(trips);
         if (config) patch.monthlyFee = patch.schedule.length * config.flatRatePerTrip * 4;
-        // Save schoolName to the children doc (canonical source for transport)
+        // Always save schoolName on the subscription itself as fallback
+        patch.schoolName = schoolName.trim() || null;
+        // Also save to the children doc (canonical source) when childId is available
         if (item.childId) {
           await updateDoc(docRef('children', item.childId), { schoolName: schoolName.trim() || null, updatedAt: new Date() });
         }
