@@ -272,7 +272,7 @@ function SettingsModal({
     const sibRank: Record<string, number> = {};
     Object.values(famGroups).forEach(group => group.forEach((k, i) => { sibRank[k.id] = i + 1; }));
 
-    type KidRow = { kidId: string; name: string; siblingRank: number; slotsPerWeek: number; discounts: string[]; monthlyFee: number };
+    type KidRow = { kidId: string; name: string; schoolName?: string; siblingRank: number; slotsPerWeek: number; discounts: string[]; monthlyFee: number };
     type FamilyRow = { key: string; label: string; kids: KidRow[]; total: number };
 
     return Object.entries(famGroups).map(([key, kids]) => {
@@ -301,7 +301,7 @@ function SettingsModal({
           });
         }
         const slotsPerWeek = kid.requestedSchedule.length;
-        return { kidId: kid.id, name: kid.name, siblingRank: rank, slotsPerWeek, discounts: [...appliedDiscounts], monthlyFee: fee };
+        return { kidId: kid.id, name: kid.name, schoolName: kid.schoolName, siblingRank: rank, slotsPerWeek, discounts: [...appliedDiscounts], monthlyFee: fee };
       });
       const total = kidRows.reduce((s, r) => s + r.monthlyFee, 0);
       const label = key.includes('@') ? key : kids[0]?.name ?? key;
@@ -451,13 +451,20 @@ function SettingsModal({
                       </div>
                       <div className="space-y-1">
                         {fam.kids.map(kid => (
-                          <div key={kid.kidId} className="flex items-center gap-2 text-xs text-gray-500">
-                            <span className="truncate flex-1">{kid.name}</span>
-                            <span className="text-gray-400">{kid.slotsPerWeek} viagem{kid.slotsPerWeek !== 1 ? 's' : ''}/sem</span>
-                            {kid.discounts.map(d => (
-                              <span key={d} className="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-xs shrink-0">{d}</span>
-                            ))}
-                            <span className="font-semibold text-gray-700 tabular-nums shrink-0">€{kid.monthlyFee.toFixed(2)}</span>
+                          <div key={kid.kidId} className="text-xs text-gray-500 space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate flex-1 font-medium text-gray-700">{kid.name}</span>
+                              <span className="text-gray-400">{kid.slotsPerWeek} viagem{kid.slotsPerWeek !== 1 ? 's' : ''}/sem</span>
+                              {kid.discounts.map(d => (
+                                <span key={d} className="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded shrink-0">{d}</span>
+                              ))}
+                              <span className="font-semibold text-gray-700 tabular-nums shrink-0">€{kid.monthlyFee.toFixed(2)}</span>
+                            </div>
+                            <div className="pl-0.5">
+                              {kid.schoolName
+                                ? <span className="text-gray-400">🏫 {kid.schoolName}</span>
+                                : <span className="text-amber-500">⚠ sem escola — editar na inscrição</span>}
+                            </div>
                           </div>
                         ))}
                       </div>
