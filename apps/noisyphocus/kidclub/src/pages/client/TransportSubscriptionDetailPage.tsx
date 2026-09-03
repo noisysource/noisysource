@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { TransportationSubscription } from '@shared/models';
+import { TransportationConfig } from '@shared/models/Transportation';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -35,6 +36,9 @@ export default function TransportSubscriptionDetailPage() {
   const navigate = useNavigate();
   const user = useUser();
   const [subscription, setSubscription] = useState<TransportationSubscription | null>(null);
+  const [config, setConfig] = useState<TransportationConfig | null>(null);
+  const [siblingRank, setSiblingRank] = useState(1);
+  const [schoolName, setSchoolName] = useState<string | undefined>();
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -49,13 +53,38 @@ export default function TransportSubscriptionDetailPage() {
     if (!id) return;
     setIsLoading(true);
     try {
-      const subSnap = await getDoc(docRef('transportationSubscriptions', id));
+      const [subSnap, cfgSnap, calSnap] = await Promise.all([
+        getDoc(docRef('transportationSubscriptions', id)),
+        getDoc(docRef('config', 'transportation')),
+        getDoc(docRef('config', 'schoolCalendar')),
+      ]);
       if (!subSnap.exists()) return;
       const data = subSnap.data();
       const sub = { ...data, id: subSnap.id } as TransportationSubscription;
       setSubscription(sub);
 
-      const calSnap = await getDoc(docRef('config', 'schoolCalendar'));
+      if (cfgSnap.exists()) setConfig(cfgSnap.data() as TransportationConfig);
+
+      // Resolve school name: subscription doc first, then children doc
+      let school: string | undefined = sub.schoolName;
+      if (!school && sub.childId) {
+        const childSnap = await getDoc(docRef('children', sub.childId));
+        if (childSnap.exists()) school = childSnap.data().schoolName;
+      }
+      setSchoolName(school);
+
+      // Sibling rank: count active transport subs in the same family, sorted by childName
+      if (sub.familyId) {
+        const famSnap = await getDocs(
+          query(col('transportationSubscriptions'), where('familyId', '==', sub.familyId), where('status', '==', 'active'))
+        );
+        const siblings = famSnap.docs
+          .map(d => ({ id: d.id, childName: d.data().childName as string }))
+          .sort((a, b) => a.childName.localeCompare(b.childName));
+        const rank = siblings.findIndex(s => s.id === id) + 1;
+        setSiblingRank(rank > 0 ? rank : 1);
+      }
+
       const schoolYearEnd: Date | null =
         calSnap.exists() && calSnap.data().yearEndDate
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`)
@@ -181,6 +210,57 @@ export default function TransportSubscriptionDetailPage() {
   const isActive = subscription.status === 'active';
   const isPending = subscription.status === 'pending';
 
+  // Compute per-slot discount breakdown from config
+  const priceBreakdown = useMemo(() => {
+    if (!config || !subscription) return null;
+    const { flatRatePerTrip, weeksPerMonth, vatRate, siblingDiscountPercentage, schoolDiscounts, minTripsForDiscount, multiTripDiscountPercentage } = config;
+    if (!flatRatePerTrip) return null;
+
+    const periodOrder: Record<string, number> = { morning: 0, lunch: 1, afternoon: 2 };
+    const slotPeriodFrom = (time: string) => {
+      const h = parseInt(time.split(':')[0], 10);
+      return h < 12 ? 'morning' : h < 15 ? 'lunch' : 'afternoon';
+    };
+
+    // Group slots by day, sort by time within day to determine tripRank
+    const slotsByDay: Record<string, typeof subscription.schedule> = {};
+    for (const s of subscription.schedule ?? []) (slotsByDay[s.dayOfWeek] ??= []).push(s);
+    Object.values(slotsByDay).forEach(g =>
+      g.sort((a, b) => (periodOrder[slotPeriodFrom(a.pickupTime)] ?? 0) - (periodOrder[slotPeriodFrom(b.pickupTime)] ?? 0))
+    );
+
+    const appliedDiscounts: { label: string; pct: number }[] = [];
+    if (siblingRank >= 2 && siblingDiscountPercentage > 0)
+      appliedDiscounts.push({ label: 'Desconto irmãos', pct: siblingDiscountPercentage });
+    for (const sd of (schoolDiscounts ?? [])) {
+      if (schoolName && sd.schoolName && sd.schoolName.toLowerCase() === schoolName.toLowerCase() && sd.discountPercentage > 0)
+        appliedDiscounts.push({ label: `Desconto ${sd.schoolName}`, pct: sd.discountPercentage });
+    }
+
+    let totalFee = 0;
+    let hasMultiTrip = false;
+    for (const [, slots] of Object.entries(slotsByDay)) {
+      slots.forEach((_, idx) => {
+        const tripRank = idx + 1;
+        let discount = appliedDiscounts.reduce((s, d) => s + d.pct, 0);
+        if (tripRank >= minTripsForDiscount && multiTripDiscountPercentage > 0) {
+          discount += multiTripDiscountPercentage;
+          hasMultiTrip = true;
+        }
+        discount = Math.min(1, discount);
+        totalFee += flatRatePerTrip * (1 - discount) * weeksPerMonth;
+      });
+    }
+    if (hasMultiTrip)
+      appliedDiscounts.push({ label: `Desconto viagem extra`, pct: multiTripDiscountPercentage });
+
+    const slotsPerWeek = (subscription.schedule ?? []).length;
+    const baseTotal = flatRatePerTrip * slotsPerWeek * weeksPerMonth;
+    const vatAmount = totalFee * vatRate;
+
+    return { flatRatePerTrip, weeksPerMonth, slotsPerWeek, baseTotal, appliedDiscounts, totalFee, vatRate, vatAmount };
+  }, [config, subscription, siblingRank, schoolName]);
+
   const statusBadge = isActive
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }
     : isPending
@@ -210,10 +290,34 @@ export default function TransportSubscriptionDetailPage() {
           </span>
         </div>
 
-        <p className="mt-4 text-2xl font-bold text-gray-900">
-          €{(subscription.monthlyFee ?? 0).toFixed(2)}
-          <span className="text-base font-normal text-gray-500">/mês</span>
-        </p>
+        {priceBreakdown ? (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-baseline gap-1">
+              <span className="text-2xl font-bold text-gray-900">€{priceBreakdown.totalFee.toFixed(2)}</span>
+              <span className="text-base font-normal text-gray-500">/mês</span>
+              {priceBreakdown.vatRate > 0 && (
+                <span className="text-xs text-gray-400 ml-1">+ €{priceBreakdown.vatAmount.toFixed(2)} IVA</span>
+              )}
+            </div>
+            <div className="text-xs text-gray-500 space-y-1">
+              <div className="flex items-center justify-between">
+                <span>€{priceBreakdown.flatRatePerTrip.toFixed(2)}/viagem × {priceBreakdown.slotsPerWeek} viagem{priceBreakdown.slotsPerWeek !== 1 ? 's' : ''}/semana × {priceBreakdown.weeksPerMonth} semanas</span>
+                <span className="tabular-nums text-gray-400">€{priceBreakdown.baseTotal.toFixed(2)}</span>
+              </div>
+              {priceBreakdown.appliedDiscounts.map(d => (
+                <div key={d.label} className="flex items-center justify-between text-green-700">
+                  <span>✓ {d.label}</span>
+                  <span className="tabular-nums">-{Math.round(d.pct * 100)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-4 text-2xl font-bold text-gray-900">
+            €{(subscription.monthlyFee ?? 0).toFixed(2)}
+            <span className="text-base font-normal text-gray-500">/mês</span>
+          </p>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {(subscription.schedule ?? []).map((s, i) => (
