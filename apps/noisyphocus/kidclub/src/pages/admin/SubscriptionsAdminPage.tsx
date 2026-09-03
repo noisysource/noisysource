@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getDocs, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { getDocs, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import PlacesInput from '../../components/PlacesInput';
 import { getTransportationConfig } from '../../services/transportationService';
@@ -489,8 +489,19 @@ export default function SubscriptionsAdminPage() {
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
       const newStatus = item._type === 'study' ? 'confirmed' : 'active';
-      await updateDoc(docRef(colName, item.id), { status: newStatus, approvedAt: new Date(), updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'active' } : i));
+      const patch: Record<string, unknown> = { status: newStatus, approvedAt: new Date(), updatedAt: new Date() };
+
+      // Auto-link to existing family by contactEmail if not yet linked
+      if (!item.familyId && item.contactEmail) {
+        const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
+        if (!famSnap.empty) patch.familyId = famSnap.docs[0].id;
+      }
+
+      await updateDoc(docRef(colName, item.id), patch);
+      setItems(prev => prev.map(i => i.id === item.id
+        ? { ...i, status: 'active', familyId: (patch.familyId as string | undefined) ?? i.familyId }
+        : i
+      ));
     } finally { setProcessing(null); }
   };
 
@@ -535,6 +546,19 @@ export default function SubscriptionsAdminPage() {
   };
 
   const isUnlinked = (i: SubItem) => i.source === 'manual' && !i.familyId;
+
+  const linkToFamily = async (item: SubItem) => {
+    if (!item.contactEmail) return alert('Sem email de contacto para vincular.');
+    setProcessing(item.id);
+    try {
+      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
+      if (famSnap.empty) { alert(`Nenhuma conta encontrada para ${item.contactEmail}.`); return; }
+      const familyId = famSnap.docs[0].id;
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      await updateDoc(docRef(colName, item.id), { familyId, updatedAt: new Date() });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, familyId } : i));
+    } finally { setProcessing(null); }
+  };
 
   const filtered = items
     .filter(i => tab === 'all' || (tab === 'pending' ? (i.status === 'pending' || i.status === 'planned') : i.status === tab))
@@ -729,9 +753,16 @@ export default function SubscriptionsAdminPage() {
                           </>
                         )}
                         {isUnlinked(item) && (
-                          <button onClick={() => hardDelete(item)} disabled={processing === item.id}
-                            className="text-red-400 hover:text-red-600 text-sm px-2 py-1 disabled:opacity-60"
-                            title="Eliminar">🗑</button>
+                          <>
+                            <button onClick={() => linkToFamily(item)} disabled={processing === item.id}
+                              className="bg-orange-50 text-orange-700 border border-orange-200 text-sm px-3 py-1.5 rounded-lg hover:bg-orange-100 disabled:opacity-60 whitespace-nowrap"
+                              title={`Vincular a conta com email ${item.contactEmail}`}>
+                              {processing === item.id ? '…' : '🔗 Vincular'}
+                            </button>
+                            <button onClick={() => hardDelete(item)} disabled={processing === item.id}
+                              className="text-red-400 hover:text-red-600 text-sm px-2 py-1 disabled:opacity-60"
+                              title="Eliminar">🗑</button>
+                          </>
                         )}
                         {item.status !== 'cancelled' && (
                           <button onClick={() => setEditId(editId === item.id ? null : item.id)}
