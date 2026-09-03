@@ -1079,7 +1079,11 @@ export default function TransportPlannerPage() {
 
   const effectiveRunHours = (run: AutoRun): number => {
     if (driverHourOverrides[run.id] != null) return driverHourOverrides[run.id];
-    if (cellRoutes[run.id]) return cellRoutes[run.id]!.totalDurationMin / 60;
+    const route = cellRoutes[run.id];
+    if (route) {
+      const extraMin = driverOverrides[run.id]?.waypointExtraMin?.reduce((s, x) => s + x, 0) ?? 0;
+      return (route.totalDurationMin + extraMin) / 60;
+    }
     return HOURS_PER_RUN;
   };
 
@@ -1344,7 +1348,9 @@ export default function TransportPlannerPage() {
                     {DAYS.map(day => {
                       const run = (allAutoRuns[day] ?? []).find(r => r.direction === period.id && effectiveStopCount(r) > 0);
                       if (!run) return <td key={day} className="px-1 py-1 text-center text-gray-200">—</td>;
-                      const fromRoute = cellRoutes[run.id] != null ? cellRoutes[run.id]!.totalDurationMin / 60 : null;
+                      const fromRoute = cellRoutes[run.id] != null
+                        ? (cellRoutes[run.id]!.totalDurationMin + (driverOverrides[run.id]?.waypointExtraMin?.reduce((s, x) => s + x, 0) ?? 0)) / 60
+                        : null;
                       const override = driverHourOverrides[run.id];
                       const hours = effectiveRunHours(run);
                       const isOverridden = override != null;
