@@ -134,6 +134,11 @@ export default function FamiliesAdminPage() {
 
   if (loading) return <div className="p-6 text-gray-400">A carregar...</div>;
 
+  const familyIds = new Set(families.map(f => f.id));
+  const orphanTransport = transport.filter(t => !t.familyId || !familyIds.has(t.familyId));
+  const orphanStudy = study.filter(s => !s.familyId || !familyIds.has(s.familyId));
+  const orphanChildren = children.filter(c => !c.familyId || !familyIds.has(c.familyId));
+
   const pendingBilling = (fid: string) => billing.filter(b => b.familyId === fid && b.status === 'pending');
   const pendingTotal = (fid: string) => pendingBilling(fid).reduce((s, b) => s + (b.total ?? 0), 0);
 
@@ -141,7 +146,15 @@ export default function FamiliesAdminPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-800">Famílias e Crianças</h1>
-        <span className="text-sm text-gray-400">{families.length} família(s) registada(s)</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-gray-400">{families.length} família(s) registada(s)</span>
+          <button
+            onClick={load}
+            className="text-sm text-blue-600 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-50"
+          >
+            ↻ Atualizar
+          </button>
+        </div>
       </div>
 
       <input
@@ -325,6 +338,39 @@ export default function FamiliesAdminPage() {
           );
         })}
       </div>
+
+      {(orphanTransport.length > 0 || orphanStudy.length > 0 || orphanChildren.length > 0) && (
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold text-gray-700 mb-3">Sem família associada</h2>
+          <p className="text-xs text-gray-400 mb-3">Inscrições e crianças criadas manualmente ou sem conta de família ligada.</p>
+          <div className="space-y-1">
+            {orphanChildren.map(c => (
+              <div key={c.id} className="flex justify-between text-sm bg-white rounded border border-gray-200 px-3 py-2">
+                <div><span className="text-gray-500 text-xs mr-2">👤</span><span className="text-gray-800">{c.firstName} {c.lastName}</span></div>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[c.status ?? 'active'] ?? 'bg-gray-100'}`}>{c.status ?? 'active'}</span>
+              </div>
+            ))}
+            {orphanStudy.map(s => (
+              <div key={s.id} className="flex justify-between text-sm bg-white rounded border border-gray-200 px-3 py-2">
+                <div><span className="text-gray-500 text-xs mr-2">📚</span><span className="text-gray-800">{s.childName ?? '—'}</span></div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600 font-medium">€{(s.monthlyPrice ?? 0).toFixed(2)}/mês</span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[s.status ?? ''] ?? 'bg-gray-100'}`}>{s.status}</span>
+                </div>
+              </div>
+            ))}
+            {orphanTransport.map(t => (
+              <div key={t.id} className="flex justify-between text-sm bg-white rounded border border-gray-200 px-3 py-2">
+                <div><span className="text-gray-500 text-xs mr-2">🚌</span><span className="text-gray-800">{t.childName ?? '—'}</span></div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600 font-medium">€{(t.monthlyFee ?? 0).toFixed(2)}/mês</span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[t.status ?? ''] ?? 'bg-gray-100'}`}>{t.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
