@@ -1302,10 +1302,25 @@ export default function TransportPlannerPage() {
               ⚙ Definições
             </button>
             {!locked && (
-              <button onClick={handleOptimizeAll} disabled={anyLoading}
-                className="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60 font-medium">
-                {anyLoading ? '…' : '🗺 Calcular todas as rotas'}
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    if (!window.confirm('Limpar todas as rotas calculadas e recomeçar?')) return;
+                    setCellRoutes({});
+                    setRunRemovals({});
+                    setRunAddressOverrides({});
+                    setDriverOverrides({});
+                    setDriverHourOverrides({});
+                  }}
+                  className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-red-50 hover:border-red-200 hover:text-red-600 text-gray-500 transition-colors"
+                >
+                  ✕ Limpar
+                </button>
+                <button onClick={handleOptimizeAll} disabled={anyLoading}
+                  className="text-sm px-4 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60 font-medium">
+                  {anyLoading ? '…' : '🗺 Calcular todas as rotas'}
+                </button>
+              </>
             )}
             <button
               onClick={() => setLocked(v => !v)}
