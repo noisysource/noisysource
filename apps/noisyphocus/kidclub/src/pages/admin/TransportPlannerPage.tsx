@@ -49,7 +49,7 @@ interface AutoRun {
   anchor: string;
   stops: AutoStop[];
 }
-interface RouteWaypoint { kidIds: string[]; kidNames: string[]; address: string; type: 'pickup' | 'dropoff'; eta: string; deviationMin?: number }
+interface RouteWaypoint { kidIds: string[]; kidNames: string[]; address: string; type: 'pickup' | 'dropoff'; eta: string; deviationMin?: number; rideTimesMin?: number[] }
 interface OptimizedRoute {
   waypoints: RouteWaypoint[];
   driverStartTime: string;
@@ -217,19 +217,26 @@ async function optimizeAutoRun(run: AutoRun, vanCapacity: number): Promise<Optim
   }));
   if (!kids.length) return null;
   const result = await solveRoutes(kids, vanCapacity, MAPS_KEY, isMorning ? 'morning' : 'afternoon', run.targetArrival);
+  // Build pickup time lookup for ride-time calculation
+  const pickupTimeByKid: Record<string, number> = {};
+  result.stops.forEach(s => { if (s.type === 'pickup') pickupTimeByKid[s.kidId] = s.arrivalMin; });
+
   const rawWaypoints: RouteWaypoint[] = result.stops.filter(s => s.type !== 'depot').map(s => ({
     kidIds: [s.kidId], kidNames: [s.kidName],
     address: s.address, type: s.type as 'pickup' | 'dropoff',
     eta: formatTimeSec(s.arrivalMin * 60),
     deviationMin: s.deviationMin,
+    rideTimesMin: s.type === 'dropoff' && pickupTimeByKid[s.kidId] != null
+      ? [Math.round(s.arrivalMin - pickupTimeByKid[s.kidId])]
+      : undefined,
   }));
   const merged: RouteWaypoint[] = [];
   for (const wp of rawWaypoints) {
     const last = merged[merged.length - 1];
     if (last && last.address === wp.address && last.type === wp.type) {
       last.kidIds.push(...wp.kidIds); last.kidNames.push(...wp.kidNames);
-      // average deviation for merged stops at same school
       if (wp.deviationMin != null) last.deviationMin = Math.round(((last.deviationMin ?? 0) + wp.deviationMin) / 2);
+      if (wp.rideTimesMin) last.rideTimesMin = [...(last.rideTimesMin ?? []), ...wp.rideTimesMin];
     } else merged.push({ ...wp });
   }
   return {
@@ -894,6 +901,13 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
             const dev = wp.type === 'pickup' ? wp.deviationMin : undefined;
             const devClass = dev == null ? '' : dev > 10 ? 'text-red-500' : dev > 0 ? 'text-amber-500' : 'text-green-500';
             const devLabel = dev == null ? null : dev === 0 ? null : `${dev > 0 ? '+' : ''}${dev}min`;
+            // Ride-time badges per kid at dropoff
+            const rideBadges = wp.type === 'dropoff' && wp.rideTimesMin
+              ? wp.rideTimesMin.map((rt, ri) => {
+                  const cls = rt > 45 ? 'text-red-500' : rt > 30 ? 'text-amber-500' : 'text-gray-400';
+                  return <span key={ri} className={`shrink-0 text-[10px] font-medium ${cls}`}>{rt}min</span>;
+                })
+              : null;
             return (
               <div key={i} className="flex items-start gap-1.5">
                 <span className={`font-mono shrink-0 font-semibold ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
@@ -905,6 +919,7 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
                   : <span className="text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</span>
                 }
                 {devLabel && <span className={`shrink-0 text-[10px] font-medium ml-auto ${devClass}`}>{devLabel}</span>}
+                {rideBadges && <span className="ml-auto flex gap-1">{rideBadges}</span>}
               </div>
             );
           })}
