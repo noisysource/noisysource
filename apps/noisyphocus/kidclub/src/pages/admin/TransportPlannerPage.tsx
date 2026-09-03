@@ -135,6 +135,10 @@ function shiftTime(hhmm: string, offsetMin: number): string {
   const total = ((h * 60 + m + offsetMin) % 1440 + 1440) % 1440;
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
+function hhmmToMin(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
 function formatTimeSec(seconds: number): string {
   const total = Math.round(seconds / 60);
   const h = Math.floor(total / 60);
@@ -887,7 +891,16 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
               }
             </div>
           ))}
-          <div className="text-gray-400 pt-0.5 border-t border-gray-50">{route.totalDurationMin}min · {route.totalDistanceKm}km</div>
+          <div className="text-gray-400 pt-0.5 border-t border-gray-50">
+            {(() => {
+              const lastEta = displayEtas[displayEtas.length - 1];
+              const wallMin = lastEta && displayedStartTime
+                ? ((hhmmToMin(lastEta) - hhmmToMin(displayedStartTime) + 1440) % 1440)
+                : route.totalDurationMin;
+              return fmtHours(wallMin / 60);
+            })()}
+            {' · '}{route.totalDistanceKm}km
+          </div>
           {route.unassigned.length > 0 && (
             <div className="text-red-600 bg-red-50 border border-red-100 rounded px-1.5 py-1 space-y-0.5">
               <div className="font-medium">⚠ Sem encaixe:</div>
