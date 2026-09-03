@@ -1092,7 +1092,7 @@ export default function TransportPlannerPage() {
     if (driverHourOverrides[run.id] != null) return driverHourOverrides[run.id];
     const route = cellRoutes[run.id];
     if (route) return routeWallClockMin(route, driverOverrides[run.id]) / 60;
-    return HOURS_PER_RUN;
+    return 0;
   };
 
   const { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyDiscountTotal, monthlyProfit } = useMemo(() => {
