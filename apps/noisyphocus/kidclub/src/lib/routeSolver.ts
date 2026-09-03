@@ -1,7 +1,7 @@
 export const DEPOT_ADDRESS =
   'Arco-Íris da Pequenada, Avenida da Guarda Inglesa, Coimbra, Portugal';
 
-const DEFAULT_MAX_RIDE_MIN = 45;
+const DEFAULT_MAX_RIDE_MIN = 60;
 const EARLIEST_DEPARTURE_MIN = 6 * 60; // 06:00
 
 export interface SolverKid {
@@ -9,8 +9,9 @@ export interface SolverKid {
   kidName: string;
   pickupAddress: string;
   dropoffAddress: string;
-  deadlineMin: number;   // latest arrival at dropoff (minutes from midnight)
-  maxRideMin?: number;   // max time in van (defaults to DEFAULT_MAX_RIDE_MIN)
+  deadlineMin: number;       // latest arrival at dropoff (for morning: school start time)
+  maxRideMin?: number;
+  earliestPickupMin?: number; // earliest the van may pick up this kid (school dismissal for afternoon)
 }
 
 export interface RouteStop {
@@ -19,6 +20,7 @@ export interface RouteStop {
   kidId: string;
   kidName: string;
   arrivalMin: number;
+  deviationMin?: number; // arrivalMin − earliestPickupMin: <0 van arrived early (waited), >0 late
 }
 
 export interface UnassignedKid {
@@ -29,14 +31,12 @@ export interface UnassignedKid {
 
 export interface SolverResult {
   stops: RouteStop[];
-  driverDepartMin: number;   // departure time from the route's first stop (school for afternoon)
+  driverDepartMin: number;
   totalTimeMin: number;
   totalDistanceKm: number;
   unassigned: UnassignedKid[];
-  // For afternoon runs: travel from DEPOT to the school (before the solver's route begins).
-  // The driver's actual departure from Arco-Íris = driverDepartMin - depotToStartMin.
-  depotToStartMin: number;
-  depotToStartKm: number;
+  depotToStartMin: number; // always 0 in new model (depot is the start)
+  depotToStartKm: number;  // always 0 in new model
 }
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -58,8 +58,6 @@ function parseDurMin(d: unknown): number {
   return 0;
 }
 
-// Returns an RFC3339 timestamp for next Tuesday at the given minute-of-day.
-// Tuesday is a stable mid-week reference for historical traffic patterns.
 function nextTuesdayAt(minutesFromMidnight: number): string {
   const d = new Date();
   const daysUntilTuesday = ((2 - d.getDay() + 7) % 7) || 7;
@@ -71,7 +69,7 @@ function nextTuesdayAt(minutesFromMidnight: number): string {
 async function fetchMatrix(
   addresses: string[],
   mapsKey: string,
-  departureMin?: number, // minutes from midnight — pins departure time for stable traffic results
+  departureMin?: number,
 ): Promise<{ time: number[][]; dist: number[][] }> {
   const n = addresses.length;
   const time: number[][] = Array.from({ length: n }, (_, i) =>
@@ -81,17 +79,13 @@ async function fetchMatrix(
     Array.from({ length: n }, (_, j) => (i === j ? 0 : Infinity)),
   );
 
-  // TRAFFIC_AWARE_OPTIMAL requires origins×destinations ≤ 100 (n ≤ 10).
-  // Fall back to TRAFFIC_AWARE for larger matrices.
   const routingPreference = n <= 10 ? 'TRAFFIC_AWARE_OPTIMAL' : 'TRAFFIC_AWARE';
-
   const body: Record<string, unknown> = {
     origins: addresses.map(a => ({ waypoint: { address: a } })),
     destinations: addresses.map(a => ({ waypoint: { address: a } })),
     travelMode: 'DRIVE',
     routingPreference,
   };
-  // Pin departure time so results don't change based on when the button is clicked.
   if (departureMin != null) {
     body.departureTime = nextTuesdayAt(departureMin);
   }
@@ -133,10 +127,23 @@ function travelTime(stops: StopNode[], matrix: number[][]): number {
     .reduce((sum, s, i) => sum + matrix[stops[i].locIdx][s.locIdx], 0);
 }
 
-function computeTimes(stops: StopNode[], matrix: number[][], startMin: number): number[] {
+// Computes arrival times, inserting wait time at pickup stops when van arrives
+// before the school's dismissal (earliestPickupMin). This is the only scheduling
+// constraint for afternoon: the van waits at the school if it arrives early.
+function computeTimesWithWaits(
+  stops: StopNode[],
+  matrix: number[][],
+  startMin: number,
+  kidsMap: Map<string, SolverKid>,
+): number[] {
   const times = [startMin];
   for (let i = 1; i < stops.length; i++) {
-    times.push(times[i - 1] + matrix[stops[i - 1].locIdx][stops[i].locIdx]);
+    let t = times[i - 1] + matrix[stops[i - 1].locIdx][stops[i].locIdx];
+    if (stops[i].type === 'pickup') {
+      const earliest = kidsMap.get(stops[i].kidId)?.earliestPickupMin;
+      if (earliest != null && t < earliest) t = earliest;
+    }
+    times.push(t);
   }
   return times;
 }
@@ -151,7 +158,6 @@ function checkConstraints(
   kidsOnRoute: Map<string, SolverKid>,
   capacity: number,
 ): FailReason {
-  // Capacity
   let passengers = 0;
   for (let i = 0; i < proposed.length; i++) {
     const t = proposed[i].type;
@@ -160,7 +166,6 @@ function checkConstraints(
     if (passengers > capacity || passengers < 0) return 'capacity';
   }
 
-  // Per-kid deadline and max ride time
   for (const [kidId, kid] of kidsOnRoute) {
     const pi = proposed.findIndex(s => s.type === 'pickup' && s.kidId === kidId);
     const di = proposed.findIndex(s => s.type === 'dropoff' && s.kidId === kidId);
@@ -190,7 +195,7 @@ function diagnoseKid(
   capacity: number,
   direction: string,
   globalDeadline: number,
-  departureMin?: number,
+  driverDepartMin: number,
 ): UnassignedKid['reason'] {
   const n = route.length;
   const numPickups = route.filter(s => s.type === 'pickup').length;
@@ -208,12 +213,12 @@ function diagnoseKid(
     const djMin = allPickupsFirst ? numPickups + 2 : pi + 1;
     for (let dj = djMin; dj <= n; dj++) {
       const proposed = [...withPickup.slice(0, dj), dropoffNode, ...withPickup.slice(dj)];
-      const newTime = travelTime(proposed, matrix.time);
-      const depart = direction === 'morning' ? globalDeadline - newTime : (departureMin ?? globalDeadline);
+      const newTravel = travelTime(proposed, matrix.time);
+      const depart = direction === 'morning' ? globalDeadline - newTravel : driverDepartMin;
       if (direction === 'morning' && depart < EARLIEST_DEPARTURE_MIN) { hitTooEarly = true; continue; }
-      const times = computeTimes(proposed, matrix.time, depart);
       const kidsForCheck = new Map(assignedKids);
       kidsForCheck.set(kid.kidId, kid);
+      const times = computeTimesWithWaits(proposed, matrix.time, depart, kidsForCheck);
       const reason = checkConstraints(proposed, times, kidsForCheck, capacity);
       if (reason === 'capacity') hitCapacity = true;
       if (reason === 'rideTime') hitRideTime = true;
@@ -226,26 +231,27 @@ function diagnoseKid(
   return 'unknown';
 }
 
-
 // ─── Main solver ──────────────────────────────────────────────────────────────
 
 type KidWithIdx = SolverKid & { pickupLocIdx: number; dropoffLocIdx: number };
 
 /**
- * Greedy cheapest-insertion heuristic for a single van.
+ * Pickup-and-delivery solver for a single van.
  *
- * Morning: route = DEPOT → pickups/dropoffs → DEPOT (round-trip)
- *   Departure time is derived by working back from the tightest deadline.
+ * Morning: DEPOT → pickups (homes) → dropoffs (schools) → DEPOT
+ *   All pickups before all dropoffs. Departure time worked back from tightest deadline.
  *
- * Afternoon: route = school → dropoffs → DEPOT
- *   Departure is fixed at `departureMin` (school dismissal time).
+ * Afternoon/lunch: DEPOT → interleaved pickups (schools) + dropoffs (homes) → DEPOT
+ *   Van picks up from multiple schools, interleaves dropoffs when van is at capacity.
+ *   Van waits at a school if it arrives before dismissal (earliestPickupMin).
+ *   Departure calculated to arrive at the earliest-dismissal school on time.
  */
 export async function solveRoutes(
   kids: SolverKid[],
   capacity: number,
   mapsKey: string,
   direction: 'morning' | 'afternoon' = 'morning',
-  departureMin?: number,
+  departureHint?: number, // used only as traffic-time reference for afternoon
 ): Promise<SolverResult> {
   if (kids.length === 0) {
     return { stops: [], driverDepartMin: 0, totalTimeMin: 0, totalDistanceKm: 0, unassigned: [], depotToStartMin: 0, depotToStartKm: 0 };
@@ -256,16 +262,6 @@ export async function solveRoutes(
   const addresses: string[] = [DEPOT_ADDRESS];
   addrToIdx.set(DEPOT_ADDRESS, 0);
 
-  const startAddress = direction === 'afternoon' && kids[0]?.pickupAddress
-    ? kids[0].pickupAddress   // all afternoon kids share the same school
-    : DEPOT_ADDRESS;
-
-  const effectiveStart = direction === 'afternoon' ? startAddress : DEPOT_ADDRESS;
-  if (!addrToIdx.has(effectiveStart)) {
-    addrToIdx.set(effectiveStart, addresses.length);
-    addresses.push(effectiveStart);
-  }
-
   for (const kid of kids) {
     for (const addr of [kid.pickupAddress, kid.dropoffAddress].filter(Boolean)) {
       if (!addrToIdx.has(addr)) {
@@ -275,9 +271,12 @@ export async function solveRoutes(
     }
   }
 
-  // For morning runs use 07:30 as the reference departure time for traffic modelling.
-  const trafficDepartureMin = direction === 'morning' ? 7 * 60 + 30 : (departureMin ?? 16 * 60);
-  const matrix = await fetchMatrix(addresses, mapsKey, trafficDepartureMin);
+  // Traffic reference: morning at 07:30, afternoon at earliest dismissal or hint
+  const minEarliest = Math.min(...kids.map(k => k.earliestPickupMin ?? Infinity));
+  const trafficRef = direction === 'morning'
+    ? 7 * 60 + 30
+    : (isFinite(minEarliest) ? minEarliest : (departureHint ?? 16 * 60));
+  const matrix = await fetchMatrix(addresses, mapsKey, trafficRef);
 
   // ── Map kids to location indices ────────────────────────────────────────────
   const mappedKids: KidWithIdx[] = kids.map(k => ({
@@ -286,33 +285,42 @@ export async function solveRoutes(
     dropoffLocIdx: addrToIdx.get(k.dropoffAddress) ?? 0,
   }));
 
-  // ── Initial route: [startDepot, endDepot] ───────────────────────────────────
-  const startIdx = addrToIdx.get(effectiveStart) ?? 0;
-  const endIdx = 0; // DEPOT_ADDRESS is always index 0
+  // ── Compute afternoon departure: leave depot just in time for earliest school ─
+  const depotIdx = 0;
+  let driverDepartMin: number;
+  const globalDeadline = Math.min(...kids.map(k => k.deadlineMin));
 
-  const mkDepot = (idx: number): StopNode => ({
-    locIdx: idx, address: addresses[idx], type: 'depot', kidId: '', kidName: '',
-  });
-  let route: StopNode[] = [mkDepot(startIdx), mkDepot(endIdx)];
+  if (direction === 'morning') {
+    // Will be set after solving (works backwards from deadline)
+    driverDepartMin = 0; // placeholder
+  } else {
+    // Leave depot so van arrives at the earliest-dismissal school right on time.
+    // Use the minimum drive time from depot to any pickup school as estimate.
+    const minDepotToPickup = Math.min(
+      ...mappedKids.map(k => matrix.time[depotIdx][k.pickupLocIdx])
+    );
+    driverDepartMin = isFinite(minEarliest)
+      ? Math.max(minEarliest - minDepotToPickup, EARLIEST_DEPARTURE_MIN)
+      : Math.max((departureHint ?? 16 * 60) - 30, EARLIEST_DEPARTURE_MIN);
+  }
+
+  // ── Initial route: [DEPOT, DEPOT] ────────────────────────────────────────────
+  const mkDepot = (): StopNode => ({ locIdx: 0, address: DEPOT_ADDRESS, type: 'depot', kidId: '', kidName: '' });
+  let route: StopNode[] = [mkDepot(), mkDepot()];
 
   const assignedKids = new Map<string, SolverKid>();
   const unassigned: UnassignedKid[] = [];
   let remaining = [...mappedKids];
 
-  // Tight deadline for working backwards (morning only)
-  const globalDeadline = Math.min(...kids.map(k => k.deadlineMin));
-
-  // Morning runs: all pickups before all dropoffs (school-bus pattern — gather then deliver).
-  // This prevents the van zigzagging back to the same school multiple times.
+  // Morning: all pickups before all dropoffs (gather-then-deliver school-bus pattern).
+  // Afternoon: fully interleaved — allows dropoffs between pickups to free capacity.
   const allPickupsFirst = direction === 'morning';
 
-  // Two-step insertion helper: inserts pickup at pi in original route, then
-  // dropoff at dj in the resulting (longer) route. Keeps the final depot last.
   const buildProposed = (
     base: StopNode[],
     kid: KidWithIdx,
-    pi: number, // position in base (1 … base.length-1)
-    dj: number, // position in base+pickup (pi+1 … base.length)
+    pi: number,
+    dj: number,
   ): StopNode[] => {
     const pickupNode: StopNode = { locIdx: kid.pickupLocIdx, address: kid.pickupAddress, type: 'pickup', kidId: kid.kidId, kidName: kid.kidName };
     const dropoffNode: StopNode = { locIdx: kid.dropoffLocIdx, address: kid.dropoffAddress, type: 'dropoff', kidId: kid.kidId, kidName: kid.kidName };
@@ -322,44 +330,47 @@ export async function solveRoutes(
 
   // ── Greedy insertion loop ───────────────────────────────────────────────────
   while (remaining.length > 0) {
+    // Baseline wall-clock for current route (used as cost reference)
+    const baseDepart = direction === 'morning'
+      ? globalDeadline - travelTime(route, matrix.time)
+      : driverDepartMin;
+    const baseTimes = computeTimesWithWaits(route, matrix.time, baseDepart, assignedKids);
+    const baseWallClock = baseTimes.length > 1 ? baseTimes[baseTimes.length - 1] - baseTimes[0] : 0;
+
     let bestKid: KidWithIdx | null = null;
     let bestPi = -1;
     let bestDj = -1;
     let bestCost = Infinity;
 
-    const n = route.length; // current route length (final depot is at index n-1)
-    const oldTime = travelTime(route, matrix.time);
+    const n = route.length;
     const numPickups = route.filter(s => s.type === 'pickup').length;
 
     for (const kid of remaining) {
-      // pi: where to insert the pickup in the original route.
-      //   allPickupsFirst → only positions before the first existing dropoff (≤ numPickups+1).
-      //   Otherwise → anywhere except before the start depot or after the end depot.
       const piMax = allPickupsFirst ? numPickups + 1 : n - 1;
 
       for (let pi = 1; pi <= piMax; pi++) {
-        // dj: where to insert the dropoff in the route-after-pickup (length n+1, depot at index n).
-        //   allPickupsFirst → only positions after all pickups (≥ numPickups+2).
-        //   Otherwise → anywhere after the pickup just inserted.
         const djMin = allPickupsFirst ? numPickups + 2 : pi + 1;
-        const djMax = n; // insert before the final depot which is now at index n
+        const djMax = n;
 
         for (let dj = djMin; dj <= djMax; dj++) {
           const proposed = buildProposed(route, kid, pi, dj);
-          const newTime = travelTime(proposed, matrix.time);
-          const depart = direction === 'morning'
-            ? globalDeadline - newTime
-            : (departureMin ?? globalDeadline);
-
-          if (direction === 'morning' && depart < EARLIEST_DEPARTURE_MIN) continue;
-
-          const times = computeTimes(proposed, matrix.time, depart);
           const kidsForCheck = new Map(assignedKids);
           kidsForCheck.set(kid.kidId, kid);
 
+          const newTravel = travelTime(proposed, matrix.time);
+          const newDepart = direction === 'morning'
+            ? globalDeadline - newTravel
+            : driverDepartMin;
+
+          if (direction === 'morning' && newDepart < EARLIEST_DEPARTURE_MIN) continue;
+
+          const times = computeTimesWithWaits(proposed, matrix.time, newDepart, kidsForCheck);
           if (!isValid(proposed, times, kidsForCheck, capacity)) continue;
 
-          const cost = newTime - oldTime;
+          // Cost = additional wall-clock time (includes waits)
+          const wallClock = times[times.length - 1] - times[0];
+          const cost = wallClock - baseWallClock;
+
           if (cost < bestCost) {
             bestCost = cost;
             bestKid = kid;
@@ -375,9 +386,8 @@ export async function solveRoutes(
       assignedKids.set(bestKid.kidId, bestKid);
       remaining = remaining.filter(k => k.kidId !== bestKid!.kidId);
     } else {
-      // No valid insertion found for any remaining kid → diagnose and flag them
       for (const kid of remaining) {
-        const reason = diagnoseKid(kid, route, matrix, assignedKids, capacity, direction, globalDeadline, departureMin);
+        const reason = diagnoseKid(kid, route, matrix, assignedKids, capacity, direction, globalDeadline, driverDepartMin);
         unassigned.push({ kidId: kid.kidId, kidName: kid.kidName, reason });
       }
       break;
@@ -385,37 +395,37 @@ export async function solveRoutes(
   }
 
   // ── Final timing ────────────────────────────────────────────────────────────
-  const finalTime = travelTime(route, matrix.time);
-  const driverDepartMin = direction === 'morning'
-    ? globalDeadline - finalTime
-    : (departureMin ?? globalDeadline);
-  const times = computeTimes(route, matrix.time, driverDepartMin);
+  const finalTravel = travelTime(route, matrix.time);
+  if (direction === 'morning') {
+    driverDepartMin = globalDeadline - finalTravel;
+  }
 
-  // ── Aggregate total distance ────────────────────────────────────────────────
+  const finalTimes = computeTimesWithWaits(route, matrix.time, driverDepartMin, assignedKids);
+
   const totalDistKm = route
     .slice(1)
     .reduce((sum, s, i) => sum + matrix.dist[route[i].locIdx][s.locIdx], 0);
 
-  const stops: RouteStop[] = route.map((s, i) => ({
-    address: s.address,
-    type: s.type,
-    kidId: s.kidId,
-    kidName: s.kidName,
-    arrivalMin: times[i],
-  }));
+  const stops: RouteStop[] = route.map((s, i) => {
+    const kid = assignedKids.get(s.kidId);
+    const deviationMin = s.type === 'pickup' && kid?.earliestPickupMin != null
+      ? Math.round(finalTimes[i] - kid.earliestPickupMin)
+      : undefined;
+    return { address: s.address, type: s.type, kidId: s.kidId, kidName: s.kidName, arrivalMin: finalTimes[i], deviationMin };
+  });
 
-  // For afternoon: compute the DEPOT → school leg that precedes the solver's route.
-  // The driver's actual departure from Arco-Íris is driverDepartMin - depotToStartMin.
-  const depotToStartMin = startIdx !== 0 ? Math.round(matrix.time[0][startIdx]) : 0;
-  const depotToStartKm = startIdx !== 0 ? Math.round(matrix.dist[0][startIdx] * 10) / 10 : 0;
+  // Wall-clock duration = last stop time − departure time
+  const wallClockMin = finalTimes.length > 1
+    ? finalTimes[finalTimes.length - 1] - driverDepartMin
+    : finalTravel;
 
   return {
     stops,
     driverDepartMin,
-    totalTimeMin: Math.round(finalTime),
+    totalTimeMin: Math.round(wallClockMin),
     totalDistanceKm: Math.round(totalDistKm * 10) / 10,
     unassigned,
-    depotToStartMin,
-    depotToStartKm,
+    depotToStartMin: 0, // depot is always the start now
+    depotToStartKm: 0,
   };
 }

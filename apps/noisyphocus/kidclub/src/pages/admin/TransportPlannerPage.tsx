@@ -49,7 +49,7 @@ interface AutoRun {
   anchor: string;
   stops: AutoStop[];
 }
-interface RouteWaypoint { kidIds: string[]; kidNames: string[]; address: string; type: 'pickup' | 'dropoff'; eta: string }
+interface RouteWaypoint { kidIds: string[]; kidNames: string[]; address: string; type: 'pickup' | 'dropoff'; eta: string; deviationMin?: number }
 interface OptimizedRoute {
   waypoints: RouteWaypoint[];
   driverStartTime: string;
@@ -164,51 +164,44 @@ function formatTimeSec(seconds: number): string {
 function normalizeAnchor(addr: string): string {
   return addr.split(',')[0].trim().toLowerCase();
 }
-function buildSchoolRuns(bySchool: Map<string, AutoStop[]>, direction: 'lunch' | 'afternoon', day: Day, prefix: string): AutoRun[] {
-  const runs: AutoRun[] = [];
-  let idx = 0;
-  for (const [, entries] of bySchool) {
-    const seen = new Set<string>();
-    const stops = entries.filter(e => { if (seen.has(e.kidId)) return false; seen.add(e.kidId); return true; });
-    if (!stops.length) continue;
-    runs.push({
-      id: `auto-${day}-${prefix}${idx++}`,
-      day, direction,
-      targetArrival: Math.min(...stops.map(e => e.requestedTime)),
-      anchor: entries[0].pickupAddr,
-      stops,
-    });
-  }
-  return runs;
-}
 function computeAutoRuns(kids: PlannerKid[], day: Day): AutoRun[] {
   const morning: AutoStop[] = [];
-  const byLunchSchool = new Map<string, AutoStop[]>();
-  const byAfternoonSchool = new Map<string, AutoStop[]>();
+  const lunch: AutoStop[] = [];
+  const afternoon: AutoStop[] = [];
+
   for (const kid of kids) {
     for (const slot of kid.requestedSchedule) {
       if (slot.day !== day) continue;
       const t = parseMinutes(slot.time || '08:00');
+      const stop: AutoStop = { kidId: kid.id, kidName: kid.name, pickupAddr: slot.pickup, dropoffAddr: slot.dropoff, requestedTime: t };
       if (t < 12 * 60) {
-        if (slot.pickup.trim())
-          morning.push({ kidId: kid.id, kidName: kid.name, pickupAddr: slot.pickup, dropoffAddr: slot.dropoff, requestedTime: t });
+        if (slot.pickup.trim()) morning.push(stop);
+      } else if (t < LUNCH_CUTOFF_MIN) {
+        if (slot.dropoff.trim()) lunch.push(stop);
       } else {
-        const bySchool = t < LUNCH_CUTOFF_MIN ? byLunchSchool : byAfternoonSchool;
-        const school = normalizeAnchor(slot.pickup);
-        if (!bySchool.has(school)) bySchool.set(school, []);
-        if (slot.dropoff.trim())
-          bySchool.get(school)!.push({ kidId: kid.id, kidName: kid.name, pickupAddr: slot.pickup, dropoffAddr: slot.dropoff, requestedTime: t });
+        if (slot.dropoff.trim()) afternoon.push(stop);
       }
     }
   }
+
+  const dedup = (stops: AutoStop[]) => {
+    const seen = new Set<string>();
+    return stops.filter(s => { if (seen.has(s.kidId)) return false; seen.add(s.kidId); return true; });
+  };
+
   const runs: AutoRun[] = [];
   if (morning.length > 0) {
-    const seen = new Set<string>();
-    const stops = morning.filter(e => { if (seen.has(e.kidId)) return false; seen.add(e.kidId); return true; });
+    const stops = dedup(morning);
     runs.push({ id: `auto-${day}-m0`, day, direction: 'morning', targetArrival: MORNING_DEADLINE_MIN, anchor: '', stops });
   }
-  runs.push(...buildSchoolRuns(byLunchSchool, 'lunch', day, 'l'));
-  runs.push(...buildSchoolRuns(byAfternoonSchool, 'afternoon', day, 'a'));
+  if (lunch.length > 0) {
+    const stops = dedup(lunch);
+    runs.push({ id: `auto-${day}-l0`, day, direction: 'lunch', targetArrival: Math.min(...stops.map(s => s.requestedTime)), anchor: '', stops });
+  }
+  if (afternoon.length > 0) {
+    const stops = dedup(afternoon);
+    runs.push({ id: `auto-${day}-a0`, day, direction: 'afternoon', targetArrival: Math.min(...stops.map(s => s.requestedTime)), anchor: '', stops });
+  }
   return runs.sort((a, b) => a.targetArrival - b.targetArrival);
 }
 async function optimizeAutoRun(run: AutoRun, vanCapacity: number): Promise<OptimizedRoute | null> {
@@ -218,32 +211,33 @@ async function optimizeAutoRun(run: AutoRun, vanCapacity: number): Promise<Optim
     kidId: s.kidId, kidName: s.kidName,
     pickupAddress: s.pickupAddr,
     dropoffAddress: s.dropoffAddr.trim() ? s.dropoffAddr : SOLVER_DEPOT,
-    // Morning: must arrive at school by the deadline, max 60 min in van.
-    // Afternoon/lunch: going home — no arrival deadline, no ride-time cap.
     deadlineMin: isMorning ? MORNING_DEADLINE_MIN : 23 * 60,
     maxRideMin: isMorning ? 60 : 180,
+    earliestPickupMin: isMorning ? undefined : s.requestedTime,
   }));
   if (!kids.length) return null;
-  const result = await solveRoutes(kids, vanCapacity, MAPS_KEY, isMorning ? 'morning' : 'afternoon', isMorning ? undefined : run.targetArrival);
+  const result = await solveRoutes(kids, vanCapacity, MAPS_KEY, isMorning ? 'morning' : 'afternoon', run.targetArrival);
   const rawWaypoints: RouteWaypoint[] = result.stops.filter(s => s.type !== 'depot').map(s => ({
     kidIds: [s.kidId], kidNames: [s.kidName],
     address: s.address, type: s.type as 'pickup' | 'dropoff',
     eta: formatTimeSec(s.arrivalMin * 60),
+    deviationMin: s.deviationMin,
   }));
   const merged: RouteWaypoint[] = [];
   for (const wp of rawWaypoints) {
     const last = merged[merged.length - 1];
     if (last && last.address === wp.address && last.type === wp.type) {
       last.kidIds.push(...wp.kidIds); last.kidNames.push(...wp.kidNames);
+      // average deviation for merged stops at same school
+      if (wp.deviationMin != null) last.deviationMin = Math.round(((last.deviationMin ?? 0) + wp.deviationMin) / 2);
     } else merged.push({ ...wp });
   }
-  const depotDepartMin = result.driverDepartMin - result.depotToStartMin;
   return {
     waypoints: merged,
-    driverStartTime: formatTimeSec(depotDepartMin * 60),
+    driverStartTime: formatTimeSec(result.driverDepartMin * 60),
     driverStartAddress: SOLVER_DEPOT,
-    totalDurationMin: result.totalTimeMin + result.depotToStartMin,
-    totalDistanceKm: Math.round((result.totalDistanceKm + result.depotToStartKm) * 10) / 10,
+    totalDurationMin: result.totalTimeMin,
+    totalDistanceKm: result.totalDistanceKm,
     unassigned: result.unassigned.map(u => ({
       name: u.kidName,
       reason: u.reason === 'capacity' ? 'capacidade' : u.reason === 'rideTime' ? 'tempo viagem' : u.reason === 'tooEarly' ? 'cedo demais' : 'desconhecido',
@@ -831,8 +825,10 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
 }) {
   const [showAddresses, setShowAddresses] = useState(false);
   const isMorning = run.direction === 'morning';
-  const anchorShort = run.anchor.split(',')[0];
-  const uniqueDestinations = [...new Set(run.stops.map(s => s.dropoffAddr.split(',')[0]).filter(Boolean))];
+  // Morning header: show destination schools (dropoffs). Afternoon: show pickup schools.
+  const uniqueDestinations = isMorning
+    ? [...new Set(run.stops.map(s => s.dropoffAddr.split(',')[0]).filter(Boolean))]
+    : [...new Set(run.stops.map(s => s.pickupAddr.split(',')[0]).filter(Boolean))];
 
   const hasDriverOverride = !!(driverOverride && (
     driverOverride.departureOffsetMin !== 0 || driverOverride.waypointOrder || driverOverride.waypointExtraMin
@@ -862,10 +858,9 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
     <div className={`bg-white rounded-lg border p-2.5 text-xs ${hasDriverOverride ? 'border-blue-200' : hasOverrides ? 'border-amber-200' : 'border-gray-200'}`}>
       {/* Header row */}
       <div className="flex items-center gap-1 mb-2 flex-wrap">
-        {isMorning
-          ? uniqueDestinations.slice(0, 2).map(d => <span key={d} className="bg-orange-50 text-orange-700 border border-orange-100 px-1.5 py-0.5 rounded truncate max-w-[90px]">{d}</span>)
-          : <span className="text-gray-500 truncate flex-1 min-w-0">{anchorShort}</span>
-        }
+        {uniqueDestinations.slice(0, 2).map(d => (
+          <span key={d} className={`border px-1.5 py-0.5 rounded truncate max-w-[90px] ${isMorning ? 'bg-orange-50 text-orange-700 border-orange-100' : 'bg-blue-50 text-blue-700 border-blue-100'}`}>{d}</span>
+        ))}
         <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full shrink-0 ml-auto">
           {run.stops.length} {run.stops.length === 1 ? 'aluno' : 'alunos'}
         </span>
@@ -895,18 +890,24 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
               {showAddresses ? '👤' : '📍'}
             </button>
           </div>
-          {displayedWaypoints.map((wp, i) => (
-            <div key={i} className="flex items-start gap-1.5">
-              <span className={`font-mono shrink-0 font-semibold ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
-                {hasAnyOverride ? '~' : ''}{displayEtas[i]}
-              </span>
-              <span className={`shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>{wp.type === 'pickup' ? '↑' : '↓'}</span>
-              {showAddresses
-                ? <span className="text-gray-500 truncate">{wp.address.split(',')[0]}</span>
-                : <span className="text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</span>
-              }
-            </div>
-          ))}
+          {displayedWaypoints.map((wp, i) => {
+            const dev = wp.type === 'pickup' ? wp.deviationMin : undefined;
+            const devClass = dev == null ? '' : dev > 10 ? 'text-red-500' : dev > 0 ? 'text-amber-500' : 'text-green-500';
+            const devLabel = dev == null ? null : dev === 0 ? null : `${dev > 0 ? '+' : ''}${dev}min`;
+            return (
+              <div key={i} className="flex items-start gap-1.5">
+                <span className={`font-mono shrink-0 font-semibold ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
+                  {hasAnyOverride ? '~' : ''}{displayEtas[i]}
+                </span>
+                <span className={`shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>{wp.type === 'pickup' ? '↑' : '↓'}</span>
+                {showAddresses
+                  ? <span className="text-gray-500 truncate">{wp.address.split(',')[0]}</span>
+                  : <span className="text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</span>
+                }
+                {devLabel && <span className={`shrink-0 text-[10px] font-medium ml-auto ${devClass}`}>{devLabel}</span>}
+              </div>
+            );
+          })}
           <div className="text-gray-400 pt-0.5 border-t border-gray-50">
             {fmtHours(routeWallClockMin(route, driverOverride) / 60)}
             {' · '}{route.totalDistanceKm}km
