@@ -1,4 +1,5 @@
 import { Routes, Route, BrowserRouter, Navigate } from 'react-router-dom';
+import { ImpersonationProvider } from './contexts/ImpersonationContext';
 import { ProtectRoute } from '@shared/ProtectedRoute';
 import NotAuthorizedPage from './pages/NotAuthorizedPage';
 import LandingPage from './pages/LandingPage';
@@ -11,7 +12,7 @@ import { Analytics } from './components/Analytics';
 import AdminLayout from './pages/admin/AdminLayout';
 import PartyAdminPage from './pages/admin/PartyAdminPage';
 import PartyConfigPage from './pages/admin/PartyConfigPage';
-import StudyPricingPage from './pages/admin/StudyPricingPage';
+import FinancialSummaryPage from './pages/admin/FinancialSummaryPage';
 import CalendarPage from './pages/admin/CalendarPage';
 import EmailCenterPage from './pages/admin/EmailCenterPage';
 import TransportationConfigPage from './pages/admin/transport/TransportationConfigPage';
@@ -23,8 +24,10 @@ import DataManagementPage from './pages/admin/DataManagementPage';
 import HRPage from './pages/admin/HRPage';
 import SubscriptionsAdminPage from './pages/admin/SubscriptionsAdminPage';
 import TransportPlannerPage from './pages/admin/TransportPlannerPage';
+import StudyRoomPlannerPage from './pages/admin/StudyRoomPlannerPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
 import FamiliesAdminPage from './pages/admin/FamiliesAdminPage';
+import DiscountsAdminPage from './pages/admin/DiscountsAdminPage';
 import PaymentsPage from './pages/client/PaymentsPage';
 
 // Client pages
@@ -53,6 +56,7 @@ import TermsPage from './pages/TermsPage';
 export default function App() {
   return (
     <BrowserRouter>
+      <ImpersonationProvider>
       <Analytics />
       <Routes>
         <Route path="/" element={<LandingPage />} />
@@ -71,7 +75,8 @@ export default function App() {
           <Route path="subscriptions" element={<SubscriptionsAdminPage />} />
           <Route path="parties" element={<PartyAdminPage />} />
           <Route path="party-config" element={<PartyConfigPage />} />
-          <Route path="study-pricing" element={<StudyPricingPage />} />
+          <Route path="study-pricing" element={<Navigate to="/admin/financial-summary" replace />} />
+          <Route path="financial-summary" element={<FinancialSummaryPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="email-center" element={<EmailCenterPage />} />
           <Route path="transport-config" element={<TransportationConfigPage />} />
@@ -80,7 +85,9 @@ export default function App() {
           <Route path="camps" element={<CampsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
           <Route path="families" element={<FamiliesAdminPage />} />
+          <Route path="config/descontos" element={<DiscountsAdminPage />} />
           {/* Legacy redirects */}
+          <Route path="study-room-planner" element={<StudyRoomPlannerPage />} />
           <Route path="study-room" element={<Navigate to="/admin/subscriptions" replace />} />
           <Route path="transport" element={<Navigate to="/admin/subscriptions" replace />} />
           <Route path="enrollments" element={<Navigate to="/admin/subscriptions" replace />} />
@@ -141,6 +148,7 @@ export default function App() {
         <Route path="/not-authorized" element={<NotAuthorizedPage />} />
         <Route path="*" element={<div className="p-8 text-center text-gray-500">Página não encontrada</div>} />
       </Routes>
+      </ImpersonationProvider>
     </BrowserRouter>
   );
 }

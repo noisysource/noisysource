@@ -7,9 +7,11 @@ export function Analytics() {
   const location = useLocation();
 
   useEffect(() => {
-    logEvent(analytics, 'page_view', {
-      page_path: location.pathname + location.search,
-    });
+    try {
+      logEvent(analytics, 'page_view', {
+        page_path: location.pathname + location.search,
+      });
+    } catch { /* analytics unavailable in this environment */ }
   }, [location]);
 
   return null;

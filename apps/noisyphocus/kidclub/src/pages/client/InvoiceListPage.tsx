@@ -82,7 +82,7 @@ export default function InvoiceListPage() {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">My Invoices</h1>
+        <h1 className="text-2xl font-bold">As minhas faturas</h1>
       </div>
 
       {/* Filters */}
@@ -95,27 +95,27 @@ export default function InvoiceListPage() {
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           }`}
         >
-          All
+          Todas
         </button>
         <button
           onClick={() => setFilterStatus('pending')}
           className={`px-4 py-2 rounded-lg ${
-            filterStatus === 'pending' 
-              ? 'bg-blue-600 text-white' 
+            filterStatus === 'pending'
+              ? 'bg-blue-600 text-white'
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           }`}
         >
-          Pending
+          Pendentes
         </button>
         <button
           onClick={() => setFilterStatus('paid')}
           className={`px-4 py-2 rounded-lg ${
-            filterStatus === 'paid' 
-              ? 'bg-blue-600 text-white' 
+            filterStatus === 'paid'
+              ? 'bg-blue-600 text-white'
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           }`}
         >
-          Paid
+          Pagas
         </button>
         <button
           onClick={() => setFilterStatus('overdue')}
@@ -125,7 +125,7 @@ export default function InvoiceListPage() {
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           }`}
         >
-          Overdue
+          Em atraso
         </button>
       </div>
 
@@ -143,21 +143,21 @@ export default function InvoiceListPage() {
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
                       <h3 className="text-lg font-semibold">
-                        Invoice {invoice.invoiceNumber}
+                        Fatura {invoice.invoiceNumber}
                       </h3>
                       <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(invoice.status)}`}>
-                        {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
+                        {(({ paid: 'Paga', pending: 'Pendente', overdue: 'Em atraso', cancelled: 'Cancelada', draft: 'Rascunho', refunded: 'Reembolsada' } as Record<string, string>)[invoice.status]) ?? invoice.status}
                       </span>
                     </div>
                     <p className="text-sm text-gray-600 mb-2">
                       {getSubscriptionLabel(invoice)}
                     </p>
-                    <div className="flex gap-4 text-sm text-gray-500">
-                      <span>Issue Date: {format(invoice.issueDate, 'MMM dd, yyyy')}</span>
-                      <span>Due Date: {format(invoice.dueDate, 'MMM dd, yyyy')}</span>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
+                      <span>Emitida: {format(invoice.issueDate, 'dd/MM/yyyy')}</span>
+                      <span>Vencimento: {format(invoice.dueDate, 'dd/MM/yyyy')}</span>
                       {invoice.periodStart && invoice.periodEnd && (
                         <span>
-                          Period: {format(invoice.periodStart, 'MMM dd')} - {format(invoice.periodEnd, 'MMM dd, yyyy')}
+                          Período: {format(invoice.periodStart, 'dd/MM')} – {format(invoice.periodEnd, 'dd/MM/yyyy')}
                         </span>
                       )}
                     </div>
@@ -178,9 +178,9 @@ export default function InvoiceListPage() {
       ) : (
         <div className="bg-white p-8 rounded-lg shadow-sm border border-gray-200 text-center">
           <p className="text-gray-500">
-            {filterStatus === 'all' 
-              ? 'You have no invoices yet.' 
-              : `No ${filterStatus} invoices found.`}
+            {filterStatus === 'all'
+              ? 'Ainda não tem faturas.'
+              : 'Nenhuma fatura encontrada para este filtro.'}
           </p>
         </div>
       )}

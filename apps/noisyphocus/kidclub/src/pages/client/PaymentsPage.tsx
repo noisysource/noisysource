@@ -42,6 +42,8 @@ export default function PaymentsPage() {
   const [batchPhone, setBatchPhone] = useState('');
   const [batchActing, setBatchActing] = useState(false);
   const [batchResults, setBatchResults] = useState<{ id: string; ok: boolean; msg: string }[]>([]);
+  const [mbwayPhoneError, setMbwayPhoneError] = useState('');
+  const [batchPhoneError, setBatchPhoneError] = useState('');
 
   useEffect(() => {
     if (!user) return;
@@ -98,7 +100,8 @@ export default function PaymentsPage() {
   };
 
   const handleSinglePay = async (record: BillingRecord, method: 'mbway' | 'multibanco' | 'card') => {
-    if (method === 'mbway' && !mbwayPhone.trim()) { alert('Introduza o número de telemóvel MB WAY.'); return; }
+    if (method === 'mbway' && !mbwayPhone.trim()) { setMbwayPhoneError('Introduza o número de telemóvel MB WAY.'); return; }
+    setMbwayPhoneError('');
     setActing(true);
     try {
       let msg = '';
@@ -116,7 +119,8 @@ export default function PaymentsPage() {
 
   const handleBatchPay = async () => {
     if (!batchMethod) return;
-    if (batchMethod === 'mbway' && !batchPhone.trim()) { alert('Introduza o número de telemóvel MB WAY.'); return; }
+    if (batchMethod === 'mbway' && !batchPhone.trim()) { setBatchPhoneError('Introduza o número de telemóvel MB WAY.'); return; }
+    setBatchPhoneError('');
 
     const targets = records.filter(r => selected.has(r.id) && r.status === 'pending');
     setBatchActing(true);
@@ -197,7 +201,7 @@ export default function PaymentsPage() {
           {batchPanel && !batchActing && batchResults.length === 0 && (
             <div className="space-y-2">
               <p className="text-sm font-medium text-gray-700">Método de pagamento:</p>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {(['mbway', 'multibanco', 'card'] as const).map(m => (
                   <button key={m}
                     onClick={() => setBatchMethod(m)}
@@ -207,9 +211,12 @@ export default function PaymentsPage() {
                 ))}
               </div>
               {batchMethod === 'mbway' && (
-                <input type="tel" placeholder="9XXXXXXXX" value={batchPhone}
-                  onChange={e => setBatchPhone(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2 text-sm" />
+                <>
+                  <input type="tel" placeholder="9XXXXXXXX" value={batchPhone}
+                    onChange={e => { setBatchPhone(e.target.value); setBatchPhoneError(''); }}
+                    className={`w-full border rounded-lg px-3 py-2 text-sm ${batchPhoneError ? 'border-red-400' : ''}`} />
+                  {batchPhoneError && <p className="text-xs text-red-500">{batchPhoneError}</p>}
+                </>
               )}
               {batchMethod && (
                 <button onClick={handleBatchPay}
@@ -330,8 +337,9 @@ export default function PaymentsPage() {
                             <div className="border rounded-lg p-3 space-y-2">
                               <p className="text-sm font-semibold">📱 MB WAY</p>
                               <input type="tel" placeholder="9XXXXXXXX" value={mbwayPhone}
-                                onChange={e => setMbwayPhone(e.target.value)}
-                                className="w-full border rounded px-3 py-2 text-sm" />
+                                onChange={e => { setMbwayPhone(e.target.value); setMbwayPhoneError(''); }}
+                                className={`w-full border rounded px-3 py-2 text-sm ${mbwayPhoneError ? 'border-red-400' : ''}`} />
+                              {mbwayPhoneError && <p className="text-xs text-red-500">{mbwayPhoneError}</p>}
                               <button onClick={() => handleSinglePay(record, 'mbway')} disabled={acting}
                                 className="w-full bg-green-600 text-white py-2 rounded font-medium text-sm hover:bg-green-700 disabled:opacity-50">
                                 {acting ? 'A processar...' : 'Pagar com MB WAY'}

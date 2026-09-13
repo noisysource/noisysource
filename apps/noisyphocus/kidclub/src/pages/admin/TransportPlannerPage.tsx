@@ -1,9 +1,10 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { getDocs, getDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { getDocs, getDoc, deleteDoc, updateDoc, addDoc, writeBatch } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { col, docRef } from '../../lib/db';
 import { solveRoutes, SolverKid, DEPOT_ADDRESS as SOLVER_DEPOT } from '../../lib/routeSolver';
-import { TransportationConfig, SchoolDiscount } from '@shared/models/Transportation';
+import { TransportationConfig, SchoolDiscount, WeekPattern } from '@shared/models/Transportation';
 import { saveTransportationConfig, getActiveTransportationSubscriptions } from '../../services/transportationService';
 import PlacesInput from '../../components/PlacesInput';
 
@@ -38,8 +39,9 @@ interface PlannerKid {
   monthlyFee: number;
   requestedSchedule: ScheduleSlot[];
   notes?: string;
-  status?: 'pending' | 'active';
+  status?: 'pending' | 'active' | 'planned' | 'offered';
   contactEmail?: string;
+  weekPattern: WeekPattern;
 }
 interface AutoStop { kidId: string; kidName: string; pickupAddr: string; dropoffAddr: string; requestedTime: number }
 interface AutoRun {
@@ -65,10 +67,14 @@ interface DriverOverride {
   // Extra dwell time (min) added after each waypoint (by display position), pushing subsequent ETAs forward.
   waypointExtraMin?: number[];
 }
+interface RunAdditionEntry extends AutoStop {
+  sourceRunId: string;
+}
 interface SavedPlan {
   manualKids: PlannerKid[];
   cellRoutes?: Record<string, OptimizedRoute | null>;
   runRemovals?: Record<string, string[]>;
+  runAdditions?: Record<string, RunAdditionEntry[]>;
   runAddressOverrides?: Record<string, Record<string, AddressOverride>>;
   driverOverrides?: Record<string, DriverOverride>;
   driverHourOverrides?: Record<string, number>;
@@ -80,7 +86,7 @@ const HOURS_PER_RUN = 2;
 const DEFAULT_CONFIG: TransportationConfig = {
   flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23,
   multiTripDiscountPercentage: 0, minTripsForDiscount: 2,
-  siblingDiscountPercentage: 0, schoolDiscounts: [],
+  siblingDiscountPercentage: 0, returningStudentDiscountPercentage: 0, schoolDiscounts: [],
   driverRatePerHour: 7, vanCapacity: 8, weeksPerMonth: 4.33,
   vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22,
 };
@@ -113,7 +119,15 @@ function parseSchedule(raw: any[]): ScheduleSlot[] {
   });
 }
 function loadFromStorage(): SavedPlan {
-  try { const r = localStorage.getItem(LS_KEY); if (r) return JSON.parse(r); } catch { /* ignore */ }
+  try {
+    const r = localStorage.getItem(LS_KEY);
+    if (r) {
+      const p = JSON.parse(r) as SavedPlan;
+      // backfill weekPattern for older saved kids
+      p.manualKids = (p.manualKids ?? []).map(k => ({ weekPattern: 'all' as WeekPattern, ...k }));
+      return p;
+    }
+  } catch { /* ignore */ }
   return { manualKids: [] };
 }
 function saveToStorage(p: SavedPlan) {
@@ -163,6 +177,55 @@ function formatTimeSec(seconds: number): string {
 }
 function normalizeAnchor(addr: string): string {
   return addr.split(',')[0].trim().toLowerCase();
+}
+// Compute display ETAs for a route, respecting reorder and extra buffer times.
+// When order is default, shifts original solver ETAs by departure offset + cumulative extra.
+// When reordered, rebuilds from departure time using original inter-stop durations as estimates.
+function computeDisplayEtas(
+  route: OptimizedRoute,
+  order: number[],
+  extraMin: number[],
+  offsetMin: number,
+): string[] {
+  const origEtaMins = route.waypoints.map(wp => hhmmToMin(wp.eta));
+  const origStartMin = hhmmToMin(route.driverStartTime);
+  const interStopDurs = origEtaMins.slice(1).map((t, i) => (t - origEtaMins[i] + 1440) % 1440);
+  const isDefault = order.every((v, i) => v === i);
+
+  if (isDefault) {
+    let cum = offsetMin;
+    return order.map((wpIdx, i) => {
+      const eta = shiftTime(route.waypoints[wpIdx].eta, cum);
+      cum += extraMin[i] ?? 0;
+      return eta;
+    });
+  }
+
+  // Reordered: rebuild times from departure anchor using positional segment durations
+  const avgSeg = interStopDurs.length > 0
+    ? interStopDurs.reduce((s, d) => s + d, 0) / interStopDurs.length
+    : 10;
+  const result: string[] = [];
+  let curMin = origStartMin + offsetMin;
+  order.forEach((wpIdx, i) => {
+    if (i === 0) {
+      curMin += (origEtaMins[wpIdx] - origStartMin + 1440) % 1440;
+    } else {
+      curMin += (interStopDurs[i - 1] ?? avgSeg) + (extraMin[i - 1] ?? 0);
+    }
+    const mod = ((curMin % 1440) + 1440) % 1440;
+    result.push(`${String(Math.floor(mod / 60)).padStart(2, '0')}:${String(Math.round(mod % 60)).padStart(2, '0')}`);
+  });
+  return result;
+}
+function buildMapsUrl(startAddr: string, waypoints: RouteWaypoint[], order: number[]): string {
+  const wps = order.map(i => waypoints[i]).filter(wp => wp.address);
+  if (!wps.length) return '';
+  const origin = encodeURIComponent(startAddr);
+  const destination = encodeURIComponent(wps[wps.length - 1].address);
+  const midpoints = wps.slice(0, -1).map(wp => encodeURIComponent(wp.address)).join('|');
+  const base = `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}`;
+  return midpoints ? `${base}&waypoints=${midpoints}` : base;
 }
 function computeAutoRuns(kids: PlannerKid[], day: Day): AutoRun[] {
   const morning: AutoStop[] = [];
@@ -303,24 +366,26 @@ function SettingsModal({
         for (const slot of kid.requestedSchedule) (slotsByDay[slot.day] ??= []).push(slot);
         Object.values(slotsByDay).forEach(g => g.sort((a, b) => periodOrder[slotPeriod(a.time)] - periodOrder[slotPeriod(b.time)]));
 
-        let fee = 0;
+        let subtotal = 0;
         const appliedDiscounts = new Set<string>();
         for (const [, slots] of Object.entries(slotsByDay)) {
-          slots.forEach((slot, idx) => {
+          slots.forEach((_, idx) => {
             const tripRank = idx + 1;
             let discount = 0;
             if (rank >= 2) { discount += cfg.siblingDiscountPercentage; if (cfg.siblingDiscountPercentage > 0) appliedDiscounts.add(`irmãos -${pct(cfg.siblingDiscountPercentage)}%`); }
-            for (const sd of (cfg.schoolDiscounts ?? [])) {
-              if (kid.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === kid.schoolName.toLowerCase()) {
-                discount += sd.discountPercentage;
-                if (sd.discountPercentage > 0) appliedDiscounts.add(`escola -${pct(sd.discountPercentage)}%`);
-              }
-            }
             if (tripRank >= cfg.minTripsForDiscount) { discount += cfg.multiTripDiscountPercentage; if (cfg.multiTripDiscountPercentage > 0) appliedDiscounts.add(`2.ª viagem -${pct(cfg.multiTripDiscountPercentage)}%`); }
             discount = Math.min(1, discount);
-            fee += cfg.flatRatePerTrip * (1 - discount) * cfg.weeksPerMonth;
+            subtotal += cfg.flatRatePerTrip * (1 - discount) * cfg.weeksPerMonth;
           });
         }
+        let schoolDiscountPct = 0;
+        for (const sd of (cfg.schoolDiscounts ?? [])) {
+          if (kid.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === kid.schoolName.toLowerCase() && sd.discountPercentage > 0) {
+            schoolDiscountPct = sd.discountPercentage;
+            appliedDiscounts.add(`escola -${pct(sd.discountPercentage)}%`);
+          }
+        }
+        const fee = subtotal * (1 - schoolDiscountPct);
         const slotsPerWeek = kid.requestedSchedule.length;
         return { kidId: kid.id, name: kid.name, schoolName: kid.schoolName, siblingRank: rank, slotsPerWeek, discounts: [...appliedDiscounts], monthlyFee: fee };
       });
@@ -423,6 +488,13 @@ function SettingsModal({
                 <p className="text-xs font-medium text-gray-700">Irmãos (2.º filho+)</p>
                 <Field label="desconto (%)" value={pct(cfg.siblingDiscountPercentage)} step={1} onChange={v => set('siblingDiscountPercentage', frac(v))} width="w-14" />
                 {hint('Aplica-se ao 2.º e 3.º filho da mesma família (por email ou familyId)')}
+              </div>
+
+              {/* Aluno anterior */}
+              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                <p className="text-xs font-medium text-gray-700">Aluno anterior</p>
+                <Field label="desconto (%)" value={pct(cfg.returningStudentDiscountPercentage)} step={1} onChange={v => set('returningStudentDiscountPercentage', frac(v))} width="w-14" />
+                {hint('Desconto aplicado manualmente a alunos do ano anterior (marcados em Inscrições)')}
               </div>
             </div>
 
@@ -532,6 +604,98 @@ function SettingsModal({
   );
 }
 
+// ─── KidChip ─────────────────────────────────────────────────────────────────
+function KidChip({ kid, assignedSlots, onRemove }: {
+  kid: PlannerKid;
+  assignedSlots: Set<string>;
+  onRemove?: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+
+  const totalSlots = kid.requestedSchedule.length;
+  const assignedCount = kid.requestedSchedule.filter(s => {
+    const p = slotPeriod(s.time);
+    return assignedSlots.has(`${s.day}-${p}`);
+  }).length;
+
+  const isSeated = assignedCount > 0;
+  const isPartial = isSeated && assignedCount < totalSlots;
+
+  const chipCls = isPartial
+    ? 'bg-amber-100 text-amber-800 border-amber-200'
+    : isSeated
+      ? 'bg-green-100 text-green-800 border-green-200'
+      : 'bg-gray-100 text-gray-600 border-gray-200';
+
+  const days = [...new Set(kid.requestedSchedule.map(s => DAY_SHORT[s.day] ?? s.day))].join(' ');
+  const pickup = kid.requestedSchedule[0]?.pickup?.split(',')[0] ?? '—';
+  const dropoff = kid.requestedSchedule[0]?.dropoff?.split(',')[0] ?? '—';
+
+  return (
+    <div className="relative inline-block" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      <Link
+        to={`/admin/subscriptions?highlight=${kid.id}`}
+        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-medium transition-shadow hover:shadow-sm ${chipCls}`}
+        onClick={e => e.stopPropagation()}
+      >
+        {kid.name}
+        {isPartial && <span className="opacity-60 text-[10px]">{assignedCount}/{totalSlots}</span>}
+        {onRemove && (
+          <button type="button" onClick={e => { e.preventDefault(); e.stopPropagation(); onRemove(); }}
+            className="ml-0.5 opacity-40 hover:opacity-100 leading-none">×</button>
+        )}
+      </Link>
+
+      {/* Hover tooltip */}
+      {hovered && (
+        <div className="absolute left-0 top-7 z-50 w-52 bg-gray-900 text-white rounded-lg p-2.5 shadow-xl text-xs space-y-1 pointer-events-none">
+          <p className="font-semibold">{kid.name}</p>
+          {kid.contactEmail && <p className="text-gray-300 truncate">{kid.contactEmail}</p>}
+          {days && <p className="text-gray-300">📅 {days}</p>}
+          {pickup !== '—' && <p className="text-gray-300 truncate">▲ {pickup}</p>}
+          {dropoff !== '—' && <p className="text-gray-300 truncate">▼ {dropoff}</p>}
+          {kid.monthlyFee > 0 && <p className="text-green-300 font-medium">€{kid.monthlyFee.toFixed(0)}/mês</p>}
+          {kid.notes && <p className="text-gray-400 italic truncate">{kid.notes}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KidChipGroup({ title, color, kids, kidAssignments, onRemove }: {
+  title: string;
+  color: 'green' | 'amber';
+  kids: PlannerKid[];
+  kidAssignments: Record<string, Set<string>>;
+  onRemove: (k: PlannerKid) => void;
+}) {
+  const headerCls = color === 'green'
+    ? 'bg-green-50 border-green-200 text-green-800'
+    : 'bg-amber-50 border-amber-200 text-amber-800';
+
+  return (
+    <div className={`rounded-xl border ${color === 'green' ? 'border-green-200' : 'border-amber-200'} overflow-hidden`}>
+      <div className={`px-3 py-2 flex items-center justify-between ${headerCls}`}>
+        <span className="text-xs font-semibold">{title}</span>
+        <span className="text-xs opacity-70">{kids.length}</span>
+      </div>
+      <div className="p-2 flex flex-wrap gap-1.5 min-h-[40px]">
+        {kids.length === 0 && (
+          <p className="text-xs text-gray-400 w-full text-center py-1">—</p>
+        )}
+        {kids.map(k => (
+          <KidChip
+            key={k.id}
+            kid={k}
+            assignedSlots={kidAssignments[k.id] ?? new Set()}
+            onRemove={k.source === 'manual' ? () => onRemove(k) : undefined}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── KidCard ──────────────────────────────────────────────────────────────────
 function KidCard({ kid, assignedSlots = new Set<string>() }: { kid: PlannerKid; assignedSlots?: Set<string> }) {
   const statusColor = kid.source === 'manual' ? 'bg-purple-100 text-purple-800'
@@ -560,6 +724,11 @@ function KidCard({ kid, assignedSlots = new Set<string>() }: { kid: PlannerKid; 
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="font-semibold text-gray-800 text-sm leading-tight">{kid.name}</span>
             <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium shrink-0 ${statusColor}`}>{statusLabel}</span>
+            {kid.weekPattern !== 'all' && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium shrink-0">
+                {kid.weekPattern === 'odd' ? 'ímp.' : 'par.'}
+              </span>
+            )}
           </div>
           {kid.monthlyFee > 0 && <div className="text-xs font-semibold text-blue-600 mt-0.5">€{kid.monthlyFee.toFixed(0)}/mês</div>}
         </div>
@@ -597,66 +766,491 @@ function KidCard({ kid, assignedSlots = new Set<string>() }: { kid: PlannerKid; 
   );
 }
 
-// ─── EditRunModal ─────────────────────────────────────────────────────────────
-function EditRunModal({ run, removals, addressOverrides, onSave, onClose }: {
+// ─── RunEditModal ─────────────────────────────────────────────────────────────
+function RunEditModal({ run, route, removals, addressOverrides, driverOverride, availableKids, existingAdditions, unassignedKids, onSave, onClose }: {
   run: AutoRun;
+  route?: OptimizedRoute | null;
   removals: string[];
   addressOverrides: Record<string, AddressOverride>;
-  onSave: (removals: string[], overrides: Record<string, AddressOverride>) => void;
+  driverOverride: DriverOverride;
+  availableKids: Array<{ sourceRunId: string; stop: AutoStop }>;
+  existingAdditions: RunAdditionEntry[];
+  unassignedKids: PlannerKid[];
+  onSave: (opts: { removals: string[]; addressOverrides: Record<string, AddressOverride>; driverOverride: DriverOverride; needsRecalc: boolean; additions: RunAdditionEntry[] }) => void;
   onClose: () => void;
 }) {
   const [localRemovals, setLocalRemovals] = useState<string[]>([...removals]);
   const [localOverrides, setLocalOverrides] = useState<Record<string, AddressOverride>>({ ...addressOverrides });
+  const [offset, setOffset] = useState(driverOverride.departureOffsetMin ?? 0);
+  const [order, setOrder] = useState<number[]>(
+    driverOverride.waypointOrder ?? (route ? route.waypoints.map((_, i) => i) : [])
+  );
+  const [extraMin, setExtraMin] = useState<number[]>(
+    driverOverride.waypointExtraMin ?? (route ? route.waypoints.map(() => 0) : [])
+  );
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [localAdditions, setLocalAdditions] = useState<RunAdditionEntry[]>([...existingAdditions]);
+  // kid-chip drag state (to merge a kid from one waypoint row into another)
+  const [draggingKidId, setDraggingKidId] = useState<string | null>(null);
+  const [draggingKidSourceWp, setDraggingKidSourceWp] = useState<number | null>(null);
+  const [kidDropTargetWp, setKidDropTargetWp] = useState<number | null>(null);
+  // kidWpOverride: kidId → original waypoint index (overrides solver assignment for display + address)
+  const [kidWpOverride, setKidWpOverride] = useState<Record<string, number>>({});
+  const [kidPoolOpen, setKidPoolOpen] = useState(false);
+  const [manualStops, setManualStops] = useState<Array<{ id: string; type: 'pickup' | 'dropoff'; address: string; kidIds: string[] }>>([]);
 
-  const visibleStops = run.stops.filter(s => !localRemovals.includes(s.kidId));
   const dirLabel = run.direction === 'morning' ? '🌅 Manhã' : run.direction === 'lunch' ? '🍽 Almoço' : '🌆 Tarde';
+  const isDefaultOrder = order.every((v, i) => v === i);
+  const hasExtra = extraMin.some(v => v !== 0);
+  const additionsDiff =
+    JSON.stringify(localAdditions.map(a => a.kidId).sort()) !==
+    JSON.stringify(existingAdditions.map(a => a.kidId).sort());
+  const kidsChanged =
+    localRemovals.length !== removals.length ||
+    JSON.stringify(localOverrides) !== JSON.stringify(addressOverrides) ||
+    additionsDiff ||
+    Object.keys(kidWpOverride).length > 0 ||
+    manualStops.some(ms => ms.kidIds.length > 0);
 
+  // Build kid pool — unassigned kids + kids from other same-day runs, excluding already-assigned
+  type PoolEntry = RunAdditionEntry;
+  const assignedInModal = new Set([
+    ...localAdditions.map(a => a.kidId),
+    ...run.stops.map(s => s.kidId).filter(id => !localRemovals.includes(id)),
+    ...manualStops.flatMap(ms => ms.kidIds),
+  ]);
+  const kidPool: PoolEntry[] = [
+    ...availableKids
+      .filter(a => !assignedInModal.has(a.stop.kidId))
+      .map(a => ({ ...a.stop, sourceRunId: a.sourceRunId })),
+    ...unassignedKids
+      .filter(k => !assignedInModal.has(k.id))
+      .map(k => {
+        const slot = k.requestedSchedule.find(s => s.day === run.day) || k.requestedSchedule[0];
+        return { kidId: k.id, kidName: k.name, pickupAddr: slot?.pickup || '', dropoffAddr: slot?.dropoff || '', requestedTime: parseMinutes(slot?.time || '08:00'), sourceRunId: '' };
+      }),
+  ];
+  // Name lookup across all known kids
+  const kidNameMap: Record<string, string> = {};
+  for (const k of kidPool) kidNameMap[k.kidId] = k.kidName;
+  for (const a of localAdditions) kidNameMap[a.kidId] = a.kidName;
+  for (const s of run.stops) kidNameMap[s.kidId] = s.kidName;
+  for (const k of unassignedKids) kidNameMap[k.id] = k.name;
+  if (route) route.waypoints.forEach(wp => wp.kidIds.forEach((id, i) => { kidNameMap[id] = wp.kidNames[i]; }));
+
+  function poolKidData(kidId: string): PoolEntry | undefined {
+    const fromPool = kidPool.find(k => k.kidId === kidId);
+    if (fromPool) return fromPool;
+    const fromAvail = availableKids.find(a => a.stop.kidId === kidId);
+    if (fromAvail) return { ...fromAvail.stop, sourceRunId: fromAvail.sourceRunId };
+    const fromUnassigned = unassignedKids.find(k => k.id === kidId);
+    if (fromUnassigned) {
+      const slot = fromUnassigned.requestedSchedule.find(s => s.day === run.day) || fromUnassigned.requestedSchedule[0];
+      return { kidId: fromUnassigned.id, kidName: fromUnassigned.name, pickupAddr: slot?.pickup || '', dropoffAddr: slot?.dropoff || '', requestedTime: parseMinutes(slot?.time || '08:00'), sourceRunId: '' };
+    }
+    return undefined;
+  }
+
+  // Address override helpers — when waypoint shared by multiple kids, apply to all
+  function getWpAddress(wp: RouteWaypoint): string {
+    const kidId = wp.kidIds[0];
+    const ov = localOverrides[kidId];
+    return (wp.type === 'pickup' ? ov?.pickup : ov?.dropoff) ?? wp.address;
+  }
+  function setWpAddress(wp: RouteWaypoint, value: string) {
+    const field = wp.type === 'pickup' ? 'pickup' : 'dropoff';
+    setLocalOverrides(prev => {
+      const next = { ...prev };
+      for (const kidId of wp.kidIds) next[kidId] = { ...next[kidId], [field]: value };
+      return next;
+    });
+  }
   function updateOverride(kidId: string, field: 'pickup' | 'dropoff', value: string) {
     setLocalOverrides(prev => ({ ...prev, [kidId]: { ...prev[kidId], [field]: value } }));
   }
 
+  function adjustExtra(i: number, delta: number) {
+    setExtraMin(prev => { const a = [...prev]; a[i] = Math.max(-60, (a[i] ?? 0) + delta); return a; });
+  }
+
+  function handleDragStart(i: number) { setDragIdx(i); }
+  function handleDragOver(e: React.DragEvent, i: number) {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === i) return;
+    setOrder(prev => { const a = [...prev]; const [item] = a.splice(dragIdx, 1); a.splice(i, 0, item); return a; });
+    setExtraMin(prev => { const a = [...prev]; const [item] = a.splice(dragIdx, 1); a.splice(i, 0, item); return a; });
+    setDragIdx(i);
+  }
+  function handleDragEnd() { setDragIdx(null); }
+
+  const displayEtas = route ? computeDisplayEtas(route, order, extraMin, offset) : [];
+
+  function handleSave() {
+    const manualAdditions: PoolEntry[] = manualStops.flatMap(ms =>
+      ms.kidIds.flatMap(kidId => {
+        const data = poolKidData(kidId);
+        if (!data) return [];
+        return [{
+          ...data,
+          pickupAddr: ms.type === 'pickup' ? (ms.address || data.pickupAddr) : data.pickupAddr,
+          dropoffAddr: ms.type === 'dropoff' ? (ms.address || data.dropoffAddr) : data.dropoffAddr,
+        }];
+      })
+    );
+    onSave({
+      removals: localRemovals,
+      addressOverrides: localOverrides,
+      driverOverride: {
+        departureOffsetMin: offset,
+        waypointOrder: isDefaultOrder ? undefined : order,
+        waypointExtraMin: hasExtra ? extraMin : undefined,
+      },
+      needsRecalc: kidsChanged,
+      additions: [...localAdditions, ...manualAdditions],
+    });
+  }
+
+  // Visible stops (for no-route fallback)
+  const visibleStops = run.stops.filter(s => !localRemovals.includes(s.kidId));
+
   return (
     <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-[500px] max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <div className="bg-white rounded-xl shadow-xl w-[500px] max-h-[88vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
           <h3 className="font-semibold text-gray-800">{dirLabel} — {DAY_PT[run.day]}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {visibleStops.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-4">Sem alunos neste percurso.</p>
-          )}
-          {visibleStops.map(stop => (
-            <div key={stop.kidId} className="border border-gray-200 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-sm text-gray-800">{stop.kidName}</span>
-                <button onClick={() => setLocalRemovals(prev => [...prev, stop.kidId])} className="text-xs text-red-400 hover:text-red-600">
-                  × Remover
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-gray-500 mb-0.5 block">Embarque</label>
-                  <input type="text" value={localOverrides[stop.kidId]?.pickup ?? stop.pickupAddr}
-                    onChange={e => updateOverride(stop.kidId, 'pickup', e.target.value)}
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+        {/* Departure offset strip — only when route exists */}
+        {route && (
+          <div className="px-5 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-3 text-sm">
+            <span className="text-gray-500 text-xs font-medium shrink-0">Partida</span>
+            <button onClick={() => setOffset(v => v - 5)} className="w-6 h-6 rounded border border-gray-200 text-gray-600 hover:bg-white font-mono text-xs leading-none">−</button>
+            <span className="font-mono text-sm font-semibold w-14 text-center">
+              {shiftTime(route.driverStartTime, offset)}
+            </span>
+            <button onClick={() => setOffset(v => v + 5)} className="w-6 h-6 rounded border border-gray-200 text-gray-600 hover:bg-white font-mono text-xs leading-none">+</button>
+            {offset !== 0 && (
+              <>
+                <span className={`text-xs font-mono ${offset > 0 ? 'text-amber-600' : 'text-blue-600'}`}>
+                  {offset > 0 ? `+${offset}` : offset}min
+                </span>
+                <button onClick={() => setOffset(0)} className="text-xs text-gray-400 hover:text-gray-600">reset</button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Main list */}
+        <div className="flex-1 overflow-y-auto">
+          {route ? (
+            /* ── Unified waypoint list (route computed) ── */
+            <div className="p-4 space-y-0">
+              {order.map((wpIdx, i) => {
+                const wp = route.waypoints[wpIdx];
+                const extra = extraMin[i] ?? 0;
+                const isPickup = wp.type === 'pickup';
+                // Kids originally here (unless overridden away), plus kids overridden to come here
+                const allWpKids = route.waypoints.flatMap(w => w.kidIds);
+                const overriddenHere = Object.entries(kidWpOverride)
+                  .filter(([, tgt]) => tgt === wpIdx)
+                  .map(([id]) => id)
+                  .filter(id => !wp.kidIds.includes(id));
+                const visibleKidIds = [
+                  ...wp.kidIds.filter(id =>
+                    !localRemovals.includes(id) &&
+                    (kidWpOverride[id] === undefined || kidWpOverride[id] === wpIdx)
+                  ),
+                  ...overriddenHere.filter(id => !localRemovals.includes(id)),
+                ];
+                if (visibleKidIds.length === 0) return null;
+                // look up name for any kid (they might be from another waypoint)
+                const kidName = (id: string) => {
+                  for (const w of route.waypoints) {
+                    const idx = w.kidIds.indexOf(id);
+                    if (idx !== -1) return w.kidNames[idx].split(' ')[0];
+                  }
+                  return '?';
+                };
+                const isKidDropTarget = kidDropTargetWp === wpIdx;
+                return (
+                  <div key={`${wpIdx}-${i}`}>
+                    {/* Stop row */}
+                    <div
+                      draggable
+                      onDragStart={e => {
+                        if (draggingKidId !== null) { e.preventDefault(); return; }
+                        handleDragStart(i);
+                      }}
+                      onDragOver={e => {
+                        e.preventDefault();
+                        if (draggingKidId !== null) {
+                          if (draggingKidSourceWp !== wpIdx) setKidDropTargetWp(wpIdx);
+                        } else {
+                          handleDragOver(e, i);
+                        }
+                      }}
+                      onDragLeave={() => { if (kidDropTargetWp === wpIdx) setKidDropTargetWp(null); }}
+                      onDrop={e => {
+                        if (draggingKidId !== null && draggingKidSourceWp !== wpIdx) {
+                          const targetAddr = getWpAddress(wp);
+                          const field = isPickup ? 'pickup' : 'dropoff';
+                          setLocalOverrides(prev => ({
+                            ...prev,
+                            [draggingKidId]: { ...prev[draggingKidId], [field]: targetAddr },
+                          }));
+                          setKidWpOverride(prev => ({ ...prev, [draggingKidId]: wpIdx }));
+                          setKidDropTargetWp(null);
+                          setDraggingKidId(null);
+                          setDraggingKidSourceWp(null);
+                        }
+                      }}
+                      onDragEnd={() => {
+                        handleDragEnd();
+                        setKidDropTargetWp(null);
+                        setDraggingKidId(null);
+                        setDraggingKidSourceWp(null);
+                      }}
+                      className={`rounded-lg border px-3 py-2.5 cursor-grab active:cursor-grabbing transition-colors ${
+                        dragIdx === i ? 'bg-blue-50 border-blue-300' :
+                        isKidDropTarget ? 'bg-green-50 border-green-400 border-dashed' :
+                        'bg-gray-50 border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-300 select-none text-xs shrink-0">⋮⋮</span>
+                        <span className={`font-mono text-xs font-semibold shrink-0 w-11 ${isPickup ? 'text-blue-600' : 'text-orange-600'}`}>
+                          {(!isDefaultOrder || hasExtra || offset !== 0) ? '~' : ''}{displayEtas[i]}
+                        </span>
+                        <span className={`text-xs shrink-0 ${isPickup ? 'text-blue-400' : 'text-orange-400'}`}>
+                          {isPickup ? '↑' : '↓'}
+                        </span>
+                        {/* Kid chips — individually draggable to merge into another row */}
+                        <div className="flex-1 flex flex-wrap gap-1 min-w-0">
+                          {visibleKidIds.map((kidId) => (
+                            <span
+                              key={kidId}
+                              draggable
+                              onDragStart={e => {
+                                e.stopPropagation();
+                                setDraggingKidId(kidId);
+                                setDraggingKidSourceWp(wpIdx);
+                              }}
+                              onDragEnd={e => {
+                                e.stopPropagation();
+                                setDraggingKidId(null);
+                                setDraggingKidSourceWp(null);
+                                setKidDropTargetWp(null);
+                              }}
+                              className={`inline-flex items-center gap-1 bg-white border border-gray-200 rounded-full px-2 py-0.5 text-xs text-gray-700 cursor-grab ${draggingKidId === kidId ? 'opacity-40' : ''}`}
+                            >
+                              {kidName(kidId)}
+                              <button
+                                onClick={e => { e.stopPropagation(); setLocalRemovals(prev => [...prev, kidId]); }}
+                                className="text-red-300 hover:text-red-500 leading-none ml-0.5"
+                              >×</button>
+                            </span>
+                          ))}
+                          {isKidDropTarget && <span className="text-[10px] text-green-500 italic">← largar aqui</span>}
+                        </div>
+                      </div>
+                      {/* Address input — second line */}
+                      <div className="mt-2 flex items-center gap-1.5 ml-5">
+                        <span className="text-gray-300 text-xs shrink-0">📍</span>
+                        <input
+                          type="text"
+                          value={getWpAddress(wp)}
+                          onChange={e => setWpAddress(wp, e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          onMouseDown={e => e.stopPropagation()}
+                          className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white cursor-text"
+                          placeholder="Morada"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Buffer time between stops */}
+                    {i < order.length - 1 && (
+                      <div className="flex items-center gap-2 py-1 px-4">
+                        <div className="flex-1 border-t border-dashed border-gray-200" />
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => adjustExtra(i, -5)} disabled={extra <= -60}
+                            className="w-5 h-5 text-xs rounded border border-gray-200 text-gray-400 hover:text-gray-600 disabled:opacity-20 leading-none">−</button>
+                          <span className={`text-xs font-mono w-14 text-center ${extra > 0 ? 'text-amber-600 font-semibold' : extra < 0 ? 'text-blue-600 font-semibold' : 'text-gray-300'}`}>
+                            {extra !== 0 ? `${extra > 0 ? '+' : ''}${extra}min` : '—'}
+                          </span>
+                          <button onClick={() => adjustExtra(i, 5)}
+                            className="w-5 h-5 text-xs rounded border border-gray-200 text-gray-400 hover:text-gray-600 leading-none">+</button>
+                        </div>
+                        <div className="flex-1 border-t border-dashed border-gray-200" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {(!isDefaultOrder || hasExtra) && (
+                <div className="flex items-center justify-between pt-2">
+                  <p className="text-xs text-amber-500">Os horários (~) são aproximados após ajustes.</p>
+                  {!isDefaultOrder && (
+                    <button onClick={() => { setOrder(route.waypoints.map((_, i) => i)); setExtraMin(route.waypoints.map(() => 0)); }}
+                      className="text-xs text-gray-400 hover:text-gray-600">
+                      Repor ordem
+                    </button>
+                  )}
                 </div>
-                <div>
-                  <label className="text-xs text-gray-500 mb-0.5 block">Destino</label>
-                  <input type="text" value={localOverrides[stop.kidId]?.dropoff ?? stop.dropoffAddr}
-                    onChange={e => updateOverride(stop.kidId, 'dropoff', e.target.value)}
-                    className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                </div>
-              </div>
+              )}
             </div>
-          ))}
+          ) : (
+            /* ── Fallback: per-kid cards when no route yet ── */
+            <div className="p-4 space-y-3">
+              {visibleStops.length === 0 && (
+                <p className="text-sm text-gray-400 text-center py-4">Sem alunos neste percurso.</p>
+              )}
+              {visibleStops.map(stop => (
+                <div key={stop.kidId} className="border border-gray-200 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-sm text-gray-800">{stop.kidName}</span>
+                    <button onClick={() => setLocalRemovals(prev => [...prev, stop.kidId])} className="text-xs text-red-400 hover:text-red-600">
+                      × Remover
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-gray-500 mb-0.5 block">↑ Embarque</label>
+                      <input type="text" value={localOverrides[stop.kidId]?.pickup ?? stop.pickupAddr}
+                        onChange={e => updateOverride(stop.kidId, 'pickup', e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-0.5 block">↓ Destino</label>
+                      <input type="text" value={localOverrides[stop.kidId]?.dropoff ?? stop.dropoffAddr}
+                        onChange={e => updateOverride(stop.kidId, 'dropoff', e.target.value)}
+                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
+        {/* Pool + manual stops section — always visible */}
+        <div className="border-t border-gray-100 px-4 py-3 space-y-3">
+
+          {/* Manual stops */}
+          {manualStops.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Paragens manuais</p>
+              {manualStops.map(ms => (
+                <div key={ms.id} className="border border-gray-200 rounded-lg p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={ms.type}
+                      onChange={e => setManualStops(prev => prev.map(m => m.id === ms.id ? { ...m, type: e.target.value as 'pickup' | 'dropoff' } : m))}
+                      className="text-xs border border-gray-200 rounded px-1.5 py-1 bg-white shrink-0"
+                    >
+                      <option value="pickup">↑ Embarque</option>
+                      <option value="dropoff">↓ Destino</option>
+                    </select>
+                    <input
+                      type="text" placeholder="Morada…" value={ms.address}
+                      onChange={e => setManualStops(prev => prev.map(m => m.id === ms.id ? { ...m, address: e.target.value } : m))}
+                      className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                    <button onClick={() => setManualStops(prev => prev.filter(m => m.id !== ms.id))}
+                      className="text-gray-400 hover:text-red-500 text-xs shrink-0">×</button>
+                  </div>
+                  <div className="flex flex-wrap gap-1 min-h-[26px] bg-gray-50 rounded px-1.5 py-1">
+                    {ms.kidIds.length === 0
+                      ? <span className="text-[10px] text-gray-300 italic self-center">Sem alunos — atribua abaixo</span>
+                      : ms.kidIds.map(kidId => (
+                        <span key={kidId} className="inline-flex items-center gap-1 bg-white border border-gray-200 rounded-full px-2 py-0.5 text-xs text-gray-700">
+                          {(kidNameMap[kidId] ?? kidId).split(' ')[0]}
+                          <button onClick={() => setManualStops(prev => prev.map(m => m.id === ms.id ? { ...m, kidIds: m.kidIds.filter(id => id !== kidId) } : m))}
+                            className="text-red-300 hover:text-red-500 leading-none">×</button>
+                        </span>
+                      ))
+                    }
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Kids added without a specific stop */}
+          {localAdditions.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-indigo-600 mb-1.5">↔ Adicionados a este percurso</p>
+              <div className="space-y-1">
+                {localAdditions.map(a => (
+                  <div key={a.kidId} className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-lg px-2.5 py-1.5">
+                    <span className="flex-1 text-xs text-gray-700 font-medium">{a.kidName}</span>
+                    <span className="text-[10px] text-gray-400 truncate max-w-[90px]">{a.pickupAddr.split(',')[0]}</span>
+                    <button onClick={() => setLocalAdditions(prev => prev.filter(la => la.kidId !== a.kidId))}
+                      className="text-red-300 hover:text-red-500 text-xs shrink-0">×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Kid pool header row */}
+          <div className="flex items-center justify-between gap-2">
+            <button onClick={() => setKidPoolOpen(v => !v)}
+              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1 min-w-0">
+              <span className={`inline-block transition-transform shrink-0 ${kidPoolOpen ? 'rotate-90' : ''}`}>›</span>
+              <span className="truncate">Inscrições disponíveis{kidPool.length > 0 ? ` (${kidPool.length})` : ''}</span>
+            </button>
+            <div className="flex gap-1 shrink-0">
+              <button
+                onClick={() => setManualStops(prev => [...prev, { id: Math.random().toString(36).slice(2), type: 'pickup', address: '', kidIds: [] }])}
+                className="text-[10px] text-indigo-500 hover:text-indigo-700 border border-indigo-200 rounded px-1.5 py-0.5 whitespace-nowrap"
+              >+ ↑ Embarque</button>
+              <button
+                onClick={() => setManualStops(prev => [...prev, { id: Math.random().toString(36).slice(2), type: 'dropoff', address: '', kidIds: [] }])}
+                className="text-[10px] text-indigo-500 hover:text-indigo-700 border border-indigo-200 rounded px-1.5 py-0.5 whitespace-nowrap"
+              >+ ↓ Destino</button>
+            </div>
+          </div>
+
+          {/* Kid pool list */}
+          {kidPoolOpen && (
+            <div className="space-y-1">
+              {kidPool.length === 0 && <p className="text-xs text-gray-400 text-center py-1">Sem inscrições disponíveis.</p>}
+              {kidPool.map(k => (
+                <div key={k.kidId} className="flex items-center gap-1.5 bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-1.5">
+                  <span className="flex-1 text-xs text-gray-700 font-medium truncate">{k.kidName}</span>
+                  {k.sourceRunId
+                    ? <span className="text-[10px] text-gray-400 shrink-0">← outro percurso</span>
+                    : <span className="text-[10px] text-gray-400 shrink-0">sem percurso</span>
+                  }
+                  {/* Add to run (uses subscription address) */}
+                  <button
+                    onClick={() => setLocalAdditions(prev => [...prev, k])}
+                    title="Adicionar ao percurso"
+                    className="text-xs font-bold text-indigo-500 hover:text-indigo-700 shrink-0 px-1"
+                  >+</button>
+                  {/* Assign to a specific manual stop */}
+                  {manualStops.map(ms => (
+                    <button key={ms.id}
+                      onClick={() => setManualStops(prev => prev.map(m => m.id === ms.id ? { ...m, kidIds: [...m.kidIds, k.kidId] } : m))}
+                      title={`Adicionar a paragem "${ms.type === 'pickup' ? '↑' : '↓'}"`}
+                      className="text-[10px] text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-1 py-0.5 shrink-0"
+                    >→ {ms.type === 'pickup' ? '↑' : '↓'}</button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
         <div className="px-5 py-3 border-t border-gray-100 flex gap-2">
-          <button onClick={() => onSave(localRemovals, localOverrides)}
+          <button onClick={handleSave}
             className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 font-medium flex-1">
-            Guardar e recalcular
+            {kidsChanged ? 'Guardar e recalcular' : 'Guardar'}
           </button>
           <button onClick={onClose} className="text-sm px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600">
             Cancelar
@@ -667,166 +1261,13 @@ function EditRunModal({ run, removals, addressOverrides, onSave, onClose }: {
   );
 }
 
-// ─── DriverOverrideModal ──────────────────────────────────────────────────────
-function DriverOverrideModal({ run, route, override, onSave, onClose }: {
-  run: AutoRun;
-  route: OptimizedRoute;
-  override: DriverOverride;
-  onSave: (o: DriverOverride) => void;
-  onClose: () => void;
-}) {
-  const [offset, setOffset] = useState(override.departureOffsetMin);
-  const [order, setOrder] = useState<number[]>(
-    override.waypointOrder ?? route.waypoints.map((_, i) => i)
-  );
-  const [extraMin, setExtraMin] = useState<number[]>(
-    override.waypointExtraMin ?? route.waypoints.map(() => 0)
-  );
-
-  const dirLabel = run.direction === 'morning' ? '🌅 Manhã' : run.direction === 'lunch' ? '🍽 Almoço' : '🌆 Tarde';
-  const isDefaultOrder = order.every((v, i) => v === i);
-
-  function moveUp(i: number) {
-    if (i === 0) return;
-    setOrder(prev => { const a = [...prev]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; return a; });
-    setExtraMin(prev => { const a = [...prev]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; return a; });
-  }
-  function moveDown(i: number) {
-    if (i === order.length - 1) return;
-    setOrder(prev => { const a = [...prev]; [a[i], a[i + 1]] = [a[i + 1], a[i]]; return a; });
-    setExtraMin(prev => { const a = [...prev]; [a[i], a[i + 1]] = [a[i + 1], a[i]]; return a; });
-  }
-  function adjustExtra(i: number, delta: number) {
-    setExtraMin(prev => { const a = [...prev]; a[i] = Math.max(0, (a[i] ?? 0) + delta); return a; });
-  }
-
-  // Compute display ETAs with departure offset and cumulative per-waypoint extra time
-  const displayEtas = (() => {
-    let cum = offset;
-    return order.map((wpIdx, i) => {
-      const eta = shiftTime(route.waypoints[wpIdx].eta, cum);
-      cum += extraMin[i] ?? 0;
-      return eta;
-    });
-  })();
-
-  const hasExtra = extraMin.some(v => v > 0);
-
-  return (
-    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-[440px] max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-semibold text-gray-800">🚗 Motorista — {dirLabel}, {DAY_PT[run.day]}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {/* Departure offset */}
-          <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">Ajuste de partida</p>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setOffset(v => v - 5)} className="w-8 h-8 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 font-mono">−</button>
-              <span className="w-20 text-center font-mono text-sm font-semibold">
-                {offset > 0 ? `+${offset}` : offset} min
-              </span>
-              <button onClick={() => setOffset(v => v + 5)} className="w-8 h-8 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 font-mono">+</button>
-              {offset !== 0 && (
-                <button onClick={() => setOffset(0)} className="text-xs text-gray-400 hover:text-gray-600 ml-1">reset</button>
-              )}
-            </div>
-            <p className="text-xs text-gray-400 mt-1.5">
-              Partida: <span className="font-mono font-semibold">{shiftTime(route.driverStartTime, offset)}</span>
-              {offset !== 0 && <span className="ml-1">(original {route.driverStartTime})</span>}
-            </p>
-          </div>
-
-          {/* Stop reorder + per-waypoint buffer */}
-          <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">Paragens e folgas</p>
-            <p className="text-xs text-gray-400 mb-3">Reordene as paragens e adicione tempo extra entre elas.</p>
-            <div className="space-y-0">
-              {order.map((wpIdx, i) => {
-                const wp = route.waypoints[wpIdx];
-                const extra = extraMin[i] ?? 0;
-                return (
-                  <div key={i}>
-                    {/* Waypoint row */}
-                    <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                      <span className={`font-mono text-xs font-semibold shrink-0 ${wp.type === 'pickup' ? 'text-blue-600' : 'text-orange-600'}`}>
-                        {(!isDefaultOrder || hasExtra) ? '~' : ''}{displayEtas[i]}
-                      </span>
-                      <span className={`text-xs shrink-0 ${wp.type === 'pickup' ? 'text-blue-400' : 'text-orange-400'}`}>
-                        {wp.type === 'pickup' ? '↑' : '↓'}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-gray-700 truncate">{wp.kidNames.map(n => n.split(' ')[0]).join(', ')}</div>
-                        <div className="text-xs text-gray-400 truncate">{wp.address.split(',').slice(0, 2).join(',')}</div>
-                      </div>
-                      <div className="flex gap-0.5 shrink-0">
-                        <button onClick={() => moveUp(i)} disabled={i === 0}
-                          className="px-1 text-gray-300 hover:text-gray-600 disabled:opacity-20 text-sm">↑</button>
-                        <button onClick={() => moveDown(i)} disabled={i === order.length - 1}
-                          className="px-1 text-gray-300 hover:text-gray-600 disabled:opacity-20 text-sm">↓</button>
-                      </div>
-                    </div>
-                    {/* Buffer between this stop and the next */}
-                    {i < order.length - 1 && (
-                      <div className="flex items-center gap-2 px-3 py-1">
-                        <div className="flex-1 border-l-2 border-dashed border-gray-200 ml-2" style={{ height: 1 }} />
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => adjustExtra(i, -5)} disabled={extra === 0}
-                            className="w-5 h-5 text-xs rounded border border-gray-200 text-gray-400 hover:text-gray-600 disabled:opacity-20 leading-none">−</button>
-                          <span className={`text-xs font-mono w-12 text-center ${extra > 0 ? 'text-amber-600 font-semibold' : 'text-gray-300'}`}>
-                            {extra > 0 ? `+${extra}min` : '—'}
-                          </span>
-                          <button onClick={() => adjustExtra(i, 5)}
-                            className="w-5 h-5 text-xs rounded border border-gray-200 text-gray-400 hover:text-gray-600 leading-none">+</button>
-                        </div>
-                        <div className="flex-1 border-l-2 border-dashed border-gray-200 ml-2" style={{ height: 1 }} />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {!isDefaultOrder && (
-              <button onClick={() => { setOrder(route.waypoints.map((_, i) => i)); setExtraMin(route.waypoints.map(() => 0)); }}
-                className="text-xs text-gray-400 hover:text-gray-600 mt-2">
-                Repor tudo
-              </button>
-            )}
-            {(!isDefaultOrder || hasExtra) && (
-              <p className="text-xs text-amber-500 mt-1">Os horários (~) são aproximados após ajustes.</p>
-            )}
-          </div>
-        </div>
-
-        <div className="px-5 py-4 border-t border-gray-100 flex gap-2 justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
-          <button
-            onClick={() => onSave({
-              departureOffsetMin: offset,
-              waypointOrder: isDefaultOrder ? undefined : order,
-              waypointExtraMin: hasExtra ? extraMin : undefined,
-            })}
-            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-            Guardar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── RouteCell ────────────────────────────────────────────────────────────────
-function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasOverrides, driverOverride, locked }: {
+function RouteCell({ run, route, loading, onOptimize, onEdit, driverOverride, locked }: {
   run: AutoRun;
   route?: OptimizedRoute | null;
   loading?: boolean;
   onOptimize: () => void;
   onEdit: () => void;
-  onDriverEdit: () => void;
-  hasOverrides?: boolean;
   driverOverride?: DriverOverride;
   locked?: boolean;
 }) {
@@ -840,29 +1281,24 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
   const hasDriverOverride = !!(driverOverride && (
     driverOverride.departureOffsetMin !== 0 || driverOverride.waypointOrder || driverOverride.waypointExtraMin
   ));
-  const displayedWaypoints = route
-    ? (driverOverride?.waypointOrder
-        ? driverOverride.waypointOrder.map(i => route.waypoints[i])
-        : route.waypoints)
+  const wpOrder = route
+    ? (driverOverride?.waypointOrder ?? route.waypoints.map((_, i) => i))
     : [];
+  const displayedWaypoints = wpOrder.map(i => route!.waypoints[i]);
   const displayedStartTime = route && driverOverride?.departureOffsetMin
     ? shiftTime(route.driverStartTime, driverOverride.departureOffsetMin)
     : route?.driverStartTime ?? '';
   const offsetMin = driverOverride?.departureOffsetMin ?? 0;
+  const extraMinsCell = driverOverride?.waypointExtraMin ?? (route?.waypoints.map(() => 0) ?? []);
 
-  // Compute per-waypoint ETAs with cumulative extra dwell time
-  const displayEtas = (() => {
-    let cum = offsetMin;
-    return displayedWaypoints.map((wp, i) => {
-      const eta = shiftTime(wp.eta, cum);
-      cum += driverOverride?.waypointExtraMin?.[i] ?? 0;
-      return eta;
-    });
-  })();
-  const hasAnyOverride = !!(driverOverride?.waypointOrder || driverOverride?.waypointExtraMin);
+  const displayEtas = route ? computeDisplayEtas(route, wpOrder, extraMinsCell, offsetMin) : [];
+  const hasAnyOverride = !!(driverOverride && (
+    driverOverride.departureOffsetMin !== 0 || driverOverride.waypointOrder || driverOverride.waypointExtraMin
+  ));
+  const mapsUrl = route ? buildMapsUrl(route.driverStartAddress, route.waypoints, wpOrder) : '';
 
   return (
-    <div className={`bg-white rounded-lg border p-2.5 text-xs ${hasDriverOverride ? 'border-blue-200' : hasOverrides ? 'border-amber-200' : 'border-gray-200'}`}>
+    <div className={`bg-white rounded-lg border p-2.5 text-xs ${hasDriverOverride ? 'border-blue-200' : 'border-gray-200'}`}>
       {/* Header row */}
       <div className="flex items-center gap-1 mb-2 flex-wrap">
         {uniqueDestinations.slice(0, 2).map(d => (
@@ -871,9 +1307,8 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
         <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full shrink-0 ml-auto">
           {run.stops.length} {run.stops.length === 1 ? 'aluno' : 'alunos'}
         </span>
-        {hasDriverOverride && <span className="text-xs" title="Ajuste motorista activo">🚗</span>}
+        {hasDriverOverride && <span className="text-xs text-blue-400" title="Ajuste motorista activo">🚗</span>}
         <button onClick={onEdit} className="text-gray-300 hover:text-blue-500 transition-colors shrink-0" title="Editar percurso">✏</button>
-        {route && <button onClick={onDriverEdit} className="text-gray-300 hover:text-blue-500 transition-colors shrink-0" title="Ajuste motorista">🚗</button>}
       </div>
 
       {/* Kids chips — before route */}
@@ -942,9 +1377,15 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
               </div>
             );
           })}
-          <div className="text-gray-400 pt-0.5 border-t border-gray-50">
-            {fmtHours(routeWallClockMin(route, driverOverride) / 60)}
-            {' · '}{route.totalDistanceKm}km
+          <div className="text-gray-400 pt-0.5 border-t border-gray-50 flex items-center gap-2">
+            <span>{fmtHours(routeWallClockMin(route, driverOverride) / 60)}{' · '}{route.totalDistanceKm}km</span>
+            {mapsUrl && (
+              <a href={mapsUrl} target="_blank" rel="noopener noreferrer"
+                className="ml-auto text-[10px] text-blue-400 hover:text-blue-600 underline shrink-0"
+                title="Ver rota no Google Maps">
+                🗺 Maps
+              </a>
+            )}
           </div>
           {route.unassigned.length > 0 && (
             <div className="text-red-600 bg-red-50 border border-red-100 rounded px-1.5 py-1 space-y-0.5">
@@ -959,10 +1400,10 @@ function RouteCell({ run, route, loading, onOptimize, onEdit, onDriverEdit, hasO
         <div className="w-full py-1 text-center text-xs text-amber-500 border border-amber-100 rounded bg-amber-50">
           🔒 bloqueado
         </div>
-      ) : (
+      ) : !route && (
         <button onClick={onOptimize} disabled={loading}
           className="w-full py-1 text-indigo-500 hover:text-indigo-700 border border-indigo-100 hover:border-indigo-300 rounded bg-indigo-50 hover:bg-indigo-100 transition-colors disabled:opacity-40">
-          {loading ? '…' : route ? '↻ Recalcular' : '🗺 Calcular rota'}
+          {loading ? '…' : '🗺 Calcular rota'}
         </button>
       )}
     </div>
@@ -993,62 +1434,71 @@ export default function TransportPlannerPage() {
 
   // Manual overrides
   const [runRemovals, setRunRemovals] = useState<Record<string, string[]>>(saved.runRemovals ?? {});
+  const [runAdditions, setRunAdditions] = useState<Record<string, RunAdditionEntry[]>>(saved.runAdditions ?? {});
   const [runAddressOverrides, setRunAddressOverrides] = useState<Record<string, Record<string, AddressOverride>>>(saved.runAddressOverrides ?? {});
   const [driverOverrides, setDriverOverrides] = useState<Record<string, DriverOverride>>(saved.driverOverrides ?? {});
   const [editingRun, setEditingRun] = useState<AutoRun | null>(null);
-  const [driverEditingRun, setDriverEditingRun] = useState<AutoRun | null>(null);
+  const [selectedWeekNum, setSelectedWeekNum] = useState<0 | 1 | 2 | 3 | 4>(0); // 0 = all
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [snap, childrenSnap, configSnap] = await Promise.all([
-          getDocs(col('transportationSubscriptions')),
-          getDocs(col('children')),
-          getDoc(docRef('config', 'transportation')),
-        ]);
-        // Build childId → schoolName lookup from the children collection
-        const childSchoolMap: Record<string, string> = {};
-        childrenSnap.docs.forEach(d => {
-          const s = d.data().schoolName;
-          if (s) childSchoolMap[d.id] = s;
-        });
-        const kids: PlannerKid[] = snap.docs.map(d => {
-          const x = d.data();
-          if (x.status === 'cancelled') return null;
-          return {
-            id: d.id, source: (x.source === 'manual' ? 'manual' : 'db') as 'manual' | 'db',
-            name: x.childName || '(sem nome)', monthlyFee: x.monthlyFee ?? 0,
-            familyId: x.familyId || undefined,
-            schoolName: childSchoolMap[x.childId] || x.schoolName || undefined,
-            requestedSchedule: parseSchedule(x.schedule || []),
-            contactEmail: x.contactEmail, notes: x.note || undefined,
-            status: x.status === 'confirmed' ? 'active' : x.status === 'planned' ? 'pending' : (x.status as any) || 'pending',
-          };
-        }).filter(Boolean) as PlannerKid[];
-        setDbKids(kids);
-        if (configSnap.exists()) {
-          const d = configSnap.data();
-          setConfig({ ...DEFAULT_CONFIG, ...d });
-        }
-      } catch (e) {
-        console.error('Failed to load transport data', e);
-      } finally {
-        setLoading(false);
+  const loadKids = async () => {
+    setLoading(true);
+    try {
+      const [snap, childrenSnap, configSnap] = await Promise.all([
+        getDocs(col('transportationSubscriptions')),
+        getDocs(col('children')),
+        getDoc(docRef('config', 'transportation')),
+      ]);
+      const childSchoolMap: Record<string, string> = {};
+      childrenSnap.docs.forEach(d => {
+        const s = d.data().schoolName;
+        if (s) childSchoolMap[d.id] = s;
+      });
+      const kids: PlannerKid[] = snap.docs.map(d => {
+        const x = d.data();
+        if (x.status === 'cancelled') return null;
+        return {
+          id: d.id, source: (x.source === 'manual' ? 'manual' : 'db') as 'manual' | 'db',
+          name: x.childName || '(sem nome)', monthlyFee: x.monthlyFee ?? 0,
+          familyId: x.familyId || undefined,
+          schoolName: childSchoolMap[x.childId] || x.schoolName || undefined,
+          requestedSchedule: parseSchedule(x.schedule || []),
+          contactEmail: x.contactEmail, notes: x.note || undefined,
+          status: x.status === 'confirmed' ? 'active' : x.status === 'planned' ? 'pending' : (x.status as any) || 'pending',
+          weekPattern: (x.weekPattern ?? 'all') as WeekPattern,
+        };
+      }).filter(Boolean) as PlannerKid[];
+      setDbKids(kids);
+      if (configSnap.exists()) {
+        const d = configSnap.data();
+        setConfig({ ...DEFAULT_CONFIG, ...d });
       }
-    })();
-  }, []);
+    } catch (e) {
+      console.error('Failed to load transport data', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadKids(); }, []);
 
   useEffect(() => {
-    saveToStorage({ manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked });
-  }, [manualKids, cellRoutes, runRemovals, runAddressOverrides, driverOverrides, driverHourOverrides, locked]);
+    saveToStorage({ manualKids, cellRoutes, runRemovals, runAdditions, runAddressOverrides, driverOverrides, driverHourOverrides, locked });
+  }, [manualKids, cellRoutes, runRemovals, runAdditions, runAddressOverrides, driverOverrides, driverHourOverrides, locked]);
+
+  const weekNumPattern = selectedWeekNum === 0 ? 'all'
+    : selectedWeekNum % 2 === 1 ? 'odd' : 'even';
 
   const allKids = useMemo(() => {
     const dbIds = new Set(dbKids.map(k => k.id));
-    return [...dbKids, ...manualKids.filter(k => !dbIds.has(k.id))];
-  }, [dbKids, manualKids]);
+    const all = [...dbKids, ...manualKids.filter(k => !dbIds.has(k.id))];
+    if (weekNumPattern === 'all') return all;
+    return all.filter(k => k.weekPattern === 'all' || k.weekPattern === weekNumPattern);
+  }, [dbKids, manualKids, weekNumPattern]);
 
   const pendingKids = useMemo(() => dbKids.filter(k => k.status === 'pending'), [dbKids]);
-  const activeKids = useMemo(() => dbKids.filter(k => k.status === 'active'), [dbKids]);
+  const activeKids = useMemo(() => dbKids.filter(k => k.status === 'active' &&
+    (weekNumPattern === 'all' || k.weekPattern === 'all' || k.weekPattern === weekNumPattern)
+  ), [dbKids, weekNumPattern]);
 
   const allAutoRuns = useMemo(() => {
     const result: Partial<Record<Day, AutoRun[]>> = {};
@@ -1057,13 +1507,18 @@ export default function TransportPlannerPage() {
   }, [allKids]);
 
   function getEffectiveRun(run: AutoRun): AutoRun {
-    const stops = run.stops
+    const baseStops = run.stops
       .filter(s => !(runRemovals[run.id] ?? []).includes(s.kidId))
       .map(s => {
         const ov = runAddressOverrides[run.id]?.[s.kidId];
         return { ...s, pickupAddr: ov?.pickup ?? s.pickupAddr, dropoffAddr: ov?.dropoff ?? s.dropoffAddr };
       });
-    return { ...run, stops };
+    const addedStops = (runAdditions[run.id] ?? []).map(e => {
+      const ov = runAddressOverrides[run.id]?.[e.kidId];
+      const s: AutoStop = { kidId: e.kidId, kidName: e.kidName, pickupAddr: ov?.pickup ?? e.pickupAddr, dropoffAddr: ov?.dropoff ?? e.dropoffAddr, requestedTime: e.requestedTime };
+      return s;
+    });
+    return { ...run, stops: [...baseStops, ...addedStops] };
   }
 
   async function runOptimization(runId: string, effectiveRun: AutoRun) {
@@ -1096,16 +1551,49 @@ export default function TransportPlannerPage() {
     for (const run of allRuns) await handleOptimizeRun(run);
   }
 
-  function handleEditSave(run: AutoRun, newRemovals: string[], newOverrides: Record<string, AddressOverride>) {
-    setRunRemovals(prev => ({ ...prev, [run.id]: newRemovals }));
-    setRunAddressOverrides(prev => ({ ...prev, [run.id]: newOverrides }));
-    setCellRoutes(prev => ({ ...prev, [run.id]: null }));
+  function handleCombinedSave(run: AutoRun, opts: {
+    removals: string[];
+    addressOverrides: Record<string, AddressOverride>;
+    driverOverride: DriverOverride;
+    needsRecalc: boolean;
+    additions: RunAdditionEntry[];
+  }) {
+    setRunRemovals(prev => {
+      const next = { ...prev, [run.id]: opts.removals };
+      const prevAdditions = runAdditions[run.id] ?? [];
+      // Kids removed from additions: un-remove them from their source run (if they had one)
+      for (const e of prevAdditions) {
+        if (e.sourceRunId && !opts.additions.some(a => a.kidId === e.kidId)) {
+          next[e.sourceRunId] = (next[e.sourceRunId] ?? []).filter(id => id !== e.kidId);
+        }
+      }
+      // Kids newly added: remove from their source run (unassigned kids have no source run)
+      for (const a of opts.additions) {
+        if (a.sourceRunId && !prevAdditions.some(e => e.kidId === a.kidId)) {
+          next[a.sourceRunId] = [...new Set([...(next[a.sourceRunId] ?? []), a.kidId])];
+        }
+      }
+      return next;
+    });
+    setRunAdditions(prev => ({ ...prev, [run.id]: opts.additions }));
+    setRunAddressOverrides(prev => ({ ...prev, [run.id]: opts.addressOverrides }));
+    if (opts.driverOverride.departureOffsetMin === 0 && !opts.driverOverride.waypointOrder && !opts.driverOverride.waypointExtraMin) {
+      setDriverOverrides(prev => { const { [run.id]: _, ...rest } = prev; return rest; });
+    } else {
+      setDriverOverrides(prev => ({ ...prev, [run.id]: opts.driverOverride }));
+    }
     setEditingRun(null);
-    // Build effective run from new values directly (state hasn't settled yet)
-    const effectiveStops = run.stops
-      .filter(s => !newRemovals.includes(s.kidId))
-      .map(s => { const ov = newOverrides[s.kidId]; return { ...s, pickupAddr: ov?.pickup ?? s.pickupAddr, dropoffAddr: ov?.dropoff ?? s.dropoffAddr }; });
-    runOptimization(run.id, { ...run, stops: effectiveStops });
+    if (opts.needsRecalc) {
+      setCellRoutes(prev => ({ ...prev, [run.id]: null }));
+      const baseStops = run.stops
+        .filter(s => !opts.removals.includes(s.kidId))
+        .map(s => { const ov = opts.addressOverrides[s.kidId]; return { ...s, pickupAddr: ov?.pickup ?? s.pickupAddr, dropoffAddr: ov?.dropoff ?? s.dropoffAddr }; });
+      const addedStops: AutoStop[] = opts.additions.map(e => {
+        const ov = opts.addressOverrides[e.kidId];
+        return { kidId: e.kidId, kidName: e.kidName, pickupAddr: ov?.pickup ?? e.pickupAddr, dropoffAddr: ov?.dropoff ?? e.dropoffAddr, requestedTime: e.requestedTime };
+      });
+      runOptimization(run.id, { ...run, stops: [...baseStops, ...addedStops] });
+    }
   }
 
   async function removeManualKid(kidId: string) {
@@ -1115,7 +1603,8 @@ export default function TransportPlannerPage() {
   }
 
   const effectiveStopCount = (run: AutoRun) =>
-    run.stops.filter(s => !(runRemovals[run.id] ?? []).includes(s.kidId)).length;
+    run.stops.filter(s => !(runRemovals[run.id] ?? []).includes(s.kidId)).length +
+    (runAdditions[run.id]?.length ?? 0);
 
   const allRuns = useMemo(
     () => (Object.values(allAutoRuns).flat() as AutoRun[]).filter(r => effectiveStopCount(r) > 0),
@@ -1129,7 +1618,7 @@ export default function TransportPlannerPage() {
     return 0;
   };
 
-  const { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyDiscountTotal, monthlyProfit } = useMemo(() => {
+  const { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyRevenueActive, monthlyDiscountTotal, monthlyProfit, monthlyProfitActive } = useMemo(() => {
     const driverCost = allRuns.reduce((sum, run) =>
       sum + effectiveRunHours(run) * config.driverRatePerHour, 0) * config.weeksPerMonth;
     const vanCost = config.vanMonthlyCost;
@@ -1145,46 +1634,52 @@ export default function TransportPlannerPage() {
     }, 0) * config.weeksPerMonth;
     const monthlyCost = driverCost + vanCost + electricityCost;
 
-    // Sibling ranking: group allKids by familyId ?? contactEmail, sort alphabetically
-    const familyGroups: Record<string, PlannerKid[]> = {};
-    allKids.forEach(kid => { const key = kid.familyId ?? kid.contactEmail; if (key) (familyGroups[key] ??= []).push(kid); });
-    Object.values(familyGroups).forEach(g => g.sort((a, b) => a.name.localeCompare(b.name)));
-    const siblingRankMap: Record<string, number> = {};
-    Object.values(familyGroups).forEach(group => group.forEach((kid, i) => { siblingRankMap[kid.id] = i + 1; }));
-
     const periodOrder: Record<Period, number> = { morning: 0, lunch: 1, afternoon: 2 };
     const pricePerTrip = config.flatRatePerTrip;
 
-    let monthlyRevenue = 0;
-    let monthlyRevenueGross = 0;
-    for (const kid of allKids) {
-      const siblingRank = siblingRankMap[kid.id] ?? 1;
-      const slotsByDay: Record<string, ScheduleSlot[]> = {};
-      for (const slot of kid.requestedSchedule) (slotsByDay[slot.day] ??= []).push(slot);
-      Object.values(slotsByDay).forEach(g => g.sort((a, b) => periodOrder[slotPeriod(a.time)] - periodOrder[slotPeriod(b.time)]));
+    const calcRevenue = (kids: PlannerKid[]) => {
+      const famGroups: Record<string, PlannerKid[]> = {};
+      kids.forEach(kid => { const key = kid.familyId ?? kid.contactEmail; if (key) (famGroups[key] ??= []).push(kid); });
+      Object.values(famGroups).forEach(g => g.sort((a, b) => a.name.localeCompare(b.name)));
+      const sibRankMap: Record<string, number> = {};
+      Object.values(famGroups).forEach(group => group.forEach((kid, i) => { sibRankMap[kid.id] = i + 1; }));
 
-      for (const slot of kid.requestedSchedule) {
-        const tripRank = (slotsByDay[slot.day].indexOf(slot) ?? 0) + 1;
-        let totalDiscount = 0;
-        // Sibling discount applies to 2nd+ child in the same family
-        if (siblingRank >= 2) totalDiscount += config.siblingDiscountPercentage;
-        // School discount: match by school name (case-insensitive)
+      let revenue = 0, revenueGross = 0;
+      for (const kid of kids) {
+        const siblingRank = sibRankMap[kid.id] ?? 1;
+        const slotsByDay: Record<string, ScheduleSlot[]> = {};
+        for (const slot of kid.requestedSchedule) (slotsByDay[slot.day] ??= []).push(slot);
+        Object.values(slotsByDay).forEach(g => g.sort((a, b) => periodOrder[slotPeriod(a.time)] - periodOrder[slotPeriod(b.time)]));
+
+        let subtotal = 0;
+        for (const [, slots] of Object.entries(slotsByDay)) {
+          slots.forEach((_, idx) => {
+            const tripRank = idx + 1;
+            let discount = 0;
+            if (siblingRank >= 2) discount += config.siblingDiscountPercentage;
+            if (tripRank >= config.minTripsForDiscount) discount += config.multiTripDiscountPercentage;
+            discount = Math.min(1, discount);
+            subtotal += pricePerTrip * (1 - discount) * config.weeksPerMonth;
+            revenueGross += pricePerTrip * config.weeksPerMonth;
+          });
+        }
+        let schoolDiscountPct = 0;
         for (const sd of (config.schoolDiscounts ?? [])) {
           if (kid.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === kid.schoolName.toLowerCase()) {
-            totalDiscount += sd.discountPercentage;
+            schoolDiscountPct = sd.discountPercentage;
           }
         }
-        // Multi-trip discount: applies to 2nd+ trip on the same day
-        if (tripRank >= config.minTripsForDiscount) totalDiscount += config.multiTripDiscountPercentage;
-        totalDiscount = Math.min(1, totalDiscount);
-        monthlyRevenue += pricePerTrip * (1 - totalDiscount) * config.weeksPerMonth;
-        monthlyRevenueGross += pricePerTrip * config.weeksPerMonth;
+        revenue += subtotal * (1 - schoolDiscountPct);
       }
-    }
+      return { revenue, revenueGross };
+    };
+
+    const { revenue: monthlyRevenue, revenueGross: monthlyRevenueGross } = calcRevenue(allKids);
+    const { revenue: monthlyRevenueActive } = calcRevenue(activeKids);
     const monthlyDiscountTotal = monthlyRevenueGross - monthlyRevenue;
 
-    return { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyRevenueGross, monthlyDiscountTotal, monthlyProfit: monthlyRevenue - monthlyCost };
-  }, [allRuns, cellRoutes, config, allKids, driverHourOverrides, runRemovals]);
+    return { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyRevenueActive, monthlyRevenueGross, monthlyDiscountTotal, monthlyProfit: monthlyRevenue - monthlyCost, monthlyProfitActive: monthlyRevenueActive - monthlyCost };
+  }, [allRuns, cellRoutes, config, allKids, activeKids, driverHourOverrides, runRemovals]);
 
   // For each kid: which (day-period) slots are they actually in (respecting manual removals)
   const kidAssignments = useMemo(() => {
@@ -1200,6 +1695,78 @@ export default function TransportPlannerPage() {
     }
     return map;
   }, [allAutoRuns, runRemovals]);
+
+  // Kids seated = appear in at least one effective run slot
+  const seatedKidIds = useMemo(() => new Set(Object.keys(kidAssignments)), [kidAssignments]);
+
+  // Dirty tracking: mark unsaved when routes / removals / overrides change after initial load
+  const [isDirty, setIsDirty] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [versions, setVersions] = useState<{ id: string; savedAt: Date; seatedCount: number }[]>([]);
+  const [showVersions, setShowVersions] = useState(false);
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    setIsDirty(true);
+  }, [cellRoutes, runRemovals, runAdditions, runAddressOverrides, driverOverrides]);
+
+  // Load saved versions on mount
+  useEffect(() => {
+    getDocs(col('transportRoutes')).then(snap => {
+      const vs = snap.docs
+        .map(d => ({ id: d.id, savedAt: d.data().savedAt?.toDate?.() ?? new Date(0), seatedCount: (d.data().seatedKidIds ?? []).length }))
+        .sort((a, b) => b.savedAt.getTime() - a.savedAt.getTime())
+        .slice(0, 10);
+      setVersions(vs);
+    }).catch(() => {});
+  }, []);
+
+  const saveRouteVersion = async () => {
+    setSaving(true);
+    try {
+      const seatedIds = [...seatedKidIds];
+      const now = new Date();
+
+      // Save version snapshot (include computed costs so summary page can read them)
+      const vRef = await addDoc(col('transportRoutes'), {
+        savedAt: now,
+        seatedKidIds: seatedIds,
+        cellRoutes: JSON.parse(JSON.stringify(cellRoutes)),
+        runRemovals,
+        runAddressOverrides: JSON.parse(JSON.stringify(runAddressOverrides)),
+        driverOverrides: JSON.parse(JSON.stringify(driverOverrides)),
+        snapshot: { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyRevenueActive },
+      });
+
+      // Update subscription statuses in batch
+      const batch = writeBatch(db);
+      for (const kid of dbKids) {
+        if (kid.source === 'manual') continue;
+        if (seatedKidIds.has(kid.id) && kid.status === 'pending') {
+          batch.update(docRef('transportationSubscriptions', kid.id), { status: 'planned', updatedAt: now });
+        } else if (!seatedKidIds.has(kid.id) && kid.status === 'planned') {
+          batch.update(docRef('transportationSubscriptions', kid.id), { status: 'pending', updatedAt: now });
+        }
+      }
+      await batch.commit();
+
+      // Refresh local kid statuses
+      setDbKids(prev => prev.map(k => {
+        if (k.source === 'manual') return k;
+        if (seatedKidIds.has(k.id) && k.status === 'pending') return { ...k, status: 'pending' as const };
+        if (!seatedKidIds.has(k.id) && k.status === 'planned') return { ...k, status: 'pending' as const };
+        return k;
+      }));
+
+      setLastSavedAt(now);
+      setIsDirty(false);
+      setVersions(prev => [{ id: vRef.id, savedAt: now, seatedCount: seatedIds.length }, ...prev].slice(0, 10));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   async function handleSaveConfig(cfg: TransportationConfig) {
     setSettingsSaving(true);
@@ -1249,22 +1816,24 @@ export default function TransportPlannerPage() {
           g.sort((a, b) => (periodOrder[slotPeriodFrom(a.pickupTime)] ?? 0) - (periodOrder[slotPeriodFrom(b.pickupTime)] ?? 0))
         );
 
-        let totalSlotFee = 0;
+        let subtotal = 0;
         for (const [, slots] of Object.entries(slotsByDay)) {
-          slots.forEach((slot, idx) => {
+          slots.forEach((_, idx) => {
             const tripRank = idx + 1;
             let discount = 0;
             if (rank >= 2) discount += cfg.siblingDiscountPercentage;
-            for (const sd of (cfg.schoolDiscounts ?? [])) {
-              if (sub.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === sub.schoolName.toLowerCase()) {
-                discount += sd.discountPercentage;
-              }
-            }
             if (tripRank >= cfg.minTripsForDiscount) discount += cfg.multiTripDiscountPercentage;
             discount = Math.min(1, discount);
-            totalSlotFee += cfg.flatRatePerTrip * (1 - discount) * cfg.weeksPerMonth;
+            subtotal += cfg.flatRatePerTrip * (1 - discount) * cfg.weeksPerMonth;
           });
         }
+        let schoolDiscountPct = 0;
+        for (const sd of (cfg.schoolDiscounts ?? [])) {
+          if (sub.schoolName && sd.schoolName && sd.schoolName.toLowerCase() === sub.schoolName.toLowerCase()) {
+            schoolDiscountPct = sd.discountPercentage;
+          }
+        }
+        const totalSlotFee = subtotal * (1 - schoolDiscountPct);
         if (Math.abs(totalSlotFee - sub.monthlyFee) > 0.01) {
           batch.push({ id: sub.id, monthlyFee: totalSlotFee });
           updated++;
@@ -1290,7 +1859,6 @@ export default function TransportPlannerPage() {
   }, [allRuns]);
 
   const anyLoading = Object.values(cellLoading).some(Boolean);
-  const profitColor = monthlyProfit >= 0 ? 'text-green-600' : 'text-red-600';
 
   return (
     <div className="flex flex-col h-full -m-6">
@@ -1298,6 +1866,7 @@ export default function TransportPlannerPage() {
       <div className="bg-white border-b border-gray-200 px-6 pt-3 pb-3 overflow-y-auto max-h-[80vh]">
         <div className="flex items-center gap-5 flex-wrap">
           <div className="flex items-center gap-5 divide-x divide-gray-200">
+            {/* Costs */}
             <div>
               <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Custo mensal</div>
               <div className="text-lg font-bold text-red-600">{eur(monthlyCost)}</div>
@@ -1313,17 +1882,21 @@ export default function TransportPlannerPage() {
                 </button>
               </div>
             </div>
+            {/* Forecast — all kids */}
             <div className="pl-5">
-              <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Receita mensal</div>
-              <div className="text-lg font-bold text-blue-600">{eur(monthlyRevenue)}</div>
-              <div className="text-xs text-gray-400 space-x-1">
-                {config.flatRatePerTrip > 0 && <span>€{config.flatRatePerTrip}/viagem</span>}
-                {monthlyDiscountTotal > 0 && <span className="text-orange-500">· -{eur(monthlyDiscountTotal)} desc.</span>}
+              <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Estimado</div>
+              <div className="text-lg font-bold text-indigo-600">{eur(monthlyRevenue)}</div>
+              <div className={`text-xs font-semibold ${monthlyProfit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {monthlyProfit >= 0 ? '+' : '−'}{eur(monthlyProfit)} lucro · <span className="font-normal text-gray-400">{pendingKids.length} pend.{monthlyDiscountTotal > 0 ? ` · -${eur(monthlyDiscountTotal)} desc.` : ''}</span>
               </div>
             </div>
+            {/* Reality — active kids only */}
             <div className="pl-5">
-              <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Lucro mensal</div>
-              <div className={`text-lg font-bold ${profitColor}`}>{eur(monthlyProfit)}</div>
+              <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide">Realidade</div>
+              <div className="text-lg font-bold text-blue-600">{eur(monthlyRevenueActive)}</div>
+              <div className={`text-xs font-semibold ${monthlyProfitActive >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {monthlyProfitActive >= 0 ? '+' : '−'}{eur(monthlyProfitActive)} lucro · <span className="font-normal text-gray-400">{activeKids.length} ativos</span>
+              </div>
             </div>
           </div>
           <div className="text-sm text-gray-500">
@@ -1331,9 +1904,51 @@ export default function TransportPlannerPage() {
             <span className="font-semibold text-gray-700">{totalKidCount}</span> alunos
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <button onClick={loadKids} disabled={loading}
+              className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition-colors disabled:opacity-50">
+              ↺ Recarregar
+            </button>
             <button onClick={() => setSettingsOpen(true)}
               className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition-colors">
               ⚙ Definições
+            </button>
+            {/* Version history */}
+            <div className="relative">
+              <button onClick={() => setShowVersions(v => !v)}
+                className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500 transition-colors">
+                🕓 {versions.length > 0 ? `v${versions.length}` : 'Versões'}
+              </button>
+              {showVersions && (
+                <div className="absolute right-0 top-9 z-50 w-64 bg-white border border-gray-200 rounded-xl shadow-lg p-2">
+                  <p className="text-xs font-semibold text-gray-500 px-2 py-1 uppercase tracking-wide">Versões guardadas</p>
+                  {versions.length === 0 && <p className="text-xs text-gray-400 px-2 py-2">Nenhuma versão guardada.</p>}
+                  {versions.map(v => (
+                    <div key={v.id} className="px-2 py-1.5 rounded-lg hover:bg-gray-50 text-xs text-gray-600">
+                      <span className="font-medium">{v.savedAt.toLocaleDateString('pt-PT')} {v.savedAt.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="text-gray-400 ml-2">{v.seatedCount} com lugar</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Dirty indicator + save */}
+            {isDirty && (
+              <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
+                Não guardado
+              </span>
+            )}
+            {lastSavedAt && !isDirty && (
+              <span className="text-xs text-green-600">
+                ✓ Guardado {lastSavedAt.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+            <button
+              onClick={saveRouteVersion}
+              disabled={saving || !isDirty}
+              className="text-sm px-4 py-1.5 bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 disabled:opacity-40 font-medium transition-colors"
+            >
+              {saving ? '…' : '💾 Guardar versão'}
             </button>
             {!locked && (
               <>
@@ -1342,6 +1957,7 @@ export default function TransportPlannerPage() {
                     if (!window.confirm('Limpar todas as rotas calculadas e recomeçar?')) return;
                     setCellRoutes({});
                     setRunRemovals({});
+                    setRunAdditions({});
                     setRunAddressOverrides({});
                     setDriverOverrides({});
                     setDriverHourOverrides({});
@@ -1573,35 +2189,53 @@ export default function TransportPlannerPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel — collapsible */}
         {sidebarOpen && (
-          <div className="w-52 shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
-            <div className="p-3 border-b border-gray-100">
+          <div className="w-56 shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
+            <div className="p-3 border-b border-gray-100 flex items-center justify-between">
               <span className="text-sm font-semibold text-gray-700">Inscrições</span>
+              <span className="text-xs text-gray-400">{allKids.length} total</span>
             </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
-            {loading && <p className="text-sm text-gray-400 text-center py-4">A carregar…</p>}
-            {manualKids.map(k => (
-              <div key={k.id} className="relative group">
-                <KidCard kid={k} assignedSlots={kidAssignments[k.id] ?? new Set()} />
-                <button onClick={() => removeManualKid(k.id)}
-                  className="absolute top-1.5 right-7 text-gray-300 hover:text-red-500 text-sm opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+            {/* Week number filter */}
+            <div className="px-3 py-2 border-b border-gray-100 space-y-1">
+              <button
+                onClick={() => setSelectedWeekNum(0)}
+                className={`text-xs px-2 py-0.5 rounded-full border transition-colors w-full ${selectedWeekNum === 0 ? 'bg-gray-700 text-white border-gray-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+              >
+                Todas as semanas
+              </button>
+              <div className="flex gap-1">
+                {([1, 2, 3, 4] as const).map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setSelectedWeekNum(n)}
+                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors flex-1 ${selectedWeekNum === n ? 'bg-gray-700 text-white border-gray-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                  >
+                    Sem. {n}
+                  </button>
+                ))}
               </div>
-            ))}
-            {!loading && pendingKids.length === 0 && manualKids.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-3">Sem pedidos pendentes.</p>
-            )}
-            {pendingKids.map(k => <KidCard key={k.id} kid={k} assignedSlots={kidAssignments[k.id] ?? new Set()} />)}
-            {activeKids.length > 0 && (
-              <div className="mt-2">
-                <button onClick={() => setShowActiveKids(v => !v)}
-                  className="w-full text-left text-xs text-gray-400 font-medium uppercase tracking-wide py-2 flex items-center justify-between">
-                  <span>Já ativas ({activeKids.length})</span>
-                  <span>{showActiveKids ? '▲' : '▼'}</span>
-                </button>
-                {showActiveKids && activeKids.map(k => <KidCard key={k.id} kid={k} assignedSlots={kidAssignments[k.id] ?? new Set()} />)}
-              </div>
-            )}
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {loading && <p className="text-sm text-gray-400 text-center py-4">A carregar…</p>}
+
+              {/* Seated */}
+              <KidChipGroup
+                title="Com lugar"
+                color="green"
+                kids={allKids.filter(k => seatedKidIds.has(k.id))}
+                kidAssignments={kidAssignments}
+                onRemove={k => { if (k.source === 'manual') removeManualKid(k.id); }}
+              />
+
+              {/* Unseated */}
+              <KidChipGroup
+                title="Sem lugar"
+                color="amber"
+                kids={allKids.filter(k => !seatedKidIds.has(k.id))}
+                kidAssignments={kidAssignments}
+                onRemove={k => { if (k.source === 'manual') removeManualKid(k.id); }}
+              />
+            </div>
           </div>
-        </div>
         )}
 
         {/* Sidebar toggle strip */}
@@ -1653,12 +2287,10 @@ export default function TransportPlannerPage() {
                                     run={run}
                                     route={cellRoutes[run.id]}
                                     loading={cellLoading[run.id]}
-                                    hasOverrides={!!(runRemovals[run.id]?.length || runAddressOverrides[run.id])}
                                     driverOverride={driverOverrides[run.id]}
                                     locked={locked}
                                     onOptimize={() => handleOptimizeRun(run)}
                                     onEdit={() => setEditingRun(run)}
-                                    onDriverEdit={() => setDriverEditingRun(run)}
                                   />
                                 ))}
                               </div>
@@ -1675,31 +2307,40 @@ export default function TransportPlannerPage() {
         </div>
       </div>
 
-      {editingRun && (
-        <EditRunModal
-          run={editingRun}
-          removals={runRemovals[editingRun.id] ?? []}
-          addressOverrides={runAddressOverrides[editingRun.id] ?? {}}
-          onSave={(removals, overrides) => handleEditSave(editingRun, removals, overrides)}
-          onClose={() => setEditingRun(null)}
-        />
-      )}
-      {driverEditingRun && cellRoutes[driverEditingRun.id] && (
-        <DriverOverrideModal
-          run={driverEditingRun}
-          route={cellRoutes[driverEditingRun.id]!}
-          override={driverOverrides[driverEditingRun.id] ?? { departureOffsetMin: 0 }}
-          onSave={override => {
-            if (override.departureOffsetMin === 0 && !override.waypointOrder) {
-              setDriverOverrides(prev => { const { [driverEditingRun.id]: _, ...rest } = prev; return rest; });
-            } else {
-              setDriverOverrides(prev => ({ ...prev, [driverEditingRun.id]: override }));
-            }
-            setDriverEditingRun(null);
-          }}
-          onClose={() => setDriverEditingRun(null)}
-        />
-      )}
+      {editingRun && (() => {
+        const thisKidIds = new Set([
+          ...editingRun.stops.map(s => s.kidId),
+          ...(runAdditions[editingRun.id] ?? []).map(a => a.kidId),
+        ]);
+        const availableKidsForModal: Array<{ sourceRunId: string; stop: AutoStop }> = [];
+        for (const r of (allAutoRuns[editingRun.day] ?? [])) {
+          if (r.id === editingRun.id) continue;
+          for (const stop of r.stops) {
+            if (thisKidIds.has(stop.kidId)) continue;
+            if ((runRemovals[r.id] ?? []).includes(stop.kidId)) continue;
+            availableKidsForModal.push({ sourceRunId: r.id, stop });
+          }
+        }
+        // Kids not seated in any run (the sidebar's "Sem lugar" list)
+        const availableKidIdsInModal = new Set(availableKidsForModal.map(a => a.stop.kidId));
+        const unassignedKidsForModal = allKids.filter(k =>
+          !seatedKidIds.has(k.id) && !availableKidIdsInModal.has(k.id)
+        );
+        return (
+          <RunEditModal
+            run={editingRun}
+            route={cellRoutes[editingRun.id]}
+            removals={runRemovals[editingRun.id] ?? []}
+            addressOverrides={runAddressOverrides[editingRun.id] ?? {}}
+            driverOverride={driverOverrides[editingRun.id] ?? { departureOffsetMin: 0 }}
+            availableKids={availableKidsForModal}
+            existingAdditions={runAdditions[editingRun.id] ?? []}
+            unassignedKids={unassignedKidsForModal}
+            onSave={opts => handleCombinedSave(editingRun, opts)}
+            onClose={() => setEditingRun(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

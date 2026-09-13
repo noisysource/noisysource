@@ -105,18 +105,18 @@ export default function FamilyDashboardPage() {
       <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-lg shadow-lg">
         <h1 className="text-2xl font-bold mb-1">Bem-vindo, {family?.primaryContact.name.split(' ')[0]}</h1>
         <p className="text-blue-100 text-sm mb-6">Área de Família — Arco-Íris da Pequenada</p>
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white/10 rounded-lg p-4">
-            <p className="text-sm opacity-90 mb-1">Mensalidade total</p>
-            <p className="text-3xl font-bold">€{totalMonthly.toFixed(2)}</p>
+        <div className="grid grid-cols-3 gap-2 sm:gap-4">
+          <div className="bg-white/10 rounded-lg p-3 sm:p-4">
+            <p className="text-xs sm:text-sm opacity-90 mb-1">Mensalidade total</p>
+            <p className="text-xl sm:text-3xl font-bold">€{totalMonthly.toFixed(2)}</p>
           </div>
-          <div className="bg-white/10 rounded-lg p-4">
-            <p className="text-sm opacity-90 mb-1">Crianças</p>
-            <p className="text-3xl font-bold">{childData.length}</p>
+          <div className="bg-white/10 rounded-lg p-3 sm:p-4">
+            <p className="text-xs sm:text-sm opacity-90 mb-1">Crianças</p>
+            <p className="text-xl sm:text-3xl font-bold">{childData.length}</p>
           </div>
-          <div className="bg-white/10 rounded-lg p-4">
-            <p className="text-sm opacity-90 mb-1">Inscrições ativas</p>
-            <p className="text-3xl font-bold">{activeCount}</p>
+          <div className="bg-white/10 rounded-lg p-3 sm:p-4">
+            <p className="text-xs sm:text-sm opacity-90 mb-1">Inscrições ativas</p>
+            <p className="text-xl sm:text-3xl font-bold">{activeCount}</p>
           </div>
         </div>
       </div>
@@ -164,8 +164,8 @@ export default function FamilyDashboardPage() {
                 transport.filter(t => !isCancelled(t.status ?? '')).reduce((s, x) => s + (x.monthlyFee ?? 0), 0);
 
               const allSubs = [
-                ...study.map(s => ({ type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice })),
-                ...transport.map(t => ({ type: 'Transporte', status: t.status ?? '', price: t.monthlyFee })),
+                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, appliedDiscounts: s.appliedDiscounts ?? [] })),
+                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, appliedDiscounts: t.appliedDiscounts ?? [] })),
               ];
 
               return (
@@ -187,16 +187,35 @@ export default function FamilyDashboardPage() {
                       <p className="text-sm text-gray-400">Sem inscrições</p>
                     ) : (
                       allSubs.map((sub, i) => (
-                        <div key={i} className="flex items-center justify-between text-sm">
-                          <span className="text-gray-700">{sub.type}</span>
-                          <div className="flex items-center gap-2">
-                            {!isCancelled(sub.status) && (
-                              <span className="text-gray-600">€{(sub.price ?? 0).toFixed(2)}/mês</span>
-                            )}
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_CLASS[sub.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                              {STATUS_LABEL[sub.status] ?? sub.status}
-                            </span>
+                        <div key={i} className="text-sm space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-700">{sub.type}</span>
+                            <div className="flex items-center gap-2">
+                              {!isCancelled(sub.status) && (
+                                <span className="text-gray-600">€{(sub.price ?? 0).toFixed(2)}/mês</span>
+                              )}
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_CLASS[sub.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                                {STATUS_LABEL[sub.status] ?? sub.status}
+                              </span>
+                            </div>
                           </div>
+                          {sub.appliedDiscounts.length > 0 && (
+                            <div className="flex gap-1 flex-wrap pl-1">
+                              {sub.appliedDiscounts.map(d => (
+                                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
+                                  {d.name} −{Math.round(d.percentage * 100)}%
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {sub.status === 'offered' && (
+                            <Link
+                              to={`/client/${sub.subType === 'transport' ? 'transport' : 'study'}/${sub.id}`}
+                              className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5 hover:bg-purple-100 transition-colors w-fit"
+                            >
+                              ✅ Lugar disponível — confirme aqui
+                            </Link>
+                          )}
                         </div>
                       ))
                     )}

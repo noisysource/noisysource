@@ -1,12 +1,17 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getDocs, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { getDocs, getDoc, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import PlacesInput from '../../components/PlacesInput';
 import { getTransportationConfig } from '../../services/transportationService';
 import { TransportationConfig } from '@shared/models/Transportation';
+import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
+import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../components/WeekSchedulePicker';
+import { activeWeeksInPattern } from '@shared/models/weekPattern';
+import { DiscountRule, AppliedDiscount } from '@shared/models/Discount';
+import { getDiscountRules, applyDiscounts, grossFromAppliedDiscounts } from '../../services/discountService';
 
-type SubStatus = 'planned' | 'pending' | 'active' | 'cancelled';
+type SubStatus = 'planned' | 'pending' | 'offered' | 'active' | 'cancelled';
 type TypeFilter = 'all' | 'transport' | 'study' | 'unlinked';
 
 interface SubItem {
@@ -27,12 +32,20 @@ interface SubItem {
   // Transport
   schedule?: any[];
   monthlyFee?: number;
+  // Returning student discount (legacy)
+  returningStudent?: boolean;
+  originalFee?: number;    // transport: fee before discount
+  basePrice?: number;      // study: fee before discount
+  // Central discount system
+  appliedDiscounts?: AppliedDiscount[];
+  weekPattern?: 'all' | 'odd' | 'even';
   // Common
   status: SubStatus;
   statusReason?: string;
   note?: string;
   createdAt: Date;
   cancelRequested?: boolean;
+  feeReviewRequired?: boolean;
 }
 
 const toDate = (v: any): Date => v?.toDate?.() ?? new Date(v ?? 0);
@@ -63,13 +76,15 @@ const StatusBadge = ({ status, cancelRequested }: { status: SubStatus; cancelReq
   if (cancelRequested && status === 'active')
     return <span className="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full font-medium">Cancelamento pedido</span>;
   const map: Record<SubStatus, string> = {
-    planned: 'bg-yellow-100 text-yellow-800',
     pending: 'bg-yellow-100 text-yellow-800',
+    planned: 'bg-blue-100 text-blue-800',
+    offered: 'bg-purple-100 text-purple-800',
     active: 'bg-green-100 text-green-800',
     cancelled: 'bg-gray-100 text-gray-600',
   };
   const label: Record<SubStatus, string> = {
-    planned: 'Pendente', pending: 'Pendente', active: 'Ativa', cancelled: 'Cancelada',
+    pending: 'Pendente', planned: 'Planeado', offered: 'Aguarda confirmação',
+    active: 'Ativa', cancelled: 'Cancelada',
   };
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[status]}`}>{label[status]}</span>;
 };
@@ -260,69 +275,146 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
   );
 }
 
-function ManualTransportForm({ config, onSave, onCancel }: { config: TransportationConfig | null; onSave: (item: SubItem) => void; onCancel: () => void }) {
+// ─── Unified Manual Enrollment Form (transport + study, same as client) ───────
+function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
+  transportConfig: TransportationConfig | null;
+  studyConfig: StudyCenterConfig | null;
+  onSave: (items: SubItem[]) => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState('');
   const [parentName, setParentName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [schoolName, setSchoolName] = useState('');
+  const [schoolYear, setSchoolYear] = useState('');
   const [note, setNote] = useState('');
-  const [trips, setTrips] = useState<TripTemplate[]>([newTrip()]);
+  const [schedule, setSchedule] = useState<WeekScheduleValue>({ weekPattern: 'all', days: [] });
   const [saving, setSaving] = useState(false);
 
-  const totalSlots = trips.flatMap(t => t.days).length;
-  const monthlyFee = config ? totalSlots * config.flatRatePerTrip * 4 : 0;
+  const transportDays = schedule.days.filter(d => (d.services.transportTrips?.length ?? 0) > 0);
+  const studyDays = schedule.days.filter(d => d.services.study);
+  const totalTrips = transportDays.reduce((sum, d) => sum + (d.services.transportTrips?.length ?? 0), 0);
+
+  const hasTransport = totalTrips > 0;
+  const hasStudy = studyDays.length > 0;
+  const isValid = name.trim().length > 0 && (hasTransport || hasStudy) &&
+    (!hasTransport || transportDays.every(d => d.services.transportTrips!.every(t => t.pickupAddress.trim() && t.dropoffAddress.trim())));
 
   const submit = async () => {
-    if (!name.trim()) return;
+    if (!isValid) return;
     setSaving(true);
-    const schedule = tripsToSchedule(trips);
     try {
-      const ref = await addDoc(col('transportationSubscriptions'), {
-        childName: name.trim(), contactName: parentName.trim() || null,
-        contactEmail: email.trim() || null, contactMobile: phone.trim() || null,
-        status: 'planned', source: 'manual', monthlyFee,
-        schedule, note: note.trim() || null,
-        createdAt: new Date(), updatedAt: new Date(),
-      });
-      onSave({
-        id: ref.id, _type: 'transport', childName: name.trim(),
-        contactName: parentName.trim() || undefined,
-        contactEmail: email.trim() || undefined,
-        contactPhone: phone.trim() || undefined, source: 'manual',
-        schedule, monthlyFee, status: 'planned',
-        note: note.trim() || undefined, createdAt: new Date(),
-      });
+      const now = new Date();
+      const endDate = new Date(now);
+      endDate.setFullYear(endDate.getFullYear() + 1);
+      const created: SubItem[] = [];
+
+      if (hasTransport) {
+        const fsSchedule = transportDays.flatMap(d =>
+          d.services.transportTrips!.map(t => ({
+            dayOfWeek: d.weekday,
+            pickupTime: t.time,
+            pickupLocation: t.pickupAddress,
+            dropoffLocation: t.dropoffAddress,
+          }))
+        );
+        const weeks = activeWeeksInPattern(schedule.weekPattern);
+        const monthlyFee = transportConfig ? totalTrips * transportConfig.flatRatePerTrip * weeks : 0;
+        const ref = await addDoc(col('transportationSubscriptions'), {
+          childName: name.trim(), contactName: parentName.trim() || null,
+          contactEmail: email.trim() || null, contactMobile: phone.trim() || null,
+          schoolName: schoolName.trim() || null,
+          status: 'planned', source: 'manual', monthlyFee,
+          weekPattern: schedule.weekPattern,
+          schedule: fsSchedule, note: note.trim() || null,
+          createdAt: now, updatedAt: now,
+        });
+        created.push({
+          id: ref.id, _type: 'transport', childName: name.trim(),
+          contactName: parentName.trim() || undefined,
+          contactEmail: email.trim() || undefined,
+          contactPhone: phone.trim() || undefined,
+          schoolName: schoolName.trim() || undefined,
+          source: 'manual', schedule: fsSchedule, monthlyFee,
+          status: 'planned', note: note.trim() || undefined, createdAt: now,
+        });
+      }
+
+      if (hasStudy) {
+        const ratePerDay = studyConfig
+          ? (studyConfig.pricePerDayPerWeek != null && studyConfig.weeksPerMonth != null
+              ? studyConfig.pricePerDayPerWeek * studyConfig.weeksPerMonth
+              : studyConfig.monthlyPricePerWeekday)
+          : 0;
+        const weeks = activeWeeksInPattern(schedule.weekPattern);
+        const weeksBase = studyConfig?.weeksPerMonth ?? 4;
+        const monthlyPrice = studyConfig ? studyDays.length * ratePerDay * (weeks / weeksBase) : 0;
+        const days = studyDays.map(d => ({ day: d.weekday, hour: d.hour }));
+        const ref = await addDoc(col('studyroom'), {
+          childName: name.trim(), familyId: '', childId: '',
+          schoolName: schoolName.trim() || null,
+          schoolYear: schoolYear.trim() || null,
+          contactEmail: email.trim() || null,
+          contactName: parentName.trim() || null,
+          contactMobile: phone.trim() || null,
+          days, weekPattern: schedule.weekPattern,
+          monthlyPrice, basePrice: monthlyPrice,
+          note: note.trim() || null,
+          status: 'pending', source: 'manual',
+          startDate: now, endDate,
+          createdAt: now, updatedAt: now,
+          history: [], uploadedFiles: [], statusHistory: [], entryHistory: [],
+        });
+        created.push({
+          id: ref.id, _type: 'study', childName: name.trim(),
+          contactName: parentName.trim() || undefined,
+          contactEmail: email.trim() || undefined,
+          contactPhone: phone.trim() || undefined,
+          schoolName: schoolName.trim() || undefined,
+          schoolYear: schoolYear.trim() || undefined,
+          days, monthlyPrice, source: 'manual', status: 'pending',
+          note: note.trim() || undefined, createdAt: now,
+        });
+      }
+
+      onSave(created);
     } finally { setSaving(false); }
   };
 
-  const fieldCls = 'w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400';
+  const fieldCls = 'w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400';
 
   return (
-    <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-4 space-y-3">
-      <h3 className="font-semibold text-indigo-900 text-sm">Nova inscrição de transporte</h3>
+    <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 mb-4 space-y-4">
+      <h3 className="font-semibold text-blue-900">Nova inscrição</h3>
       <div className="grid grid-cols-2 gap-2">
         <input autoFocus value={name} onChange={e => setName(e.target.value)}
           placeholder="Nome da criança *" className={fieldCls} />
+        <PlacesInput value={schoolName} onChange={setSchoolName}
+          placeholder="Escola" className={fieldCls}
+          types={['school', 'primary_school', 'secondary_school']} nameOnly />
         <input value={parentName} onChange={e => setParentName(e.target.value)}
           placeholder="Nome do encarregado" className={fieldCls} />
         <input type="email" value={email} onChange={e => setEmail(e.target.value)}
           placeholder="Email do encarregado" className={fieldCls} />
         <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
           placeholder="Telefone" className={fieldCls} />
+        <input value={schoolYear} onChange={e => setSchoolYear(e.target.value)}
+          placeholder="Ano letivo (ex: 2024/2025)" className={fieldCls} />
+        <input value={note} onChange={e => setNote(e.target.value)}
+          placeholder="Nota (opcional)" className={`${fieldCls} col-span-2`} />
       </div>
-      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Nota (opcional)" className={fieldCls} />
-      <TripEditor trips={trips} onChange={setTrips} />
-      {config && totalSlots > 0 && (
-        <div className="flex items-center justify-between bg-indigo-100 rounded-lg px-3 py-2">
-          <span className="text-xs text-indigo-700">
-            {totalSlots} {totalSlots === 1 ? 'viagem' : 'viagens'}/semana × €{config.flatRatePerTrip.toFixed(2)} × 4 semanas
-          </span>
-          <span className="text-sm font-bold text-indigo-900">€{monthlyFee.toFixed(2)}/mês</span>
-        </div>
-      )}
+      <WeekSchedulePicker
+        value={schedule}
+        onChange={setSchedule}
+        availableServices={['transport', 'study']}
+        transportConfig={transportConfig}
+        studyCenterConfig={studyConfig}
+        schoolName={schoolName || undefined}
+      />
       <div className="flex gap-2 pt-1">
-        <button onClick={submit} disabled={!name.trim() || saving}
-          className="bg-indigo-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-60 font-medium">
+        <button onClick={submit} disabled={!isValid || saving}
+          className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
           {saving ? 'A guardar…' : 'Guardar inscrição'}
         </button>
         <button onClick={onCancel} className="text-sm px-4 py-2 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-600">
@@ -400,6 +492,100 @@ function MiniWeekCalendar({ item }: { item: SubItem }) {
   );
 }
 
+// ─── Version History Modal ────────────────────────────────────────────────────
+function VersionHistoryModal({ item, onClose }: { item: SubItem; onClose: () => void }) {
+  const [versions, setVersions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getDocs(query(col('subscriptionVersions'), where('subscriptionId', '==', item.id)))
+      .then(snap => {
+        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        docs.sort((a: any, b: any) => {
+          const ta = a.changedAt?.toDate?.() ?? new Date(a.changedAt ?? 0);
+          const tb = b.changedAt?.toDate?.() ?? new Date(b.changedAt ?? 0);
+          return tb.getTime() - ta.getTime();
+        });
+        setVersions(docs);
+      })
+      .finally(() => setLoading(false));
+  }, [item.id]);
+
+  const changeTypeLabel: Record<string, string> = {
+    status_change: 'Mudança de estado',
+    schedule_edit: 'Alteração de horário',
+    fee_change: 'Alteração de mensalidade',
+    discount_change: 'Alteração de desconto',
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+          <div>
+            <h2 className="font-bold text-gray-900">Histórico de alterações</h2>
+            <p className="text-xs text-gray-500 mt-0.5">{item.childName} · {item._type === 'study' ? 'Sala de Estudo' : 'Transporte'}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none">✕</button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-5">
+          {loading ? (
+            <div className="text-center text-gray-400 py-8">A carregar…</div>
+          ) : versions.length === 0 ? (
+            <div className="text-center text-gray-400 py-8">Sem histórico registado.</div>
+          ) : (
+            <div className="relative pl-8">
+              <div className="absolute left-3 top-0 bottom-0 w-px bg-gray-100" />
+              <div className="space-y-5">
+                {versions.map((v: any, idx) => {
+                  const changedAt = v.changedAt?.toDate?.() ?? new Date(v.changedAt ?? 0);
+                  const snap = v.snapshot ?? {};
+                  const fee = snap.monthlyFee ?? snap.monthlyPrice ?? null;
+                  const discounts: AppliedDiscount[] = snap.appliedDiscounts ?? [];
+                  const pct = (d: number) => `${(d * 100).toFixed(0)}%`;
+                  const newSchedule: any[] | null = v.patchApplied?.schedule ?? null;
+                  return (
+                    <div key={v.id} className="relative">
+                      <div className={`absolute w-2.5 h-2.5 rounded-full border-2 border-white ${idx === 0 ? 'bg-amber-500' : 'bg-gray-300'}`} style={{ top: 4, left: -20 }} />
+                      <div className="text-xs text-gray-400 mb-1">
+                        {changedAt.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {' · '}
+                        <span>{v.changedBy?.role === 'parent' ? 'Encarregado' : 'Admin'}</span>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-3 space-y-1.5">
+                        <span className="text-xs font-semibold text-gray-700">{changeTypeLabel[v.changeType] ?? v.changeType}</span>
+                        {fee != null && (
+                          <div className="text-xs text-gray-600">
+                            Mensalidade antes: <span className="font-semibold">€{Number(fee).toFixed(2)}</span>
+                          </div>
+                        )}
+                        {discounts.length > 0 && (
+                          <div className="flex gap-1 flex-wrap">
+                            {discounts.map((d: AppliedDiscount) => (
+                              <span key={d.ruleId} className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                {d.name} -{pct(d.percentage)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {newSchedule && newSchedule.length > 0 && (
+                          <div className="text-xs text-gray-500">
+                            Novo horário: {newSchedule.map((s: any) => `${DAY_PT[s.dayOfWeek] ?? s.dayOfWeek} ${s.pickupTime ?? ''}`).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function SubscriptionsAdminPage() {
   const [searchParams] = useSearchParams();
@@ -410,6 +596,8 @@ export default function SubscriptionsAdminPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<SubStatus | 'all'>('pending');
+  const [search, setSearch] = useState('');
+
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [processing, setProcessing] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
@@ -418,17 +606,27 @@ export default function SubscriptionsAdminPage() {
   const [showManualForm, setShowManualForm] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [transportConfig, setTransportConfig] = useState<TransportationConfig | null>(null);
+  const [studyConfig, setStudyConfig] = useState<StudyCenterConfig | null>(null);
+  const [discountRules, setDiscountRules] = useState<DiscountRule[]>([]);
+  const [importing, setImporting] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
+  const [historyItem, setHistoryItem] = useState<SubItem | null>(null);
 
   const load = async () => {
     setIsLoading(true); setError(null);
     try {
-      const [studySnap, transportSnap, childrenSnap, cfg] = await Promise.all([
+      const [studySnap, transportSnap, childrenSnap, cfg, studyCfgSnap, rules] = await Promise.all([
         getDocs(col('studyroom')),
         getDocs(col('transportationSubscriptions')),
         getDocs(col('children')),
         getTransportationConfig(),
+        getDoc(docRef('config', 'studyCenter')),
+        getDiscountRules(),
       ]);
       if (cfg) setTransportConfig(cfg);
+      if (studyCfgSnap.exists()) setStudyConfig(studyCfgSnap.data() as StudyCenterConfig);
+      setDiscountRules(rules ?? []);
+
       const childSchoolMap: Record<string, string> = {};
       childrenSnap.docs.forEach(d => { const s = d.data().schoolName; if (s) childSchoolMap[d.id] = s; });
       const study: SubItem[] = studySnap.docs.map(d => {
@@ -441,9 +639,14 @@ export default function SubscriptionsAdminPage() {
           source: x.source,
           schoolName: x.schoolName, schoolYear: x.schoolYear,
           days: x.days || [], monthlyPrice: x.monthlyPrice ?? x.basePrice ?? 0,
+          basePrice: x.basePrice ?? x.monthlyPrice ?? 0,
+          returningStudent: x.returningStudent ?? false,
+          appliedDiscounts: x.appliedDiscounts ?? [],
+          weekPattern: x.weekPattern ?? 'all',
           status: (x.status === 'confirmed' ? 'active' : x.status) as SubStatus,
           statusReason: x.statusReason, note: x.note,
           createdAt: toDate(x.createdAt), cancelRequested: x.cancelRequested,
+          feeReviewRequired: x.feeReviewRequired ?? false,
         };
       });
       const transport: SubItem[] = transportSnap.docs.map(d => {
@@ -457,9 +660,14 @@ export default function SubscriptionsAdminPage() {
           source: x.source,
           schoolName: x.childId ? (childSchoolMap[x.childId] ?? x.schoolName) : x.schoolName,
           schedule: x.schedule || [], monthlyFee: x.monthlyFee ?? 0,
+          originalFee: x.originalFee ?? x.monthlyFee ?? 0,
+          returningStudent: x.returningStudent ?? false,
+          appliedDiscounts: x.appliedDiscounts ?? [],
+          weekPattern: x.weekPattern ?? 'all',
           status: x.status as SubStatus,
           statusReason: x.statusReason, note: x.note,
           createdAt: toDate(x.createdAt), cancelRequested: x.cancelRequested,
+          feeReviewRequired: x.feeReviewRequired ?? false,
         };
       });
       setItems([...study, ...transport].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()));
@@ -488,10 +696,10 @@ export default function SubscriptionsAdminPage() {
     setProcessing(item.id);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      const newStatus = item._type === 'study' ? 'confirmed' : 'active';
+      // Study goes confirmed (active); transport goes planned (awaiting route assignment → offered → active)
+      const newStatus = item._type === 'study' ? 'confirmed' : 'planned';
       const patch: Record<string, unknown> = { status: newStatus, approvedAt: new Date(), updatedAt: new Date() };
 
-      // Auto-link to existing family by contactEmail if not yet linked
       if (!item.familyId && item.contactEmail) {
         const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
         if (!famSnap.empty) patch.familyId = famSnap.docs[0].id;
@@ -499,9 +707,64 @@ export default function SubscriptionsAdminPage() {
 
       await updateDoc(docRef(colName, item.id), patch);
       setItems(prev => prev.map(i => i.id === item.id
-        ? { ...i, status: 'active', familyId: (patch.familyId as string | undefined) ?? i.familyId }
+        ? { ...i, status: newStatus as SubStatus, familyId: (patch.familyId as string | undefined) ?? i.familyId }
         : i
       ));
+    } finally { setProcessing(null); }
+  };
+
+  const offerToParent = async (item: SubItem) => {
+    setProcessing(item.id);
+    try {
+      await updateDoc(docRef('transportationSubscriptions', item.id), {
+        status: 'offered', offeredAt: new Date(), updatedAt: new Date(),
+      });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'offered' as SubStatus } : i));
+    } finally { setProcessing(null); }
+  };
+
+  const [bulkOffering, setBulkOffering] = useState(false);
+  const offerAllPlanned = async () => {
+    const toOffer = filtered.filter(i => i._type === 'transport' && i.status === 'planned');
+    if (!toOffer.length) return;
+    if (!window.confirm(`Publicar ${toOffer.length} inscrição(ões) de transporte para confirmação dos pais?`)) return;
+    setBulkOffering(true);
+    try {
+      await Promise.all(toOffer.map(item =>
+        updateDoc(docRef('transportationSubscriptions', item.id), { status: 'offered', offeredAt: new Date(), updatedAt: new Date() })
+      ));
+      setItems(prev => prev.map(i => toOffer.find(o => o.id === i.id) ? { ...i, status: 'offered' as SubStatus } : i));
+    } finally { setBulkOffering(false); }
+  };
+
+  const [approveAllBusy, setApproveAllBusy] = useState(false);
+  const approveAndPublishAll = async () => {
+    const transportToOffer = items.filter(i => i._type === 'transport' && (i.status === 'pending' || i.status === 'planned'));
+    const studyToConfirm = items.filter(i => i._type === 'study' && i.status === 'pending');
+    const total = transportToOffer.length + studyToConfirm.length;
+    if (!total) { alert('Não há inscrições pendentes ou planeadas para aprovar.'); return; }
+    if (!window.confirm(`Aprovar ${studyToConfirm.length} inscrição(ões) de Sala de Estudo e publicar ${transportToOffer.length} de Transporte para confirmação dos pais?`)) return;
+    setApproveAllBusy(true);
+    try {
+      await Promise.all([
+        ...transportToOffer.map(i => updateDoc(docRef('transportationSubscriptions', i.id), { status: 'offered', offeredAt: new Date(), approvedAt: new Date(), updatedAt: new Date() })),
+        ...studyToConfirm.map(i => updateDoc(docRef('studyroom', i.id), { status: 'confirmed', approvedAt: new Date(), updatedAt: new Date() })),
+      ]);
+      setItems(prev => prev.map(i => {
+        if (transportToOffer.find(o => o.id === i.id)) return { ...i, status: 'offered' as SubStatus };
+        if (studyToConfirm.find(o => o.id === i.id)) return { ...i, status: 'confirmed' as SubStatus };
+        return i;
+      }));
+    } finally { setApproveAllBusy(false); }
+  };
+
+  const revertToPlanned = async (item: SubItem) => {
+    setProcessing(item.id);
+    try {
+      await updateDoc(docRef('transportationSubscriptions', item.id), {
+        status: 'planned', offeredAt: null, updatedAt: new Date(),
+      });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'planned' as SubStatus } : i));
     } finally { setProcessing(null); }
   };
 
@@ -545,34 +808,192 @@ export default function SubscriptionsAdminPage() {
     } finally { setProcessing(null); }
   };
 
-  const isUnlinked = (i: SubItem) => i.source === 'manual' && !i.familyId;
+  const exportCSV = () => {
+    const sep = ';';
+    const q = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+    const headers = ['id', 'tipo', 'nome', 'email', 'telefone', 'escola', 'ano_letivo', 'horario_dias', 'mensalidade', 'estado', 'nota', 'data_inscricao'];
+    const rows = filtered.map(item => [
+      item.id,
+      item._type === 'transport' ? 'Transporte' : 'Sala de Estudo',
+      item.childName,
+      item.contactEmail ?? '',
+      item.contactPhone ?? '',
+      item.schoolName ?? '',
+      item.schoolYear ?? '',
+      item._type === 'study'
+        ? (item.days ?? []).map((d: any) => dayLabel(d)).join(', ')
+        : (item.schedule ?? []).map((s: any) => `${DAY_PT[s.dayOfWeek] ?? s.dayOfWeek} ${s.pickupTime ?? ''}`).join(' / '),
+      ((item.monthlyFee ?? item.monthlyPrice) ?? 0).toFixed(2),
+      item.status,
+      item.note ?? '',
+      item.createdAt.toLocaleDateString('pt-PT'),
+    ]);
+    const csv = [headers.map(q).join(sep), ...rows.map(r => r.map(q).join(sep))].join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inscricoes_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-  const linkToFamily = async (item: SubItem) => {
-    if (!item.contactEmail) return alert('Sem email de contacto para vincular.');
+  const importCSV = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const content = text.startsWith('﻿') ? text.slice(1) : text;
+      const lines = content.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) return;
+      const sep = lines[0].includes(';') ? ';' : ',';
+      const parseRow = (line: string) => {
+        const cols: string[] = [];
+        let cur = ''; let inQ = false;
+        for (const ch of line + sep) {
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === sep && !inQ) { cols.push(cur); cur = ''; }
+          else cur += ch;
+        }
+        return cols;
+      };
+      const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
+      const idx = (name: string) => headers.indexOf(name);
+      let updated = 0;
+      for (const line of lines.slice(1)) {
+        const cols = parseRow(line);
+        const id = cols[idx('id')]?.trim();
+        if (!id) continue;
+        const item = items.find(i => i.id === id);
+        if (!item) continue;
+        const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+        const patch: Record<string, any> = { updatedAt: new Date() };
+        const feeRaw = cols[idx('mensalidade')]?.replace(',', '.').trim();
+        if (feeRaw) {
+          const fee = parseFloat(feeRaw);
+          if (!isNaN(fee)) patch[item._type === 'transport' ? 'monthlyFee' : 'monthlyPrice'] = fee;
+        }
+        const nota = cols[idx('nota')]?.trim();
+        if (nota !== undefined) patch.note = nota;
+        if (Object.keys(patch).length > 1) { await updateDoc(docRef(colName, id), patch); updated++; }
+      }
+      await load();
+      alert(`${updated} inscrição(ões) atualizadas.`);
+    } catch (e: any) {
+      alert(`Erro ao importar: ${e?.message}`);
+    } finally {
+      setImporting(false);
+      if (importRef.current) importRef.current.value = '';
+    }
+  };
+
+  const isUnlinked = (i: SubItem) =>
+    (i.source === 'manual' && !i.familyId) || (!!i.familyId && !i.childId);
+
+  const computeGross = (item: SubItem): number => {
+    if (item._type === 'transport') {
+      const totalTrips = (item.schedule ?? []).length;
+      const weeks = activeWeeksInPattern(item.weekPattern ?? 'all');
+      return totalTrips * (transportConfig?.flatRatePerTrip ?? 0) * weeks;
+    }
+    const days = (item.days ?? []).length;
+    const ratePerDay = studyConfig
+      ? (studyConfig.pricePerDayPerWeek != null && studyConfig.weeksPerMonth != null
+          ? studyConfig.pricePerDayPerWeek * studyConfig.weeksPerMonth
+          : studyConfig.monthlyPricePerWeekday)
+      : 0;
+    const weeks = activeWeeksInPattern(item.weekPattern ?? 'all');
+    const weeksBase = studyConfig?.weeksPerMonth ?? 4;
+    return days * ratePerDay * (weeks / weeksBase);
+  };
+
+  const toggleManualDiscount = async (item: SubItem, rule: DiscountRule) => {
     setProcessing(item.id);
     try {
-      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
-      if (famSnap.empty) { alert(`Nenhuma conta encontrada para ${item.contactEmail}.`); return; }
-      const familyId = famSnap.docs[0].id;
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(docRef(colName, item.id), { familyId, updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, familyId } : i));
+      const current = item.appliedDiscounts ?? [];
+      const isApplied = current.some(d => d.ruleId === rule.id);
+      const newDiscounts: AppliedDiscount[] = isApplied
+        ? current.filter(d => d.ruleId !== rule.id)
+        : [...current, { ruleId: rule.id, name: rule.name, percentage: rule.percentage, appliedAt: new Date(), appliedBy: 'admin' as const }];
+
+      const gross = computeGross(item);
+      const newFee = Math.round(applyDiscounts(gross, newDiscounts) * 100) / 100;
+      const feeField = item._type === 'transport' ? 'monthlyFee' : 'monthlyPrice';
+
+      await updateDoc(docRef(colName, item.id), {
+        appliedDiscounts: newDiscounts, [feeField]: newFee, updatedAt: new Date(),
+      });
+      setItems(prev => prev.map(i => i.id === item.id
+        ? { ...i, appliedDiscounts: newDiscounts, ...(i._type === 'transport' ? { monthlyFee: newFee } : { monthlyPrice: newFee }) }
+        : i
+      ));
+    } finally { setProcessing(null); }
+  };
+
+  const clearFeeReview = async (item: SubItem) => {
+    const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+    await updateDoc(docRef(colName, item.id), { feeReviewRequired: false, updatedAt: new Date() });
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, feeReviewRequired: false } : i));
+  };
+
+  const linkToFamily = async (item: SubItem) => {
+    setProcessing(item.id);
+    try {
+      // Step 1: resolve familyId (skip if already set)
+      let familyId = item.familyId;
+      if (!familyId) {
+        if (!item.contactEmail) { alert('Sem email de contacto para vincular.'); return; }
+        const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
+        if (famSnap.empty) { alert(`Nenhuma conta encontrada para ${item.contactEmail}.`); return; }
+        familyId = famSnap.docs[0].id;
+      }
+
+      // Step 2: try to match childId by name (case/diacritics-insensitive, exact full-name match)
+      const norm = (s: string) =>
+        (s ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+      const childrenSnap = await getDocs(query(col('children'), where('familyId', '==', familyId)));
+      const subName = norm(item.childName);
+      const matches = childrenSnap.docs.filter(d => {
+        const c = d.data();
+        return norm(`${c.firstName ?? ''} ${c.lastName ?? ''}`) === subName;
+      });
+
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      const updates: Record<string, unknown> = { familyId, updatedAt: new Date() };
+      if (matches.length === 1) updates.childId = matches[0].id;
+
+      await updateDoc(docRef(colName, item.id), updates);
+      setItems(prev => prev.map(i =>
+        i.id === item.id
+          ? { ...i, familyId, ...(matches.length === 1 ? { childId: matches[0].id } : {}) }
+          : i
+      ));
     } finally { setProcessing(null); }
   };
 
   const filtered = items
-    .filter(i => tab === 'all' || (tab === 'pending' ? (i.status === 'pending' || i.status === 'planned') : i.status === tab))
+    .filter(i => tab === 'all' || i.status === tab)
     .filter(i => {
       if (typeFilter === 'transport') return i._type === 'transport';
       if (typeFilter === 'study') return i._type === 'study';
       if (typeFilter === 'unlinked') return isUnlinked(i);
       return true;
+    })
+    .filter(i => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return (
+        (i.childName || '').toLowerCase().includes(q) ||
+        (i.contactName || '').toLowerCase().includes(q) ||
+        (i.contactEmail || '').toLowerCase().includes(q) ||
+        (i.schoolName || '').toLowerCase().includes(q)
+      );
     });
 
   const grouped = useMemo(() => {
     const map = new Map<string, { key: string; label: string | null; items: SubItem[] }>();
     for (const item of filtered) {
-      const key = item.familyId ?? item.contactEmail ?? item.id;
+      const key = item.familyId || item.contactEmail || item.id;
       const contact = [item.contactEmail, item.contactPhone].filter(Boolean).join(' · ');
       const label = item.contactName
         ? `${item.contactName}${contact ? ` · ${contact}` : ''}`
@@ -584,11 +1005,14 @@ export default function SubscriptionsAdminPage() {
   }, [filtered]);
 
   const counts = {
-    pending: items.filter(i => i.status === 'pending' || i.status === 'planned').length,
+    pending: items.filter(i => i.status === 'pending').length,
+    planned: items.filter(i => i.status === 'planned').length,
+    offered: items.filter(i => i.status === 'offered').length,
     active: items.filter(i => i.status === 'active').length,
     cancelled: items.filter(i => i.status === 'cancelled').length,
     all: items.length,
     unlinked: items.filter(isUnlinked).length,
+    feeReview: items.filter(i => i.feeReviewRequired).length,
   };
 
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar…</div>;
@@ -607,34 +1031,56 @@ export default function SubscriptionsAdminPage() {
         <div>
           <h1 className="text-2xl font-bold">Inscrições</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {counts.pending > 0 && <span className="text-yellow-700 font-medium">{counts.pending} pendente(s) · </span>}
-
+            {counts.pending > 0 && <span className="text-yellow-700 font-medium">{counts.pending} a analisar · </span>}
+            {counts.offered > 0 && <span className="text-purple-700 font-medium">{counts.offered} aguardam confirmação · </span>}
             {counts.active} ativas
             {counts.unlinked > 0 && <span className="text-orange-600 font-medium"> · {counts.unlinked} não vinculada(s)</span>}
+            {counts.feeReview > 0 && <span className="text-amber-600 font-medium"> · {counts.feeReview} mensalidade{counts.feeReview !== 1 ? 's' : ''} em revisão</span>}
           </p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => { setShowManualForm(v => !v); }}
-            className="bg-indigo-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-indigo-700 font-medium">
-            + Inscrição manual
+        <div className="flex gap-2 items-center flex-wrap">
+          <button onClick={exportCSV}
+            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium"
+            title="Exportar lista atual para CSV (Excel)">
+            ↓ Exportar CSV
+          </button>
+          <button onClick={() => importRef.current?.click()} disabled={importing}
+            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium disabled:opacity-50"
+            title="Importar CSV preenchido — atualiza mensalidade e nota">
+            {importing ? '…' : '↑ Importar CSV'}
+          </button>
+          <input ref={importRef} type="file" accept=".csv" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) importCSV(f); }} />
+          {(counts.pending > 0 || counts.planned > 0) && (
+            <button onClick={approveAndPublishAll} disabled={approveAllBusy}
+              className="bg-purple-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-purple-700 font-medium disabled:opacity-50">
+              {approveAllBusy ? 'A processar…' : '📢 Aprovar e publicar tudo'}
+            </button>
+          )}
+          <button onClick={() => setShowManualForm(v => !v)}
+            className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 font-medium">
+            {showManualForm ? '✕ Cancelar' : '+ Inscrever'}
           </button>
           <button onClick={load} className="text-sm text-blue-600 hover:underline">Atualizar</button>
         </div>
       </div>
 
-      {/* Manual form */}
+      {/* Manual enrollment form */}
       {showManualForm && (
-        <ManualTransportForm
-          config={transportConfig}
-          onSave={item => { setItems(prev => [item, ...prev]); setShowManualForm(false); }}
+        <ManualEnrollForm
+          transportConfig={transportConfig}
+          studyConfig={studyConfig}
+          onSave={newItems => { setItems(prev => [...newItems, ...prev]); setShowManualForm(false); }}
           onCancel={() => setShowManualForm(false)}
         />
       )}
 
       {/* Status tabs */}
-      <div className="flex gap-1 border-b border-gray-200 mb-3">
+      <div className="flex gap-1 border-b border-gray-200 mb-3 overflow-x-auto">
         {([
-          { key: 'pending', label: 'Pendentes', count: counts.pending },
+          { key: 'pending', label: 'A analisar', count: counts.pending },
+          { key: 'planned', label: 'Planeadas', count: counts.planned },
+          { key: 'offered', label: 'Publicadas', count: counts.offered },
           { key: 'active', label: 'Ativas', count: counts.active },
           { key: 'cancelled', label: 'Histórico', count: counts.cancelled },
           { key: 'all', label: 'Todas', count: counts.all },
@@ -651,8 +1097,8 @@ export default function SubscriptionsAdminPage() {
         ))}
       </div>
 
-      {/* Type filter pills */}
-      <div className="flex gap-2 mb-6">
+      {/* Type filter pills + search */}
+      <div className="flex flex-wrap gap-2 mb-6 items-center">
         {([
           { key: 'all', label: 'Todos os tipos' },
           { key: 'transport', label: '🚌 Transporte' },
@@ -664,7 +1110,25 @@ export default function SubscriptionsAdminPage() {
             {label}
           </button>
         ))}
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Pesquisar nome, email, escola…"
+          className="ml-auto text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-64 focus:outline-none focus:ring-2 focus:ring-blue-300"
+        />
       </div>
+
+      {/* Bulk offer button — only on planned tab when transport items exist */}
+      {tab === 'planned' && filtered.some(i => i._type === 'transport') && (
+        <div className="mb-4">
+          <button onClick={offerAllPlanned} disabled={bulkOffering}
+            className="bg-purple-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-purple-700 font-medium disabled:opacity-50">
+            {bulkOffering ? 'A publicar…' : `📢 Publicar todas para confirmação dos pais`}
+          </button>
+          <p className="text-xs text-gray-500 mt-1">Move as inscrições de transporte para "aguarda confirmação" — os pais verão o botão "Aceitar e confirmar" no portal.</p>
+        </div>
+      )}
 
       {/* List */}
       {filtered.length === 0 ? (
@@ -709,6 +1173,9 @@ export default function SubscriptionsAdminPage() {
                             {isUnlinked(item) && (
                               <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">não vinculado</span>
                             )}
+                            {item.feeReviewRequired && (
+                              <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">⚠ rever mensalidade</span>
+                            )}
                           </div>
 
                           <MiniWeekCalendar item={item} />
@@ -716,11 +1183,88 @@ export default function SubscriptionsAdminPage() {
                           {(item.schoolName || item.schoolYear) && (
                             <p className="text-xs text-gray-500 mt-1.5">{[item.schoolName, item.schoolYear].filter(Boolean).join(' · ')}</p>
                           )}
-                          {((item._type === 'study' && (item.monthlyPrice ?? 0) > 0) || (item._type === 'transport' && (item.monthlyFee ?? 0) > 0)) && (
-                            <p className="text-xs font-medium text-gray-700 mt-1">
-                              €{((item.monthlyPrice ?? item.monthlyFee) ?? 0).toFixed(2)}/mês
-                            </p>
-                          )}
+                          {(() => {
+                            const fee = item._type === 'transport' ? (item.monthlyFee ?? 0) : (item.monthlyPrice ?? 0);
+                            const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+                            const applied = item.appliedDiscounts ?? [];
+                            const autoApplied = applied.filter(d => d.appliedBy === 'auto');
+                            const adminApplied = applied.filter(d => d.appliedBy === 'admin');
+
+                            // Manual rules from central system not yet applied
+                            const manualRules = discountRules.filter(r =>
+                              r.active && r.trigger === 'manual' &&
+                              r.appliesTo.includes(item._type) &&
+                              !applied.some(d => d.ruleId === r.id)
+                            );
+
+                            if (fee === 0 && applied.length === 0 && manualRules.length === 0) return null;
+
+                            const gross = item._type === 'study'
+                              ? (item.basePrice != null && item.basePrice > fee + 0.01 ? item.basePrice : null)
+                              : grossFromAppliedDiscounts(fee, applied);
+                            const hasDiscount = gross != null && gross > fee + 0.01;
+
+                            return (
+                              <div className="mt-1.5 space-y-1.5">
+                                <div className="flex items-baseline gap-1.5">
+                                  {hasDiscount && <span className="text-xs text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
+                                  <span className={`text-xs font-semibold ${hasDiscount ? 'text-green-700' : 'text-gray-800'}`}>€{fee.toFixed(2)}/mês</span>
+                                </div>
+
+                                {/* Applied auto discounts */}
+                                {autoApplied.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Auto</span>
+                                    {autoApplied.map(d => (
+                                      <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium">
+                                        {d.name} -{pct(d.percentage)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {/* Applied admin discounts — clickable to remove */}
+                                {adminApplied.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Manual</span>
+                                    {adminApplied.map(d => {
+                                      const rule = discountRules.find(r => r.id === d.ruleId);
+                                      if (!rule) return (
+                                        <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-800 font-medium">
+                                          {d.name} -{pct(d.percentage)}
+                                        </span>
+                                      );
+                                      return (
+                                        <button key={d.ruleId}
+                                          onClick={() => toggleManualDiscount(item, rule)}
+                                          disabled={processing === item.id}
+                                          className="text-xs px-2 py-0.5 rounded-full border border-amber-300 bg-amber-100 text-amber-800 font-medium hover:bg-amber-50 disabled:opacity-50"
+                                          title="Clique para remover">
+                                          ★ {d.name} -{pct(d.percentage)}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+
+                                {/* Available manual rules not yet applied */}
+                                {item.status !== 'cancelled' && manualRules.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Adicionar</span>
+                                    {manualRules.map(r => (
+                                      <button key={r.id}
+                                        onClick={() => toggleManualDiscount(item, r)}
+                                        disabled={processing === item.id}
+                                        className="text-xs px-2 py-0.5 rounded-full border border-gray-200 bg-white text-gray-400 font-medium hover:border-gray-400 hover:text-gray-600 disabled:opacity-50"
+                                        title="Clique para aplicar">
+                                        ☆ {r.name} -{pct(r.percentage)}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                           {item.note && <p className="text-xs text-gray-500 mt-1 italic">"{item.note}"</p>}
                           {item.statusReason && item.status === 'cancelled' && <p className="text-xs text-red-600 mt-1">Motivo: {item.statusReason}</p>}
                           <p className="text-xs text-gray-400 mt-1.5">{item.createdAt.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
@@ -728,7 +1272,7 @@ export default function SubscriptionsAdminPage() {
                       </div>
 
                       <div className="flex flex-col gap-1.5 shrink-0">
-                        {(item.status === 'pending' || item.status === 'planned') && (
+                        {item.status === 'pending' && (
                           <>
                             <button onClick={() => approve(item)} disabled={processing === item.id}
                               className="bg-green-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-green-700 disabled:opacity-60 whitespace-nowrap">
@@ -737,6 +1281,30 @@ export default function SubscriptionsAdminPage() {
                             <button onClick={() => { setRejectId(item.id); setRejectReason(''); }} disabled={processing === item.id}
                               className="bg-red-50 text-red-600 border border-red-200 text-sm px-3 py-1.5 rounded-lg hover:bg-red-100 disabled:opacity-60 whitespace-nowrap">
                               ✕ Rejeitar
+                            </button>
+                          </>
+                        )}
+                        {item.status === 'planned' && item._type === 'transport' && (
+                          <>
+                            <button onClick={() => offerToParent(item)} disabled={processing === item.id}
+                              className="bg-purple-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-purple-700 disabled:opacity-60 whitespace-nowrap">
+                              {processing === item.id ? '…' : '📢 Publicar'}
+                            </button>
+                            <button onClick={() => { setRejectId(item.id); setRejectReason(''); }} disabled={processing === item.id}
+                              className="bg-red-50 text-red-600 border border-red-200 text-sm px-3 py-1.5 rounded-lg hover:bg-red-100 disabled:opacity-60 whitespace-nowrap">
+                              ✕ Rejeitar
+                            </button>
+                          </>
+                        )}
+                        {item.status === 'offered' && (
+                          <>
+                            <button onClick={() => revertToPlanned(item)} disabled={processing === item.id}
+                              className="bg-blue-50 text-blue-700 border border-blue-200 text-sm px-3 py-1.5 rounded-lg hover:bg-blue-100 disabled:opacity-60 whitespace-nowrap">
+                              {processing === item.id ? '…' : '↩ Rever'}
+                            </button>
+                            <button onClick={() => approve(item)} disabled={processing === item.id}
+                              className="bg-green-50 text-green-700 border border-green-200 text-sm px-3 py-1.5 rounded-lg hover:bg-green-100 disabled:opacity-60 whitespace-nowrap">
+                              {processing === item.id ? '…' : '✓ Forçar ativo'}
                             </button>
                           </>
                         )}
@@ -756,7 +1324,7 @@ export default function SubscriptionsAdminPage() {
                           <>
                             <button onClick={() => linkToFamily(item)} disabled={processing === item.id}
                               className="bg-orange-50 text-orange-700 border border-orange-200 text-sm px-3 py-1.5 rounded-lg hover:bg-orange-100 disabled:opacity-60 whitespace-nowrap"
-                              title={`Vincular a conta com email ${item.contactEmail}`}>
+                              title={item.familyId ? 'Vincular criança pelo nome' : `Vincular família pelo email ${item.contactEmail}`}>
                               {processing === item.id ? '…' : '🔗 Vincular'}
                             </button>
                             <button onClick={() => hardDelete(item)} disabled={processing === item.id}
@@ -768,6 +1336,15 @@ export default function SubscriptionsAdminPage() {
                           <button onClick={() => setEditId(editId === item.id ? null : item.id)}
                             className="text-gray-400 hover:text-blue-600 text-sm px-2 py-1"
                             title="Editar">✏️</button>
+                        )}
+                        <button onClick={() => setHistoryItem(item)}
+                          className="text-gray-400 hover:text-indigo-600 text-sm px-2 py-1"
+                          title="Histórico de alterações">🕐</button>
+                        {item.feeReviewRequired && (
+                          <button onClick={() => clearFeeReview(item)} disabled={processing === item.id}
+                            className="bg-amber-50 text-amber-800 border border-amber-300 text-xs px-2.5 py-1.5 rounded-lg hover:bg-amber-100 disabled:opacity-60 whitespace-nowrap font-medium">
+                            {processing === item.id ? '…' : '✓ Mensalidade revista'}
+                          </button>
                         )}
                       </div>
                     </div>
@@ -806,6 +1383,10 @@ export default function SubscriptionsAdminPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {historyItem && (
+        <VersionHistoryModal item={historyItem} onClose={() => setHistoryItem(null)} />
       )}
     </div>
   );

@@ -5,6 +5,27 @@ import { col, docRef } from '../../lib/db';
 import { Invoice, Payment } from '@shared/models';
 import { format } from 'date-fns';
 
+const STATUS_PT: Record<string, string> = {
+  paid: 'Paga', pending: 'Pendente', overdue: 'Em atraso',
+  cancelled: 'Cancelada', canceled: 'Cancelada',
+};
+
+const STATUS_CLS: Record<string, string> = {
+  paid: 'bg-green-100 text-green-800',
+  pending: 'bg-yellow-100 text-yellow-800',
+  overdue: 'bg-red-100 text-red-800',
+  cancelled: 'bg-gray-100 text-gray-800',
+};
+
+const PAYMENT_STATUS_PT: Record<string, string> = {
+  completed: 'Concluído', failed: 'Falhado', pending: 'Pendente', refunded: 'Reembolsado',
+};
+
+const PAYMENT_METHOD_PT: Record<string, string> = {
+  bank_transfer: 'Transferência bancária', mbway: 'MB Way', cash: 'Numerário',
+  card: 'Cartão', multibanco: 'Multibanco',
+};
+
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
@@ -15,11 +36,10 @@ export default function InvoiceDetailPage() {
     if (id) {
       const fetchInvoice = async () => {
         setIsLoading(true);
-        
-        // Fetch invoice
+
         const invoiceRef = docRef('invoices', id);
         const invoiceSnap = await getDoc(invoiceRef);
-        
+
         if (invoiceSnap.exists()) {
           const data = invoiceSnap.data();
           const invoiceData = {
@@ -35,7 +55,6 @@ export default function InvoiceDetailPage() {
           } as Invoice;
           setInvoice(invoiceData);
 
-          // Fetch associated payment if exists
           if (invoiceData.paymentId) {
             const paymentRef = docRef('payments', invoiceData.paymentId);
             const paymentSnap = await getDoc(paymentRef);
@@ -52,11 +71,7 @@ export default function InvoiceDetailPage() {
               } as Payment);
             }
           } else {
-            // Check if there's a payment linked to this invoice
-            const paymentsQuery = query(
-              col('payments'),
-              where('invoiceId', '==', invoiceSnap.id)
-            );
+            const paymentsQuery = query(col('payments'), where('invoiceId', '==', invoiceSnap.id));
             const paymentsSnap = await getDocs(paymentsQuery);
             if (!paymentsSnap.empty) {
               const paymentData = paymentsSnap.docs[0].data();
@@ -72,7 +87,7 @@ export default function InvoiceDetailPage() {
             }
           }
         }
-        
+
         setIsLoading(false);
       };
 
@@ -83,7 +98,7 @@ export default function InvoiceDetailPage() {
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
-        <div className="text-gray-500">Loading invoice...</div>
+        <div className="text-gray-500">A carregar...</div>
       </div>
     );
   }
@@ -91,35 +106,20 @@ export default function InvoiceDetailPage() {
   if (!invoice) {
     return (
       <div className="bg-white p-8 rounded-lg shadow-sm border border-gray-200">
-        <p className="text-gray-500">Invoice not found.</p>
+        <p className="text-gray-500">Fatura não encontrada.</p>
         <Link to="/client/invoices" className="text-blue-600 hover:underline mt-4 inline-block">
-          ← Back to Invoices
+          ← Faturas
         </Link>
       </div>
     );
   }
 
-  const getStatusColor = (status: Invoice['status']) => {
-    switch (status) {
-      case 'paid':
-        return 'bg-green-100 text-green-800';
-      case 'pending':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'overdue':
-        return 'bg-red-100 text-red-800';
-      case 'cancelled':
-        return 'bg-gray-100 text-gray-800';
-      default:
-        return 'bg-blue-100 text-blue-800';
-    }
-  };
-
-  const getSubscriptionLabel = (invoice: Invoice) => {
-    const types = invoice.subscriptionItems?.map(i => i.subscriptionType) ?? [];
-    if (types.includes('study') && types.includes('transport')) return 'Study Room & Transport';
-    if (types.includes('study')) return 'Study Room';
-    if (types.includes('transport')) return 'Transport';
-    return 'Services';
+  const getSubscriptionLabel = (inv: Invoice) => {
+    const types = inv.subscriptionItems?.map(i => i.subscriptionType) ?? [];
+    if (types.includes('study') && types.includes('transport')) return 'Sala de Estudo & Transporte';
+    if (types.includes('study')) return 'Sala de Estudo';
+    if (types.includes('transport')) return 'Transporte Escolar';
+    return 'Serviços';
   };
 
   const isOverdue = invoice.status === 'pending' && new Date() > invoice.dueDate;
@@ -128,64 +128,63 @@ export default function InvoiceDetailPage() {
     <div>
       <div className="mb-6">
         <Link to="/client/invoices" className="text-blue-600 hover:underline mb-4 inline-block">
-          ← Back to Invoices
+          ← Faturas
         </Link>
-        <div className="flex justify-between items-start">
+        <div className="flex justify-between items-start flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold mb-2">
-              Invoice {invoice.invoiceNumber}
+            <h1 className="text-2xl font-bold mb-1">
+              Fatura {invoice.invoiceNumber}
             </h1>
-            <p className="text-gray-600">{getSubscriptionLabel(invoice)} Subscription</p>
+            <p className="text-gray-600">{getSubscriptionLabel(invoice)}</p>
           </div>
-          <span className={`px-4 py-2 rounded-full text-sm font-medium ${getStatusColor(invoice.status)}`}>
-            {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
-            {isOverdue && ' (Overdue)'}
+          <span className={`px-4 py-2 rounded-full text-sm font-medium ${STATUS_CLS[invoice.status] ?? 'bg-gray-100 text-gray-800'}`}>
+            {STATUS_PT[invoice.status] ?? invoice.status}
+            {isOverdue && ' (Em atraso)'}
           </span>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Invoice Details */}
+        {/* Main details */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Invoice Information */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="text-lg font-semibold mb-4">Invoice Details</h2>
+            <h2 className="text-lg font-semibold mb-4">Detalhes da fatura</h2>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <p className="text-gray-500">Issue Date</p>
-                <p className="font-medium">{format(invoice.issueDate, 'MMMM dd, yyyy')}</p>
+                <p className="text-gray-500">Data de emissão</p>
+                <p className="font-medium">{format(invoice.issueDate, 'dd/MM/yyyy')}</p>
               </div>
               <div>
-                <p className="text-gray-500">Due Date</p>
+                <p className="text-gray-500">Data de vencimento</p>
                 <p className={`font-medium ${isOverdue ? 'text-red-600' : ''}`}>
-                  {format(invoice.dueDate, 'MMMM dd, yyyy')}
+                  {format(invoice.dueDate, 'dd/MM/yyyy')}
                 </p>
               </div>
               {invoice.periodStart && invoice.periodEnd && (
                 <>
                   <div>
-                    <p className="text-gray-500">Period Start</p>
-                    <p className="font-medium">{format(invoice.periodStart, 'MMMM dd, yyyy')}</p>
+                    <p className="text-gray-500">Início do período</p>
+                    <p className="font-medium">{format(invoice.periodStart, 'dd/MM/yyyy')}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Period End</p>
-                    <p className="font-medium">{format(invoice.periodEnd, 'MMMM dd, yyyy')}</p>
+                    <p className="text-gray-500">Fim do período</p>
+                    <p className="font-medium">{format(invoice.periodEnd, 'dd/MM/yyyy')}</p>
                   </div>
                 </>
               )}
             </div>
           </div>
 
-          {/* Line Items */}
+          {/* Line items */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="text-lg font-semibold mb-4">Line Items</h2>
+            <h2 className="text-lg font-semibold mb-4">Serviços</h2>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-2 px-4 font-medium">Description</th>
-                    <th className="text-right py-2 px-4 font-medium">Quantity</th>
-                    <th className="text-right py-2 px-4 font-medium">Unit Price</th>
+                    <th className="text-left py-2 px-4 font-medium">Descrição</th>
+                    <th className="text-right py-2 px-4 font-medium">Qtd</th>
+                    <th className="text-right py-2 px-4 font-medium">Preço unit.</th>
                     <th className="text-right py-2 px-4 font-medium">Total</th>
                   </tr>
                 </thead>
@@ -206,7 +205,7 @@ export default function InvoiceDetailPage() {
                   </tr>
                   {invoice.tax && invoice.taxRate && (
                     <tr>
-                      <td colSpan={3} className="text-right py-2 px-4">Tax ({invoice.taxRate * 100}%)</td>
+                      <td colSpan={3} className="text-right py-2 px-4">IVA ({invoice.taxRate * 100}%)</td>
                       <td className="text-right py-2 px-4">€{invoice.tax.toFixed(2)}</td>
                     </tr>
                   )}
@@ -219,10 +218,9 @@ export default function InvoiceDetailPage() {
             </div>
           </div>
 
-          {/* Notes */}
           {invoice.notes && (
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h2 className="text-lg font-semibold mb-2">Notes</h2>
+              <h2 className="text-lg font-semibold mb-2">Notas</h2>
               <p className="text-gray-600">{invoice.notes}</p>
             </div>
           )}
@@ -230,12 +228,11 @@ export default function InvoiceDetailPage() {
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Billing Information */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="text-lg font-semibold mb-4">Billing Information</h2>
+            <h2 className="text-lg font-semibold mb-4">Dados de faturação</h2>
             <div className="space-y-2 text-sm">
               <div>
-                <p className="text-gray-500">Name</p>
+                <p className="text-gray-500">Nome</p>
                 <p className="font-medium">{invoice.billingName}</p>
               </div>
               <div>
@@ -244,51 +241,50 @@ export default function InvoiceDetailPage() {
               </div>
               {invoice.billingPhone && (
                 <div>
-                  <p className="text-gray-500">Phone</p>
+                  <p className="text-gray-500">Telefone</p>
                   <p className="font-medium">{invoice.billingPhone}</p>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Payment Information */}
           {payment && (
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h2 className="text-lg font-semibold mb-4">Payment Information</h2>
+              <h2 className="text-lg font-semibold mb-4">Pagamento</h2>
               <div className="space-y-2 text-sm">
                 <div>
-                  <p className="text-gray-500">Status</p>
+                  <p className="text-gray-500">Estado</p>
                   <p className={`font-medium ${
-                    payment.status === 'completed' ? 'text-green-600' : 
-                    payment.status === 'failed' ? 'text-red-600' : 
+                    payment.status === 'completed' ? 'text-green-600' :
+                    payment.status === 'failed' ? 'text-red-600' :
                     'text-yellow-600'
                   }`}>
-                    {payment.status.charAt(0).toUpperCase() + payment.status.slice(1)}
+                    {PAYMENT_STATUS_PT[payment.status] ?? payment.status}
                   </p>
                 </div>
                 <div>
-                  <p className="text-gray-500">Method</p>
+                  <p className="text-gray-500">Método</p>
                   <p className="font-medium">
-                    {payment.method.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                    {PAYMENT_METHOD_PT[payment.method] ?? payment.method}
                   </p>
                 </div>
                 <div>
-                  <p className="text-gray-500">Amount</p>
+                  <p className="text-gray-500">Valor</p>
                   <p className="font-medium">€{payment.amount.toFixed(2)}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500">Payment Date</p>
-                  <p className="font-medium">{format(payment.paymentDate, 'MMMM dd, yyyy')}</p>
+                  <p className="text-gray-500">Data de pagamento</p>
+                  <p className="font-medium">{format(payment.paymentDate, 'dd/MM/yyyy')}</p>
                 </div>
                 {payment.processedDate && (
                   <div>
-                    <p className="text-gray-500">Processed Date</p>
-                    <p className="font-medium">{format(payment.processedDate, 'MMMM dd, yyyy')}</p>
+                    <p className="text-gray-500">Data de processamento</p>
+                    <p className="font-medium">{format(payment.processedDate, 'dd/MM/yyyy')}</p>
                   </div>
                 )}
                 {payment.transactionId && (
                   <div>
-                    <p className="text-gray-500">Transaction ID</p>
+                    <p className="text-gray-500">Referência</p>
                     <p className="font-medium text-xs">{payment.transactionId}</p>
                   </div>
                 )}
@@ -296,30 +292,17 @@ export default function InvoiceDetailPage() {
             </div>
           )}
 
-          {/* Actions */}
           <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="text-lg font-semibold mb-4">Actions</h2>
+            <h2 className="text-lg font-semibold mb-4">Ações</h2>
             <div className="space-y-2">
               {invoice.status === 'pending' && (
-                <button
-                  className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors"
-                  onClick={() => {
-                    // TODO: Implement payment flow
-                    alert('Payment integration coming soon!');
-                  }}
+                <Link
+                  to="/client/payments"
+                  className="block w-full text-center bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors"
                 >
-                  Pay Now
-                </button>
+                  Pagar agora
+                </Link>
               )}
-              <button
-                className="w-full bg-gray-100 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-200 transition-colors"
-                onClick={() => {
-                  // TODO: Implement download PDF
-                  alert('Download PDF coming soon!');
-                }}
-              >
-                Download PDF
-              </button>
             </div>
           </div>
         </div>
@@ -327,15 +310,3 @@ export default function InvoiceDetailPage() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-

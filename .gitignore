@@ -1,6 +1,9 @@
 # Node dependencies
 node_modules/
 
+# Service account keys — never commit
+*service-account*.json
+
 # Vercel
 .vercel/
 

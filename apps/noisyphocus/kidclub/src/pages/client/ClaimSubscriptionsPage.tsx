@@ -176,7 +176,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
               <div className="px-6 py-5 space-y-4">
                 <p className="text-sm font-medium text-gray-700">Confirme os dados da criança</p>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Primeiro nome *</label>
                     <input
@@ -211,7 +211,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                   {err('dateOfBirth') && <p className="text-xs text-red-500 mt-1">{err('dateOfBirth')}</p>}
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Escola</label>
                     <input

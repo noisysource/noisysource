@@ -16,6 +16,7 @@ export interface TransportationConfig {
   multiTripDiscountPercentage: number;
   minTripsForDiscount: number;
   siblingDiscountPercentage: number;
+  returningStudentDiscountPercentage: number;
   schoolDiscounts: SchoolDiscount[];
   // Operations (planner cost model)
   driverRatePerHour: number;
@@ -24,6 +25,7 @@ export interface TransportationConfig {
   vanMonthlyCost: number;
   consumptionPer100km: number;
   electricityPricePerKwh: number;
+  driverMonthlyCostOverride?: number; // manual override shown in financial summary
 }
 
 export interface Location {
@@ -34,12 +36,19 @@ export interface Location {
 
 export interface SubscriptionSchedule {
   dayOfWeek: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+  direction: 'pickup' | 'dropoff' | 'both'; // pickup = home→school (morning), dropoff = school→home (afternoon)
   pickupTime: string; // HH:MM
   pickupLocation: string;
   dropoffLocation: string;
 }
 
-export type SubscriptionStatus = 'active' | 'inactive' | 'cancelled' | 'pending';
+// Infer direction from time for legacy records that lack the field
+export const inferDirection = (s: Partial<SubscriptionSchedule>): 'pickup' | 'dropoff' | 'both' =>
+  s.direction ?? ((s.pickupTime ?? '08:00') >= '12:00' ? 'dropoff' : 'pickup');
+
+import { WeekPattern } from './weekPattern';
+export type { WeekPattern };
+export type SubscriptionStatus = 'active' | 'inactive' | 'cancelled' | 'pending' | 'planned' | 'offered';
 
 export interface TransportationSubscription {
   id: string;
@@ -64,9 +73,13 @@ export interface TransportationSubscription {
   
   // Pricing
   monthlyFee: number;
+  originalFee?: number;       // fee before returningStudent discount
+  returningStudent?: boolean;
   ridesRemaining?: number; // For limited ride subscriptions
+  appliedDiscounts?: import('./Discount').AppliedDiscount[];
   
   // Schedule
+  weekPattern: WeekPattern;
   schedule: SubscriptionSchedule[]; // Array of scheduled trips
   
   // Metadata

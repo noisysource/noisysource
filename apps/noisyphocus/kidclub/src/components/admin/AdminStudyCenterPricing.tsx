@@ -9,6 +9,7 @@ const initialConfig: StudyCenterConfig = {
   registrationFee: 35,
   insuranceFee: 25,
   monthlyTransportFeePerWeekday: 18,
+  returningStudentDiscountPercentage: 0,
 };
 
 interface ConfigInputProps {
@@ -134,6 +135,12 @@ const AdminStudyCenterPricing: React.FC = () => {
               value={config.insuranceFee}
               onChange={(e) => handleFeeChange('insuranceFee', e.target.value)}
             />
+            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+              <p className="text-sm text-blue-800">
+                Descontos geridos centralmente em{' '}
+                <a href="/admin/config/descontos" className="font-semibold underline">Configuração de Descontos</a>.
+              </p>
+            </div>
           </div>
         </div>
 

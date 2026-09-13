@@ -1,7 +1,9 @@
 import { Timestamp } from "firebase/firestore";
 
 // @shared/models/StudyRoomEntry.ts
-export type DaySelection = { day: string; hour: string; transport: boolean };
+import { WeekPattern } from './weekPattern';
+export type { WeekPattern };
+export type DaySelection = { day: string; hour: string };
 
 export type StudyStatus = "pending" | "confirmed" | "canceled" | "archived";
 
@@ -53,13 +55,15 @@ export interface StudyRoomEntry {
   
   // Schedule
   days: DaySelection[];
+  weekPattern: WeekPattern;
   note?: string;
-  
+
   // Pricing
   monthlyPrice: number;
   basePrice?: number;
-  transportFee?: number;
   total?: number;
+  returningStudent?: boolean;
+  appliedDiscounts?: import('./Discount').AppliedDiscount[];
   
   // Dates
   startDate: Date;
@@ -68,9 +72,6 @@ export interface StudyRoomEntry {
   // Status
   status: StudyStatus;
   statusReason?: string;
-  
-  // Transport
-  needsTransport: boolean;
   
   // History and tracking
   history?: SubscriptionVersion[];
@@ -121,13 +122,12 @@ export const fromStudyDoc = (raw: any, id: string): StudyRoomEntry => ({
     ? raw.days.map((d: any) => ({
       day: String(d?.day ?? ""),
       hour: String(d?.hour ?? ""),
-      transport: Boolean(d?.transport),
     }))
     : [],
+  weekPattern: (raw?.weekPattern ?? 'all') as WeekPattern,
   note: raw?.note ? String(raw.note) : undefined,
   monthlyPrice: Number(raw?.monthlyPrice ?? 0),
   basePrice: raw?.basePrice === undefined ? undefined : Number(raw.basePrice),
-  transportFee: raw?.transportFee === undefined ? undefined : Number(raw.transportFee),
   total: raw?.total === undefined ? undefined : Number(raw.total),
   startDate: toDate(raw?.startDate),
   endDate: toDate(raw?.endDate),
@@ -135,7 +135,6 @@ export const fromStudyDoc = (raw: any, id: string): StudyRoomEntry => ({
   updatedAt: toDate(raw?.updatedAt ?? raw?.createdAt),
   status: normalizeStatus(raw),
   statusReason: raw?.statusReason ? String(raw.statusReason) : undefined,
-  needsTransport: Boolean(raw?.needsTransport),
   history: raw?.history || [],
   uploadedFiles: raw?.uploadedFiles || [],
   statusHistory: raw?.statusHistory || [],
@@ -159,16 +158,15 @@ export const toStudyDoc = (input: Partial<StudyRoomSave>) => {
     schoolYear: input.schoolYear,
     schoolName: input.schoolName,
     days: Array.isArray(input.days) ? input.days : [],
+    weekPattern: input.weekPattern ?? 'all',
     note: input.note,
     monthlyPrice: input.monthlyPrice,
     basePrice: input.basePrice,
-    transportFee: input.transportFee,
     total: input.total,
     startDate: input.startDate,
     endDate: input.endDate,
     createdAt: input.createdAt ?? new Date(),
     updatedAt: new Date(),
-    needsTransport: input.needsTransport ?? false,
     status,
     statusReason: input.statusReason,
     history: input.history || [],
@@ -188,16 +186,15 @@ export const toStudyDocPartial = (input: Partial<StudyRoomSave>) => {
     schoolYear: input.schoolYear,
     schoolName: input.schoolName,
     days: input.days,
+    weekPattern: input.weekPattern,
     note: input.note,
     monthlyPrice: input.monthlyPrice,
     basePrice: input.basePrice,
-    transportFee: input.transportFee,
     total: input.total,
     startDate: input.startDate,
     endDate: input.endDate,
     createdAt: input.createdAt,
     updatedAt: new Date(),
-    needsTransport: input.needsTransport,
     status,
     statusReason: input.statusReason,
     history: input.history,

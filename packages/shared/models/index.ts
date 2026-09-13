@@ -1,3 +1,4 @@
+export * from './weekPattern';
 export * from './Booking';
 export * from './StudyRoomEntry';
 export * from './PartyConfig';

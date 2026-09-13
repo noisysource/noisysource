@@ -15,7 +15,7 @@ export { generateMonthlyInvoices, triggerInvoiceGeneration } from "./kidclub/gen
 export { syncVendusClient } from "./kidclub/syncVendusClient";
 export { sendBillingNotice, backfillBillingSchedules, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, createPartyDeposit, retryVendusInvoice, onStudyroomConfirmed, onTransportConfirmed, onStudyroomCancelled, onTransportCancelled } from "./kidclub/billing";
 export { onStudyroomCreated, onTransportCreated, onStudyroomStatusNotify, onTransportStatusNotify, onCampSubscriptionCreated } from "./kidclub/notifications";
+export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/discountRecalc";
 export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
 export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
-export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
-export { getKidclubVatSummary } from "./kidclub/vatSummary";
+export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";export { getKidclubVatSummary } from "./kidclub/vatSummary";

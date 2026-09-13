@@ -127,6 +127,14 @@ service cloud.firestore {
         allow write: if isRainbowAdmin();
       }
 
+      // Immutable audit trail — full snapshot before each subscription change
+      match /subscriptionVersions/{versionId} {
+        allow read, write: if isRainbowAdmin();
+        // Parents write a snapshot before every change they make; they cannot read back
+        allow create: if isAuthenticated()
+          && request.resource.data.changedBy.userId == request.auth.uid;
+      }
+
       // Per-day/trip cancellations by clients
       match /eventModifications/{doc} {
         allow read: if isAuthenticated();
@@ -177,6 +185,11 @@ service cloud.firestore {
       match /camps/{doc} {
         allow read: if isAuthenticated();
         allow write: if isRainbowAdmin() || isOwner();
+      }
+
+      // Transport planner versions (route snapshots saved by admin)
+      match /transportRoutes/{doc} {
+        allow read, write: if isRainbowAdmin() || isOwner();
       }
 
       // Camp

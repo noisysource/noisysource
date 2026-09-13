@@ -132,7 +132,7 @@ export async function createOrUpdateClient(familyId: string, payload: VendusClie
   }
 
   try {
-    const created = await createClient({ ...payload, external_reference: ref });
+    const created = await createClient(payload);
     return created.id;
   } catch (err: any) {
     // Vendus rejects duplicate NIFs — find the existing client and re-link it

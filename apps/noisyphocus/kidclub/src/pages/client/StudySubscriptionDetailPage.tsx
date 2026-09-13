@@ -185,7 +185,7 @@ export default function StudySubscriptionDetailPage() {
   }
 
   const isActive = subscription.status === 'confirmed' || (subscription.status as string) === 'active';
-  const isPending = subscription.status === 'pending';
+  const isPending = subscription.status === 'pending' || (subscription.status as string) === 'planned';
 
   const statusBadge = isActive
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }
@@ -214,10 +214,28 @@ export default function StudySubscriptionDetailPage() {
           </span>
         </div>
 
-        <p className="mt-4 text-2xl font-bold text-gray-900">
-          €{(subscription.monthlyPrice ?? 0).toFixed(2)}
-          <span className="text-base font-normal text-gray-500">/mês</span>
-        </p>
+        <div className="mt-4 space-y-2">
+          {(() => {
+            const fee = subscription.monthlyPrice ?? 0;
+            const gross = subscription.basePrice != null && subscription.basePrice > fee + 0.01 ? subscription.basePrice : null;
+            return (
+              <div className="flex items-baseline gap-1.5 flex-wrap">
+                {gross != null && <span className="text-base text-gray-400 line-through">€{gross.toFixed(2)}</span>}
+                <span className={`text-2xl font-bold ${gross != null ? 'text-green-700' : 'text-gray-900'}`}>€{fee.toFixed(2)}</span>
+                <span className="text-base font-normal text-gray-500">/mês</span>
+              </div>
+            );
+          })()}
+          {(subscription.appliedDiscounts ?? []).length > 0 && (
+            <div className="flex gap-1.5 flex-wrap">
+              {(subscription.appliedDiscounts ?? []).map(d => (
+                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
+                  {d.name} −{Math.round(d.percentage * 100)}%
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
 
         {!editingSchedule ? (
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -281,8 +299,14 @@ export default function StudySubscriptionDetailPage() {
 
       {/* Pending notice */}
       {isPending && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4 text-sm text-yellow-800">
-          O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4">
+          <p className="text-sm text-yellow-800 mb-3">O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.</p>
+          <Link
+            to={`/client/enroll/study?childId=${subscription.childId}&editId=${id}`}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-yellow-900 bg-white border border-yellow-300 px-3 py-1.5 rounded-lg hover:bg-yellow-50 transition-colors"
+          >
+            ✏️ Editar pedido
+          </Link>
         </div>
       )}
 

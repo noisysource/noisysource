@@ -44,6 +44,9 @@ export default function TransportSubscriptionDetailPage() {
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [accepting, setAccepting] = useState(false);
+  const [showDeclineConfirm, setShowDeclineConfirm] = useState(false);
+  const [declining, setDeclining] = useState(false);
 
   useEffect(() => {
     if (id) loadData();
@@ -179,6 +182,28 @@ export default function TransportSubscriptionDetailPage() {
     }
   };
 
+  const acceptOffer = async () => {
+    if (!id) return;
+    setAccepting(true);
+    try {
+      await updateDoc(docRef('transportationSubscriptions', id), {
+        status: 'active', acceptedAt: new Date(), updatedAt: new Date(),
+      });
+      setSubscription(prev => prev ? { ...prev, status: 'active' } : prev);
+    } finally { setAccepting(false); }
+  };
+
+  const declineOffer = async () => {
+    if (!id) return;
+    setDeclining(true);
+    try {
+      await updateDoc(docRef('transportationSubscriptions', id), {
+        status: 'cancelled', cancelledAt: new Date(), updatedAt: new Date(),
+      });
+      navigate('/client/subscriptions', { replace: true });
+    } finally { setDeclining(false); }
+  };
+
   const cancelSubscription = async () => {
     if (!id) return;
     setCancelling(true);
@@ -194,23 +219,11 @@ export default function TransportSubscriptionDetailPage() {
     }
   };
 
-  if (isLoading) {
-    return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
-  }
+  // Derived state — must stay before any early returns (rules of hooks)
+  const isActive = subscription?.status === 'active' || subscription?.status === 'confirmed';
+  const isPending = subscription?.status === 'pending' || subscription?.status === 'planned';
+  const isOffered = subscription?.status === 'offered';
 
-  if (!subscription) {
-    return (
-      <div className="bg-white p-8 rounded-lg border text-center">
-        <p className="text-gray-500 mb-4">Subscrição não encontrada.</p>
-        <Link to="/client/subscriptions" className="text-blue-600 hover:underline">← Voltar</Link>
-      </div>
-    );
-  }
-
-  const isActive = subscription.status === 'active';
-  const isPending = subscription.status === 'pending';
-
-  // Compute per-slot discount breakdown from config
   const priceBreakdown = useMemo(() => {
     if (!config || !subscription) return null;
     const { flatRatePerTrip, weeksPerMonth, vatRate, siblingDiscountPercentage, schoolDiscounts, minTripsForDiscount, multiTripDiscountPercentage } = config;
@@ -222,7 +235,6 @@ export default function TransportSubscriptionDetailPage() {
       return h < 12 ? 'morning' : h < 15 ? 'lunch' : 'afternoon';
     };
 
-    // Group slots by day, sort by time within day to determine tripRank
     const slotsByDay: Record<string, typeof subscription.schedule> = {};
     for (const s of subscription.schedule ?? []) (slotsByDay[s.dayOfWeek] ??= []).push(s);
     Object.values(slotsByDay).forEach(g =>
@@ -232,27 +244,33 @@ export default function TransportSubscriptionDetailPage() {
     const appliedDiscounts: { label: string; pct: number }[] = [];
     if (siblingRank >= 2 && siblingDiscountPercentage > 0)
       appliedDiscounts.push({ label: 'Desconto irmãos', pct: siblingDiscountPercentage });
-    for (const sd of (schoolDiscounts ?? [])) {
-      if (schoolName && sd.schoolName && sd.schoolName.toLowerCase() === schoolName.toLowerCase() && sd.discountPercentage > 0)
-        appliedDiscounts.push({ label: `Desconto ${sd.schoolName}`, pct: sd.discountPercentage });
-    }
 
-    let totalFee = 0;
+    let subtotal = 0;
     let hasMultiTrip = false;
     for (const [, slots] of Object.entries(slotsByDay)) {
       slots.forEach((_, idx) => {
         const tripRank = idx + 1;
-        let discount = appliedDiscounts.reduce((s, d) => s + d.pct, 0);
+        let discount = siblingRank >= 2 ? siblingDiscountPercentage : 0;
         if (tripRank >= minTripsForDiscount && multiTripDiscountPercentage > 0) {
           discount += multiTripDiscountPercentage;
           hasMultiTrip = true;
         }
         discount = Math.min(1, discount);
-        totalFee += flatRatePerTrip * (1 - discount) * weeksPerMonth;
+        subtotal += flatRatePerTrip * (1 - discount) * weeksPerMonth;
       });
     }
     if (hasMultiTrip)
       appliedDiscounts.push({ label: `Desconto viagem extra`, pct: multiTripDiscountPercentage });
+
+    let schoolDiscountPct = 0;
+    for (const sd of (schoolDiscounts ?? [])) {
+      if (schoolName && sd.schoolName && sd.schoolName.toLowerCase() === schoolName.toLowerCase() && sd.discountPercentage > 0) {
+        schoolDiscountPct = sd.discountPercentage;
+        appliedDiscounts.push({ label: `Desconto ${sd.schoolName}`, pct: sd.discountPercentage });
+        break;
+      }
+    }
+    const totalFee = subtotal * (1 - schoolDiscountPct);
 
     const slotsPerWeek = (subscription.schedule ?? []).length;
     const baseTotal = flatRatePerTrip * slotsPerWeek * weeksPerMonth;
@@ -265,7 +283,22 @@ export default function TransportSubscriptionDetailPage() {
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }
     : isPending
     ? { label: 'Pendente de aprovação', cls: 'bg-yellow-100 text-yellow-800' }
+    : isOffered
+    ? { label: 'Aguarda a sua confirmação', cls: 'bg-purple-100 text-purple-800' }
     : { label: 'Cancelada', cls: 'bg-gray-100 text-gray-600' };
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
+  }
+
+  if (!subscription) {
+    return (
+      <div className="bg-white p-8 rounded-lg border text-center">
+        <p className="text-gray-500 mb-4">Subscrição não encontrada.</p>
+        <Link to="/client/subscriptions" className="text-blue-600 hover:underline">← Voltar</Link>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
@@ -290,34 +323,32 @@ export default function TransportSubscriptionDetailPage() {
           </span>
         </div>
 
-        {priceBreakdown ? (
-          <div className="mt-4 space-y-2">
-            <div className="flex items-baseline gap-1">
-              <span className="text-2xl font-bold text-gray-900">€{priceBreakdown.totalFee.toFixed(2)}</span>
-              <span className="text-base font-normal text-gray-500">/mês</span>
-              {priceBreakdown.vatRate > 0 && (
-                <span className="text-xs text-gray-400 ml-1">+ €{priceBreakdown.vatAmount.toFixed(2)} IVA</span>
-              )}
-            </div>
-            <div className="text-xs text-gray-500 space-y-1">
-              <div className="flex items-center justify-between">
-                <span>€{priceBreakdown.flatRatePerTrip.toFixed(2)}/viagem × {priceBreakdown.slotsPerWeek} viagem{priceBreakdown.slotsPerWeek !== 1 ? 's' : ''}/semana × {priceBreakdown.weeksPerMonth} semanas</span>
-                <span className="tabular-nums text-gray-400">€{priceBreakdown.baseTotal.toFixed(2)}</span>
+        <div className="mt-4 space-y-2">
+          {(() => {
+            const fee = subscription.monthlyFee ?? 0;
+            const gross = priceBreakdown?.baseTotal;
+            const hasDiscount = gross != null && gross > fee + 0.01;
+            return (
+              <div className="flex items-baseline gap-1.5 flex-wrap">
+                {hasDiscount && <span className="text-base text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
+                <span className={`text-2xl font-bold ${hasDiscount ? 'text-green-700' : 'text-gray-900'}`}>€{fee.toFixed(2)}</span>
+                <span className="text-base font-normal text-gray-500">/mês</span>
+                {priceBreakdown && priceBreakdown.vatRate > 0 && (
+                  <span className="text-xs text-gray-400">+ €{priceBreakdown.vatAmount.toFixed(2)} IVA</span>
+                )}
               </div>
-              {priceBreakdown.appliedDiscounts.map(d => (
-                <div key={d.label} className="flex items-center justify-between text-green-700">
-                  <span>✓ {d.label}</span>
-                  <span className="tabular-nums">-{Math.round(d.pct * 100)}%</span>
-                </div>
+            );
+          })()}
+          {(subscription.appliedDiscounts ?? []).length > 0 && (
+            <div className="flex gap-1.5 flex-wrap mt-1">
+              {(subscription.appliedDiscounts ?? []).map(d => (
+                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
+                  {d.name} −{Math.round(d.percentage * 100)}%
+                </span>
               ))}
             </div>
-          </div>
-        ) : (
-          <p className="mt-4 text-2xl font-bold text-gray-900">
-            €{(subscription.monthlyFee ?? 0).toFixed(2)}
-            <span className="text-base font-normal text-gray-500">/mês</span>
-          </p>
-        )}
+          )}
+        </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
           {(subscription.schedule ?? []).map((s, i) => (
@@ -331,10 +362,46 @@ export default function TransportSubscriptionDetailPage() {
         </div>
       </div>
 
+      {/* Offered: parent must accept */}
+      {isOffered && (
+        <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
+          <h3 className="font-semibold text-purple-900 mb-1">Lugar encontrado!</h3>
+          <p className="text-sm text-purple-700 mb-4">
+            A equipa encontrou um lugar para <strong>{subscription.childName}</strong>.
+            Confirme a inscrição para ativar o serviço de transporte.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={acceptOffer}
+              disabled={accepting || declining}
+              className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-purple-700 disabled:opacity-60"
+            >
+              {accepting ? 'A confirmar…' : 'Aceitar e confirmar'}
+            </button>
+            <button
+              onClick={() => setShowDeclineConfirm(true)}
+              disabled={accepting || declining}
+              className="flex-1 bg-white text-gray-600 border border-gray-200 py-2.5 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-60"
+            >
+              Recusar
+            </button>
+          </div>
+          <p className="text-xs text-purple-600 mt-3">
+            Precisa de alterar algo? Recuse e submeta um novo pedido, ou contacte-nos pelo 925 581 565.
+          </p>
+        </div>
+      )}
+
       {/* Pending notice */}
       {isPending && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4 text-sm text-yellow-800">
-          O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4">
+          <p className="text-sm text-yellow-800 mb-3">O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.</p>
+          <Link
+            to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-yellow-900 bg-white border border-yellow-300 px-3 py-1.5 rounded-lg hover:bg-yellow-50 transition-colors"
+          >
+            ✏️ Editar pedido
+          </Link>
         </div>
       )}
 
@@ -402,7 +469,7 @@ export default function TransportSubscriptionDetailPage() {
       )}
 
       {/* Cancel subscription */}
-      {(isActive || isPending) && (
+      {(isActive || isPending || isOffered) && (
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="font-semibold text-gray-800 mb-1">Cancelar subscrição</h2>
           <p className="text-sm text-gray-500 mb-4">
@@ -414,6 +481,33 @@ export default function TransportSubscriptionDetailPage() {
           >
             Cancelar subscrição
           </button>
+        </div>
+      )}
+
+      {showDeclineConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+            <h3 className="font-bold text-lg mb-2">Recusar proposta?</h3>
+            <p className="text-gray-600 text-sm mb-6">
+              A inscrição de transporte de <strong>{subscription.childName}</strong> será cancelada.
+              Para retomar o serviço terá de fazer uma nova inscrição.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={declineOffer}
+                disabled={declining}
+                className="flex-1 bg-red-600 text-white py-2.5 rounded-lg hover:bg-red-700 disabled:opacity-60 text-sm font-medium"
+              >
+                {declining ? 'A recusar...' : 'Confirmar recusa'}
+              </button>
+              <button
+                onClick={() => setShowDeclineConfirm(false)}
+                className="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-lg hover:bg-gray-200 text-sm"
+              >
+                Voltar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

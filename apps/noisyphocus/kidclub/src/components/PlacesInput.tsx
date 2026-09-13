@@ -2,17 +2,24 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 
 const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string;
 
+interface LocationBias {
+  lat: number;
+  lng: number;
+  radiusMeters: number;
+}
+
 interface Props {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
   required?: boolean;
-  types?: string[]; // includedPrimaryTypes filter, e.g. ['school']
-  nameOnly?: boolean; // use structuredFormat.mainText (place name) instead of full text
+  types?: string[];
+  nameOnly?: boolean;
+  locationBias?: LocationBias;
 }
 
-export default function PlacesInput({ value, onChange, placeholder, className, required, types, nameOnly }: Props) {
+export default function PlacesInput({ value, onChange, placeholder, className, required, types, nameOnly, locationBias }: Props) {
   const [suggestions, setSuggestions] = useState<{ id: string; label: string }[]>([]);
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -41,6 +48,14 @@ export default function PlacesInput({ value, onChange, placeholder, className, r
           includedRegionCodes: ['pt'],
           languageCode: 'pt',
           ...(types?.length ? { includedPrimaryTypes: types } : {}),
+          ...(locationBias ? {
+            locationBias: {
+              circle: {
+                center: { latitude: locationBias.lat, longitude: locationBias.lng },
+                radius: locationBias.radiusMeters,
+              },
+            },
+          } : {}),
         }),
       });
       const data = await resp.json();

@@ -66,11 +66,21 @@ function nextTuesdayAt(minutesFromMidnight: number): string {
   return d.toISOString();
 }
 
+// Session-level cache — avoids re-fetching the same matrix when re-running routes
+// within the same planning session. Key is departure bucket + ordered address list
+// (order matters because matrix[i][j] refers to addresses[i] → addresses[j]).
+const matrixCache = new Map<string, { time: number[][]; dist: number[][] }>();
+
 async function fetchMatrix(
   addresses: string[],
   mapsKey: string,
   departureMin?: number,
 ): Promise<{ time: number[][]; dist: number[][] }> {
+  // Round departure to nearest 30 min so minor time drift still hits the cache.
+  const depBucket = departureMin != null ? Math.round(departureMin / 30) * 30 : -1;
+  const cacheKey = `${depBucket}|${addresses.join('||')}`;
+  const cached = matrixCache.get(cacheKey);
+  if (cached) return cached;
   const n = addresses.length;
   const time: number[][] = Array.from({ length: n }, (_, i) =>
     Array.from({ length: n }, (_, j) => (i === j ? 0 : Infinity)),
@@ -116,7 +126,9 @@ async function fetchMatrix(
     time[oi][di] = parseDurMin(el.duration);
     dist[oi][di] = ((el.distanceMeters as number) ?? 0) / 1000;
   }
-  return { time, dist };
+  const result = { time, dist };
+  matrixCache.set(cacheKey, result);
+  return result;
 }
 
 // ─── Timing helpers ───────────────────────────────────────────────────────────

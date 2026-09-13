@@ -93,6 +93,7 @@ export default function AccountPage() {
             <input
               type="text"
               required
+              autoComplete="name"
               value={form.name}
               onChange={e => set('name', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -113,6 +114,7 @@ export default function AccountPage() {
             <input
               type="tel"
               required
+              autoComplete="tel"
               placeholder="9XX XXX XXX"
               value={form.phone}
               onChange={e => set('phone', e.target.value)}
@@ -139,17 +141,19 @@ export default function AccountPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Morada</label>
             <input
               type="text"
+              autoComplete="street-address"
               placeholder="Rua e número"
               value={form.street}
               onChange={e => set('street', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Código postal</label>
               <input
                 type="text"
+                autoComplete="postal-code"
                 placeholder="XXXX-XXX"
                 value={form.postalCode}
                 onChange={e => set('postalCode', e.target.value)}
@@ -160,6 +164,7 @@ export default function AccountPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
               <input
                 type="text"
+                autoComplete="address-level2"
                 value={form.city}
                 onChange={e => set('city', e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"

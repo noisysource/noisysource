@@ -5,6 +5,7 @@ import { Child, StudyRoomEntry, TransportationSubscription, Booking, Family } fr
 import { format } from 'date-fns';
 import { calculateAge } from '../../lib/utils';
 import { familyService } from '../../services/familyService';
+import { grossFromAppliedDiscounts } from '../../services/discountService';
 
 export default function ChildDetailPage() {
   const { childId } = useParams<{ childId: string }>();
@@ -18,6 +19,7 @@ export default function ChildDetailPage() {
   const [transportSubscriptions, setTransportSubscriptions] = useState<TransportationSubscription[]>([]);
   const [partyBookings, setPartyBookings] = useState<Booking[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editFormData, setEditFormData] = useState<Partial<Child>>({});
   const [highlightSubscriptions, setHighlightSubscriptions] = useState(false);
@@ -99,10 +101,11 @@ export default function ChildDetailPage() {
       await familyService.updateChild(childId, editFormData);
       await fetchChildData();
       setIsEditing(false);
-      alert('Child information updated successfully!');
+      setSaveMessage({ type: 'success', text: 'Dados da criança actualizados.' });
+      setTimeout(() => setSaveMessage(null), 4000);
     } catch (error) {
       console.error('Error updating child:', error);
-      alert('Error updating child information.');
+      setSaveMessage({ type: 'error', text: 'Erro ao guardar. Tenta novamente.' });
     }
   };
 
@@ -131,14 +134,19 @@ export default function ChildDetailPage() {
 
   return (
     <div className="space-y-6">
+      {saveMessage && (
+        <div className={`px-4 py-3 rounded-lg text-sm font-medium ${saveMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+          {saveMessage.text}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <Link 
-            to="/client" 
+          <Link
+            to="/client/children"
             className="text-blue-600 hover:underline text-sm mb-2 inline-block"
           >
-            ← Back to Family Dashboard
+            ← As minhas crianças
           </Link>
           <h1 className="text-2xl font-bold">
             {child.firstName} {child.lastName}
@@ -148,7 +156,7 @@ export default function ChildDetailPage() {
           onClick={() => setIsEditing(!isEditing)}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
         >
-          {isEditing ? 'Cancel Edit' : 'Edit'}
+          {isEditing ? 'Cancelar' : 'Editar'}
         </button>
       </div>
 
@@ -337,10 +345,12 @@ export default function ChildDetailPage() {
                   >
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium text-blue-900">📚 Study Room</div>
+                        <div className="font-medium text-blue-900">📚 Sala de Estudo</div>
                         <div className="text-sm text-blue-700">
                           {sub.schoolName && `${sub.schoolName} · `}
-                          €{sub.monthlyPrice.toFixed(2)}/month
+                          {(sub.basePrice ?? 0) > sub.monthlyPrice + 0.01
+                            ? <><span className="line-through text-blue-400 text-xs">€{(sub.basePrice!).toFixed(2)}</span>{' '}<span className="text-green-700 font-medium">€{sub.monthlyPrice.toFixed(2)}</span>/mês</>
+                            : `€${sub.monthlyPrice.toFixed(2)}/mês`}
                         </div>
                       </div>
                       <span className={`text-xs px-2 py-1 rounded ${
@@ -351,6 +361,15 @@ export default function ChildDetailPage() {
                         {sub.status}
                       </span>
                     </div>
+                    {(sub.appliedDiscounts ?? []).length > 0 && (
+                      <div className="flex gap-1 flex-wrap mt-2">
+                        {(sub.appliedDiscounts ?? []).map(d => (
+                          <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
+                            {d.name} −{Math.round(d.percentage * 100)}%
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </Link>
                 ))}
                 {transportSubscriptions.map(sub => (
@@ -361,9 +380,14 @@ export default function ChildDetailPage() {
                   >
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium text-green-900">🚌 Transport</div>
+                        <div className="font-medium text-green-900">🚌 Transporte</div>
                         <div className="text-sm text-green-700">
-                          €{sub.monthlyFee.toFixed(2)}/month
+                          {(() => {
+                            const g = grossFromAppliedDiscounts(sub.monthlyFee, sub.appliedDiscounts);
+                            return g != null && g > sub.monthlyFee + 0.01
+                              ? <><span className="line-through text-green-400 text-xs">€{g.toFixed(2)}</span>{' '}<span className="font-medium">€{sub.monthlyFee.toFixed(2)}</span>/mês</>
+                              : `€${sub.monthlyFee.toFixed(2)}/mês`;
+                          })()}
                         </div>
                       </div>
                       <span className={`text-xs px-2 py-1 rounded ${
@@ -374,6 +398,15 @@ export default function ChildDetailPage() {
                         {sub.status}
                       </span>
                     </div>
+                    {(sub.appliedDiscounts ?? []).length > 0 && (
+                      <div className="flex gap-1 flex-wrap mt-2">
+                        {(sub.appliedDiscounts ?? []).map(d => (
+                          <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
+                            {d.name} −{Math.round(d.percentage * 100)}%
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </Link>
                 ))}
               </div>

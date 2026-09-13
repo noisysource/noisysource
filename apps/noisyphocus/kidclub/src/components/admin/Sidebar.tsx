@@ -41,9 +41,10 @@ export default function Sidebar() {
         </SidebarSection>
 
         <SidebarSection title="⚙️ Configuração">
-          <SidebarNavLink to="/admin/study-pricing">📚 Sala de Estudo</SidebarNavLink>
-          <SidebarNavLink to="/admin/transport-config">🚌 Transporte</SidebarNavLink>
-          <SidebarNavLink to="/admin/transport-planner">🗓️ Planear Rotas</SidebarNavLink>
+          <SidebarNavLink to="/admin/financial-summary">📊 Resumo Financeiro</SidebarNavLink>
+          <SidebarNavLink to="/admin/config/descontos">🏷️ Descontos</SidebarNavLink>
+          <SidebarNavLink to="/admin/study-room-planner">📖 Planeador — Sala de Estudo</SidebarNavLink>
+          <SidebarNavLink to="/admin/transport-planner">🗓️ Planeador — Transporte</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="⚙️ Operações">

@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getDocs, deleteDoc, query, orderBy, Timestamp } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { grossFromAppliedDiscounts } from '../../services/discountService';
+import { useImpersonation } from '../../contexts/ImpersonationContext';
 
 interface FamilyDoc {
   id: string;
@@ -72,6 +75,8 @@ function age(ts?: Timestamp) {
 }
 
 export default function FamiliesAdminPage() {
+  const navigate = useNavigate();
+  const { startImpersonation } = useImpersonation();
   const [families, setFamilies] = useState<FamilyDoc[]>([]);
   const [children, setChildren] = useState<ChildDoc[]>([]);
   const [study, setStudy] = useState<StudyDoc[]>([]);
@@ -81,6 +86,7 @@ export default function FamiliesAdminPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -122,14 +128,26 @@ export default function FamiliesAdminPage() {
     }
   };
 
+  // Detect families sharing an email — computed each render from loaded data
+  const duplicateEmails = (() => {
+    const counts: Record<string, number> = {};
+    for (const f of families) {
+      const em = f.primaryContact?.email?.toLowerCase();
+      if (em) counts[em] = (counts[em] ?? 0) + 1;
+    }
+    return new Set(Object.entries(counts).filter(([, n]) => n > 1).map(([em]) => em));
+  })();
+
   const filtered = families.filter(f => {
-    if (!search) return true;
     const q = search.toLowerCase();
-    return (
+    const matchesSearch = !search || (
       f.primaryContact?.name?.toLowerCase().includes(q) ||
       f.primaryContact?.email?.toLowerCase().includes(q) ||
       f.nif?.includes(q)
     );
+    const isDuplicate = duplicateEmails.has(f.primaryContact?.email?.toLowerCase() ?? '');
+    if (showOnlyFlagged && !isDuplicate) return false;
+    return matchesSearch;
   });
 
   if (loading) return <div className="p-6 text-gray-400">A carregar...</div>;
@@ -157,13 +175,23 @@ export default function FamiliesAdminPage() {
         </div>
       </div>
 
-      <input
-        type="text"
-        placeholder="Pesquisar por nome, email ou NIF..."
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        className="w-full border border-gray-200 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none"
-      />
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="Pesquisar por nome, email ou NIF..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="flex-1 border border-gray-200 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-300 focus:outline-none"
+        />
+        {duplicateEmails.size > 0 && (
+          <button
+            onClick={() => setShowOnlyFlagged(v => !v)}
+            className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${showOnlyFlagged ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-orange-600 border-orange-300 hover:bg-orange-50'}`}
+          >
+            ⚠️ Possíveis duplicados ({duplicateEmails.size} email{duplicateEmails.size > 1 ? 's' : ''})
+          </button>
+        )}
+      </div>
 
       {filtered.length === 0 && (
         <p className="text-sm text-gray-400 text-center py-12">Nenhuma família encontrada.</p>
@@ -177,20 +205,28 @@ export default function FamiliesAdminPage() {
           const pendingAmt = pendingTotal(fam.id);
           const pendingCount = pendingBilling(fam.id).length;
           const isOpen = expanded === fam.id;
+          const isDuplicate = duplicateEmails.has(fam.primaryContact?.email?.toLowerCase() ?? '');
 
           return (
-            <div key={fam.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div key={fam.id} className={`bg-white border rounded-xl overflow-hidden ${isDuplicate ? 'border-orange-300' : 'border-gray-200'}`}>
               {/* Header row */}
               <div
                 className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-50"
                 onClick={() => setExpanded(isOpen ? null : fam.id)}
               >
                 <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm shrink-0">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${isDuplicate ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}`}>
                     {fam.primaryContact?.name?.charAt(0)?.toUpperCase() ?? '?'}
                   </div>
                   <div className="min-w-0">
-                    <p className="font-semibold text-gray-900 truncate">{fam.primaryContact?.name ?? '—'}</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-gray-900 truncate">{fam.primaryContact?.name ?? '—'}</p>
+                      {isDuplicate && (
+                        <span className="shrink-0 text-xs bg-orange-100 text-orange-700 border border-orange-200 px-2 py-0.5 rounded-full font-medium">
+                          ⚠️ Possível duplicado
+                        </span>
+                      )}
+                    </div>
                     <p className="text-sm text-gray-400 truncate">{fam.primaryContact?.email ?? '—'}</p>
                   </div>
                 </div>
@@ -276,7 +312,9 @@ export default function FamiliesAdminPage() {
                               )}
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-gray-600 font-medium">€{(s.monthlyPrice ?? 0).toFixed(2)}/mês</span>
+                              {(s.basePrice ?? 0) > (s.monthlyPrice ?? 0) + 0.01
+                                ? <><span className="line-through text-gray-400 text-xs">€{(s.basePrice!).toFixed(2)}</span>{' '}<span className="text-green-700 font-medium">€{(s.monthlyPrice ?? 0).toFixed(2)}/mês</span></>
+                                : <span className="text-gray-600 font-medium">€{(s.monthlyPrice ?? 0).toFixed(2)}/mês</span>}
                               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[s.status ?? ''] ?? 'bg-gray-100'}`}>{s.status}</span>
                             </div>
                           </div>
@@ -291,7 +329,7 @@ export default function FamiliesAdminPage() {
                               )}
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-gray-600 font-medium">€{(t.monthlyFee ?? 0).toFixed(2)}/mês</span>
+                              {(() => { const g = grossFromAppliedDiscounts(t.monthlyFee ?? 0, (t as any).appliedDiscounts); return g != null && g > (t.monthlyFee ?? 0) + 0.01 ? <><span className="line-through text-gray-400 text-xs">€{g.toFixed(2)}</span>{' '}<span className="text-green-700 font-medium">€{(t.monthlyFee ?? 0).toFixed(2)}/mês</span></> : <span className="text-gray-600 font-medium">€{(t.monthlyFee ?? 0).toFixed(2)}/mês</span>; })()}
                               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[t.status ?? ''] ?? 'bg-gray-100'}`}>{t.status}</span>
                             </div>
                           </div>
@@ -323,7 +361,19 @@ export default function FamiliesAdminPage() {
                   )}
 
                   {/* Actions */}
-                  <div className="flex justify-end pt-2">
+                  <div className="flex justify-between items-center pt-2">
+                    <button
+                      onClick={() => {
+                        startImpersonation({
+                          familyId: fam.id,
+                          contactName: fam.primaryContact?.name || 'Família',
+                        });
+                        navigate('/client');
+                      }}
+                      className="px-3 py-1.5 text-sm text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                    >
+                      👁 Ver como cliente
+                    </button>
                     <button
                       onClick={() => handleDeleteFamily(fam.id)}
                       disabled={deleting === fam.id}

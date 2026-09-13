@@ -9,11 +9,8 @@ export default function AdminTransportationConfig() {
   const [config, setConfig] = useState<TransportationConfig | null>(null);
   const [flatRatePerTrip, setFlatRatePerTrip] = useState(0);
   const [vatRate, setVatRate] = useState(0.23);
-  const [multiTripDiscountPercentage, setMultiTripDiscountPercentage] = useState(0.3);
-  const [minTripsForDiscount, setMinTripsForDiscount] = useState(2);
   const [isFlatRateEditing, setIsFlatRateEditing] = useState(false);
   const [isVatEditing, setIsVatEditing] = useState(false);
-  const [isDiscountEditing, setIsDiscountEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -27,11 +24,9 @@ export default function AdminTransportationConfig() {
           setConfig(data);
           setFlatRatePerTrip(data.flatRatePerTrip || 0);
           setVatRate(data.vatRate || 0.23);
-          setMultiTripDiscountPercentage(data.multiTripDiscountPercentage || 0.3);
-          setMinTripsForDiscount(data.minTripsForDiscount || 2);
         } else {
           // Initialize with default empty config if not found
-          setConfig({ flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23, multiTripDiscountPercentage: 0.3, minTripsForDiscount: 2, siblingDiscountPercentage: 0, schoolDiscounts: [], driverRatePerHour: 7, weeksPerMonth: 4.33, vanCapacity: 8, vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22 });
+          setConfig({ flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23, multiTripDiscountPercentage: 0.3, minTripsForDiscount: 2, siblingDiscountPercentage: 0, returningStudentDiscountPercentage: 0, schoolDiscounts: [], driverRatePerHour: 7, weeksPerMonth: 4.33, vanCapacity: 8, vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22 });
         }
       } catch (err) {
         console.error("Error fetching transportation config:", err);
@@ -57,7 +52,6 @@ export default function AdminTransportationConfig() {
       setLoading(false);
       if (field === 'flatRatePerTrip') setIsFlatRateEditing(false);
       if (field === 'vatRate') setIsVatEditing(false);
-      if (field === 'multiTripDiscountPercentage' || field === 'minTripsForDiscount') setIsDiscountEditing(false);
     }
   };
 
@@ -124,41 +118,12 @@ export default function AdminTransportationConfig() {
         </div>
       </div>
 
-      {/* Discount Section */}
-      <div className="p-4 bg-white rounded-lg shadow-md">
-        <div className="flex justify-between items-center">
-          <div>
-            <h3 className="text-xl font-semibold text-gray-700">Desconto Multi-Viagem</h3>
-            <p className="text-sm text-gray-500 mt-1">Aplica um desconto para {minTripsForDiscount} ou mais viagens no mesmo dia.</p>
-            <p className="text-base font-semibold mt-1">{(multiTripDiscountPercentage * 100).toFixed(0)}% de desconto</p>
-          </div>
-          {isDiscountEditing ? (
-            <div className="flex items-center gap-4">
-              <div>
-                <label className="text-xs text-gray-500">Min. Viagens</label>
-                <input 
-                  type="number" 
-                  value={minTripsForDiscount} 
-                  onChange={e => setMinTripsForDiscount(parseInt(e.target.value))} 
-                  onBlur={() => handleBlurSave('minTripsForDiscount', minTripsForDiscount)}
-                  className="w-20 border-gray-300 rounded-md shadow-sm text-sm" 
-                />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500">Desconto (%)</label>
-                <input 
-                  type="number" 
-                  value={multiTripDiscountPercentage * 100} 
-                  onChange={e => setMultiTripDiscountPercentage(parseFloat(e.target.value) / 100)} 
-                  onBlur={() => handleBlurSave('multiTripDiscountPercentage', multiTripDiscountPercentage)}
-                  className="w-20 border-gray-300 rounded-md shadow-sm text-sm" 
-                />
-              </div>
-            </div>
-          ) : (
-            <button onClick={() => setIsDiscountEditing(true)} className="text-xs text-blue-600 font-semibold">Editar</button>
-          )}
-        </div>
+      {/* Discounts moved to central system */}
+      <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+        <p className="text-sm text-blue-800">
+          Os descontos (multi-viagem, irmão, aluno anterior, escola) foram movidos para a página central de{' '}
+          <a href="/admin/config/descontos" className="font-semibold underline">Configuração de Descontos</a>.
+        </p>
       </div>
     </div>
   );

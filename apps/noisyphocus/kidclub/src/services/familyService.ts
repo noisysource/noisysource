@@ -2,6 +2,13 @@ import { getDocs, query, where, getDoc, addDoc, updateDoc, deleteDoc } from 'fir
 import { col, docRef } from '../lib/db';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
 import { calculateAge } from '../lib/utils';
+import type { ImpersonationState } from '../contexts/ImpersonationContext';
+
+// Set by ImpersonationContext — when non-null, getOrCreateFamily returns this family directly.
+let _impersonation: ImpersonationState | null = null;
+export function setFamilyServiceImpersonation(state: ImpersonationState | null) {
+  _impersonation = state;
+}
 
 const toDate = (value: any): Date =>
   value?.toDate?.() ?? new Date(value);
@@ -24,6 +31,11 @@ const mapFamily = (id: string, data: any): Family => ({
 
 export const familyService = {
   async getOrCreateFamily(userId: string, userName: string, userEmail: string): Promise<Family> {
+    if (_impersonation) {
+      const snap = await getDoc(docRef('families', _impersonation.familyId));
+      if (snap.exists()) return mapFamily(snap.id, snap.data());
+    }
+
     const q = query(col('families'), where('primaryContact.userId', '==', userId));
     const snapshot = await getDocs(q);
 
@@ -55,8 +67,8 @@ export const familyService = {
   },
 
   async getFamilyChildren(familyId: string, includeInactive = false, userId?: string): Promise<Child[]> {
-    // When userId is provided, query by userId so Firestore rules (resource.data.userId == auth.uid) are satisfied
-    const q = userId
+    // When impersonating, always query by familyId (admin has full read access; userId would be the wrong user)
+    const q = (userId && !_impersonation)
       ? query(col('children'), where('userId', '==', userId))
       : query(col('children'), where('familyId', '==', familyId));
     const snapshot = await getDocs(q);
@@ -122,14 +134,15 @@ export const familyService = {
     transport: TransportationSubscription[];
     parties: Booking[];
   }> {
-    // When userId is provided, query by userId (rule-compatible) and filter client-side by childId
-    const studyQ = userId
+    // When userId is provided (and not impersonating), query by userId (rule-compatible) and filter client-side
+    const useUserId = !!userId && !_impersonation;
+    const studyQ = useUserId
       ? query(col('studyroom'), where('userId', '==', userId))
       : query(col('studyroom'), where('childId', '==', childId));
-    const transportQ = userId
+    const transportQ = useUserId
       ? query(col('transportationSubscriptions'), where('userId', '==', userId))
       : query(col('transportationSubscriptions'), where('childId', '==', childId));
-    const bookingsQ = userId
+    const bookingsQ = useUserId
       ? query(col('bookings'), where('userId', '==', userId))
       : query(col('bookings'), where('childId', '==', childId));
 
@@ -139,7 +152,7 @@ export const familyService = {
       getDocs(bookingsQ),
     ]);
 
-    const filterByChild = (d: any) => !userId || d.data().childId === childId;
+    const filterByChild = (d: any) => !useUserId || d.data().childId === childId;
 
     return {
       study: studySnap.docs.filter(filterByChild).map(d => ({
@@ -166,14 +179,15 @@ export const familyService = {
     transport: TransportationSubscription[];
     parties: Booking[];
   }> {
+    const useUserId = !!userId && !_impersonation;
     const [studySnap, transportSnap, bookingsSnap] = await Promise.all([
-      getDocs(userId
+      getDocs(useUserId
         ? query(col('studyroom'), where('userId', '==', userId))
         : query(col('studyroom'), where('familyId', '==', familyId))),
-      getDocs(userId
+      getDocs(useUserId
         ? query(col('transportationSubscriptions'), where('userId', '==', userId))
         : query(col('transportationSubscriptions'), where('familyId', '==', familyId))),
-      getDocs(userId
+      getDocs(useUserId
         ? query(col('bookings'), where('userId', '==', userId))
         : query(col('bookings'), where('familyId', '==', familyId))),
     ]);
