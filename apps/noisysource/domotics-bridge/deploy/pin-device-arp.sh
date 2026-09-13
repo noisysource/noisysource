@@ -35,15 +35,18 @@ mapfile -t IPS < <(node -e '
 ' "$CACHE")
 [ ${#IPS[@]} -gt 0 ] || exit 0
 
-# Start clean. Without this a device that has since moved to another access
-# point keeps a permanent entry aimed at the repeater and can never recover,
-# which is a far more confusing failure than the one this script exists to fix.
+# Start clean — every permanent entry on the interface, not just ones for IPs
+# in the current cache. A device's IP changes on its own DHCP lease renewal,
+# with no record here that its old address ever existed; scoping the clear to
+# today's cache left yesterday's pin behind it forever. Harmless while that
+# address sits idle, but a live landmine the day DHCP hands it to something
+# else — that thing would inherit a permanent route to a stranger's MAC.
+# Nothing but this script ever sets NUD_PERMANENT here, so clearing all of
+# them is exactly as safe as clearing our own.
 cleared=0
-for ip in "${IPS[@]}"; do
-  if ip neigh show "$ip" dev "$IFACE" 2>/dev/null | grep -qi permanent; then
-    ip neigh del "$ip" dev "$IFACE" 2>/dev/null && cleared=$((cleared+1))
-  fi
-done
+while read -r stale_ip; do
+  [ -n "$stale_ip" ] && ip neigh del "$stale_ip" dev "$IFACE" 2>/dev/null && cleared=$((cleared+1))
+done < <(ip neigh show dev "$IFACE" 2>/dev/null | awk '/PERMANENT/{print $1}')
 
 # Give ordinary resolution a fair chance before overriding anything. Entries
 # mid-resolution read as INCOMPLETE rather than FAILED, so a single pass would
@@ -89,5 +92,15 @@ for ip in "${failed[@]}"; do
   ip neigh replace "$ip" lladdr "$MAC" dev "$IFACE" nud permanent 2>/dev/null && pinned=$((pinned+1))
 done
 
-echo "pin-device-arp: ${#resolved[@]} resolved, pinned $pinned of ${#failed[@]} unresolved to $MAC (cleared $cleared stale)"
+# "pinned" means the entry was written, not that it works — this script never
+# tests whether the guessed MAC actually answers. A single-repeater network has
+# one right answer and this finds it reliably; a network with more than one
+# bridging device (confirmed present here as of 2026-09-13 — three different
+# MACs answered for seven devices in one session) has no single right answer,
+# and the vote can land on a MAC that leaves the device exactly as unreachable
+# as before, just now silently rather than obviously. If devices pinned here
+# keep failing in the bridge's own logs, that is the tell: move them onto
+# whichever access point the working devices are already on, the way Sala and
+# Master bedroom were moved — that fixed them permanently, this only guesses.
+echo "pin-device-arp: ${#resolved[@]} resolved, guessed $pinned of ${#failed[@]} unresolved -> $MAC (cleared $cleared stale, unverified)"
 exit 0
