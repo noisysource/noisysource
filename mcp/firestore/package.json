@@ -1,0 +1,13 @@
+{
+  "name": "firestore-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "firebase-admin": "14.3.0"
+  }
+}

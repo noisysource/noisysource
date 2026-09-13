@@ -1,0 +1,14 @@
+{
+  "//": "Shared, version-controlled Claude Code config for this repo. Never put credentials or personal command allow-lists here — those belong in the gitignored .claude/settings.local.json.",
+  "mcpServers": {
+    "firestore-dev": {
+      "command": "node",
+      "args": ["mcp/firestore/index.js"],
+      "env": {
+        "FIRESTORE_PROJECT_ID": "kidclub-dev",
+        "GOOGLE_APPLICATION_CREDENTIALS": "kidclub-dev-service-account.json"
+      }
+    }
+  },
+  "//_note_on_prod": "There is deliberately no firestore-prod entry here. The firestore MCP server (mcp/firestore/index.js) is read-only (list/get/query/count — no write, set, or delete tools), but prod read access is still opt-in only: add a firestore-prod entry to your local, gitignored .claude/settings.local.json when you specifically need it, and remove it again afterward. Never commit a prod entry to this file."
+}
