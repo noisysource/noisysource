@@ -75,3 +75,9 @@ firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b
 - [ ] Align naming conventions with monorepo standards
 - [ ] Review and update Firestore security rules
 - [ ] Fix `SocialShare` placeholder URL in footer
+
+---
+
+## Session start/end
+
+Read `STATUS.md` (same folder) before starting work — it holds what's in progress, what's next, and anything open that needs Renato's decision. Update it before ending a session, even mid-task: current state, next concrete step, open questions, and anything risky left in flight. This is how Renato resumes cold after a context switch, so write it for someone with zero memory of this session, not as a changelog entry.

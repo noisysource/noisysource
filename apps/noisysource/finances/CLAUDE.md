@@ -147,3 +147,9 @@ All data lives under `finances_entities/{entityId}/` sub-collections in the **(d
 - NoisyPhocus income from KidClub: deferred to next iteration
 - Bank integration (Nordigen/GoCardless): future, not current priority
 - IRS: Renato + Marisa file jointly (declaração conjunta)
+
+---
+
+## Session start/end
+
+Read `STATUS.md` (same folder) before starting work — it holds what's in progress, what's next, and anything open that needs Renato's decision. Update it before ending a session, even mid-task: current state, next concrete step, open questions, and anything risky left in flight. This is how Renato resumes cold after a context switch, so write it for someone with zero memory of this session, not as a changelog entry.
