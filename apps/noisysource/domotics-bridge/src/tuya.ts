@@ -32,7 +32,35 @@ export interface DeviceState {
 const ATTEMPTS = 2;
 const RETRY_DELAY_MS = 2500;
 
+/**
+ * Bound on every individual tuyapi call, enforced by us rather than trusted to
+ * the library.
+ *
+ * Found the hard way: the bridge ran for 27 days with the process alive,
+ * answering HTTP, CPU essentially idle — and had completed zero polls, because
+ * one `await device.connect()` never settled. No socket was open by then
+ * either, so the underlying connection was already gone; only the promise
+ * wrapping it was still pending. tuyapi is documented (see openDevice below)
+ * to report some failures via an `error` event rather than a rejection, and
+ * this is what that gap costs when it actually happens: not a fast failure,
+ * an infinite one, with nothing downstream ever finding out.
+ */
+const CALL_TIMEOUT_MS = 8000;
+
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${CALL_TIMEOUT_MS}ms`)),
+      CALL_TIMEOUT_MS,
+    );
+    promise.then(
+      v => { clearTimeout(timer); resolve(v); },
+      e => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
 
 /**
  * Build a device with an `error` listener already attached.
@@ -62,8 +90,8 @@ function openDevice(config: DeviceConfig): TuyAPI {
 async function readOnce(config: DeviceConfig): Promise<Record<string, unknown>> {
   const device = openDevice(config);
   try {
-    await device.connect();
-    const data = await device.get({ schema: true });
+    await withTimeout(device.connect(), `${config.name} connect`);
+    const data = await withTimeout(device.get({ schema: true }), `${config.name} get`);
     const dps = (data as { dps?: Record<string, unknown> })?.dps;
     if (!dps) throw new Error('no dps in response');
     return dps;
@@ -122,8 +150,8 @@ export async function sendCommands(
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const device = openDevice(config);
     try {
-      await device.connect();
-      await device.set({ multiple: true, data: dps });
+      await withTimeout(device.connect(), `${config.name} connect`);
+      await withTimeout(device.set({ multiple: true, data: dps }), `${config.name} set`);
       return;
     } catch (err) {
       lastError = err;
