@@ -62,15 +62,22 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
   useEffect(() => {
     if (!user?.email) return;
     (async () => {
-      const [transportSnap, studySnap] = await Promise.all([
+      // Study-room docs inconsistently use `email` or `contactEmail` depending on which
+      // admin flow created them (confirmed against prod: neither field alone covers every
+      // record) — query both and dedupe.
+      const [transportSnap, studyByEmailSnap, studyByContactEmailSnap] = await Promise.all([
         getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))),
         getDocs(query(col('studyroom'), where('email', '==', user.email))),
+        getDocs(query(col('studyroom'), where('contactEmail', '==', user.email))),
       ]);
+      const studyDocsById = new Map(
+        [...studyByEmailSnap.docs, ...studyByContactEmailSnap.docs].map(d => [d.id, d])
+      );
 
       const unclaimedTransport = transportSnap.docs.filter(
         d => !d.data().familyId && !CANCELLED_STATUSES.has(d.data().status)
       );
-      const unclaimedStudy = studySnap.docs.filter(
+      const unclaimedStudy = [...studyDocsById.values()].filter(
         d => !d.data().familyId && !CANCELLED_STATUSES.has(d.data().status)
       );
 
