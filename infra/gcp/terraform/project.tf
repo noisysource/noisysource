@@ -10,7 +10,10 @@ resource "google_project_service" "apis" {
     "run.googleapis.com",
     "firestore.googleapis.com",
     "orgpolicy.googleapis.com",
-    "routes.googleapis.com",
+    # routes.googleapis.com intentionally NOT enabled here: it produced an
+    # unexpected ~€500 charge and was disabled manually. Do not re-add
+    # without also adding its quota override + key restriction in the same
+    # change (see infra/gcp/terraform/quotas.tf notes once that exists).
     "places.googleapis.com",
   ])
   service                    = each.key
