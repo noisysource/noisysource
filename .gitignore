@@ -46,3 +46,7 @@ apps/noisyphocus/kidclub/src/lib/featureFlags.ts
 # App env files — project-specific, not committed
 apps/noisysource/finances/.env.*
 apps/noisysource/domotics/.env.*
+
+# Claude Code — personal/local-only config, never shared or committed
+.claude/settings.local.json
+.claude/worktrees/
