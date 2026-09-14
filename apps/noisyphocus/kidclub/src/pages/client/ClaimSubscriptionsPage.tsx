@@ -5,13 +5,20 @@ import { col, docRef } from '../../lib/db';
 import { familyService } from '../../services/familyService';
 import { calculateAge } from '../../lib/utils';
 
-interface PendingSub {
+const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
+
+interface LinkedSub {
+  collection: 'transportationSubscriptions' | 'studyroom';
   id: string;
-  childName: string;
   monthlyFee: number;
-  status: string;
-  schedule: any[];
+  scheduleLabel: string;
   notes?: string;
+}
+
+interface PendingChild {
+  key: string;
+  childName: string;
+  subs: LinkedSub[];
 }
 
 interface ChildForm {
@@ -26,14 +33,27 @@ const PT_DAY: Record<string, string> = {
   monday: 'Seg', tuesday: 'Ter', wednesday: 'Qua', thursday: 'Qui', friday: 'Sex',
 };
 
-function scheduleLabel(schedule: any[]): string {
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function transportScheduleLabel(schedule: any[]): string {
   const days = [...new Set(schedule.map((s: any) => PT_DAY[s.dayOfWeek] ?? s.dayOfWeek))];
-  return days.join(' · ') + (schedule.length === 1 ? ' — 1 viagem/semana' : ` — ${schedule.length} viagens/semana`);
+  return `🚌 ${days.join(' · ')}` + (schedule.length === 1 ? ' — 1 viagem/semana' : ` — ${schedule.length} viagens/semana`);
+}
+
+function studyScheduleLabel(days: any[]): string {
+  const labels = [...new Set(days.map((d: any) => PT_DAY[d.day] ?? d.day))];
+  return `📚 Sala de Estudo — ${labels.join(' · ')}`;
 }
 
 export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () => void }) {
   const user = useUser();
-  const [subs, setSubs] = useState<PendingSub[]>([]);
+  const [children, setChildren] = useState<PendingChild[]>([]);
   const [forms, setForms] = useState<Record<string, ChildForm>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -42,28 +62,61 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
   useEffect(() => {
     if (!user?.email) return;
     (async () => {
-      const snap = await getDocs(
-        query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))
-      );
-      const unclaimed: PendingSub[] = snap.docs
-        .filter(d => !d.data().familyId && d.data().status !== 'cancelled')
-        .map(d => {
-          const data = d.data();
-          return {
-            id: d.id,
-            childName: data.childName ?? data.kidName ?? '',
-            monthlyFee: data.monthlyFee ?? 0,
-            status: data.status ?? 'pending',
-            schedule: data.schedule ?? [],
-            notes: data.notes ?? '',
-          };
-        });
+      const [transportSnap, studySnap] = await Promise.all([
+        getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))),
+        getDocs(query(col('studyroom'), where('email', '==', user.email))),
+      ]);
 
-      setSubs(unclaimed);
+      const unclaimedTransport = transportSnap.docs.filter(
+        d => !d.data().familyId && !CANCELLED_STATUSES.has(d.data().status)
+      );
+      const unclaimedStudy = studySnap.docs.filter(
+        d => !d.data().familyId && !CANCELLED_STATUSES.has(d.data().status)
+      );
+
+      // Group by normalized child name; a study doc's linkedTransportId (when present)
+      // forces it into the same group as that transport doc, even if the name differs slightly.
+      const groups = new Map<string, PendingChild>();
+      const keyByTransportId = new Map<string, string>();
+
+      for (const d of unclaimedTransport) {
+        const data = d.data();
+        const childName = data.childName ?? data.kidName ?? '';
+        const key = normalizeName(childName);
+        keyByTransportId.set(d.id, key);
+        const group = groups.get(key) ?? { key, childName, subs: [] as LinkedSub[] };
+        group.subs.push({
+          collection: 'transportationSubscriptions',
+          id: d.id,
+          monthlyFee: data.monthlyFee ?? 0,
+          scheduleLabel: transportScheduleLabel(data.schedule ?? []),
+          notes: data.notes ?? '',
+        });
+        groups.set(key, group);
+      }
+
+      for (const d of unclaimedStudy) {
+        const data = d.data();
+        const childName = data.childName ?? data.studentName ?? '';
+        const linkedKey = data.linkedTransportId ? keyByTransportId.get(data.linkedTransportId) : undefined;
+        const key = linkedKey ?? normalizeName(childName);
+        const group = groups.get(key) ?? { key, childName, subs: [] as LinkedSub[] };
+        group.subs.push({
+          collection: 'studyroom',
+          id: d.id,
+          monthlyFee: data.monthlyPrice ?? 0,
+          scheduleLabel: studyScheduleLabel(data.days ?? []),
+          notes: data.note ?? '',
+        });
+        groups.set(key, group);
+      }
+
+      const unclaimed = [...groups.values()];
+      setChildren(unclaimed);
       const initial: Record<string, ChildForm> = {};
-      for (const sub of unclaimed) {
-        const parts = sub.childName.trim().split(' ');
-        initial[sub.id] = {
+      for (const child of unclaimed) {
+        const parts = child.childName.trim().split(' ');
+        initial[child.key] = {
           firstName: parts[0] ?? '',
           lastName: parts.slice(1).join(' '),
           dateOfBirth: '',
@@ -76,18 +129,18 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
     })();
   }, [user]);
 
-  function setField(subId: string, field: keyof ChildForm, value: string) {
-    setForms(prev => ({ ...prev, [subId]: { ...prev[subId], [field]: value } }));
-    setErrors(prev => { const { [`${subId}.${field}`]: _, ...rest } = prev; return rest; });
+  function setField(childKey: string, field: keyof ChildForm, value: string) {
+    setForms(prev => ({ ...prev, [childKey]: { ...prev[childKey], [field]: value } }));
+    setErrors(prev => { const { [`${childKey}.${field}`]: _, ...rest } = prev; return rest; });
   }
 
   async function handleConfirm() {
     const newErrors: Record<string, string> = {};
-    for (const sub of subs) {
-      const f = forms[sub.id];
-      if (!f.firstName.trim()) newErrors[`${sub.id}.firstName`] = 'Obrigatório';
-      if (!f.lastName.trim()) newErrors[`${sub.id}.lastName`] = 'Obrigatório';
-      if (!f.dateOfBirth) newErrors[`${sub.id}.dateOfBirth`] = 'Obrigatório';
+    for (const child of children) {
+      const f = forms[child.key];
+      if (!f.firstName.trim()) newErrors[`${child.key}.firstName`] = 'Obrigatório';
+      if (!f.lastName.trim()) newErrors[`${child.key}.lastName`] = 'Obrigatório';
+      if (!f.dateOfBirth) newErrors[`${child.key}.dateOfBirth`] = 'Obrigatório';
     }
     if (Object.keys(newErrors).length) { setErrors(newErrors); return; }
 
@@ -97,8 +150,8 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
         user!.uid, user!.name || user!.email?.split('@')[0] || '', user!.email || ''
       );
 
-      for (const sub of subs) {
-        const f = forms[sub.id];
+      for (const child of children) {
+        const f = forms[child.key];
         const dob = new Date(f.dateOfBirth);
         const age = calculateAge(dob);
 
@@ -116,13 +169,15 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
           updatedAt: new Date(),
         });
 
-        await updateDoc(docRef('transportationSubscriptions', sub.id), {
-          familyId: family.id,
-          childId: childRef.id,
-          userId: user!.uid,
-          childAge: age,
-          source: 'web',
-        });
+        for (const sub of child.subs) {
+          await updateDoc(docRef(sub.collection, sub.id), {
+            familyId: family.id,
+            childId: childRef.id,
+            userId: user!.uid,
+            childAge: age,
+            source: 'web',
+          });
+        }
       }
 
       onComplete();
@@ -150,25 +205,28 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
           <div className="text-4xl mb-3">🚌</div>
           <h1 className="text-2xl font-bold text-gray-900">Bem-vindo ao KidClub!</h1>
           <p className="text-gray-500 mt-2">
-            Encontrámos {subs.length === 1 ? 'uma criança associada' : `${subs.length} crianças associadas`} ao seu email.
+            Encontrámos {children.length === 1 ? 'uma criança associada' : `${children.length} crianças associadas`} ao seu email.
             Por favor confirme os dados para ligar a sua conta.
           </p>
         </div>
 
-        {/* One card per child */}
-        {subs.map(sub => {
-          const f = forms[sub.id] ?? { firstName: '', lastName: '', dateOfBirth: '', schoolName: '', schoolYear: '' };
-          const err = (field: keyof ChildForm) => errors[`${sub.id}.${field}`];
+        {/* One card per child (may combine transport + study room subscriptions) */}
+        {children.map(child => {
+          const f = forms[child.key] ?? { firstName: '', lastName: '', dateOfBirth: '', schoolName: '', schoolYear: '' };
+          const err = (field: keyof ChildForm) => errors[`${child.key}.${field}`];
+          const totalFee = child.subs.reduce((sum, s) => sum + s.monthlyFee, 0);
           return (
-            <div key={sub.id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div key={child.key} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
               {/* Sub summary */}
               <div className="bg-blue-50 border-b border-blue-100 px-6 py-4 flex items-center justify-between">
                 <div>
-                  <p className="font-semibold text-blue-900">{sub.childName}</p>
-                  <p className="text-sm text-blue-600">{scheduleLabel(sub.schedule)}</p>
+                  <p className="font-semibold text-blue-900">{child.childName}</p>
+                  {child.subs.map(sub => (
+                    <p key={sub.id} className="text-sm text-blue-600">{sub.scheduleLabel}</p>
+                  ))}
                 </div>
-                {sub.monthlyFee > 0 && (
-                  <span className="font-bold text-blue-800 text-lg">€{sub.monthlyFee.toFixed(0)}/mês</span>
+                {totalFee > 0 && (
+                  <span className="font-bold text-blue-800 text-lg">€{totalFee.toFixed(0)}/mês</span>
                 )}
               </div>
 
@@ -182,7 +240,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                     <input
                       type="text"
                       value={f.firstName}
-                      onChange={e => setField(sub.id, 'firstName', e.target.value)}
+                      onChange={e => setField(child.key, 'firstName', e.target.value)}
                       className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err('firstName') ? 'border-red-400' : 'border-gray-300'}`}
                     />
                     {err('firstName') && <p className="text-xs text-red-500 mt-1">{err('firstName')}</p>}
@@ -192,7 +250,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                     <input
                       type="text"
                       value={f.lastName}
-                      onChange={e => setField(sub.id, 'lastName', e.target.value)}
+                      onChange={e => setField(child.key, 'lastName', e.target.value)}
                       className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err('lastName') ? 'border-red-400' : 'border-gray-300'}`}
                     />
                     {err('lastName') && <p className="text-xs text-red-500 mt-1">{err('lastName')}</p>}
@@ -204,7 +262,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                   <input
                     type="date"
                     value={f.dateOfBirth}
-                    onChange={e => setField(sub.id, 'dateOfBirth', e.target.value)}
+                    onChange={e => setField(child.key, 'dateOfBirth', e.target.value)}
                     max={new Date().toISOString().split('T')[0]}
                     className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err('dateOfBirth') ? 'border-red-400' : 'border-gray-300'}`}
                   />
@@ -217,7 +275,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                     <input
                       type="text"
                       value={f.schoolName}
-                      onChange={e => setField(sub.id, 'schoolName', e.target.value)}
+                      onChange={e => setField(child.key, 'schoolName', e.target.value)}
                       placeholder="Nome da escola"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
                     />
@@ -226,7 +284,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                     <label className="block text-xs text-gray-500 mb-1">Ano escolar</label>
                     <select
                       value={f.schoolYear}
-                      onChange={e => setField(sub.id, 'schoolYear', e.target.value)}
+                      onChange={e => setField(child.key, 'schoolYear', e.target.value)}
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
                     >
                       <option value="">Selecionar</option>
@@ -237,9 +295,9 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
                   </div>
                 </div>
 
-                {sub.notes && (
-                  <p className="text-xs text-gray-400 italic">Nota: {sub.notes}</p>
-                )}
+                {child.subs.map(sub => sub.notes && (
+                  <p key={sub.id} className="text-xs text-gray-400 italic">Nota: {sub.notes}</p>
+                ))}
               </div>
             </div>
           );
