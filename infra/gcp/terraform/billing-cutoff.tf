@@ -98,3 +98,22 @@ resource "google_cloudfunctions2_function" "billing_cutoff" {
     ignore_changes = [build_config]
   }
 }
+
+# The Pub/Sub push subscription authenticates its invocation with an OIDC
+# token from billing_cutoff_agent (same SA the function runs as) -- without
+# this, every delivery fails at the infra layer with "IAM principal lacks
+# {run.routes.invoke} permission" before the function code ever runs.
+# Discovered by actually testing the deployed function, not by inspection.
+#
+# Note: the underlying Cloud Run service name is NOT the function's name --
+# Cloud Functions 2nd gen lowercases it ("billingCutoff" -> "billingcutoff").
+# Using service_config[0].service (the actual resolved resource path)
+# instead of the function name avoids that mismatch.
+resource "google_cloud_run_service_iam_member" "billing_cutoff_invoker" {
+  count    = var.manage_combined_budget ? 1 : 0
+  project  = var.gcp_project_id
+  location = var.gcp_region
+  service  = split("/", google_cloudfunctions2_function.billing_cutoff[0].service_config[0].service)[length(split("/", google_cloudfunctions2_function.billing_cutoff[0].service_config[0].service)) - 1]
+  role     = "roles/run.invoker"
+  member   = google_service_account.billing_cutoff_agent[0].member
+}
