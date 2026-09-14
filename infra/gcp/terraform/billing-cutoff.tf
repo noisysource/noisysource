@@ -27,6 +27,13 @@ resource "google_project_iam_member" "billing_cutoff_agent_dev" {
   member  = google_service_account.billing_cutoff_agent[0].member
 }
 
+resource "google_project_iam_member" "billing_cutoff_agent_dev_firestore" {
+  count   = var.manage_combined_budget ? 1 : 0
+  project = var.gcp_project_id
+  role    = "roles/datastore.user"
+  member  = google_service_account.billing_cutoff_agent[0].member
+}
+
 resource "google_project_iam_member" "billing_cutoff_agent_prod" {
   count    = var.manage_combined_budget ? 1 : 0
   provider = google.prod

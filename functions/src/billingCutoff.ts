@@ -59,7 +59,15 @@ async function notifyRenato(costAmount: number, budgetAmount: number, currency: 
 }
 
 export const billingCutoff = onMessagePublished(
-  { topic: "billing-budget-cutoff-trigger", region: "europe-west3" },
+  {
+    topic: "billing-budget-cutoff-trigger",
+    region: "europe-west3",
+    // Must be set here, not just in Terraform's service_config: firebase
+    // deploy doesn't read the Terraform-managed service account, and will
+    // silently fall back to the default compute SA (which lacks
+    // serviceusage.serviceUsageAdmin) if this isn't pinned explicitly.
+    serviceAccount: "billing-cutoff-agent@kidclub-dev.iam.gserviceaccount.com",
+  },
   async (event) => {
     const data = (event.data.message.json ?? {}) as BillingBudgetNotification;
     const costAmount = data.costAmount ?? 0;
