@@ -1424,6 +1424,11 @@ export default function TransportPlannerPage() {
   const [manualKids, setManualKids] = useState<PlannerKid[]>(saved.manualKids);
   const [cellRoutes, setCellRoutes] = useState<Record<string, OptimizedRoute | null>>(saved.cellRoutes ?? {});
   const [cellLoading, setCellLoading] = useState<Record<string, boolean>>({});
+  // Signature of the run inputs (kids/addresses/capacity) as of the last solve for that
+  // run id — lets "Recalculate All" skip runs that haven't changed instead of re-buying
+  // every run's route matrix on every click (each click was costing real money: N²
+  // Routes API elements per run × every run in the week, even for untouched runs).
+  const lastSolvedSignatureRef = useRef<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showActiveKids, setShowActiveKids] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -1506,6 +1511,15 @@ export default function TransportPlannerPage() {
     return result;
   }, [allKids]);
 
+  function computeRunSignature(effectiveRun: AutoRun, vanCapacity: number): string {
+    return JSON.stringify({
+      capacity: vanCapacity,
+      direction: effectiveRun.direction,
+      targetArrival: effectiveRun.targetArrival,
+      stops: effectiveRun.stops.map(s => [s.kidId, s.pickupAddr, s.dropoffAddr, s.requestedTime]),
+    });
+  }
+
   function getEffectiveRun(run: AutoRun): AutoRun {
     const baseStops = run.stops
       .filter(s => !(runRemovals[run.id] ?? []).includes(s.kidId))
@@ -1534,6 +1548,7 @@ export default function TransportPlannerPage() {
     try {
       const result = await optimizeAutoRun(effectiveRun, config.vanCapacity);
       setCellRoutes(p => ({ ...p, [runId]: result }));
+      lastSolvedSignatureRef.current[runId] = computeRunSignature(effectiveRun, config.vanCapacity);
       if (result?.unassigned.length) console.warn(`[optimizeAutoRun] ${runId}: sem encaixe para`, result.unassigned);
     } catch (e) {
       console.error('[optimizeAutoRun] failed', runId, e);
@@ -1548,7 +1563,15 @@ export default function TransportPlannerPage() {
   }
 
   async function handleOptimizeAll() {
-    for (const run of allRuns) await handleOptimizeRun(run);
+    for (const run of allRuns) {
+      const effectiveRun = getEffectiveRun(run);
+      const signature = computeRunSignature(effectiveRun, config.vanCapacity);
+      // Skip runs whose kids/addresses/capacity haven't changed since their last solve —
+      // "Recalculate All" used to re-buy every run's route matrix unconditionally, which is
+      // the actual mechanism behind a past unexpected Routes API bill.
+      if (cellRoutes[run.id] !== undefined && lastSolvedSignatureRef.current[run.id] === signature) continue;
+      await runOptimization(run.id, effectiveRun);
+    }
   }
 
   function handleCombinedSave(run: AutoRun, opts: {
