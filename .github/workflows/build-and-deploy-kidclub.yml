@@ -33,7 +33,11 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
-      - name: Build KidClub app
+      - name: Build KidClub app (Dev)
+        if: github.event.inputs.environment == 'dev'
+        run: pnpm --filter kidclub build:staging
+      - name: Build KidClub app (Prod/default)
+        if: github.event.inputs.environment != 'dev'
         run: pnpm --filter kidclub build
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
