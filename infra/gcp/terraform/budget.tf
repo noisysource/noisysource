@@ -75,6 +75,10 @@ resource "google_billing_budget" "combined_budget" {
   all_updates_rule {
     monitoring_notification_channels = []
     disable_default_iam_recipients   = false # keep default: emails billing account admins
+    # Feeds the automated cutoff (see billing-cutoff.tf) — it disables Places/Routes
+    # on both projects once costAmount reaches the €50 line. Doesn't replace the
+    # email above, which still fires at every threshold including the €30 warning.
+    pubsub_topic = google_pubsub_topic.billing_cutoff_trigger[0].id
   }
 }
 

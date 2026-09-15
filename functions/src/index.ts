@@ -8,6 +8,7 @@ export { getGcpCosts } from "./getGcpCosts";
 export { expandTemplatesInRange, postPlannedInstance } from "./LedgerFunctions";
 export * from "./OrgDataTools";
 export { sendEmailFromOutbox } from "./SendEmailFromOutbox";
+export { billingCutoff } from "./billingCutoff";
 export { createRecurringExpenses } from "./recurringExpenses";
 export { impersonateUser } from "./impersonation";
 export { lookupUserByEmail } from "./userManagement";
