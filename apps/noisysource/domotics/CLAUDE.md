@@ -60,3 +60,9 @@ Real-time live data (amps, watts, kWh streaming) will eventually require persist
 ## Notes
 - IAP setup reference: `../../../infra/gcp/`
 - Previous energy monitoring work exists in a separate repo — review before building to extract useful patterns
+
+---
+
+## Session start/end
+
+Read `STATUS.md` (same folder) before starting work — it holds what's in progress, what's next, and anything open that needs Renato's decision. Update it before ending a session, even mid-task: current state, next concrete step, open questions, and anything risky left in flight. This is how Renato resumes cold after a context switch, so write it for someone with zero memory of this session, not as a changelog entry.

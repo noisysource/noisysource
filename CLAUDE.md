@@ -116,3 +116,17 @@ This is a monorepo with several Claude Code sessions potentially running in para
 - **Deploys stay human-triggered for anything that touches prod.** `deploy-finances.yml` and `deploy-functions.yml` are `workflow_dispatch`-only (manual) — keep it that way. `build-and-deploy-kidclub.yml` auto-deploys on push to `main`/`staging`; an agent should only land on `main` via a reviewed PR, never push straight to it.
 - **Clean up your worktree when the task is done:** `git worktree remove .claude/worktrees/<short-task-name>` after the branch is merged (or abandoned). A stale worktree is how real credentials end up copied into a forgotten folder (this happened once already — see the audit notes) — don't let it happen again.
 - **Visibility:** if you're not sure what agents/worktrees currently exist, `git worktree list` from the main checkout shows every active one and its branch. Treat any worktree not shown there, or any branch you don't recognize, as something to ask about before building on top of it.
+
+### Session start/end ritual
+
+Renato works on this solo, alongside a full-time job elsewhere, switching between KidClub (live/prod), Finances, and Domotics in short, fragmented sessions. Losing track of where a given app was left is the main real cost of that switching — treat it as a correctness problem, not a nice-to-have.
+
+- Each app (`apps/noisyphocus/kidclub`, `apps/noisysource/finances`, `apps/noisysource/domotics`) has a `STATUS.md`. Read it at the start of any session on that app. Update it before ending one — including mid-task, including when interrupted — with: what's currently in progress, what was last completed, the concrete next step, any open question that needs Renato's decision, and anything risky left in flight (a prod-touching change, an unreviewed PR, a new metered API call).
+- Write `STATUS.md` for someone with zero memory of the session, because that's usually exactly who reads it next — Renato after a context switch, or a fresh agent with no prior context.
+- A cross-app data/feature dependency (e.g. "KidClub now produces a field FinHub needs") goes in the "Cross-App Data Contracts" section below, not just in one app's STATUS.md, so the other app's agent finds it without being told where to look.
+
+## Cross-App Data Contracts
+
+Running log of data or behavior one app produces that another app consumes. Add an entry here whenever a change in one app matters to another; the consuming app's agent should check this section, not rely on being told verbally each time.
+
+_(none yet — add entries as they come up, e.g.: "KidClub `families/{id}.transportDiscountTotal` (added <date>) — FinHub should read this for the sibling-discount income report instead of recomputing it.")_
