@@ -5,8 +5,8 @@
     "source": "functions",
     "runtime": "nodejs22",
     "predeploy": [
-      "pnpm -w --filter @shared build",
-      "pnpm -w --filter functions build"
+      "pnpm --filter @shared build",
+      "pnpm --filter functions build"
     ]
   },
   "hosting": [

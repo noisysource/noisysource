@@ -33,10 +33,6 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
-      - name: Prepare Functions for deployment
-        run: |
-          cd functions
-          pnpm install --prod
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -68,10 +64,6 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
-      - name: Prepare Functions for deployment
-        run: |
-          cd functions
-          pnpm install --prod
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
