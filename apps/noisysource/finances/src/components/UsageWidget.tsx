@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { httpsCallable } from "firebase/functions";
-import { functions } from "../lib/firebase"; // ensure this is getFunctions(app, "europe-west1")
+import { functions } from "../lib/firebase"; // getFunctions(app, "europe-west3") — matches getUsageSnapshot's region
 import type { UsageSnapshot } from "../types/usage";
 
 function Bar({ used, free, label }: { used: number; free: number; label: string }) {

@@ -59,7 +59,7 @@ async function sumMetric(projectId: string, metricType: string, start: Date, end
   }
 }
 
-export const getUsageSnapshot = onCall<unknown, any>(async () => {
+export const getUsageSnapshot = onCall<unknown, any>({ region: "europe-west3" }, async () => {
   const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
   if (!projectId) throw new Error("Missing project id");
   const { start, end, label } = monthWindowUTC();
