@@ -131,7 +131,14 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
       await Promise.all(unclaimed.map(async child => {
         const existingChildId = child.subs.find(s => s.childId)?.childId;
         if (existingChildId) {
-          child.existingChild = await familyService.getChild(existingChildId);
+          try {
+            child.existingChild = await familyService.getChild(existingChildId);
+          } catch (e) {
+            // Permission-denied or any other read failure here shouldn't strand the
+            // whole page on an infinite spinner — fall back to the create-new-child
+            // path (same as if no childId had been set at all).
+            console.error('[ClaimSubscriptionsPage] failed to fetch existing child', existingChildId, e);
+          }
         }
       }));
 
