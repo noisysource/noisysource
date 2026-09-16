@@ -501,7 +501,7 @@ export const eventService = {
               end: Timestamp.fromDate(new Date(startDt.getTime() + 5 * 60 * 60 * 1000)),
               type: 'study',
               bookingId: entry.id,
-              status: (entry.status === 'confirmed' || (entry.status as string) === 'active') ? 'confirmed' : 'pending',
+              status: entry.status === 'active' ? 'confirmed' : 'pending',
               isCancelled,
               booking: {
                 childName: entry.childName,

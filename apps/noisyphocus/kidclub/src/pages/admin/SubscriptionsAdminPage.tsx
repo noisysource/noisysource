@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { getDocs, getDoc, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import PlacesInput from '../../components/PlacesInput';
-import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../components/EnrollmentDetailsForm';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, EMPTY_ENROLLMENT_ADDRESS, validateEnrollmentDetails } from '../../components/EnrollmentDetailsForm';
 import { getTransportationConfig } from '../../services/transportationService';
 import { familyService } from '../../services/familyService';
 import { TransportationConfig } from '@shared/models/Transportation';
@@ -11,11 +11,10 @@ import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { Child } from '@shared/models';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../components/WeekSchedulePicker';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
-import { DiscountRule, AppliedDiscount } from '@shared/models/Discount';
-import { getDiscountRules, applyDiscounts, grossFromAppliedDiscounts } from '../../services/discountService';
-import { calculateAge } from '../../lib/utils';
+import { DiscountRule, AppliedDiscount, DiscountScope } from '@shared/models/Discount';
+import { getDiscountRules, applyDiscounts, resolveAutoDiscounts, grossFromAppliedDiscounts, DayLike } from '../../services/discountService';
+import { calculateAge, SubStatus, normalizeSubStatus } from '../../lib/utils';
 
-type SubStatus = 'planned' | 'pending' | 'offered' | 'active' | 'cancelled';
 type TypeFilter = 'all' | 'transport' | 'study' | 'unlinked';
 
 interface SubItem {
@@ -36,6 +35,10 @@ interface SubItem {
   // Transport
   schedule?: any[];
   monthlyFee?: number;
+  // Operational tracking only — never gates status. Transport's old "planned"
+  // status used to double as "awaiting route assignment"; now that's this
+  // independent boolean instead of a hidden third status axis.
+  routeAssigned?: boolean;
   // Returning student discount (legacy)
   returningStudent?: boolean;
   originalFee?: number;    // transport: fee before discount
@@ -50,10 +53,14 @@ interface SubItem {
   createdAt: Date;
   cancelRequested?: boolean;
   feeReviewRequired?: boolean;
-  // Set when an admin edits a subscription already linked to a family/child — surfaced
-  // to the parent as a review prompt (confirm/edit/reject) on their dashboard, cleared
-  // once they act. See FamilyDashboardPage.tsx and the client subscription detail pages.
-  needsClientReview?: boolean;
+  // Two-way in-app review flags (no email for this). clientReviewPending: set
+  // whenever admin changes a subscription (status or details) that's already
+  // linked to a family/child — surfaced as a review prompt on the parent's
+  // dashboard, cleared once they act. adminReviewPending: set whenever a
+  // client-initiated change happens (e.g. a cancel request) — surfaced here,
+  // cleared once admin views/acts on it.
+  clientReviewPending?: boolean;
+  adminReviewPending?: boolean;
 }
 
 const toDate = (v: any): Date => v?.toDate?.() ?? new Date(v ?? 0);
@@ -85,14 +92,11 @@ const StatusBadge = ({ status, cancelRequested }: { status: SubStatus; cancelReq
     return <span className="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full font-medium">Cancelamento pedido</span>;
   const map: Record<SubStatus, string> = {
     pending: 'bg-yellow-100 text-yellow-800',
-    planned: 'bg-blue-100 text-blue-800',
-    offered: 'bg-purple-100 text-purple-800',
     active: 'bg-green-100 text-green-800',
     cancelled: 'bg-gray-100 text-gray-600',
   };
   const label: Record<SubStatus, string> = {
-    pending: 'Pendente', planned: 'Planeado', offered: 'Aguarda confirmação',
-    active: 'Ativa', cancelled: 'Cancelada',
+    pending: 'Pendente', active: 'Ativa', cancelled: 'Cancelada',
   };
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[status]}`}>{label[status]}</span>;
 };
@@ -119,6 +123,15 @@ const tripsToSchedule = (trips: TripTemplate[]) =>
   trips.flatMap(t => t.days.map(day => ({
     dayOfWeek: day, pickupTime: t.time, pickupLocation: t.pickup, dropoffLocation: t.dropoff,
   })));
+
+// One DayLike entry per weekday that has at least one trip, with transportTrips.length
+// set to how many trips run that day — structurally enough for resolveAutoDiscounts'
+// auto_multitrip check, without needing the trips grouped by day already.
+const daysLikeFromTrips = (trips: TripTemplate[]): DayLike[] => {
+  const perDay = new Map<string, number>();
+  for (const t of trips) for (const d of t.days) perDay.set(d, (perDay.get(d) ?? 0) + 1);
+  return [...perDay.values()].map(count => ({ services: { transportTrips: Array(count).fill(null) } }));
+};
 
 // ─── Reusable trip list editor ────────────────────────────────────────────────
 function TripEditor({ trips, onChange, accent = 'indigo' }: { trips: TripTemplate[]; onChange: (t: TripTemplate[]) => void; accent?: string }) {
@@ -171,12 +184,66 @@ function TripEditor({ trips, onChange, accent = 'indigo' }: { trips: TripTemplat
   );
 }
 
+// ─── Discount picker (shared by ManualEnrollForm and EditForm) ────────────────
+// Single source of truth for the fee math: applyDiscounts() here is the exact
+// same function the list view's toggleManualDiscount/computeGross use, so
+// whatever total is shown on screen is exactly what gets persisted.
+function DiscountPicker({ rules, scope, selected, onToggle, gross }: {
+  rules: DiscountRule[];
+  scope: DiscountScope;
+  selected: AppliedDiscount[];
+  onToggle: (rule: DiscountRule) => void;
+  gross: number;
+}) {
+  const applicable = rules.filter(r => r.active && r.appliesTo.includes(scope));
+  const net = applyDiscounts(gross, selected);
+  if (applicable.length === 0 && selected.length === 0) return null;
+  return (
+    <div className="space-y-2 bg-gray-50 rounded-lg p-3 border border-gray-100">
+      <p className="text-xs font-semibold text-gray-600">Descontos</p>
+      <div className="flex flex-wrap gap-2">
+        {applicable.map(rule => {
+          const isSelected = selected.some(d => d.ruleId === rule.id);
+          return (
+            <label key={rule.id}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border cursor-pointer transition-colors ${isSelected ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-400'}`}>
+              <input type="checkbox" checked={isSelected} onChange={() => onToggle(rule)} className="accent-blue-600" />
+              {rule.name} -{(rule.percentage * 100).toFixed(0)}%
+            </label>
+          );
+        })}
+        {applicable.length === 0 && <p className="text-xs text-gray-400">Sem regras de desconto para este serviço.</p>}
+      </div>
+      <div className="flex items-baseline gap-2 text-sm pt-1">
+        {net < gross - 0.01 && <span className="text-gray-400 line-through">€{gross.toFixed(2)}</span>}
+        <span className="font-semibold text-gray-800">€{net.toFixed(2)}/mês</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Edit Form ────────────────────────────────────────────────────────────────
-function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: TransportationConfig | null; onSave: (updated: Partial<SubItem>) => void; onCancel: () => void; }) {
-  const [name, setName] = useState(item.childName);
-  const [parentName, setParentName] = useState(item.contactName ?? '');
-  const [email, setEmail] = useState(item.contactEmail ?? '');
-  const [phone, setPhone] = useState(item.contactPhone ?? '');
+// Same shared EnrollmentDetailsForm + validation ManualEnrollForm and the
+// parent flows use — child/contact fields are one implementation, not a
+// second one that can drift out of sync again.
+function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, onCancel }: {
+  item: SubItem;
+  transportConfig: TransportationConfig | null;
+  studyConfig: StudyCenterConfig | null;
+  discountRules: DiscountRule[];
+  onSave: (updated: Partial<SubItem>) => void;
+  onCancel: () => void;
+}) {
+  const [details, setDetails] = useState<EnrollmentDetailsValue>(() => {
+    const parts = item.childName.trim().split(' ');
+    return {
+      ...EMPTY_ENROLLMENT_DETAILS,
+      firstName: parts[0] ?? '', lastName: parts.slice(1).join(' '),
+      schoolName: item.schoolName ?? '', schoolYear: item.schoolYear ?? '',
+      contactName: item.contactName ?? '', contactEmail: item.contactEmail ?? '', contactPhone: item.contactPhone ?? '',
+    };
+  });
+  const [detailErrors, setDetailErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
   const [note, setNote] = useState(item.note ?? '');
   const [trips, setTrips] = useState<TripTemplate[]>(
     item._type === 'transport' ? tripsFromSchedule(item.schedule ?? []) : [newTrip()]
@@ -184,9 +251,43 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
   const [studyDays, setStudyDays] = useState<string[]>(
     item._type === 'study' ? (item.days ?? []).map((d: any) => typeof d === 'string' ? d : d?.day ?? d?.dayOfWeek ?? '') : []
   );
-  const [schoolName, setSchoolName] = useState(item.schoolName ?? '');
-  const [schoolYear, setSchoolYear] = useState(item.schoolYear ?? '');
   const [saving, setSaving] = useState(false);
+  const [existingChild, setExistingChild] = useState<Child | null>(null);
+  const [loadingChild, setLoadingChild] = useState(!!item.childId);
+
+  // dateOfBirth/homeAddress live on the children doc, not the subscription —
+  // fetch it once so the shared form can be pre-filled with what the admin
+  // already entered at creation time, same as ManualEnrollForm's match flow.
+  useEffect(() => {
+    if (!item.childId) return;
+    familyService.getChild(item.childId).then(c => {
+      if (!c) return;
+      setExistingChild(c);
+      setDetails(prev => ({
+        ...prev,
+        firstName: c.firstName ?? prev.firstName,
+        lastName: c.lastName ?? prev.lastName,
+        dateOfBirth: c.dateOfBirth && !isNaN(c.dateOfBirth.getTime()) ? c.dateOfBirth.toISOString().split('T')[0] : '',
+        homeAddress: c.homeAddress
+          ? { street: c.homeAddress.street ?? '', city: c.homeAddress.city ?? '', postalCode: c.homeAddress.postalCode ?? '', country: c.homeAddress.country ?? '' }
+          : EMPTY_ENROLLMENT_ADDRESS,
+      }));
+    }).finally(() => setLoadingChild(false));
+  }, [item.childId]);
+
+  // Discount selection — seeded from the subscription's already-applied discounts
+  // (respecting prior admin decisions); only falls back to resolveAutoDiscounts()
+  // as a helpful default for legacy subscriptions that never had any recorded.
+  const [selectedDiscounts, setSelectedDiscounts] = useState<AppliedDiscount[]>(() => {
+    if (item.appliedDiscounts?.length) return item.appliedDiscounts;
+    const scopeDays: DayLike[] = item._type === 'transport' ? daysLikeFromTrips(trips) : [];
+    return resolveAutoDiscounts(discountRules, item._type, scopeDays, item.schoolName);
+  });
+  const toggleDiscount = (rule: DiscountRule) => {
+    setSelectedDiscounts(prev => prev.some(d => d.ruleId === rule.id)
+      ? prev.filter(d => d.ruleId !== rule.id)
+      : [...prev, { ruleId: rule.id, name: rule.name, percentage: rule.percentage, appliedAt: new Date(), appliedBy: 'admin' as const }]);
+  };
 
   const toggleStudyDay = (day: string) =>
     setStudyDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]);
@@ -194,43 +295,79 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
   // Already linked to a family/child — the parent will see this edit and must
   // acknowledge it, rather than it silently changing under them.
   const linkedToFamily = !!item.familyId;
+  const scope: DiscountScope = item._type;
+
+  const gross = item._type === 'transport'
+    ? tripsToSchedule(trips).length * (transportConfig?.flatRatePerTrip ?? 0) * activeWeeksInPattern(item.weekPattern ?? 'all')
+    : (() => {
+        const ratePerDay = studyConfig
+          ? (studyConfig.pricePerDayPerWeek != null && studyConfig.weeksPerMonth != null
+              ? studyConfig.pricePerDayPerWeek * studyConfig.weeksPerMonth
+              : studyConfig.monthlyPricePerWeekday)
+          : 0;
+        const weeks = activeWeeksInPattern(item.weekPattern ?? 'all');
+        const weeksBase = studyConfig?.weeksPerMonth ?? 4;
+        return studyDays.length * ratePerDay * (weeks / weeksBase);
+      })();
+  const netFee = Math.round(applyDiscounts(gross, selectedDiscounts) * 100) / 100;
 
   const submit = async () => {
+    const errs = validateEnrollmentDetails(details);
+    if (Object.keys(errs).length) { setDetailErrors(errs); return; }
     setSaving(true);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      const fullName = `${details.firstName.trim()} ${details.lastName.trim()}`;
       const patch: Record<string, any> = {
-        childName: name.trim(), contactName: parentName.trim() || null,
-        contactEmail: email.trim() || null,
+        childName: fullName, contactName: details.contactName.trim() || null,
+        contactEmail: details.contactEmail.trim() || null,
         note: note.trim() || null, updatedAt: new Date(),
+        appliedDiscounts: selectedDiscounts,
       };
-      if (linkedToFamily) patch.needsClientReview = true;
+      if (linkedToFamily) patch.clientReviewPending = true;
       if (item._type === 'transport') {
-        patch.contactMobile = phone.trim() || null;
+        patch.contactMobile = details.contactPhone.trim() || null;
         patch.schedule = tripsToSchedule(trips);
-        if (config) patch.monthlyFee = patch.schedule.length * config.flatRatePerTrip * 4;
-        // Always save schoolName on the subscription itself as fallback
-        patch.schoolName = schoolName.trim() || null;
-        // Also save to the children doc (canonical source) when childId is available
-        if (item.childId) {
-          await updateDoc(docRef('children', item.childId), { schoolName: schoolName.trim() || null, updatedAt: new Date() });
-        }
+        patch.schoolName = details.schoolName.trim() || null;
+        patch.monthlyFee = netFee;
       } else {
-        patch.contactPhone = phone.trim() || null;
-        patch.schoolName = schoolName.trim() || null;
-        patch.schoolYear = schoolYear.trim() || null;
+        patch.contactPhone = details.contactPhone.trim() || null;
+        patch.schoolName = details.schoolName.trim() || null;
+        patch.schoolYear = details.schoolYear.trim() || null;
         patch.days = studyDays;
+        patch.monthlyPrice = netFee;
+        patch.basePrice = gross;
       }
       await updateDoc(docRef(colName, item.id), patch);
+
+      // Child-level fields (dateOfBirth/homeAddress/schoolName/schoolYear/name)
+      // live on the children doc, not the subscription.
+      if (item.childId) {
+        const dob = new Date(details.dateOfBirth + 'T12:00:00');
+        await updateDoc(docRef('children', item.childId), {
+          firstName: details.firstName.trim(), lastName: details.lastName.trim(),
+          dateOfBirth: dob, age: calculateAge(dob),
+          schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
+          homeAddress: {
+            street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
+            postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
+          },
+          updatedAt: new Date(),
+        });
+      }
+
       onSave({
-        childName: name.trim(), contactName: parentName.trim() || undefined,
-        contactEmail: email.trim() || undefined,
-        contactPhone: phone.trim() || undefined, note: note.trim() || undefined,
+        childName: fullName, contactName: details.contactName.trim() || undefined,
+        contactEmail: details.contactEmail.trim() || undefined,
+        contactPhone: details.contactPhone.trim() || undefined, note: note.trim() || undefined,
         schedule: item._type === 'transport' ? patch.schedule : item.schedule,
-        monthlyFee: item._type === 'transport' ? (patch.monthlyFee ?? item.monthlyFee) : item.monthlyFee,
-        schoolName: schoolName.trim() || undefined, schoolYear: schoolYear.trim() || undefined,
+        monthlyFee: item._type === 'transport' ? netFee : item.monthlyFee,
+        monthlyPrice: item._type === 'study' ? netFee : item.monthlyPrice,
+        basePrice: item._type === 'study' ? gross : item.basePrice,
+        schoolName: details.schoolName.trim() || undefined, schoolYear: details.schoolYear.trim() || undefined,
         days: item._type === 'study' ? studyDays : item.days,
-        needsClientReview: linkedToFamily || item.needsClientReview,
+        appliedDiscounts: selectedDiscounts,
+        clientReviewPending: linkedToFamily || item.clientReviewPending,
       });
     } finally { setSaving(false); }
   };
@@ -245,29 +382,15 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
           Esta inscrição já está associada a uma família — a alteração ficará marcada para revisão do encarregado.
         </p>
       )}
-      <div className="grid grid-cols-2 gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Nome da criança *" className={fieldCls} />
-        <input value={parentName} onChange={e => setParentName(e.target.value)} placeholder="Nome do encarregado" className={fieldCls} />
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className={fieldCls} />
-        <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Telefone" className={fieldCls} />
-      </div>
-      {item._type === 'study' && (
-        <div className="grid grid-cols-2 gap-2">
-          <PlacesInput
-            value={schoolName} onChange={setSchoolName} placeholder="Escola"
-            types={['school', 'primary_school', 'secondary_school']} nameOnly
-            className={fieldCls}
-          />
-          <input value={schoolYear} onChange={e => setSchoolYear(e.target.value)} placeholder="Ano escolar" className={fieldCls} />
-        </div>
+      {loadingChild ? (
+        <p className="text-xs text-gray-400">A carregar dados da criança…</p>
+      ) : (
+        <EnrollmentDetailsForm value={details} onChange={setDetails} errors={detailErrors} />
       )}
-      {item._type === 'transport' && (
-        <PlacesInput
-          value={schoolName} onChange={setSchoolName} placeholder="Escola da criança"
-          types={['school', 'primary_school', 'secondary_school']} nameOnly
-          className={fieldCls}
-        />
+      {!existingChild && item.childId && !loadingChild && (
+        <p className="text-xs text-amber-600">Não foi possível carregar a criança associada — a alterar apenas os dados da inscrição.</p>
       )}
+
       {item._type === 'study' && (
         <div>
           <p className="text-xs text-gray-500 mb-1">Dias</p>
@@ -282,9 +405,12 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
         </div>
       )}
       {item._type === 'transport' && <TripEditor trips={trips} onChange={setTrips} accent="blue" />}
-      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Nota (opcional)" className={fieldCls} />
+
+      <DiscountPicker rules={discountRules} scope={scope} selected={selectedDiscounts} onToggle={toggleDiscount} gross={gross} />
+
+      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Nota (opcional, apenas interna)" className={fieldCls} />
       <div className="flex gap-2">
-        <button onClick={submit} disabled={!name.trim() || saving}
+        <button onClick={submit} disabled={saving}
           className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
           {saving ? 'A guardar…' : 'Guardar'}
         </button>
@@ -295,9 +421,10 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
 }
 
 // ─── Unified Manual Enrollment Form (transport + study, same as client) ───────
-function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
+function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave, onCancel }: {
   transportConfig: TransportationConfig | null;
   studyConfig: StudyCenterConfig | null;
+  discountRules: DiscountRule[];
   onSave: (items: SubItem[]) => void;
   onCancel: () => void;
 }) {
@@ -313,6 +440,9 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
   const [matches, setMatches] = useState<Child[] | null>(null);
   const [checkingMatches, setCheckingMatches] = useState(false);
   const [selectedChildId, setSelectedChildId] = useState<string | 'new' | null>(null);
+  // Other children in the same family with an active subscription — feeds the
+  // auto_sibling discount check. Resolved alongside the child-match lookup.
+  const [siblingCount, setSiblingCount] = useState(0);
 
   const updateDetails = (v: EnrollmentDetailsValue) => {
     // Identity changed — any previous match resolution no longer applies.
@@ -347,10 +477,59 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
       const found = await familyService.findMatchingChildren(details.firstName, details.lastName, details.contactEmail);
       setMatches(found);
       if (found.length === 0) setSelectedChildId('new');
+      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', details.contactEmail.trim())));
+      if (!famSnap.empty) {
+        const siblings = await familyService.getFamilyChildren(famSnap.docs[0].id);
+        const counts = await Promise.all(siblings.map(s => familyService.getChildSubscriptionCounts(s.id)));
+        setSiblingCount(counts.filter(c => c > 0).length);
+      } else {
+        setSiblingCount(0);
+      }
     } finally {
       setCheckingMatches(false);
     }
   };
+
+  // Discount selection, per scope. resolveAutoDiscounts() is the single source of
+  // truth for which rules auto-apply; admin overrides (explicit check/uncheck)
+  // always win over that default, in either direction.
+  const [transportOverrides, setTransportOverrides] = useState<Map<string, boolean>>(new Map());
+  const [studyOverrides, setStudyOverrides] = useState<Map<string, boolean>>(new Map());
+
+  const transportGross = transportConfig ? totalTrips * transportConfig.flatRatePerTrip * activeWeeksInPattern(schedule.weekPattern) : 0;
+  const studyRatePerDay = studyConfig
+    ? (studyConfig.pricePerDayPerWeek != null && studyConfig.weeksPerMonth != null
+        ? studyConfig.pricePerDayPerWeek * studyConfig.weeksPerMonth
+        : studyConfig.monthlyPricePerWeekday)
+    : 0;
+  const studyWeeksBase = studyConfig?.weeksPerMonth ?? 4;
+  const studyGross = studyConfig ? studyDays.length * studyRatePerDay * (activeWeeksInPattern(schedule.weekPattern) / studyWeeksBase) : 0;
+
+  const transportAuto = hasTransport ? resolveAutoDiscounts(discountRules, 'transport', transportDays, details.schoolName, siblingCount) : [];
+  const studyAuto = hasStudy ? resolveAutoDiscounts(discountRules, 'study', studyDays, details.schoolName, siblingCount) : [];
+
+  const resolveSelected = (scope: DiscountScope, auto: AppliedDiscount[], overrides: Map<string, boolean>): AppliedDiscount[] =>
+    discountRules
+      .filter(r => r.active && r.appliesTo.includes(scope))
+      .filter(r => overrides.has(r.id) ? overrides.get(r.id)! : auto.some(a => a.ruleId === r.id))
+      .map(r => ({
+        ruleId: r.id, name: r.name, percentage: r.percentage, appliedAt: new Date(),
+        appliedBy: (!overrides.has(r.id) && auto.some(a => a.ruleId === r.id)) ? 'auto' as const : 'admin' as const,
+      }));
+
+  const transportSelected = resolveSelected('transport', transportAuto, transportOverrides);
+  const studySelected = resolveSelected('study', studyAuto, studyOverrides);
+
+  const toggleTransportDiscount = (rule: DiscountRule) => setTransportOverrides(prev => {
+    const next = new Map(prev);
+    next.set(rule.id, !transportSelected.some(d => d.ruleId === rule.id));
+    return next;
+  });
+  const toggleStudyDiscount = (rule: DiscountRule) => setStudyOverrides(prev => {
+    const next = new Map(prev);
+    next.set(rule.id, !studySelected.some(d => d.ruleId === rule.id));
+    return next;
+  });
 
   const submit = async () => {
     if (!isValid || !selectedChildId) return;
@@ -397,14 +576,14 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
             dropoffLocation: t.dropoffAddress,
           }))
         );
-        const weeks = activeWeeksInPattern(schedule.weekPattern);
-        const monthlyFee = transportConfig ? totalTrips * transportConfig.flatRatePerTrip * weeks : 0;
+        const monthlyFee = Math.round(applyDiscounts(transportGross, transportSelected) * 100) / 100;
         const ref = await addDoc(col('transportationSubscriptions'), {
           childId, childName: fullName,
           contactName: details.contactName.trim() || null,
           contactEmail: details.contactEmail.trim() || null, contactMobile: details.contactPhone.trim() || null,
           schoolName: details.schoolName.trim() || null,
-          status: 'planned', source: 'manual', monthlyFee,
+          status: 'pending', source: 'manual', monthlyFee, originalFee: transportGross,
+          appliedDiscounts: transportSelected,
           weekPattern: schedule.weekPattern,
           schedule: fsSchedule, note: note.trim() || null,
           createdAt: now, updatedAt: now,
@@ -415,20 +594,13 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
           contactEmail: details.contactEmail.trim() || undefined,
           contactPhone: details.contactPhone.trim() || undefined,
           schoolName: details.schoolName.trim() || undefined,
-          source: 'manual', schedule: fsSchedule, monthlyFee,
-          status: 'planned', note: note.trim() || undefined, createdAt: now,
+          source: 'manual', schedule: fsSchedule, monthlyFee, appliedDiscounts: transportSelected,
+          status: 'pending', note: note.trim() || undefined, createdAt: now,
         });
       }
 
       if (hasStudy) {
-        const ratePerDay = studyConfig
-          ? (studyConfig.pricePerDayPerWeek != null && studyConfig.weeksPerMonth != null
-              ? studyConfig.pricePerDayPerWeek * studyConfig.weeksPerMonth
-              : studyConfig.monthlyPricePerWeekday)
-          : 0;
-        const weeks = activeWeeksInPattern(schedule.weekPattern);
-        const weeksBase = studyConfig?.weeksPerMonth ?? 4;
-        const monthlyPrice = studyConfig ? studyDays.length * ratePerDay * (weeks / weeksBase) : 0;
+        const monthlyPrice = Math.round(applyDiscounts(studyGross, studySelected) * 100) / 100;
         const days = studyDays.map(d => ({ day: d.weekday, hour: d.hour }));
         const ref = await addDoc(col('studyroom'), {
           childId, childName: fullName, familyId: '',
@@ -438,7 +610,8 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
           contactName: details.contactName.trim() || null,
           contactMobile: details.contactPhone.trim() || null,
           days, weekPattern: schedule.weekPattern,
-          monthlyPrice, basePrice: monthlyPrice,
+          monthlyPrice, basePrice: studyGross,
+          appliedDiscounts: studySelected,
           note: note.trim() || null,
           status: 'pending', source: 'manual',
           startDate: now, endDate,
@@ -452,7 +625,8 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
           contactPhone: details.contactPhone.trim() || undefined,
           schoolName: details.schoolName.trim() || undefined,
           schoolYear: details.schoolYear.trim() || undefined,
-          days, monthlyPrice, source: 'manual', status: 'pending',
+          days, monthlyPrice, basePrice: studyGross, appliedDiscounts: studySelected,
+          source: 'manual', status: 'pending',
           note: note.trim() || undefined, createdAt: now,
         });
       }
@@ -479,6 +653,13 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
         studyCenterConfig={studyConfig}
         schoolName={details.schoolName || undefined}
       />
+
+      {hasTransport && (
+        <DiscountPicker rules={discountRules} scope="transport" selected={transportSelected} onToggle={toggleTransportDiscount} gross={transportGross} />
+      )}
+      {hasStudy && (
+        <DiscountPicker rules={discountRules} scope="study" selected={studySelected} onToggle={toggleStudyDiscount} gross={studyGross} />
+      )}
 
       {/* Child-matching step: must resolve to an existing or new child before saving */}
       {matches === null ? (
@@ -697,9 +878,8 @@ export default function SubscriptionsAdminPage() {
   const [search, setSearch] = useState('');
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [onlyAdminReview, setOnlyAdminReview] = useState(false);
   const [processing, setProcessing] = useState<string | null>(null);
-  const [rejectId, setRejectId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
   const [editId, setEditId] = useState<string | null>(null);
   const [showManualForm, setShowManualForm] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -735,6 +915,7 @@ export default function SubscriptionsAdminPage() {
         return {
           id: d.id, _type: 'study',
           childName: x.childName || x.studentName || '—',
+          childId: x.childId || undefined,
           familyId: x.familyId, contactEmail: x.email || x.contactEmail,
           contactPhone: x.phone || x.contactPhone,
           source: x.source,
@@ -744,10 +925,12 @@ export default function SubscriptionsAdminPage() {
           returningStudent: x.returningStudent ?? false,
           appliedDiscounts: x.appliedDiscounts ?? [],
           weekPattern: x.weekPattern ?? 'all',
-          status: (x.status === 'confirmed' ? 'active' : x.status) as SubStatus,
+          status: normalizeSubStatus(x.status),
           statusReason: x.statusReason, note: x.note,
           createdAt: toDate(x.createdAt), cancelRequested: x.cancelRequested,
           feeReviewRequired: x.feeReviewRequired ?? false,
+          clientReviewPending: x.clientReviewPending ?? x.needsClientReview ?? false,
+          adminReviewPending: x.adminReviewPending ?? false,
         };
       });
       const transport: SubItem[] = transportSnap.docs.map(d => {
@@ -761,14 +944,17 @@ export default function SubscriptionsAdminPage() {
           source: x.source,
           schoolName: x.childId ? (childSchoolMap[x.childId] ?? x.schoolName) : x.schoolName,
           schedule: x.schedule || [], monthlyFee: x.monthlyFee ?? 0,
+          routeAssigned: x.routeAssigned ?? false,
           originalFee: x.originalFee ?? x.monthlyFee ?? 0,
           returningStudent: x.returningStudent ?? false,
           appliedDiscounts: x.appliedDiscounts ?? [],
           weekPattern: x.weekPattern ?? 'all',
-          status: x.status as SubStatus,
+          status: normalizeSubStatus(x.status),
           statusReason: x.statusReason, note: x.note,
           createdAt: toDate(x.createdAt), cancelRequested: x.cancelRequested,
           feeReviewRequired: x.feeReviewRequired ?? false,
+          clientReviewPending: x.clientReviewPending ?? x.needsClientReview ?? false,
+          adminReviewPending: x.adminReviewPending ?? false,
         };
       });
       setItems([...study, ...transport].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()));
@@ -793,90 +979,59 @@ export default function SubscriptionsAdminPage() {
     }, 100);
   }, [highlightId, isLoading, items]);
 
-  const approve = async (item: SubItem) => {
+  // One direct status control, no approve/offer/reject/revert gating workflow.
+  // Admin can set any subscription to any of the 3 states freely.
+  const setStatus = async (item: SubItem, newStatus: SubStatus) => {
+    if (item.status === newStatus) return;
+    if (newStatus === 'cancelled' && !window.confirm(`Cancelar inscrição de ${item.childName}?`)) return;
     setProcessing(item.id);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      // Study goes confirmed (active); transport goes planned (awaiting route assignment → offered → active)
-      const newStatus = item._type === 'study' ? 'confirmed' : 'planned';
-      const patch: Record<string, unknown> = { status: newStatus, approvedAt: new Date(), updatedAt: new Date() };
+      const patch: Record<string, unknown> = { status: newStatus, updatedAt: new Date() };
+      if (newStatus === 'active') patch.approvedAt = new Date();
+      if (newStatus === 'cancelled') patch.cancelledAt = new Date();
+      if (newStatus === 'pending') patch.approvedAt = null;
 
+      // Same convenience the old approve() had — try to auto-resolve familyId
+      // by contact email if not yet linked. Doesn't gate the status change.
       if (!item.familyId && item.contactEmail) {
         const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
         if (!famSnap.empty) patch.familyId = famSnap.docs[0].id;
       }
 
+      // Already linked to a family — flag this change for the parent to review
+      // on next login (in-app only, replaces the old offered-status email dance).
+      const linked = item.familyId || (patch.familyId as string | undefined);
+      if (linked) patch.clientReviewPending = true;
+
       await updateDoc(docRef(colName, item.id), patch);
       setItems(prev => prev.map(i => i.id === item.id
-        ? { ...i, status: newStatus as SubStatus, familyId: (patch.familyId as string | undefined) ?? i.familyId }
+        ? {
+            ...i, status: newStatus,
+            familyId: (patch.familyId as string | undefined) ?? i.familyId,
+            clientReviewPending: linked ? true : i.clientReviewPending,
+          }
         : i
       ));
     } finally { setProcessing(null); }
   };
 
-  const offerToParent = async (item: SubItem) => {
+  const toggleRouteAssigned = async (item: SubItem) => {
+    if (item._type !== 'transport') return;
     setProcessing(item.id);
     try {
-      await updateDoc(docRef('transportationSubscriptions', item.id), {
-        status: 'offered', offeredAt: new Date(), updatedAt: new Date(),
-      });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'offered' as SubStatus } : i));
+      const next = !item.routeAssigned;
+      await updateDoc(docRef('transportationSubscriptions', item.id), { routeAssigned: next, updatedAt: new Date() });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, routeAssigned: next } : i));
     } finally { setProcessing(null); }
   };
 
-  const [bulkOffering, setBulkOffering] = useState(false);
-  const offerAllPlanned = async () => {
-    const toOffer = filtered.filter(i => i._type === 'transport' && i.status === 'planned');
-    if (!toOffer.length) return;
-    if (!window.confirm(`Publicar ${toOffer.length} inscrição(ões) de transporte para confirmação dos pais?`)) return;
-    setBulkOffering(true);
-    try {
-      await Promise.all(toOffer.map(item =>
-        updateDoc(docRef('transportationSubscriptions', item.id), { status: 'offered', offeredAt: new Date(), updatedAt: new Date() })
-      ));
-      setItems(prev => prev.map(i => toOffer.find(o => o.id === i.id) ? { ...i, status: 'offered' as SubStatus } : i));
-    } finally { setBulkOffering(false); }
-  };
-
-  const [approveAllBusy, setApproveAllBusy] = useState(false);
-  const approveAndPublishAll = async () => {
-    const transportToOffer = items.filter(i => i._type === 'transport' && (i.status === 'pending' || i.status === 'planned'));
-    const studyToConfirm = items.filter(i => i._type === 'study' && i.status === 'pending');
-    const total = transportToOffer.length + studyToConfirm.length;
-    if (!total) { alert('Não há inscrições pendentes ou planeadas para aprovar.'); return; }
-    if (!window.confirm(`Aprovar ${studyToConfirm.length} inscrição(ões) de Sala de Estudo e publicar ${transportToOffer.length} de Transporte para confirmação dos pais?`)) return;
-    setApproveAllBusy(true);
-    try {
-      await Promise.all([
-        ...transportToOffer.map(i => updateDoc(docRef('transportationSubscriptions', i.id), { status: 'offered', offeredAt: new Date(), approvedAt: new Date(), updatedAt: new Date() })),
-        ...studyToConfirm.map(i => updateDoc(docRef('studyroom', i.id), { status: 'confirmed', approvedAt: new Date(), updatedAt: new Date() })),
-      ]);
-      setItems(prev => prev.map(i => {
-        if (transportToOffer.find(o => o.id === i.id)) return { ...i, status: 'offered' as SubStatus };
-        if (studyToConfirm.find(o => o.id === i.id)) return { ...i, status: 'confirmed' as SubStatus };
-        return i;
-      }));
-    } finally { setApproveAllBusy(false); }
-  };
-
-  const revertToPlanned = async (item: SubItem) => {
-    setProcessing(item.id);
-    try {
-      await updateDoc(docRef('transportationSubscriptions', item.id), {
-        status: 'planned', offeredAt: null, updatedAt: new Date(),
-      });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'planned' as SubStatus } : i));
-    } finally { setProcessing(null); }
-  };
-
-  const reject = async (item: SubItem) => {
-    if (!rejectReason.trim()) return;
+  const clearAdminReview = async (item: SubItem) => {
     setProcessing(item.id);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(docRef(colName, item.id), { status: 'cancelled', statusReason: rejectReason, rejectedAt: new Date(), updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'cancelled', statusReason: rejectReason } : i));
-      setRejectId(null); setRejectReason('');
+      await updateDoc(docRef(colName, item.id), { adminReviewPending: false, updatedAt: new Date() });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, adminReviewPending: false } : i));
     } finally { setProcessing(null); }
   };
 
@@ -887,25 +1042,6 @@ export default function SubscriptionsAdminPage() {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
       await deleteDoc(docRef(colName, item.id));
       setItems(prev => prev.filter(i => i.id !== item.id));
-    } finally { setProcessing(null); }
-  };
-
-  const cancel = async (item: SubItem) => {
-    if (!window.confirm(`Cancelar inscrição de ${item.childName}?`)) return;
-    setProcessing(item.id);
-    try {
-      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(docRef(colName, item.id), { status: 'cancelled', statusReason: 'Cancelado pelo administrador', cancelledAt: new Date(), updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'cancelled' } : i));
-    } finally { setProcessing(null); }
-  };
-
-  const revertToPending = async (item: SubItem) => {
-    setProcessing(item.id);
-    try {
-      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(docRef(colName, item.id), { status: 'pending', approvedAt: null, updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'pending' } : i));
     } finally { setProcessing(null); }
   };
 
@@ -1193,6 +1329,7 @@ export default function SubscriptionsAdminPage() {
 
   const filtered = items
     .filter(i => tab === 'all' || i.status === tab)
+    .filter(i => !onlyAdminReview || i.adminReviewPending)
     .filter(i => {
       if (typeFilter === 'transport') return i._type === 'transport';
       if (typeFilter === 'study') return i._type === 'study';
@@ -1226,13 +1363,12 @@ export default function SubscriptionsAdminPage() {
 
   const counts = {
     pending: items.filter(i => i.status === 'pending').length,
-    planned: items.filter(i => i.status === 'planned').length,
-    offered: items.filter(i => i.status === 'offered').length,
     active: items.filter(i => i.status === 'active').length,
     cancelled: items.filter(i => i.status === 'cancelled').length,
     all: items.length,
     unlinked: items.filter(isUnlinked).length,
     feeReview: items.filter(i => i.feeReviewRequired).length,
+    adminReview: items.filter(i => i.adminReviewPending).length,
   };
 
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar…</div>;
@@ -1252,10 +1388,10 @@ export default function SubscriptionsAdminPage() {
           <h1 className="text-2xl font-bold">Inscrições</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {counts.pending > 0 && <span className="text-yellow-700 font-medium">{counts.pending} a analisar · </span>}
-            {counts.offered > 0 && <span className="text-purple-700 font-medium">{counts.offered} aguardam confirmação · </span>}
             {counts.active} ativas
             {counts.unlinked > 0 && <span className="text-orange-600 font-medium"> · {counts.unlinked} não vinculada(s)</span>}
             {counts.feeReview > 0 && <span className="text-amber-600 font-medium"> · {counts.feeReview} mensalidade{counts.feeReview !== 1 ? 's' : ''} em revisão</span>}
+            {counts.adminReview > 0 && <span className="text-pink-600 font-medium"> · {counts.adminReview} alteração{counts.adminReview !== 1 ? 'ões' : ''} do cliente por rever</span>}
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
@@ -1283,12 +1419,6 @@ export default function SubscriptionsAdminPage() {
           </button>
           <input ref={importChildRef} type="file" accept=".csv" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) importMissingChildDetailsCSV(f); }} />
-          {(counts.pending > 0 || counts.planned > 0) && (
-            <button onClick={approveAndPublishAll} disabled={approveAllBusy}
-              className="bg-purple-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-purple-700 font-medium disabled:opacity-50">
-              {approveAllBusy ? 'A processar…' : '📢 Aprovar e publicar tudo'}
-            </button>
-          )}
           <button onClick={() => setShowManualForm(v => !v)}
             className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 font-medium">
             {showManualForm ? '✕ Cancelar' : '+ Inscrever'}
@@ -1302,6 +1432,7 @@ export default function SubscriptionsAdminPage() {
         <ManualEnrollForm
           transportConfig={transportConfig}
           studyConfig={studyConfig}
+          discountRules={discountRules}
           onSave={newItems => { setItems(prev => [...newItems, ...prev]); setShowManualForm(false); }}
           onCancel={() => setShowManualForm(false)}
         />
@@ -1311,8 +1442,6 @@ export default function SubscriptionsAdminPage() {
       <div className="flex gap-1 border-b border-gray-200 mb-3 overflow-x-auto">
         {([
           { key: 'pending', label: 'A analisar', count: counts.pending },
-          { key: 'planned', label: 'Planeadas', count: counts.planned },
-          { key: 'offered', label: 'Publicadas', count: counts.offered },
           { key: 'active', label: 'Ativas', count: counts.active },
           { key: 'cancelled', label: 'Histórico', count: counts.cancelled },
           { key: 'all', label: 'Todas', count: counts.all },
@@ -1342,6 +1471,10 @@ export default function SubscriptionsAdminPage() {
             {label}
           </button>
         ))}
+        <button onClick={() => setOnlyAdminReview(v => !v)}
+          className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${onlyAdminReview ? 'bg-pink-600 text-white border-pink-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
+          🔔 Por rever (cliente){counts.adminReview > 0 ? ` (${counts.adminReview})` : ''}
+        </button>
         <input
           type="search"
           value={search}
@@ -1350,17 +1483,6 @@ export default function SubscriptionsAdminPage() {
           className="ml-auto text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-64 focus:outline-none focus:ring-2 focus:ring-blue-300"
         />
       </div>
-
-      {/* Bulk offer button — only on planned tab when transport items exist */}
-      {tab === 'planned' && filtered.some(i => i._type === 'transport') && (
-        <div className="mb-4">
-          <button onClick={offerAllPlanned} disabled={bulkOffering}
-            className="bg-purple-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-purple-700 font-medium disabled:opacity-50">
-            {bulkOffering ? 'A publicar…' : `📢 Publicar todas para confirmação dos pais`}
-          </button>
-          <p className="text-xs text-gray-500 mt-1">Move as inscrições de transporte para "aguarda confirmação" — os pais verão o botão "Aceitar e confirmar" no portal.</p>
-        </div>
-      )}
 
       {/* List */}
       {filtered.length === 0 ? (
@@ -1407,6 +1529,20 @@ export default function SubscriptionsAdminPage() {
                             )}
                             {item.feeReviewRequired && (
                               <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">⚠ rever mensalidade</span>
+                            )}
+                            {item.adminReviewPending && (
+                              <button onClick={() => clearAdminReview(item)} disabled={processing === item.id}
+                                className="text-xs bg-pink-100 text-pink-800 px-2 py-0.5 rounded-full font-medium hover:bg-pink-200 disabled:opacity-60"
+                                title="Clique para marcar como revisto">
+                                🔔 alteração do cliente
+                              </button>
+                            )}
+                            {item._type === 'transport' && item.status !== 'cancelled' && (
+                              <button onClick={() => toggleRouteAssigned(item)} disabled={processing === item.id}
+                                className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.routeAssigned ? 'bg-teal-100 text-teal-800 hover:bg-teal-50' : 'bg-gray-50 text-gray-400 border border-gray-200 hover:border-gray-400'}`}
+                                title="Rota atribuída (apenas controlo operacional interno)">
+                                {item.routeAssigned ? '🗺 rota atribuída' : '🗺 sem rota'}
+                              </button>
                             )}
                           </div>
 
@@ -1504,54 +1640,22 @@ export default function SubscriptionsAdminPage() {
                       </div>
 
                       <div className="flex flex-col gap-1.5 shrink-0">
-                        {item.status === 'pending' && (
-                          <>
-                            <button onClick={() => approve(item)} disabled={processing === item.id}
-                              className="bg-green-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-green-700 disabled:opacity-60 whitespace-nowrap">
-                              {processing === item.id ? '…' : '✓ Aprovar'}
+                        {/* Direct status control — no approve/offer/reject/revert gating, admin
+                            can move freely in any direction. */}
+                        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                          {([
+                            { key: 'pending' as const, label: 'Pendente' },
+                            { key: 'active' as const, label: 'Ativo' },
+                            { key: 'cancelled' as const, label: 'Cancelado' },
+                          ]).map(({ key, label }, idx) => (
+                            <button key={key} onClick={() => setStatus(item, key)} disabled={processing === item.id}
+                              className={`px-2.5 py-1.5 whitespace-nowrap disabled:opacity-60 ${idx > 0 ? 'border-l border-gray-200' : ''} ${item.status === key
+                                ? (key === 'active' ? 'bg-green-600 text-white' : key === 'cancelled' ? 'bg-gray-600 text-white' : 'bg-yellow-500 text-white')
+                                : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+                              {label}
                             </button>
-                            <button onClick={() => { setRejectId(item.id); setRejectReason(''); }} disabled={processing === item.id}
-                              className="bg-red-50 text-red-600 border border-red-200 text-sm px-3 py-1.5 rounded-lg hover:bg-red-100 disabled:opacity-60 whitespace-nowrap">
-                              ✕ Rejeitar
-                            </button>
-                          </>
-                        )}
-                        {item.status === 'planned' && item._type === 'transport' && (
-                          <>
-                            <button onClick={() => offerToParent(item)} disabled={processing === item.id}
-                              className="bg-purple-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-purple-700 disabled:opacity-60 whitespace-nowrap">
-                              {processing === item.id ? '…' : '📢 Publicar'}
-                            </button>
-                            <button onClick={() => { setRejectId(item.id); setRejectReason(''); }} disabled={processing === item.id}
-                              className="bg-red-50 text-red-600 border border-red-200 text-sm px-3 py-1.5 rounded-lg hover:bg-red-100 disabled:opacity-60 whitespace-nowrap">
-                              ✕ Rejeitar
-                            </button>
-                          </>
-                        )}
-                        {item.status === 'offered' && (
-                          <>
-                            <button onClick={() => revertToPlanned(item)} disabled={processing === item.id}
-                              className="bg-blue-50 text-blue-700 border border-blue-200 text-sm px-3 py-1.5 rounded-lg hover:bg-blue-100 disabled:opacity-60 whitespace-nowrap">
-                              {processing === item.id ? '…' : '↩ Rever'}
-                            </button>
-                            <button onClick={() => approve(item)} disabled={processing === item.id}
-                              className="bg-green-50 text-green-700 border border-green-200 text-sm px-3 py-1.5 rounded-lg hover:bg-green-100 disabled:opacity-60 whitespace-nowrap">
-                              {processing === item.id ? '…' : '✓ Forçar ativo'}
-                            </button>
-                          </>
-                        )}
-                        {item.status === 'active' && (
-                          <>
-                            <button onClick={() => revertToPending(item)} disabled={processing === item.id}
-                              className="bg-yellow-50 text-yellow-700 border border-yellow-200 text-sm px-3 py-1.5 rounded-lg hover:bg-yellow-100 disabled:opacity-60 whitespace-nowrap">
-                              {processing === item.id ? '…' : '↩ Pendente'}
-                            </button>
-                            <button onClick={() => cancel(item)} disabled={processing === item.id}
-                              className="bg-gray-100 text-gray-600 border border-gray-200 text-sm px-3 py-1.5 rounded-lg hover:bg-gray-200 disabled:opacity-60 whitespace-nowrap">
-                              {processing === item.id ? '…' : 'Cancelar'}
-                            </button>
-                          </>
-                        )}
+                          ))}
+                        </div>
                         {isUnlinked(item) && (
                           <>
                             <button onClick={() => linkToFamily(item)} disabled={processing === item.id}
@@ -1581,27 +1685,12 @@ export default function SubscriptionsAdminPage() {
                       </div>
                     </div>
 
-                    {rejectId === item.id && (
-                      <div className="mt-4 pt-4 border-t border-gray-100">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Motivo da rejeição</label>
-                        <input type="text" value={rejectReason} onChange={e => setRejectReason(e.target.value)}
-                          placeholder="ex: Sem vagas disponíveis"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-400 mb-3" autoFocus />
-                        <div className="flex gap-2">
-                          <button onClick={() => reject(item)} disabled={!rejectReason.trim() || processing === item.id}
-                            className="bg-red-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-60">
-                            Confirmar rejeição
-                          </button>
-                          <button onClick={() => setRejectId(null)} className="text-sm px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200">
-                            Cancelar
-                          </button>
-                        </div>
-                      </div>
-                    )}
                     {editId === item.id && (
                       <EditForm
                         item={item}
-                        config={transportConfig}
+                        transportConfig={transportConfig}
+                        studyConfig={studyConfig}
+                        discountRules={discountRules}
                         onSave={updated => {
                           setItems(prev => prev.map(i => i.id === item.id ? { ...i, ...updated } : i));
                           setEditId(null);

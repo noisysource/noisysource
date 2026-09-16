@@ -1,7 +1,7 @@
 import { getDocs, query, where, getDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { col, docRef } from '../lib/db';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
-import { calculateAge, normalizeName } from '../lib/utils';
+import { calculateAge, normalizeName, normalizeSubStatus } from '../lib/utils';
 import type { ImpersonationState } from '../contexts/ImpersonationContext';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
@@ -215,6 +215,7 @@ export const familyService = {
     return {
       study: studySnap.docs.filter(filterByChild).map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         startDate: toDate(d.data().startDate),
         endDate: toDate(d.data().endDate),
         createdAt: toDate(d.data().createdAt),
@@ -222,6 +223,7 @@ export const familyService = {
       } as StudyRoomEntry)),
       transport: transportSnap.docs.filter(filterByChild).map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         createdAt: toDate(d.data().createdAt),
         updatedAt: toDate(d.data().updatedAt),
       } as TransportationSubscription)),
@@ -253,6 +255,7 @@ export const familyService = {
     return {
       study: studySnap.docs.map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         startDate: toDate(d.data().startDate),
         endDate: toDate(d.data().endDate),
         createdAt: toDate(d.data().createdAt),
@@ -260,6 +263,7 @@ export const familyService = {
       } as StudyRoomEntry)),
       transport: transportSnap.docs.map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         createdAt: toDate(d.data().createdAt),
         updatedAt: toDate(d.data().updatedAt),
       } as TransportationSubscription)),

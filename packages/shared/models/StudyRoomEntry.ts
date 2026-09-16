@@ -5,7 +5,10 @@ import { WeekPattern } from './weekPattern';
 export type { WeekPattern };
 export type DaySelection = { day: string; hour: string };
 
-export type StudyStatus = "pending" | "confirmed" | "canceled" | "archived";
+// Collapsed to 3 states (pending / active / cancelled) — legacy Firestore
+// docs may still hold "confirmed"/"canceled"/"archived"; normalizeStatus()
+// below maps them so every consumer only ever sees these three.
+export type StudyStatus = "pending" | "active" | "cancelled";
 
 export interface SubscriptionVersion {
   days: DaySelection[];
@@ -79,13 +82,16 @@ export interface StudyRoomEntry {
   statusHistory?: StatusChangeHistory[];
   entryHistory?: EntryChangeHistory[];
 
-  // Set when an admin edits a subscription already linked to a family/child — the
-  // parent must confirm/edit/reject before it's considered reviewed.
-  needsClientReview?: boolean;
+  // Two-way in-app review flags (no email). clientReviewPending: set whenever
+  // admin changes this subscription while it's linked to a family — cleared
+  // when the client views it. adminReviewPending: set whenever a client-
+  // initiated change happens (e.g. a cancel request) — cleared when admin
+  // views it.
+  clientReviewPending?: boolean;
   clientReviewedAt?: Date;
-  clientReviewRejected?: boolean;
-  clientReviewRejectedAt?: Date;
-  
+  adminReviewPending?: boolean;
+  adminReviewedAt?: Date;
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;
@@ -113,8 +119,10 @@ const toDate = (v: AnyDate): Date => {
 };
 
 export const normalizeStatus = (raw: any): StudyStatus => {
-  const s = (raw?.status as StudyStatus) ?? "pending";
-  return s === "pending" || s === "confirmed" || s === "canceled" || s === "archived" ? s : "pending";
+  const s = raw?.status;
+  if (s === "active" || s === "confirmed" || s === "offered") return "active";
+  if (s === "cancelled" || s === "canceled" || s === "archived" || s === "inactive") return "cancelled";
+  return "pending";
 };
 
 export const fromStudyDoc = (raw: any, id: string): StudyRoomEntry => ({

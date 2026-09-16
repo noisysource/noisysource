@@ -15,7 +15,7 @@ import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../compo
 import { DiscountRule } from '@shared/models/Discount';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
-import { calculateAge } from '../../../lib/utils';
+import { calculateAge, normalizeSubStatus } from '../../../lib/utils';
 
 function computeTransportFee(
   days: DayConfig[],
@@ -183,15 +183,12 @@ export default function TransportEnrollPage() {
           getDocs(query(col('transportationSubscriptions'), where('childId', '==', child.id))),
           studyDays.length > 0 ? getDocs(query(col('studyroom'), where('childId', '==', child.id))) : Promise.resolve(null),
         ]);
-        const hasTransportDup = tDupSnap.docs.some(d => {
-          const data = d.data();
-          return ['pending', 'confirmed', 'active', 'planned', 'offered'].includes(data.status);
-        });
+        const hasTransportDup = tDupSnap.docs.some(d => normalizeSubStatus(d.data().status) !== 'cancelled');
         const hasStudyDup = sDupSnap?.docs.some(d => {
           const data = d.data();
           return !data.canceled &&
             data.schoolYear === (child.schoolYear || '') &&
-            ['pending', 'confirmed', 'active', 'planned', 'offered'].includes(data.status);
+            normalizeSubStatus(data.status) !== 'cancelled';
         });
         if (hasTransportDup) {
           setSubmitError('Já existe uma inscrição de transporte ativa para este aluno.');
@@ -225,7 +222,7 @@ export default function TransportEnrollPage() {
           appliedDiscounts,
           // The parent editing directly (e.g. from an admin-edit review prompt) counts
           // as having acted on it — clear the flag rather than leaving it stuck open.
-          needsClientReview: false,
+          clientReviewPending: false,
           updatedAt: new Date(),
         });
         navigate(`/client/transport/${editId}`, { replace: true });

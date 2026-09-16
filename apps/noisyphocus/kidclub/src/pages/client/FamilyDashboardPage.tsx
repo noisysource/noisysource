@@ -11,21 +11,16 @@ interface ChildWithSubs {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  active: 'Ativo', confirmed: 'Ativo',
-  pending: 'Pendente', planned: 'Pendente',
-  cancelled: 'Cancelado', canceled: 'Cancelado', archived: 'Cancelado', inactive: 'Cancelado',
-  suspended: 'Suspenso',
+  active: 'Ativo', pending: 'Pendente', cancelled: 'Cancelado',
 };
 const STATUS_CLASS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800', confirmed: 'bg-green-100 text-green-800',
-  pending: 'bg-yellow-100 text-yellow-800', planned: 'bg-yellow-100 text-yellow-800',
-  cancelled: 'bg-gray-100 text-gray-600', canceled: 'bg-gray-100 text-gray-600',
-  archived: 'bg-gray-100 text-gray-600', inactive: 'bg-gray-100 text-gray-600',
-  suspended: 'bg-red-100 text-red-800',
+  active: 'bg-green-100 text-green-800',
+  pending: 'bg-yellow-100 text-yellow-800',
+  cancelled: 'bg-gray-100 text-gray-600',
 };
-const isActive = (s: string) => s === 'active' || s === 'confirmed';
-const isPending = (s: string) => s === 'pending' || s === 'planned';
-const isCancelled = (s: string) => ['cancelled', 'canceled', 'archived', 'inactive'].includes(s);
+const isActive = (s: string) => s === 'active';
+const isPending = (s: string) => s === 'pending';
+const isCancelled = (s: string) => s === 'cancelled';
 
 export default function FamilyDashboardPage() {
   const user = useUser();
@@ -164,8 +159,8 @@ export default function FamilyDashboardPage() {
                 transport.filter(t => !isCancelled(t.status ?? '')).reduce((s, x) => s + (x.monthlyFee ?? 0), 0);
 
               const allSubs = [
-                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, appliedDiscounts: s.appliedDiscounts ?? [], needsClientReview: (s as any).needsClientReview === true })),
-                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, appliedDiscounts: t.appliedDiscounts ?? [], needsClientReview: (t as any).needsClientReview === true })),
+                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, appliedDiscounts: s.appliedDiscounts ?? [], clientReviewPending: (s as any).clientReviewPending === true })),
+                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, appliedDiscounts: t.appliedDiscounts ?? [], clientReviewPending: (t as any).clientReviewPending === true })),
               ];
 
               return (
@@ -208,15 +203,7 @@ export default function FamilyDashboardPage() {
                               ))}
                             </div>
                           )}
-                          {sub.status === 'offered' && (
-                            <Link
-                              to={`/client/${sub.subType === 'transport' ? 'transport' : 'study'}/${sub.id}`}
-                              className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5 hover:bg-purple-100 transition-colors w-fit"
-                            >
-                              ✅ Lugar disponível — confirme aqui
-                            </Link>
-                          )}
-                          {sub.needsClientReview && (
+                          {sub.clientReviewPending && (
                             <Link
                               to={`/client/${sub.subType === 'transport' ? 'transport' : 'study'}/${sub.id}`}
                               className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5 hover:bg-purple-100 transition-colors w-fit"

@@ -13,9 +13,8 @@ import { col, docRef } from '../../../lib/db';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
-import { calculateAge } from '../../../lib/utils';
+import { calculateAge, normalizeSubStatus } from '../../../lib/utils';
 
-const ACTIVE_STATUSES = ['active', 'planned', 'offered', 'pending'];
 
 function buildTransportCoverage(subs: any[]) {
   const coverage: { weekday: string; direction: 'pickup' | 'dropoff' | 'both' }[] = [];
@@ -114,7 +113,7 @@ export default function StudyRoomEnrollPage() {
         setTransportCoverage(buildTransportCoverage(
           transSnap.docs
             .map((d: any) => ({ id: d.id, ...d.data() }))
-            .filter((s: any) => ACTIVE_STATUSES.includes(s.status))
+            .filter((s: any) => normalizeSubStatus(s.status) !== 'cancelled')
         ));
 
         // Sibling count for discount preview: both collections, any non-cancelled status
@@ -163,7 +162,7 @@ export default function StudyRoomEnrollPage() {
           const data = d.data();
           return !data.canceled &&
             data.schoolYear === (child.schoolYear || '') &&
-            ['pending', 'confirmed', 'active', 'planned', 'offered'].includes(data.status);
+            normalizeSubStatus(data.status) !== 'cancelled';
         });
         if (hasDup) {
           setSubmitError('Já existe uma inscrição na Sala de Estudo para este aluno este ano letivo.');
@@ -183,7 +182,7 @@ export default function StudyRoomEnrollPage() {
           basePrice: monthlyFee,
           // The parent editing directly (e.g. from an admin-edit review prompt) counts
           // as having acted on it — clear the flag rather than leaving it stuck open.
-          needsClientReview: false,
+          clientReviewPending: false,
           updatedAt: new Date(),
         });
         navigate(`/client/study/${editId}`, { replace: true });

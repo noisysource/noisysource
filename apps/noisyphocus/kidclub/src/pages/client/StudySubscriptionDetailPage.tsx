@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
-import { StudyRoomEntry } from '@shared/models';
+import { StudyRoomEntry, normalizeStatus } from '@shared/models';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -59,6 +59,7 @@ export default function StudySubscriptionDetailPage() {
       const sub = {
         ...data,
         id: subSnap.id,
+        status: normalizeStatus(data),
         startDate: data.startDate?.toDate?.() ?? (data.startDate ? new Date(data.startDate) : null),
         endDate: data.endDate?.toDate?.() ?? (data.endDate ? new Date(data.endDate) : null),
       } as StudyRoomEntry;
@@ -165,6 +166,8 @@ export default function StudySubscriptionDetailPage() {
       await updateDoc(docRef('studyroom', id), {
         status: 'cancelled',
         cancelledAt: new Date(),
+        // Client-initiated change — surfaced to admin as a review prompt on next login.
+        adminReviewPending: true,
         updatedAt: new Date(),
       });
       navigate('/client/subscriptions', { replace: true });
@@ -178,9 +181,9 @@ export default function StudySubscriptionDetailPage() {
     setReviewing(true);
     try {
       await updateDoc(docRef('studyroom', id), {
-        needsClientReview: false, clientReviewedAt: new Date(), updatedAt: new Date(),
+        clientReviewPending: false, clientReviewedAt: new Date(), updatedAt: new Date(),
       });
-      setSubscription(prev => prev ? { ...prev, needsClientReview: false } as any : prev);
+      setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
     } finally { setReviewing(false); }
   };
 
@@ -191,9 +194,9 @@ export default function StudySubscriptionDetailPage() {
       // Doesn't auto-revert the edit — flags it for the team to follow up on directly,
       // since there's no snapshot of the pre-edit values to restore.
       await updateDoc(docRef('studyroom', id), {
-        needsClientReview: false, clientReviewRejected: true, clientReviewRejectedAt: new Date(), updatedAt: new Date(),
+        clientReviewPending: false, clientReviewedAt: new Date(), adminReviewPending: true, updatedAt: new Date(),
       });
-      setSubscription(prev => prev ? { ...prev, needsClientReview: false } as any : prev);
+      setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
       setShowReviewReject(false);
     } finally { setReviewing(false); }
   };
@@ -211,9 +214,9 @@ export default function StudySubscriptionDetailPage() {
     );
   }
 
-  const isActive = subscription.status === 'confirmed' || (subscription.status as string) === 'active';
-  const isPending = subscription.status === 'pending' || (subscription.status as string) === 'planned';
-  const needsReview = (subscription as any).needsClientReview === true;
+  const isActive = subscription.status === 'active';
+  const isPending = subscription.status === 'pending';
+  const needsReview = subscription.clientReviewPending === true;
 
   const statusBadge = isActive
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }

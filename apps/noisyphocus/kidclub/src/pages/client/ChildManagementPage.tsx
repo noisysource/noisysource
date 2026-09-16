@@ -86,9 +86,8 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
     : (selected.sub as StudyRoomEntry).monthlyPrice;
   const discounts = selected.sub.appliedDiscounts ?? [];
 
-  const isOffered = status === 'offered';
-  const isActive = status === 'active' || status === 'confirmed';
-  const isPending = status === 'pending' || status === 'planned';
+  const isActive = status === 'active';
+  const isPending = status === 'pending';
   const isCancelled_ = isCancelled(status);
 
   // Load upcoming sessions when a study subscription is selected and active
@@ -456,30 +455,13 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
           </div>
         )}
 
-        {/* Offered: accept / decline */}
-        {isOffered && (
-          <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 space-y-3">
-            <p className="text-sm text-purple-800 font-medium">Lugar encontrado! Confirme para ativar o serviço.</p>
-            <div className="flex gap-2">
-              <button onClick={() => act({ status: 'active', acceptedAt: new Date() })} disabled={busy}
-                className="flex-1 bg-purple-600 text-white text-sm py-2 rounded-lg hover:bg-purple-700 disabled:opacity-60 font-medium">
-                {busy ? '…' : '✓ Confirmar'}
-              </button>
-              <button onClick={() => act({ status: 'cancelled', cancelledAt: new Date() })} disabled={busy}
-                className="flex-1 bg-white border border-purple-200 text-purple-700 text-sm py-2 rounded-lg hover:bg-purple-50 disabled:opacity-60 font-medium">
-                Recusar
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Cancel active/pending */}
         {(isActive || isPending) && (
           confirmCancel ? (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-3">
               <p className="text-sm text-red-800">Tem a certeza que quer cancelar esta inscrição?</p>
               <div className="flex gap-2">
-                <button onClick={() => act({ status: 'cancelled', cancelRequested: true, cancelledAt: new Date() })} disabled={busy}
+                <button onClick={() => act({ status: 'cancelled', cancelRequested: true, cancelledAt: new Date(), adminReviewPending: true })} disabled={busy}
                   className="flex-1 bg-red-600 text-white text-sm py-2 rounded-lg hover:bg-red-700 disabled:opacity-60 font-medium">
                   {busy ? '…' : 'Sim, cancelar'}
                 </button>
