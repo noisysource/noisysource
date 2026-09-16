@@ -445,7 +445,7 @@ const colPlanned = (orgId: string) => db.collection("orgs").doc(orgId).collectio
 const colLedger = (orgId: string) => db.collection("orgs").doc(orgId).collection("ledgerTransactions");
 
 /** ---------- Callable: expandTemplatesInRange ---------- */
-export const expandTemplatesInRange = onCall(async (req) => {
+export const expandTemplatesInRange = onCall({ region: "europe-west3" }, async (req) => {
   const { orgId, from, to, templateIds, dryRun } = (req.data ?? {}) as {
     orgId: string;
     from: string;
@@ -538,7 +538,7 @@ export const expandTemplatesInRange = onCall(async (req) => {
 });
 
 /** ---------- Callable: postPlannedInstance ---------- */
-export const postPlannedInstance = onCall(async (req) => {
+export const postPlannedInstance = onCall({ region: "europe-west3" }, async (req) => {
   const { orgId, instanceId, cashAccountId, createdBy, postDate } = (req.data ?? {}) as {
     orgId: string;
     instanceId: string;

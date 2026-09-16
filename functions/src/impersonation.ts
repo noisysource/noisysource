@@ -4,7 +4,7 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-export const impersonateUser = onCall(async (request) => {
+export const impersonateUser = onCall({ region: 'europe-west3' }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
   }

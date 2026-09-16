@@ -16,7 +16,7 @@ interface Expense {
   recurrenceEndDate?: Timestamp | Date;
 }
 
-export const createRecurringExpenses = onSchedule('every 24 hours', async (context) => {
+export const createRecurringExpenses = onSchedule({ schedule: 'every 24 hours', region: 'europe-west3' }, async (context) => {
   const db = admin.firestore();
   const expensesRef = db.collection('expenses');
 

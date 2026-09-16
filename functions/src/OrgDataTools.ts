@@ -4,7 +4,11 @@ import { onCall, HttpsError, type CallableRequest } from "firebase-functions/v2/
 import { setGlobalOptions } from "firebase-functions/v2";
 
 if (!admin.apps.length) admin.initializeApp();
-setGlobalOptions({ maxInstances: 5 }); // Region is set by Terraform
+// Terraform's region only defines infrastructure — it does not make the CLI's
+// `firebase deploy` pick a region for a function whose own code doesn't specify
+// one (confirmed the hard way: this repo's deploy-functions.yml never ran
+// successfully until region was pinned explicitly, function by function).
+setGlobalOptions({ maxInstances: 5 });
 const db = admin.firestore();
 
 const ALL_COLLECTIONS = [
@@ -64,6 +68,7 @@ function pruneUndefined(input: any): any {
 
 /* --------------------------------- EXPORT --------------------------------- */
 export const exportOrgData = onCall<{ orgId?: string; collections?: Col[] }>(
+  { region: "europe-west3" },
   async (req) => {
     ensureAuth(req);
     const { orgId, collections } = req.data || {};
@@ -92,7 +97,7 @@ export const importOrgData = onCall<{
   orgId?: string;
   data?: Record<string, any[]>;
   options?: { keepIds?: boolean; merge?: boolean; collections?: Col[] };
-}>(async (req) => {
+}>({ region: "europe-west3" }, async (req) => {
   ensureAuth(req);
 
   const orgId = req.data?.orgId;
@@ -154,6 +159,7 @@ export const importOrgData = onCall<{
 
 /* ---------------------------------- WIPE ---------------------------------- */
 export const wipeOrgData = onCall<{ orgId?: string; collections?: Col[]; alsoSettings?: boolean }>(
+  { region: "europe-west3" },
   async (req) => {
     ensureAuth(req);
 

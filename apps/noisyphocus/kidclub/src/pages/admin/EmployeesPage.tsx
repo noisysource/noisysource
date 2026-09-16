@@ -3,19 +3,18 @@ import { AppUser } from '@shared/models';
 import { employeeService } from '../../services/employeeService';
 import { Link } from 'react-router-dom';
 
-import { getFunctions, httpsCallable } from 'firebase/functions';
 import { signInWithCustomToken } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
+import { callable } from '../../lib/callable';
 
 function EmployeeCard({ employee }: { employee: AppUser }) {
   const role = Object.keys(employee.roles).find(role => employee.roles[role as keyof typeof employee.roles]);
 
   const handleImpersonate = async () => {
     try {
-      const functions = getFunctions();
-      const impersonateUser = httpsCallable(functions, 'impersonateUser');
+      const impersonateUser = callable<{ uid: string }, { token: string }>('impersonateUser');
       const result = await impersonateUser({ uid: employee.uid });
-      const { token } = result.data as { token: string };
+      const { token } = result.data;
 
       await signInWithCustomToken(auth, token);
       window.location.href = '/client';
