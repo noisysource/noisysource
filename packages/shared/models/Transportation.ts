@@ -85,4 +85,13 @@ export interface TransportationSubscription {
   // Metadata
   createdAt: Date;
   updatedAt: Date;
+
+  // Billing bookkeeping — set once by the billing function itself, never by
+  // any client form, when the one-time registration+insurance fee has been
+  // billed for this child (on this subscription or their study-room one,
+  // whichever came first) — this is what makes a transport-only family pay
+  // it too, not just study-room families. Deliberately lives on the
+  // subscription, not a Child document, so it resets every school year:
+  // next year's enrollment is a fresh subscription doc with no such flag.
+  enrollmentFeeBilled?: boolean;
 }

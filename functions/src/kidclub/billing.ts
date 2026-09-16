@@ -221,11 +221,56 @@ function computeLineItems(
   period: ReturnType<typeof periodForDate>,
   configs: BillingConfigs,
   existingLineItems: BillingLineItem[] = [],
-): { lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubIds: string[] } {
+): { lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } {
   const lineItems: BillingLineItem[] = [];
   let total = 0;
-  const newlyBilledEnrollmentFeeSubIds: string[] = [];
+  const newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] = [];
+  const billedThisCall = new Set<string>();
   const priorFor = (subId: string) => existingLineItems.find(li => li.subscriptionId === subId);
+
+  // "Already billed" is read straight off the currently active subscription
+  // docs themselves — sub.enrollmentFeeBilled — rather than a persistent
+  // child-level record, deliberately: a Child document outlives the school
+  // year, but this fee must NOT (per the original ask — paid again whenever
+  // a family starts a fresh subscription next year). A subscription doc IS
+  // scoped to one enrollment, so checking it resets automatically: next
+  // year's subscription is a brand new doc with no flag.
+  const childFeeBilled = new Set<string>();
+  for (const sub of [...group.study, ...group.transport]) if (sub.childId && sub.enrollmentFeeBilled) childFeeBilled.add(sub.childId);
+
+  // One-time enrollment fee (registration + insurance) — billed once per
+  // CHILD, on whichever service (study or transport) they first appear in,
+  // never discounted, so a transport-only family pays it too, not just
+  // study-room families. A child with both is only charged once, guarded
+  // here by billedThisCall. When it's actually billed, every one of that
+  // child's currently active subscriptions (both collections) gets flagged
+  // — not just the one being processed — so the fee can't be missed if the
+  // family later drops one service and keeps only the other, within the
+  // same school year. A prior fee line item on THIS specific billing record
+  // is carried forward untouched (same pattern as excludedDates) so a later
+  // recompute can't silently drop or duplicate it.
+  const maybeAddEnrollmentFee = (sub: any) => {
+    if (!sub.childId) return;
+    const priorFee = priorFor(`${sub.childId}:enrollment`);
+    if (priorFee) {
+      if (billedThisCall.has(sub.childId)) return;
+      lineItems.push(priorFee);
+      total += priorFee.amount;
+      billedThisCall.add(sub.childId);
+      return;
+    }
+    if (billedThisCall.has(sub.childId) || childFeeBilled.has(sub.childId)) return;
+    const fee = Math.round(((configs.studyConfig?.registrationFee ?? 0) + (configs.studyConfig?.insuranceFee ?? 0)) * 100) / 100;
+    if (fee <= 0) return;
+    lineItems.push({
+      title: `Taxa de Inscrição e Seguro — ${sub.childName}`,
+      amount: fee, grossAmount: fee, subscriptionId: `${sub.childId}:enrollment`, type: "enrollment", appliedDiscounts: [],
+    });
+    total += fee;
+    billedThisCall.add(sub.childId);
+    for (const s of group.study) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "studyroom", id: s.id });
+    for (const s of group.transport) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "transportationSubscriptions", id: s.id });
+  };
 
   for (const sub of group.study) {
     const gross = sub.basePrice ?? sub.monthlyPrice ?? 0;
@@ -241,30 +286,7 @@ function computeLineItems(
       ...(excludedDates.length ? { excludedDates } : {}),
     });
     total += amount;
-
-    // One-time enrollment fee (registration + insurance) — billed on this
-    // subscription's first invoice only, never discounted. A prior fee line
-    // item on THIS specific billing record is carried forward untouched
-    // (same pattern as excludedDates) so a later recompute of an already
-    // fee-bearing record can't silently drop it; otherwise it's added once,
-    // guarded by enrollmentFeeBilled on the subscription doc itself — which
-    // is what makes it recur "never again until a new subscription exists":
-    // next school year is a brand new subscription doc with no such flag.
-    const priorFee = priorFor(sub.id + ":enrollment");
-    if (priorFee) {
-      lineItems.push(priorFee);
-      total += priorFee.amount;
-    } else if (!sub.enrollmentFeeBilled) {
-      const fee = Math.round(((configs.studyConfig?.registrationFee ?? 0) + (configs.studyConfig?.insuranceFee ?? 0)) * 100) / 100;
-      if (fee > 0) {
-        lineItems.push({
-          title: `Taxa de Inscrição e Seguro — ${sub.childName}`,
-          amount: fee, grossAmount: fee, subscriptionId: sub.id + ":enrollment", type: "enrollment", appliedDiscounts: [],
-        });
-        total += fee;
-        newlyBilledEnrollmentFeeSubIds.push(sub.id);
-      }
-    }
+    maybeAddEnrollmentFee(sub);
   }
   for (const sub of group.transport) {
     const gross = sub.originalFee ?? sub.monthlyFee ?? 0;
@@ -284,16 +306,19 @@ function computeLineItems(
       ...(excludedDates.length ? { excludedDates } : {}),
     });
     total += amount;
+    maybeAddEnrollmentFee(sub);
   }
-  return { lineItems, total: Math.round(total * 100) / 100, newlyBilledEnrollmentFeeSubIds };
+  return { lineItems, total: Math.round(total * 100) / 100, newlyBilledEnrollmentFeeSubs };
 }
 
-// Marks each subscription's enrollment fee as billed, permanently, right
-// after the billing record carrying it has actually been written — this is
-// the guard that stops the fee from being added on every subsequent
-// recompute of the same or a later period.
-async function markEnrollmentFeeBilled(subIds: string[]): Promise<void> {
-  await Promise.all(subIds.map(id => appCol("studyroom").doc(id).update({ enrollmentFeeBilled: true })));
+// Marks each given subscription's enrollment fee as billed, permanently,
+// right after the billing record carrying it has actually been written —
+// this is the guard that stops the fee from being added on every subsequent
+// recompute of the same or a later period. Written on the subscription docs
+// themselves (both collections, every currently active sub for the billed
+// child), not a persistent child-level record — see computeLineItems for why.
+async function markEnrollmentFeeBilled(subs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[]): Promise<void> {
+  await Promise.all(subs.map(s => appCol(s.collection).doc(s.id).update({ enrollmentFeeBilled: true })));
 }
 
 async function loadBillingConfigs(): Promise<BillingConfigs> {
@@ -312,7 +337,7 @@ async function buildBillingRecord(
   dryRun: boolean,
   configs: BillingConfigs,
   opts: { docId?: string; sendEmail?: boolean } = {},
-): Promise<{ id: string; newlyBilledEnrollmentFeeSubIds: string[] } | undefined> {
+): Promise<{ id: string; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } | undefined> {
   const { familyId, userId, study, transport } = group;
   const { docId, sendEmail = !dryRun } = opts;
 
@@ -324,7 +349,7 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
 
-  const { lineItems, total, newlyBilledEnrollmentFeeSubIds } = computeLineItems({ study, transport }, period, configs);
+  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems({ study, transport }, period, configs);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -350,7 +375,7 @@ async function buildBillingRecord(
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
-  if (!dryRun && newlyBilledEnrollmentFeeSubIds.length) await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubIds);
+  if (!dryRun && newlyBilledEnrollmentFeeSubs.length) await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs);
 
   if (sendEmail && billingEmail) {
     await appCol("emailOutbox").add({
@@ -362,7 +387,7 @@ async function buildBillingRecord(
     });
   }
 
-  return { id: billingRef.id, newlyBilledEnrollmentFeeSubIds: dryRun ? [] : newlyBilledEnrollmentFeeSubIds };
+  return { id: billingRef.id, newlyBilledEnrollmentFeeSubs: dryRun ? [] : newlyBilledEnrollmentFeeSubs };
 }
 
 export const sendBillingNotice = onCall(
@@ -796,20 +821,21 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
   const periods = periodsUntilSchoolYearEnd(new Date());
   let created = 0, updated = 0, cancelled = 0;
 
-  // group.study is fetched once and reused across every period below — after
-  // the enrollment fee is billed on the first period it applies to, the flag
-  // must also be reflected in this in-memory copy, or every later period in
-  // this same loop would see the same stale "not yet billed" subscription
-  // object and add the fee again.
-  const applyFeeFlags = (subIds: string[]) => {
-    for (const sub of group.study) if (subIds.includes(sub.id)) sub.enrollmentFeeBilled = true;
+  // group.study/group.transport are fetched once and reused across every
+  // period below — computeLineItems reads enrollmentFeeBilled straight off
+  // these in-memory sub objects, so once the fee is billed on one period,
+  // that flag must be reflected here too before the next period in this
+  // same loop is computed, or it would see the same stale "not yet billed"
+  // objects and add the fee again.
+  const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
+    for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
   };
 
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
     const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-    const { lineItems, total, newlyBilledEnrollmentFeeSubIds } = computeLineItems(group, period, configs, existingLineItems);
+    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
       if (existing.data()?.status === "pending") {
@@ -822,7 +848,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
           cancelled++;
         } else {
           await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-          if (newlyBilledEnrollmentFeeSubIds.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubIds); applyFeeFlags(newlyBilledEnrollmentFeeSubIds); }
+          if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
           updated++;
         }
       }
@@ -831,7 +857,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
 
     if (lineItems.length > 0 && total > 0) {
       const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
-      if (result?.newlyBilledEnrollmentFeeSubIds.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubIds);
+      if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
       created++;
     }
   }
@@ -867,12 +893,9 @@ export const backfillBillingSchedules = onCall(
     // Recalculate / create billing records for families with active subscriptions
     for (const group of groups) {
       try {
-        // Same in-memory-staleness guard as autoCreateBillingSchedule: once
-        // the fee is billed for a subscription on one period, this group's
-        // own copy of that subscription must reflect it before the next
-        // period in this loop is computed.
-        const applyFeeFlags = (subIds: string[]) => {
-          for (const sub of group.study) if (subIds.includes(sub.id)) sub.enrollmentFeeBilled = true;
+        // Same in-memory-staleness guard as autoCreateBillingSchedule.
+        const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
+          for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
         };
 
         const periods = periodsUntilSchoolYearEnd(new Date());
@@ -880,7 +903,7 @@ export const backfillBillingSchedules = onCall(
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-          const { lineItems, total, newlyBilledEnrollmentFeeSubIds } = computeLineItems(group, period, configs, existingLineItems);
+          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
             if (existing.data()?.status === "pending") {
               if (lineItems.length === 0 || total === 0) {
@@ -888,7 +911,7 @@ export const backfillBillingSchedules = onCall(
                 cancelled++;
               } else {
                 await existing.ref.update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-                if (newlyBilledEnrollmentFeeSubIds.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubIds); applyFeeFlags(newlyBilledEnrollmentFeeSubIds); }
+                if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
                 updated++;
               }
             } else {
@@ -898,7 +921,7 @@ export const backfillBillingSchedules = onCall(
           }
           if (lineItems.length > 0 && total > 0) {
             const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
-            if (result?.newlyBilledEnrollmentFeeSubIds.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubIds);
+            if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
             created++;
           }
         }

@@ -89,9 +89,10 @@ export interface StudyRoomEntry {
 
   // Billing bookkeeping — set once by the billing function itself, never by
   // any client form, when the one-time registration+insurance fee has been
-  // added to this subscription's first invoice. Never reset for the life of
-  // this document, which is what makes the fee bill exactly once per
-  // subscription; a new school year means a new StudyRoomEntry doc.
+  // billed for this child (on this subscription or their transport one,
+  // whichever came first). Deliberately lives on the subscription, not the
+  // Child document, so it resets every school year: next year's enrollment
+  // is a fresh subscription doc with no such flag.
   enrollmentFeeBilled?: boolean;
 }
 
