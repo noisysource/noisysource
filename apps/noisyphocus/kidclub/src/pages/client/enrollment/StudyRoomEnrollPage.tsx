@@ -91,6 +91,7 @@ export default function StudyRoomEnrollPage() {
   };
 
   const [schedule, setSchedule] = useState<WeekScheduleValue>({ weekPattern: 'all', days: [] });
+  const [note, setNote] = useState('');
 
   useEffect(() => {
     if (!user || !childId) return;
@@ -132,19 +133,23 @@ export default function StudyRoomEnrollPage() {
         } catch { /* best-effort */ }
         if (existingSnap?.exists()) {
           const sub = existingSnap.data();
+          // Legacy/corrupted docs may hold plain day-name strings instead of
+          // {day, hour} objects (an admin-side edit bug); handle both so this
+          // page never silently renders a blank schedule from either shape.
           const days: DayConfig[] = (sub.days ?? []).map((d: any) => ({
-            weekday: d.day,
-            hour: d.hour ?? '16:00',
+            weekday: typeof d === 'string' ? d : (d?.day ?? d?.dayOfWeek ?? ''),
+            hour: (typeof d === 'string' ? undefined : d?.hour) ?? '16:00',
             services: { study: true },
           }));
           setSchedule({ weekPattern: sub.weekPattern ?? 'all', days });
+          setNote(sub.note ?? '');
         }
       } finally {
         setIsLoading(false);
       }
     };
     load();
-  }, [user, childId]);
+  }, [user, childId, editId]);
 
   const studyDays = schedule.days.filter(d => d.services.study);
   const monthlyFee = config ? computeStudyFee(schedule.days, config, schedule.weekPattern) : 0;
@@ -180,9 +185,12 @@ export default function StudyRoomEnrollPage() {
           weekPattern: schedule.weekPattern,
           monthlyPrice: monthlyFee,
           basePrice: monthlyFee,
+          note: note.trim() || null,
           // The parent editing directly (e.g. from an admin-edit review prompt) counts
           // as having acted on it — clear the flag rather than leaving it stuck open.
+          // The edit itself is a client-initiated change, so admin gets notified too.
           clientReviewPending: false,
+          adminReviewPending: true, lastClientAction: 'edited',
           updatedAt: new Date(),
         });
         navigate(`/client/study/${editId}`, { replace: true });
@@ -208,6 +216,7 @@ export default function StudyRoomEnrollPage() {
         monthlyPrice: discountedFee,
         basePrice: monthlyFee,
         appliedDiscounts,
+        note: note.trim() || null,
         startDate: today,
         endDate: nextJuly,
         status: 'pending',
@@ -304,6 +313,8 @@ export default function StudyRoomEnrollPage() {
           <h2 className="font-semibold mb-2">Observações</h2>
           <textarea
             rows={3}
+            value={note}
+            onChange={e => setNote(e.target.value)}
             placeholder="Necessidades especiais, alergias, outras informações..."
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 resize-none"
           />

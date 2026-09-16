@@ -222,7 +222,9 @@ export default function TransportEnrollPage() {
           appliedDiscounts,
           // The parent editing directly (e.g. from an admin-edit review prompt) counts
           // as having acted on it — clear the flag rather than leaving it stuck open.
+          // The edit itself is a client-initiated change, so admin gets notified too.
           clientReviewPending: false,
+          adminReviewPending: true, lastClientAction: 'edited',
           updatedAt: new Date(),
         });
         navigate(`/client/transport/${editId}`, { replace: true });

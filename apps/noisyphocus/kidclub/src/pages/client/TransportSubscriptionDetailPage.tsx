@@ -187,7 +187,11 @@ export default function TransportSubscriptionDetailPage() {
     setReviewing(true);
     try {
       await updateDoc(docRef('transportationSubscriptions', id), {
-        clientReviewPending: false, clientReviewedAt: new Date(), updatedAt: new Date(),
+        clientReviewPending: false, clientReviewedAt: new Date(),
+        // Lets admin see "parent confirmed, ready to activate" rather than
+        // just a generic review flag once they act on this.
+        adminReviewPending: true, lastClientAction: 'confirmed',
+        updatedAt: new Date(),
       });
       setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
     } finally { setReviewing(false); }
@@ -200,7 +204,9 @@ export default function TransportSubscriptionDetailPage() {
       // Doesn't auto-revert the edit — flags it for the team to follow up on directly,
       // since there's no snapshot of the pre-edit values to restore.
       await updateDoc(docRef('transportationSubscriptions', id), {
-        clientReviewPending: false, clientReviewedAt: new Date(), adminReviewPending: true, updatedAt: new Date(),
+        clientReviewPending: false, clientReviewedAt: new Date(),
+        adminReviewPending: true, lastClientAction: 'rejected',
+        updatedAt: new Date(),
       });
       setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
       setShowReviewReject(false);
@@ -216,6 +222,7 @@ export default function TransportSubscriptionDetailPage() {
         cancelledAt: new Date(),
         // Client-initiated change — surfaced to admin as a review prompt on next login.
         adminReviewPending: true,
+        lastClientAction: 'cancelRequested',
         updatedAt: new Date(),
       });
       navigate('/client/subscriptions', { replace: true });
@@ -321,9 +328,19 @@ export default function TransportSubscriptionDetailPage() {
               <p className="text-gray-500 text-sm">{subscription.contactEmail}</p>
             )}
           </div>
-          <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
-            {statusBadge.label}
-          </span>
+          <div className="flex flex-col items-end gap-1.5">
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
+              {statusBadge.label}
+            </span>
+            {isPending && (
+              <Link
+                to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
+                className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+              >
+                ✏️ Editar pedido
+              </Link>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 space-y-2">
@@ -395,19 +412,6 @@ export default function TransportSubscriptionDetailPage() {
               Recusar
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Pending notice */}
-      {isPending && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4">
-          <p className="text-sm text-yellow-800 mb-3">O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.</p>
-          <Link
-            to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-yellow-900 bg-white border border-yellow-300 px-3 py-1.5 rounded-lg hover:bg-yellow-50 transition-colors"
-          >
-            ✏️ Editar pedido
-          </Link>
         </div>
       )}
 

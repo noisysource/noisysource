@@ -461,7 +461,7 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-3">
               <p className="text-sm text-red-800">Tem a certeza que quer cancelar esta inscrição?</p>
               <div className="flex gap-2">
-                <button onClick={() => act({ status: 'cancelled', cancelRequested: true, cancelledAt: new Date(), adminReviewPending: true })} disabled={busy}
+                <button onClick={() => act({ status: 'cancelled', cancelRequested: true, cancelledAt: new Date(), adminReviewPending: true, lastClientAction: 'cancelRequested' })} disabled={busy}
                   className="flex-1 bg-red-600 text-white text-sm py-2 rounded-lg hover:bg-red-700 disabled:opacity-60 font-medium">
                   {busy ? '…' : 'Sim, cancelar'}
                 </button>

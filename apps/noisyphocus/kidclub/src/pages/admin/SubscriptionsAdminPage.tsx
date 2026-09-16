@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getDocs, getDoc, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { getDocs, getDoc, updateDoc, addDoc, deleteDoc, deleteField, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import PlacesInput from '../../components/PlacesInput';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, EMPTY_ENROLLMENT_ADDRESS, validateEnrollmentDetails } from '../../components/EnrollmentDetailsForm';
@@ -58,10 +58,15 @@ interface SubItem {
   // linked to a family/child — surfaced as a review prompt on the parent's
   // dashboard, cleared once they act. adminReviewPending: set whenever a
   // client-initiated change happens (e.g. a cancel request) — surfaced here,
-  // cleared once admin views/acts on it.
+  // cleared once admin views/acts on it. lastClientAction records *what* the
+  // client did last, so the adminReviewPending badge can say what to do next
+  // instead of a single generic "review needed" for every case.
   clientReviewPending?: boolean;
   adminReviewPending?: boolean;
+  lastClientAction?: LastClientAction;
 }
+
+type LastClientAction = 'confirmed' | 'cancelRequested' | 'edited' | 'rejected';
 
 const toDate = (v: any): Date => v?.toDate?.() ?? new Date(v ?? 0);
 const locationStr = (v: any): string => {
@@ -76,6 +81,12 @@ const WEEKDAYS = [
   { value: 'wednesday', label: 'Quarta' },
   { value: 'thursday', label: 'Quinta' },
   { value: 'friday', label: 'Sexta' },
+];
+// Matches WeekSchedulePicker's ARRIVAL_TIMES — the study-day editor below writes
+// the same {day, hour} shape clients read, so times must stay in sync with it.
+const STUDY_ARRIVAL_TIMES = [
+  '13:30', '14:00', '14:30', '15:00', '15:30', '16:00',
+  '16:30', '17:00', '17:30', '18:00', '18:30', '19:00',
 ];
 const DAY_PT: Record<string, string> = {
   monday: 'Seg', tuesday: 'Ter', wednesday: 'Qua',
@@ -99,6 +110,16 @@ const StatusBadge = ({ status, cancelRequested }: { status: SubStatus; cancelReq
     pending: 'Pendente', active: 'Ativa', cancelled: 'Cancelada',
   };
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[status]}`}>{label[status]}</span>;
+};
+
+// What the admin should do next for each kind of client-initiated change —
+// one generic "review needed" badge doesn't say whether it's ready to
+// activate, needs a call about a cancellation, or is just an FYI.
+const CLIENT_ACTION_BADGE: Record<LastClientAction, { label: string; cls: string }> = {
+  confirmed: { label: '✅ Confirmado — ativar', cls: 'bg-green-100 text-green-800 hover:bg-green-200' },
+  cancelRequested: { label: '🚫 Pedido de cancelamento', cls: 'bg-red-100 text-red-800 hover:bg-red-200' },
+  edited: { label: '✏️ Encarregado editou o pedido', cls: 'bg-blue-100 text-blue-800 hover:bg-blue-200' },
+  rejected: { label: '⚠️ Encarregado recusou a alteração', cls: 'bg-amber-100 text-amber-800 hover:bg-amber-200' },
 };
 
 // ─── Trip-template form helpers ───────────────────────────────────────────────
@@ -248,8 +269,16 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
   const [trips, setTrips] = useState<TripTemplate[]>(
     item._type === 'transport' ? tripsFromSchedule(item.schedule ?? []) : [newTrip()]
   );
-  const [studyDays, setStudyDays] = useState<string[]>(
-    item._type === 'study' ? (item.days ?? []).map((d: any) => typeof d === 'string' ? d : d?.day ?? d?.dayOfWeek ?? '') : []
+  // {day, hour} pairs — matches StudyRoomEntry.days (DaySelection[]), the shape
+  // the client-side enrollment/edit page reads back. Bare day-name strings here
+  // would silently drop the hour and break that page's pre-fill (d.day/d.hour
+  // on a string is undefined) — that's the bug this shape guards against.
+  const [studyDays, setStudyDays] = useState<{ day: string; hour: string }[]>(
+    item._type === 'study'
+      ? (item.days ?? []).map((d: any) => typeof d === 'string'
+          ? { day: d, hour: '16:00' }
+          : { day: d?.day ?? d?.dayOfWeek ?? '', hour: d?.hour ?? '16:00' })
+      : []
   );
   const [saving, setSaving] = useState(false);
   const [existingChild, setExistingChild] = useState<Child | null>(null);
@@ -290,7 +319,9 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
   };
 
   const toggleStudyDay = (day: string) =>
-    setStudyDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]);
+    setStudyDays(prev => prev.some(d => d.day === day) ? prev.filter(d => d.day !== day) : [...prev, { day, hour: '16:00' }]);
+  const setStudyDayHour = (day: string, hour: string) =>
+    setStudyDays(prev => prev.map(d => d.day === day ? { ...d, hour } : d));
 
   // Already linked to a family/child — the parent will see this edit and must
   // acknowledge it, rather than it silently changing under them.
@@ -397,11 +428,24 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
           <div className="flex gap-1 flex-wrap">
             {WEEKDAYS.map(w => (
               <button key={w.value} type="button" onClick={() => toggleStudyDay(w.value)}
-                className={`text-xs px-2.5 py-1 rounded border font-medium transition-colors ${studyDays.includes(w.value) ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-200'}`}>
+                className={`text-xs px-2.5 py-1 rounded border font-medium transition-colors ${studyDays.some(d => d.day === w.value) ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-200'}`}>
                 {w.label.slice(0, 3)}
               </button>
             ))}
           </div>
+          {studyDays.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {studyDays.map(d => (
+                <div key={d.day} className="flex items-center gap-2 text-xs">
+                  <span className="w-16 text-gray-500">{WEEKDAYS.find(w => w.value === d.day)?.label ?? d.day}</span>
+                  <select value={d.hour} onChange={e => setStudyDayHour(d.day, e.target.value)}
+                    className="border border-gray-300 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                    {STUDY_ARRIVAL_TIMES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {item._type === 'transport' && <TripEditor trips={trips} onChange={setTrips} accent="blue" />}
@@ -879,6 +923,7 @@ export default function SubscriptionsAdminPage() {
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [onlyAdminReview, setOnlyAdminReview] = useState(false);
+  const [onlyClientReview, setOnlyClientReview] = useState(false);
   const [processing, setProcessing] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [showManualForm, setShowManualForm] = useState(false);
@@ -931,6 +976,7 @@ export default function SubscriptionsAdminPage() {
           feeReviewRequired: x.feeReviewRequired ?? false,
           clientReviewPending: x.clientReviewPending ?? x.needsClientReview ?? false,
           adminReviewPending: x.adminReviewPending ?? false,
+          lastClientAction: x.lastClientAction,
         };
       });
       const transport: SubItem[] = transportSnap.docs.map(d => {
@@ -955,6 +1001,7 @@ export default function SubscriptionsAdminPage() {
           feeReviewRequired: x.feeReviewRequired ?? false,
           clientReviewPending: x.clientReviewPending ?? x.needsClientReview ?? false,
           adminReviewPending: x.adminReviewPending ?? false,
+          lastClientAction: x.lastClientAction,
         };
       });
       setItems([...study, ...transport].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()));
@@ -1030,8 +1077,8 @@ export default function SubscriptionsAdminPage() {
     setProcessing(item.id);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(docRef(colName, item.id), { adminReviewPending: false, updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, adminReviewPending: false } : i));
+      await updateDoc(docRef(colName, item.id), { adminReviewPending: false, lastClientAction: deleteField(), updatedAt: new Date() });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, adminReviewPending: false, lastClientAction: undefined } : i));
     } finally { setProcessing(null); }
   };
 
@@ -1330,6 +1377,7 @@ export default function SubscriptionsAdminPage() {
   const filtered = items
     .filter(i => tab === 'all' || i.status === tab)
     .filter(i => !onlyAdminReview || i.adminReviewPending)
+    .filter(i => !onlyClientReview || i.clientReviewPending)
     .filter(i => {
       if (typeFilter === 'transport') return i._type === 'transport';
       if (typeFilter === 'study') return i._type === 'study';
@@ -1369,6 +1417,7 @@ export default function SubscriptionsAdminPage() {
     unlinked: items.filter(isUnlinked).length,
     feeReview: items.filter(i => i.feeReviewRequired).length,
     adminReview: items.filter(i => i.adminReviewPending).length,
+    clientReview: items.filter(i => i.clientReviewPending).length,
   };
 
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar…</div>;
@@ -1392,6 +1441,7 @@ export default function SubscriptionsAdminPage() {
             {counts.unlinked > 0 && <span className="text-orange-600 font-medium"> · {counts.unlinked} não vinculada(s)</span>}
             {counts.feeReview > 0 && <span className="text-amber-600 font-medium"> · {counts.feeReview} mensalidade{counts.feeReview !== 1 ? 's' : ''} em revisão</span>}
             {counts.adminReview > 0 && <span className="text-pink-600 font-medium"> · {counts.adminReview} alteração{counts.adminReview !== 1 ? 'ões' : ''} do cliente por rever</span>}
+            {counts.clientReview > 0 && <span className="text-purple-600 font-medium"> · {counts.clientReview} a aguardar confirmação do encarregado</span>}
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
@@ -1475,6 +1525,10 @@ export default function SubscriptionsAdminPage() {
           className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${onlyAdminReview ? 'bg-pink-600 text-white border-pink-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
           🔔 Por rever (cliente){counts.adminReview > 0 ? ` (${counts.adminReview})` : ''}
         </button>
+        <button onClick={() => setOnlyClientReview(v => !v)}
+          className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${onlyClientReview ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
+          ⏳ Aguarda encarregado{counts.clientReview > 0 ? ` (${counts.clientReview})` : ''}
+        </button>
         <input
           type="search"
           value={search}
@@ -1532,10 +1586,16 @@ export default function SubscriptionsAdminPage() {
                             )}
                             {item.adminReviewPending && (
                               <button onClick={() => clearAdminReview(item)} disabled={processing === item.id}
-                                className="text-xs bg-pink-100 text-pink-800 px-2 py-0.5 rounded-full font-medium hover:bg-pink-200 disabled:opacity-60"
+                                className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].cls : 'bg-pink-100 text-pink-800 hover:bg-pink-200'}`}
                                 title="Clique para marcar como revisto">
-                                🔔 alteração do cliente
+                                {item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].label : '🔔 alteração do cliente'}
                               </button>
+                            )}
+                            {item.clientReviewPending && (
+                              <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-medium"
+                                title="O encarregado ainda não viu/confirmou esta alteração">
+                                ⏳ aguarda confirmação do encarregado
+                              </span>
                             )}
                             {item._type === 'transport' && item.status !== 'cancelled' && (
                               <button onClick={() => toggleRouteAssigned(item)} disabled={processing === item.id}

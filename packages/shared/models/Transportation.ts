@@ -94,11 +94,13 @@ export interface TransportationSubscription {
   // admin changes this subscription while it's linked to a family — cleared
   // when the client views it. adminReviewPending: set whenever a client-
   // initiated change happens (e.g. a cancel request) — cleared when admin
-  // views it.
+  // views it. lastClientAction records *what* the client did, so the admin
+  // badge can say what to do next instead of one generic "review needed".
   clientReviewPending?: boolean;
   clientReviewedAt?: Date;
   adminReviewPending?: boolean;
   adminReviewedAt?: Date;
+  lastClientAction?: 'confirmed' | 'cancelRequested' | 'edited' | 'rejected';
 
   // Metadata
   createdAt: Date;
