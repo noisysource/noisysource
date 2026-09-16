@@ -14,7 +14,7 @@ export { impersonateUser } from "./impersonation";
 export { lookupUserByEmail } from "./userManagement";
 export { generateMonthlyInvoices, triggerInvoiceGeneration } from "./kidclub/generateMonthlyInvoices";
 export { syncVendusClient } from "./kidclub/syncVendusClient";
-export { sendBillingNotice, backfillBillingSchedules, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, createPartyDeposit, retryVendusInvoice, onStudyroomBillingSync, onTransportBillingSync } from "./kidclub/billing";
+export { sendBillingNotice, backfillBillingSchedules, setBillingLineItemExcludedDays, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, createPartyDeposit, retryVendusInvoice, onStudyroomBillingSync, onTransportBillingSync } from "./kidclub/billing";
 export { onStudyroomCreated, onTransportCreated, onStudyroomStatusNotify, onTransportStatusNotify, onCampSubscriptionCreated } from "./kidclub/notifications";
 export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/discountRecalc";
 export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";

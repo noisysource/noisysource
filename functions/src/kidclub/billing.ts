@@ -8,6 +8,20 @@ import { appCol } from "./db";
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
+// functions/ deploys as an isolated directory — Cloud Build's remote install
+// only sees functions/package.json, with no monorepo/pnpm-workspace context,
+// so a real "@shared" dependency can't be added here (confirmed the hard
+// way: Cloud Build's npm rejects "@shared" outright as an invalid package
+// name, since it's a scope prefix with no name after it — breaks EVERY
+// function in the deploy, not just ones that import it). Duplicated from
+// packages/shared/models/discountLogic.ts's applyDiscounts() instead of
+// importing it; keep the two in sync if that one ever changes.
+interface AppliedDiscount { ruleId: string; name: string; percentage: number; appliedAt: Date; appliedBy: "auto" | "admin" }
+function applyDiscounts(gross: number, discounts: AppliedDiscount[]): number {
+  const totalPct = Math.min(discounts.reduce((s, d) => s + d.percentage, 0), 1);
+  return Math.round(gross * (1 - totalPct) * 100) / 100;
+}
+
 const COMPANY_NAME = "Arco-Íris da Pequenada";
 
 // ── Helpers (shared with generateMonthlyInvoices) ─────────────────────────────
@@ -29,6 +43,44 @@ function periodForDate(date: Date) {
 function dayLabel(day: string): string {
   const map: Record<string, string> = { monday:"2ª", tuesday:"3ª", wednesday:"4ª", thursday:"5ª", friday:"6ª" };
   return map[day] ?? day;
+}
+
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const weekdayOfIsoDate = (isoDate: string): string => WEEKDAY_NAMES[new Date(`${isoDate}T12:00:00Z`).getUTCDay()];
+
+// Same per-occurrence rate used to price the subscription in the first place
+// (StudyCenterConfig.pricePerDayPerWeek / TransportationConfig.flatRatePerTrip)
+// — reused here rather than back-deriving a rate from the monthly total, so
+// "one excluded day" always means the same euro amount everywhere in the app.
+function studyPerDayRate(cfg: any): number {
+  if (cfg?.pricePerDayPerWeek != null) return cfg.pricePerDayPerWeek;
+  if (cfg?.monthlyPricePerWeekday != null) return cfg.monthlyPricePerWeekday / (cfg?.weeksPerMonth ?? 4);
+  return 0;
+}
+
+// Gross (pre-discount) amount to remove for a set of excluded calendar dates.
+// Discount is reapplied afterwards via applyDiscounts(), the same function
+// that already computes every other discounted price in the app — so a
+// subscription's discount rate is preserved on the days it IS billed for,
+// instead of being partly eaten by the excluded days.
+function computeExclusionDeduction(
+  type: "study" | "transport",
+  excludedDates: string[],
+  sub: any,
+  studyConfig: any,
+  transportConfig: any,
+): number {
+  if (type === "study") {
+    return excludedDates.length * studyPerDayRate(studyConfig);
+  }
+  const rate = transportConfig?.flatRatePerTrip ?? 0;
+  let deduction = 0;
+  for (const isoDate of excludedDates) {
+    const weekday = weekdayOfIsoDate(isoDate);
+    const tripsThatDay = (sub.schedule ?? []).filter((s: any) => s.dayOfWeek === weekday).length;
+    deduction += tripsThatDay * rate;
+  }
+  return deduction;
 }
 
 // Returns all months from fromDate through August of the following year
@@ -128,27 +180,71 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
   });
 }
 
-// ── Compute line items for a group (pure, no DB access) ──────────────────────
+// ── Compute line items for a group ────────────────────────────────────────────
 
+export interface BillingLineItem {
+  title: string;
+  amount: number;               // net, after discounts AND excluded days
+  grossAmount: number;          // before discounts and exclusions
+  subscriptionId: string;
+  type: "study" | "transport";
+  appliedDiscounts: AppliedDiscount[];
+  excludedDates?: string[];     // ISO yyyy-mm-dd, admin-marked "not provided" for THIS record only
+}
+
+interface BillingConfigs { studyConfig: any; transportConfig: any }
+
+// existingLineItems (previous version of this specific billing record, if any)
+// carries forward each subscription's excludedDates — admin's per-month
+// adjustment must survive a recompute triggered by an unrelated subscription
+// edit, not just get silently overwritten with the fresh gross amount.
 function computeLineItems(
   group: { study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
-): { lineItems: { title: string; amount: number }[]; total: number } {
-  const lineItems: { title: string; amount: number }[] = [];
+  configs: BillingConfigs,
+  existingLineItems: BillingLineItem[] = [],
+): { lineItems: BillingLineItem[]; total: number } {
+  const lineItems: BillingLineItem[] = [];
   let total = 0;
+  const priorFor = (subId: string) => existingLineItems.find(li => li.subscriptionId === subId);
+
   for (const sub of group.study) {
-    const amount = sub.monthlyPrice ?? 0;
+    const gross = sub.basePrice ?? sub.monthlyPrice ?? 0;
+    const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
+    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
+    const deduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
     const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
-    lineItems.push({ title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`, amount });
+    lineItems.push({
+      title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "study", appliedDiscounts,
+      ...(excludedDates.length ? { excludedDates } : {}),
+    });
     total += amount;
   }
   for (const sub of group.transport) {
-    const amount = sub.monthlyFee ?? 0;
+    const gross = sub.originalFee ?? sub.monthlyFee ?? 0;
+    const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
+    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
+    const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
     const daysStr = (sub.schedule ?? []).map((s: any) => dayLabel(s.dayOfWeek)).join(", ");
-    lineItems.push({ title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`, amount });
+    lineItems.push({
+      title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts,
+      ...(excludedDates.length ? { excludedDates } : {}),
+    });
     total += amount;
   }
-  return { lineItems, total };
+  return { lineItems, total: Math.round(total * 100) / 100 };
+}
+
+async function loadBillingConfigs(): Promise<BillingConfigs> {
+  const [studySnap, transportSnap] = await Promise.all([
+    appCol("config").doc("studyCenter").get(),
+    appCol("config").doc("transportation").get(),
+  ]);
+  return { studyConfig: studySnap.data() ?? {}, transportConfig: transportSnap.data() ?? {} };
 }
 
 // ── Send billing notices for a period ────────────────────────────────────────
@@ -157,6 +253,7 @@ async function buildBillingRecord(
   group: { familyId: string; userId: string; study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
   dryRun: boolean,
+  configs: BillingConfigs,
   opts: { docId?: string; sendEmail?: boolean } = {},
 ): Promise<string | undefined> {
   const { familyId, userId, study, transport } = group;
@@ -170,7 +267,7 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
 
-  const { lineItems, total } = computeLineItems({ study, transport }, period);
+  const { lineItems, total } = computeLineItems({ study, transport }, period, configs);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -625,9 +722,10 @@ export const setPaymentMethod = onCall(
 // ── Auto-billing on subscription confirmation ─────────────────────────────────
 
 async function autoCreateBillingSchedule(familyId: string, userId: string): Promise<void> {
-  const [studySnap, transportSnap] = await Promise.all([
+  const [studySnap, transportSnap, configs] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
+    loadBillingConfigs(),
   ]);
 
   const group = {
@@ -643,7 +741,8 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
-    const { lineItems, total } = computeLineItems(group, period);
+    const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
+    const { lineItems, total } = computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
       if (existing.data()?.status === "pending") {
@@ -663,7 +762,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     }
 
     if (lineItems.length > 0 && total > 0) {
-      await buildBillingRecord(group, period, false, { docId, sendEmail: false });
+      await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
       created++;
     }
   }
@@ -682,7 +781,7 @@ export const backfillBillingSchedules = onCall(
     const roles = userDoc.data()?.roles ?? {};
     if (!roles.owner && !roles.rainbowAdmin) throw new Error("Unauthorized");
 
-    const groups = await getActiveSubs();
+    const [groups, configs] = await Promise.all([getActiveSubs(), loadBillingConfigs()]);
     let created = 0, updated = 0, skipped = 0, cancelled = 0, failed = 0;
     const familiesWithActiveSubs = new Set(groups.map(g => g.familyId));
 
@@ -703,7 +802,8 @@ export const backfillBillingSchedules = onCall(
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
-          const { lineItems, total } = computeLineItems(group, period);
+          const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
+          const { lineItems, total } = computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
             if (existing.data()?.status === "pending") {
               if (lineItems.length === 0 || total === 0) {
@@ -719,7 +819,7 @@ export const backfillBillingSchedules = onCall(
             continue;
           }
           if (lineItems.length > 0 && total > 0) {
-            await buildBillingRecord(group, period, false, { docId, sendEmail: false });
+            await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
             created++;
           }
         }
@@ -730,6 +830,78 @@ export const backfillBillingSchedules = onCall(
     }
 
     return { created, updated, skipped, cancelled, failed, families: groups.length };
+  }
+);
+
+// ── Admin: exclude specific days from one billing record's line item ─────────
+// For marking vacation/no-show days out of a single month's invoice, without
+// touching the subscription itself (which keeps its normal recurring
+// schedule for every other month). Only allowed while the record is still
+// "pending" — same protection every other write in this file already has for
+// paid/processing/invoiced/failed/cancelled records.
+
+export const setBillingLineItemExcludedDays = onCall(
+  { region: "europe-west3", invoker: "public" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
+    const userDoc = await db.collection("users").doc(uid).get();
+    const roles = userDoc.data()?.roles ?? {};
+    if (!roles.owner && !roles.rainbowAdmin) throw new HttpsError("permission-denied", "Unauthorized");
+
+    const { billingId, subscriptionId, excludedDates } = request.data ?? {};
+    if (!billingId || !subscriptionId || !Array.isArray(excludedDates)) {
+      throw new HttpsError("invalid-argument", "billingId, subscriptionId, excludedDates[] required");
+    }
+
+    const billingRef = appCol("billing").doc(billingId);
+    const billingSnap = await billingRef.get();
+    const billing = billingSnap.data();
+    if (!billing) throw new HttpsError("not-found", "Billing record not found");
+    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Cannot edit a "${billing.status}" record`);
+
+    const lineItems: BillingLineItem[] = billing.lineItems ?? [];
+    const idx = lineItems.findIndex((li) => li.subscriptionId === subscriptionId);
+    if (idx === -1) throw new HttpsError("not-found", "Line item not found on this billing record");
+    const li = lineItems[idx];
+
+    // Only dates within this record's own period are honoured — this is a
+    // per-record adjustment, not a general-purpose date list.
+    const periodStart: Date = billing.periodStart.toDate();
+    const periodEnd: Date = billing.periodEnd.toDate();
+    const validDates: string[] = excludedDates.filter((d: unknown) => {
+      if (typeof d !== "string") return false;
+      const dt = new Date(`${d}T12:00:00Z`);
+      return !isNaN(dt.getTime()) && dt >= periodStart && dt <= periodEnd;
+    });
+
+    const colName = li.type === "study" ? "studyroom" : "transportationSubscriptions";
+    const [subSnap, configs] = await Promise.all([
+      appCol(colName).doc(subscriptionId).get(),
+      loadBillingConfigs(),
+    ]);
+    const sub = subSnap.data() ?? {};
+
+    // Anchored to this line item's own stored gross/discounts, not a fresh
+    // read of the subscription's current price — keeps the math consistent
+    // with the total already shown on this specific invoice.
+    const gross = li.grossAmount ?? 0;
+    const appliedDiscounts = li.appliedDiscounts ?? [];
+    const deduction = computeExclusionDeduction(li.type, validDates, sub, configs.studyConfig, configs.transportConfig);
+    const newAmount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+
+    const newLineItems = [...lineItems];
+    newLineItems[idx] = { ...li, amount: newAmount, ...(validDates.length ? { excludedDates: validDates } : {}) };
+    if (!validDates.length) delete (newLineItems[idx] as any).excludedDates;
+    const newTotal = Math.round(newLineItems.reduce((s, x) => s + (x.amount ?? 0), 0) * 100) / 100;
+
+    await billingRef.update({
+      lineItems: newLineItems,
+      total: newTotal,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { amount: newAmount, total: newTotal };
   }
 );
 

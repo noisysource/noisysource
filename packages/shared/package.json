@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
+  "//exports": "Root export only, deliberately: this package is named '@shared' with no actual npm scope. Node's require() always parses a bare '@x/y...' specifier as scope 'x', package 'y' — so '@shared/models/foo' resolves as package '@shared/models' (which doesn't exist), never as a subpath of '@shared', no matter what's declared here. Frontend apps (Vite) sidestep this by aliasing '@shared/*' straight to this package's source via tsconfig paths, not through this exports field at all — only consumers that `require()` this as a real Node package (functions/) are affected. Import from the package root ('@shared') here, not a subpath.",
   "exports": {
     ".": {
       "require": "./dist/index.js",

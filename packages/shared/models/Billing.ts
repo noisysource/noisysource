@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase/firestore';
+import type { AppliedDiscount } from './Discount';
 
 export type BillingPaymentMethod = 'mbway' | 'multibanco' | 'card' | 'subscription';
 
@@ -13,7 +14,14 @@ export type BillingStatus =
 
 export interface BillingLineItem {
   title: string;
-  amount: number;
+  amount: number;                    // net, after discounts AND excluded days
+  // Present on records generated after the day-exclusion feature shipped;
+  // absent on older legacy line items.
+  subscriptionId?: string;
+  type?: 'study' | 'transport';
+  grossAmount?: number;               // before discounts and exclusions
+  appliedDiscounts?: AppliedDiscount[];
+  excludedDates?: string[];           // ISO yyyy-mm-dd, admin-marked "not provided" for THIS record only
 }
 
 export interface BillingRecord {
