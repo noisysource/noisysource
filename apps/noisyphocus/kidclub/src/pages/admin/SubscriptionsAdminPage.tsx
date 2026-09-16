@@ -281,6 +281,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
       : []
   );
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [existingChild, setExistingChild] = useState<Child | null>(null);
   const [loadingChild, setLoadingChild] = useState(!!item.childId);
 
@@ -346,6 +347,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
     const errs = validateEnrollmentDetails(details);
     if (Object.keys(errs).length) { setDetailErrors(errs); return; }
     setSaving(true);
+    setSaveError(null);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
       const fullName = `${details.firstName.trim()} ${details.lastName.trim()}`;
@@ -369,22 +371,37 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         patch.monthlyPrice = netFee;
         patch.basePrice = gross;
       }
-      await updateDoc(docRef(colName, item.id), patch);
+
+      try {
+        await updateDoc(docRef(colName, item.id), patch);
+      } catch (err: any) {
+        console.error(`Failed to save ${colName}/${item.id}:`, err);
+        setSaveError(`Falha ao guardar a inscrição: ${err?.message ?? 'erro desconhecido'}`);
+        return; // subscription write failed — nothing below is safe to run
+      }
 
       // Child-level fields (dateOfBirth/homeAddress/schoolName/schoolYear/name)
-      // live on the children doc, not the subscription.
+      // live on the children doc, not the subscription. Only reachable when a
+      // real child is linked — see the "não está associada" warning above for
+      // the alternative case.
       if (item.childId) {
         const dob = new Date(details.dateOfBirth + 'T12:00:00');
-        await updateDoc(docRef('children', item.childId), {
-          firstName: details.firstName.trim(), lastName: details.lastName.trim(),
-          dateOfBirth: dob, age: calculateAge(dob),
-          schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
-          homeAddress: {
-            street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
-            postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
-          },
-          updatedAt: new Date(),
-        });
+        try {
+          await updateDoc(docRef('children', item.childId), {
+            firstName: details.firstName.trim(), lastName: details.lastName.trim(),
+            dateOfBirth: dob, age: calculateAge(dob),
+            schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
+            homeAddress: {
+              street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
+              postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
+            },
+            updatedAt: new Date(),
+          });
+        } catch (err: any) {
+          console.error(`Failed to save children/${item.childId}:`, err);
+          setSaveError(`Inscrição guardada, mas os dados da criança (nome, data de nascimento, escola, morada) falharam ao guardar: ${err?.message ?? 'erro desconhecido'}`);
+          // Subscription patch already succeeded — still reflect it below.
+        }
       }
 
       onSave({
@@ -417,6 +434,9 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         <p className="text-xs text-gray-400">A carregar dados da criança…</p>
       ) : (
         <EnrollmentDetailsForm value={details} onChange={setDetails} errors={detailErrors} />
+      )}
+      {!item.childId && (
+        <p className="text-xs text-amber-600">Esta inscrição não está associada a nenhuma criança (provavelmente anterior à associação automática) — nome, data de nascimento, escola e morada abaixo não têm onde ser guardados e serão ignorados ao guardar.</p>
       )}
       {!existingChild && item.childId && !loadingChild && (
         <p className="text-xs text-amber-600">Não foi possível carregar a criança associada — a alterar apenas os dados da inscrição.</p>
@@ -453,6 +473,9 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
       <DiscountPicker rules={discountRules} scope={scope} selected={selectedDiscounts} onToggle={toggleDiscount} gross={gross} />
 
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Nota (opcional, apenas interna)" className={fieldCls} />
+      {saveError && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">{saveError}</p>
+      )}
       <div className="flex gap-2">
         <button onClick={submit} disabled={saving}
           className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
@@ -1618,14 +1641,16 @@ export default function SubscriptionsAdminPage() {
                             const autoApplied = applied.filter(d => d.appliedBy === 'auto');
                             const adminApplied = applied.filter(d => d.appliedBy === 'admin');
 
-                            // Manual rules from central system not yet applied
-                            const manualRules = discountRules.filter(r =>
-                              r.active && r.trigger === 'manual' &&
+                            // Any active rule for this scope not yet applied — not just
+                            // trigger:'manual' ones, so an auto rule that didn't
+                            // auto-match can still be turned on by hand from the row.
+                            const availableRules = discountRules.filter(r =>
+                              r.active &&
                               r.appliesTo.includes(item._type) &&
                               !applied.some(d => d.ruleId === r.id)
                             );
 
-                            if (fee === 0 && applied.length === 0 && manualRules.length === 0) return null;
+                            if (fee === 0 && applied.length === 0 && availableRules.length === 0) return null;
 
                             const gross = item._type === 'study'
                               ? (item.basePrice != null && item.basePrice > fee + 0.01 ? item.basePrice : null)
@@ -1639,15 +1664,27 @@ export default function SubscriptionsAdminPage() {
                                   <span className={`text-xs font-semibold ${hasDiscount ? 'text-green-700' : 'text-gray-800'}`}>€{fee.toFixed(2)}/mês</span>
                                 </div>
 
-                                {/* Applied auto discounts */}
+                                {/* Applied auto discounts — clickable to override off */}
                                 {autoApplied.length > 0 && (
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Auto</span>
-                                    {autoApplied.map(d => (
-                                      <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium">
-                                        {d.name} -{pct(d.percentage)}
-                                      </span>
-                                    ))}
+                                    {autoApplied.map(d => {
+                                      const rule = discountRules.find(r => r.id === d.ruleId);
+                                      if (!rule) return (
+                                        <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium">
+                                          {d.name} -{pct(d.percentage)}
+                                        </span>
+                                      );
+                                      return (
+                                        <button key={d.ruleId}
+                                          onClick={() => toggleManualDiscount(item, rule)}
+                                          disabled={processing === item.id}
+                                          className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 disabled:opacity-50"
+                                          title="Clique para desativar (substitui a deteção automática)">
+                                          {d.name} -{pct(d.percentage)}
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 )}
 
@@ -1675,11 +1712,11 @@ export default function SubscriptionsAdminPage() {
                                   </div>
                                 )}
 
-                                {/* Available manual rules not yet applied */}
-                                {item.status !== 'cancelled' && manualRules.length > 0 && (
+                                {/* Any other active rule for this scope — click to apply */}
+                                {item.status !== 'cancelled' && availableRules.length > 0 && (
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Adicionar</span>
-                                    {manualRules.map(r => (
+                                    {availableRules.map(r => (
                                       <button key={r.id}
                                         onClick={() => toggleManualDiscount(item, r)}
                                         disabled={processing === item.id}
