@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { getDocs, getDoc, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import PlacesInput from '../../components/PlacesInput';
-import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS } from '../../components/EnrollmentDetailsForm';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../components/EnrollmentDetailsForm';
 import { getTransportationConfig } from '../../services/transportationService';
 import { familyService } from '../../services/familyService';
 import { TransportationConfig } from '@shared/models/Transportation';
@@ -329,15 +329,12 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
 
   const hasTransport = totalTrips > 0;
   const hasStudy = studyDays.length > 0;
-  const detailsFilled = details.firstName.trim() && details.lastName.trim() && details.dateOfBirth && details.contactEmail.trim();
+  const detailsFilled = Object.keys(validateEnrollmentDetails(details)).length === 0 && details.contactEmail.trim();
   const isValid = !!detailsFilled && (hasTransport || hasStudy) &&
     (!hasTransport || transportDays.every(d => d.services.transportTrips!.every(t => t.pickupAddress.trim() && t.dropoffAddress.trim())));
 
   const validateDetails = () => {
-    const errs: typeof detailErrors = {};
-    if (!details.firstName.trim()) errs.firstName = 'Obrigatório';
-    if (!details.lastName.trim()) errs.lastName = 'Obrigatório';
-    if (!details.dateOfBirth) errs.dateOfBirth = 'Obrigatório';
+    const errs = validateEnrollmentDetails(details);
     if (!details.contactEmail.trim()) errs.contactEmail = 'Obrigatório';
     setDetailErrors(errs);
     return Object.keys(errs).length === 0;
@@ -374,6 +371,12 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
           age: calculateAge(dob),
           schoolName: details.schoolName.trim() || null,
           schoolYear: details.schoolYear.trim() || null,
+          homeAddress: {
+            street: details.homeAddress.street.trim(),
+            city: details.homeAddress.city.trim(),
+            postalCode: details.homeAddress.postalCode.trim(),
+            country: details.homeAddress.country.trim() || null,
+          },
           contactEmail: details.contactEmail.trim() || null,
           contactPhone: details.contactPhone.trim() || null,
           status: 'active',
@@ -706,6 +709,9 @@ export default function SubscriptionsAdminPage() {
   const [importing, setImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   const [historyItem, setHistoryItem] = useState<SubItem | null>(null);
+  const [exportingChildren, setExportingChildren] = useState(false);
+  const [importingChildren, setImportingChildren] = useState(false);
+  const importChildRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     setIsLoading(true); setError(null);
@@ -981,6 +987,125 @@ export default function SubscriptionsAdminPage() {
     }
   };
 
+  // ─── Missing child details (homeAddress/schoolName/schoolYear) export/import ──
+  // Same CSV format/mechanism as exportCSV/importCSV above: ';' separator, quoted
+  // fields, BOM for Excel, import matches rows back to docs by the `id` column.
+  const addressComplete = (a: any) => !!(a && String(a.street ?? '').trim() && String(a.city ?? '').trim() && String(a.postalCode ?? '').trim());
+
+  const exportMissingChildDetailsCSV = async () => {
+    setExportingChildren(true);
+    try {
+      const [childrenSnap, familiesSnap] = await Promise.all([
+        getDocs(col('children')),
+        getDocs(col('families')),
+      ]);
+      const familiesById = new Map(familiesSnap.docs.map(d => [d.id, d.data() as any]));
+
+      const sep = ';';
+      const q = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const headers = [
+        'id', 'nome', 'contacto_nome', 'contacto_email',
+        'escola', 'ano_letivo', 'morada_rua', 'morada_cidade', 'morada_codigo_postal', 'morada_pais',
+      ];
+      const rows: string[][] = [];
+
+      for (const doc of childrenSnap.docs) {
+        const c = doc.data() as any;
+        const missingSchool = !String(c.schoolName ?? '').trim();
+        const missingYear = !String(c.schoolYear ?? '').trim();
+        const missingAddress = !addressComplete(c.homeAddress);
+        if (!missingSchool && !missingYear && !missingAddress) continue;
+
+        const family = c.familyId ? familiesById.get(c.familyId) : undefined;
+        rows.push([
+          doc.id,
+          `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim(),
+          family?.primaryContact?.name ?? c.contactName ?? '',
+          family?.primaryContact?.email ?? c.contactEmail ?? '',
+          c.schoolName ?? '',
+          c.schoolYear ?? '',
+          c.homeAddress?.street ?? '',
+          c.homeAddress?.city ?? '',
+          c.homeAddress?.postalCode ?? '',
+          c.homeAddress?.country ?? '',
+        ]);
+      }
+
+      if (rows.length === 0) {
+        alert('Nenhuma criança com dados em falta.');
+        return;
+      }
+
+      const csv = [headers.map(q).join(sep), ...rows.map(r => r.map(q).join(sep))].join('\r\n');
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `criancas_dados_em_falta_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportingChildren(false);
+    }
+  };
+
+  const importMissingChildDetailsCSV = async (file: File) => {
+    setImportingChildren(true);
+    try {
+      const text = await file.text();
+      const content = text.startsWith('﻿') ? text.slice(1) : text;
+      const lines = content.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) return;
+      const sep = lines[0].includes(';') ? ';' : ',';
+      const parseRow = (line: string) => {
+        const cols: string[] = [];
+        let cur = ''; let inQ = false;
+        for (const ch of line + sep) {
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === sep && !inQ) { cols.push(cur); cur = ''; }
+          else cur += ch;
+        }
+        return cols;
+      };
+      const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
+      const idx = (name: string) => headers.indexOf(name);
+      let updated = 0;
+      for (const line of lines.slice(1)) {
+        const cols = parseRow(line);
+        const id = cols[idx('id')]?.trim();
+        if (!id) continue;
+        const patch: Record<string, any> = {};
+
+        const schoolName = cols[idx('escola')]?.trim();
+        if (schoolName) patch.schoolName = schoolName;
+        const schoolYear = cols[idx('ano_letivo')]?.trim();
+        if (schoolYear) patch.schoolYear = schoolYear;
+
+        const street = cols[idx('morada_rua')]?.trim();
+        const city = cols[idx('morada_cidade')]?.trim();
+        const postalCode = cols[idx('morada_codigo_postal')]?.trim();
+        if (street && city && postalCode) {
+          patch.homeAddress = { street, city, postalCode, country: cols[idx('morada_pais')]?.trim() || null };
+          // A manually-provided/confirmed address supersedes the "inherited from
+          // billing address, unconfirmed" flag.
+          patch.homeAddressSource = null;
+        }
+
+        if (Object.keys(patch).length > 0) {
+          patch.updatedAt = new Date();
+          await updateDoc(docRef('children', id), patch);
+          updated++;
+        }
+      }
+      alert(`${updated} criança(s) atualizada(s).`);
+    } catch (e: any) {
+      alert(`Erro ao importar: ${e?.message}`);
+    } finally {
+      setImportingChildren(false);
+      if (importChildRef.current) importChildRef.current.value = '';
+    }
+  };
+
   const isUnlinked = (i: SubItem) =>
     (i.source === 'manual' && !i.familyId) || (!!i.familyId && !i.childId);
 
@@ -1146,6 +1271,18 @@ export default function SubscriptionsAdminPage() {
           </button>
           <input ref={importRef} type="file" accept=".csv" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) importCSV(f); }} />
+          <button onClick={exportMissingChildDetailsCSV} disabled={exportingChildren}
+            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium disabled:opacity-50"
+            title="Exportar crianças com escola/ano letivo/morada em falta">
+            {exportingChildren ? '…' : '↓ Dados em falta (crianças)'}
+          </button>
+          <button onClick={() => importChildRef.current?.click()} disabled={importingChildren}
+            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium disabled:opacity-50"
+            title="Importar CSV preenchido — atualiza escola/ano letivo/morada">
+            {importingChildren ? '…' : '↑ Dados em falta (crianças)'}
+          </button>
+          <input ref={importChildRef} type="file" accept=".csv" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) importMissingChildDetailsCSV(f); }} />
           {(counts.pending > 0 || counts.planned > 0) && (
             <button onClick={approveAndPublishAll} disabled={approveAllBusy}
               className="bg-purple-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-purple-700 font-medium disabled:opacity-50">

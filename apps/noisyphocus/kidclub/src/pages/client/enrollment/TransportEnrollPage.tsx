@@ -14,7 +14,7 @@ import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
 import { DiscountRule } from '@shared/models/Discount';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
-import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS } from '../../../components/EnrollmentDetailsForm';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
 import { calculateAge } from '../../../lib/utils';
 
 function computeTransportFee(
@@ -69,10 +69,7 @@ export default function TransportEnrollPage() {
   const handleCreateChild = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    const errs: typeof newChildErrors = {};
-    if (!newChildDetails.firstName.trim()) errs.firstName = 'Obrigatório';
-    if (!newChildDetails.lastName.trim()) errs.lastName = 'Obrigatório';
-    if (!newChildDetails.dateOfBirth) errs.dateOfBirth = 'Obrigatório';
+    const errs = validateEnrollmentDetails(newChildDetails);
     if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
     setCreatingChild(true);
     try {
@@ -85,6 +82,12 @@ export default function TransportEnrollPage() {
         age: calculateAge(dob),
         schoolName: newChildDetails.schoolName.trim() || undefined,
         schoolYear: newChildDetails.schoolYear.trim() || undefined,
+        homeAddress: {
+          street: newChildDetails.homeAddress.street.trim(),
+          city: newChildDetails.homeAddress.city.trim(),
+          postalCode: newChildDetails.homeAddress.postalCode.trim(),
+          country: newChildDetails.homeAddress.country.trim() || undefined,
+        },
         status: 'active',
       });
       navigate(`/client/enroll/transport?childId=${newChildId}`, { replace: true });

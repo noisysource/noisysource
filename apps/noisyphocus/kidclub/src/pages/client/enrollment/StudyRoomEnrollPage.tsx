@@ -12,7 +12,7 @@ import { addDoc, getDoc, getDocs, updateDoc, query, where } from 'firebase/fires
 import { col, docRef } from '../../../lib/db';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
-import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS } from '../../../components/EnrollmentDetailsForm';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
 import { calculateAge } from '../../../lib/utils';
 
 const ACTIVE_STATUSES = ['active', 'planned', 'offered', 'pending'];
@@ -64,10 +64,7 @@ export default function StudyRoomEnrollPage() {
   const handleCreateChild = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    const errs: typeof newChildErrors = {};
-    if (!newChildDetails.firstName.trim()) errs.firstName = 'Obrigatório';
-    if (!newChildDetails.lastName.trim()) errs.lastName = 'Obrigatório';
-    if (!newChildDetails.dateOfBirth) errs.dateOfBirth = 'Obrigatório';
+    const errs = validateEnrollmentDetails(newChildDetails);
     if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
     setCreatingChild(true);
     try {
@@ -80,6 +77,12 @@ export default function StudyRoomEnrollPage() {
         age: calculateAge(dob),
         schoolName: newChildDetails.schoolName.trim() || undefined,
         schoolYear: newChildDetails.schoolYear.trim() || undefined,
+        homeAddress: {
+          street: newChildDetails.homeAddress.street.trim(),
+          city: newChildDetails.homeAddress.city.trim(),
+          postalCode: newChildDetails.homeAddress.postalCode.trim(),
+          country: newChildDetails.homeAddress.country.trim() || undefined,
+        },
         status: 'active',
       });
       navigate(`/client/enroll/study?childId=${newChildId}`, { replace: true });
