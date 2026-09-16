@@ -3,13 +3,17 @@ import { useSearchParams } from 'react-router-dom';
 import { getDocs, getDoc, updateDoc, addDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import PlacesInput from '../../components/PlacesInput';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS } from '../../components/EnrollmentDetailsForm';
 import { getTransportationConfig } from '../../services/transportationService';
+import { familyService } from '../../services/familyService';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
+import { Child } from '@shared/models';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../components/WeekSchedulePicker';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import { DiscountRule, AppliedDiscount } from '@shared/models/Discount';
 import { getDiscountRules, applyDiscounts, grossFromAppliedDiscounts } from '../../services/discountService';
+import { calculateAge } from '../../lib/utils';
 
 type SubStatus = 'planned' | 'pending' | 'offered' | 'active' | 'cancelled';
 type TypeFilter = 'all' | 'transport' | 'study' | 'unlinked';
@@ -46,6 +50,10 @@ interface SubItem {
   createdAt: Date;
   cancelRequested?: boolean;
   feeReviewRequired?: boolean;
+  // Set when an admin edits a subscription already linked to a family/child — surfaced
+  // to the parent as a review prompt (confirm/edit/reject) on their dashboard, cleared
+  // once they act. See FamilyDashboardPage.tsx and the client subscription detail pages.
+  needsClientReview?: boolean;
 }
 
 const toDate = (v: any): Date => v?.toDate?.() ?? new Date(v ?? 0);
@@ -183,6 +191,10 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
   const toggleStudyDay = (day: string) =>
     setStudyDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]);
 
+  // Already linked to a family/child — the parent will see this edit and must
+  // acknowledge it, rather than it silently changing under them.
+  const linkedToFamily = !!item.familyId;
+
   const submit = async () => {
     setSaving(true);
     try {
@@ -192,6 +204,7 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
         contactEmail: email.trim() || null,
         note: note.trim() || null, updatedAt: new Date(),
       };
+      if (linkedToFamily) patch.needsClientReview = true;
       if (item._type === 'transport') {
         patch.contactMobile = phone.trim() || null;
         patch.schedule = tripsToSchedule(trips);
@@ -217,6 +230,7 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
         monthlyFee: item._type === 'transport' ? (patch.monthlyFee ?? item.monthlyFee) : item.monthlyFee,
         schoolName: schoolName.trim() || undefined, schoolYear: schoolYear.trim() || undefined,
         days: item._type === 'study' ? studyDays : item.days,
+        needsClientReview: linkedToFamily || item.needsClientReview,
       });
     } finally { setSaving(false); }
   };
@@ -226,6 +240,11 @@ function EditForm({ item, config, onSave, onCancel }: { item: SubItem; config: T
   return (
     <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
       <p className="text-sm font-semibold text-gray-700">Editar inscrição</p>
+      {linkedToFamily && (
+        <p className="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5">
+          Esta inscrição já está associada a uma família — a alteração ficará marcada para revisão do encarregado.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Nome da criança *" className={fieldCls} />
         <input value={parentName} onChange={e => setParentName(e.target.value)} placeholder="Nome do encarregado" className={fieldCls} />
@@ -282,15 +301,27 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
   onSave: (items: SubItem[]) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [parentName, setParentName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [schoolName, setSchoolName] = useState('');
-  const [schoolYear, setSchoolYear] = useState('');
+  const [details, setDetails] = useState<EnrollmentDetailsValue>(EMPTY_ENROLLMENT_DETAILS);
+  const [detailErrors, setDetailErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
   const [note, setNote] = useState('');
   const [schedule, setSchedule] = useState<WeekScheduleValue>({ weekPattern: 'all', days: [] });
   const [saving, setSaving] = useState(false);
+
+  // Subscriptions must always reference a real child (never an empty childId) — before
+  // saving, search for an existing child by name/contact and let the admin link to it
+  // instead of creating a duplicate. null = not checked yet for the current details.
+  const [matches, setMatches] = useState<Child[] | null>(null);
+  const [checkingMatches, setCheckingMatches] = useState(false);
+  const [selectedChildId, setSelectedChildId] = useState<string | 'new' | null>(null);
+
+  const updateDetails = (v: EnrollmentDetailsValue) => {
+    // Identity changed — any previous match resolution no longer applies.
+    if (v.firstName !== details.firstName || v.lastName !== details.lastName || v.contactEmail !== details.contactEmail) {
+      setMatches(null);
+      setSelectedChildId(null);
+    }
+    setDetails(v);
+  };
 
   const transportDays = schedule.days.filter(d => (d.services.transportTrips?.length ?? 0) > 0);
   const studyDays = schedule.days.filter(d => d.services.study);
@@ -298,16 +329,60 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
 
   const hasTransport = totalTrips > 0;
   const hasStudy = studyDays.length > 0;
-  const isValid = name.trim().length > 0 && (hasTransport || hasStudy) &&
+  const detailsFilled = details.firstName.trim() && details.lastName.trim() && details.dateOfBirth && details.contactEmail.trim();
+  const isValid = !!detailsFilled && (hasTransport || hasStudy) &&
     (!hasTransport || transportDays.every(d => d.services.transportTrips!.every(t => t.pickupAddress.trim() && t.dropoffAddress.trim())));
 
+  const validateDetails = () => {
+    const errs: typeof detailErrors = {};
+    if (!details.firstName.trim()) errs.firstName = 'Obrigatório';
+    if (!details.lastName.trim()) errs.lastName = 'Obrigatório';
+    if (!details.dateOfBirth) errs.dateOfBirth = 'Obrigatório';
+    if (!details.contactEmail.trim()) errs.contactEmail = 'Obrigatório';
+    setDetailErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
+  const checkForMatches = async () => {
+    if (!validateDetails()) return;
+    setCheckingMatches(true);
+    try {
+      const found = await familyService.findMatchingChildren(details.firstName, details.lastName, details.contactEmail);
+      setMatches(found);
+      if (found.length === 0) setSelectedChildId('new');
+    } finally {
+      setCheckingMatches(false);
+    }
+  };
+
   const submit = async () => {
-    if (!isValid) return;
+    if (!isValid || !selectedChildId) return;
     setSaving(true);
     try {
       const now = new Date();
       const endDate = new Date(now);
       endDate.setFullYear(endDate.getFullYear() + 1);
+
+      let childId = selectedChildId;
+      if (childId === 'new') {
+        const dob = new Date(details.dateOfBirth + 'T12:00:00');
+        const ref = await addDoc(col('children'), {
+          familyId: '', // resolved once the parent claims this subscription
+          firstName: details.firstName.trim(),
+          lastName: details.lastName.trim(),
+          dateOfBirth: dob,
+          age: calculateAge(dob),
+          schoolName: details.schoolName.trim() || null,
+          schoolYear: details.schoolYear.trim() || null,
+          contactEmail: details.contactEmail.trim() || null,
+          contactPhone: details.contactPhone.trim() || null,
+          status: 'active',
+          createdAt: now, updatedAt: now,
+        });
+        childId = ref.id;
+      }
+
+      const fullName = `${details.firstName.trim()} ${details.lastName.trim()}`;
       const created: SubItem[] = [];
 
       if (hasTransport) {
@@ -322,20 +397,21 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
         const weeks = activeWeeksInPattern(schedule.weekPattern);
         const monthlyFee = transportConfig ? totalTrips * transportConfig.flatRatePerTrip * weeks : 0;
         const ref = await addDoc(col('transportationSubscriptions'), {
-          childName: name.trim(), contactName: parentName.trim() || null,
-          contactEmail: email.trim() || null, contactMobile: phone.trim() || null,
-          schoolName: schoolName.trim() || null,
+          childId, childName: fullName,
+          contactName: details.contactName.trim() || null,
+          contactEmail: details.contactEmail.trim() || null, contactMobile: details.contactPhone.trim() || null,
+          schoolName: details.schoolName.trim() || null,
           status: 'planned', source: 'manual', monthlyFee,
           weekPattern: schedule.weekPattern,
           schedule: fsSchedule, note: note.trim() || null,
           createdAt: now, updatedAt: now,
         });
         created.push({
-          id: ref.id, _type: 'transport', childName: name.trim(),
-          contactName: parentName.trim() || undefined,
-          contactEmail: email.trim() || undefined,
-          contactPhone: phone.trim() || undefined,
-          schoolName: schoolName.trim() || undefined,
+          id: ref.id, _type: 'transport', childId, childName: fullName,
+          contactName: details.contactName.trim() || undefined,
+          contactEmail: details.contactEmail.trim() || undefined,
+          contactPhone: details.contactPhone.trim() || undefined,
+          schoolName: details.schoolName.trim() || undefined,
           source: 'manual', schedule: fsSchedule, monthlyFee,
           status: 'planned', note: note.trim() || undefined, createdAt: now,
         });
@@ -352,12 +428,12 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
         const monthlyPrice = studyConfig ? studyDays.length * ratePerDay * (weeks / weeksBase) : 0;
         const days = studyDays.map(d => ({ day: d.weekday, hour: d.hour }));
         const ref = await addDoc(col('studyroom'), {
-          childName: name.trim(), familyId: '', childId: '',
-          schoolName: schoolName.trim() || null,
-          schoolYear: schoolYear.trim() || null,
-          contactEmail: email.trim() || null,
-          contactName: parentName.trim() || null,
-          contactMobile: phone.trim() || null,
+          childId, childName: fullName, familyId: '',
+          schoolName: details.schoolName.trim() || null,
+          schoolYear: details.schoolYear.trim() || null,
+          contactEmail: details.contactEmail.trim() || null,
+          contactName: details.contactName.trim() || null,
+          contactMobile: details.contactPhone.trim() || null,
           days, weekPattern: schedule.weekPattern,
           monthlyPrice, basePrice: monthlyPrice,
           note: note.trim() || null,
@@ -367,12 +443,12 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
           history: [], uploadedFiles: [], statusHistory: [], entryHistory: [],
         });
         created.push({
-          id: ref.id, _type: 'study', childName: name.trim(),
-          contactName: parentName.trim() || undefined,
-          contactEmail: email.trim() || undefined,
-          contactPhone: phone.trim() || undefined,
-          schoolName: schoolName.trim() || undefined,
-          schoolYear: schoolYear.trim() || undefined,
+          id: ref.id, _type: 'study', childId, childName: fullName,
+          contactName: details.contactName.trim() || undefined,
+          contactEmail: details.contactEmail.trim() || undefined,
+          contactPhone: details.contactPhone.trim() || undefined,
+          schoolName: details.schoolName.trim() || undefined,
+          schoolYear: details.schoolYear.trim() || undefined,
           days, monthlyPrice, source: 'manual', status: 'pending',
           note: note.trim() || undefined, createdAt: now,
         });
@@ -387,33 +463,52 @@ function ManualEnrollForm({ transportConfig, studyConfig, onSave, onCancel }: {
   return (
     <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 mb-4 space-y-4">
       <h3 className="font-semibold text-blue-900">Nova inscrição</h3>
-      <div className="grid grid-cols-2 gap-2">
-        <input autoFocus value={name} onChange={e => setName(e.target.value)}
-          placeholder="Nome da criança *" className={fieldCls} />
-        <PlacesInput value={schoolName} onChange={setSchoolName}
-          placeholder="Escola" className={fieldCls}
-          types={['school', 'primary_school', 'secondary_school']} nameOnly />
-        <input value={parentName} onChange={e => setParentName(e.target.value)}
-          placeholder="Nome do encarregado" className={fieldCls} />
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-          placeholder="Email do encarregado" className={fieldCls} />
-        <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
-          placeholder="Telefone" className={fieldCls} />
-        <input value={schoolYear} onChange={e => setSchoolYear(e.target.value)}
-          placeholder="Ano letivo (ex: 2024/2025)" className={fieldCls} />
-        <input value={note} onChange={e => setNote(e.target.value)}
-          placeholder="Nota (opcional)" className={`${fieldCls} col-span-2`} />
-      </div>
+
+      <EnrollmentDetailsForm value={details} onChange={updateDetails} errors={detailErrors} />
+      <input value={note} onChange={e => setNote(e.target.value)}
+        placeholder="Nota (opcional, apenas interna)" className={fieldCls} />
+
       <WeekSchedulePicker
         value={schedule}
         onChange={setSchedule}
         availableServices={['transport', 'study']}
         transportConfig={transportConfig}
         studyCenterConfig={studyConfig}
-        schoolName={schoolName || undefined}
+        schoolName={details.schoolName || undefined}
       />
+
+      {/* Child-matching step: must resolve to an existing or new child before saving */}
+      {matches === null ? (
+        <button
+          onClick={checkForMatches}
+          disabled={checkingMatches}
+          className="w-full text-sm text-indigo-700 border border-indigo-200 border-dashed rounded-lg py-2 hover:bg-indigo-50 transition disabled:opacity-60"
+        >
+          {checkingMatches ? 'A verificar…' : 'Verificar criança existente'}
+        </button>
+      ) : matches.length > 0 && (
+        <div className="bg-white border border-indigo-200 rounded-lg p-3 space-y-2">
+          <p className="text-xs font-semibold text-indigo-900">
+            Encontrámos {matches.length === 1 ? 'uma criança que pode ser a mesma' : `${matches.length} crianças que podem ser a mesma`}:
+          </p>
+          {matches.map(child => (
+            <label key={child.id} className="flex items-center gap-2 text-sm px-2 py-1.5 rounded hover:bg-indigo-50 cursor-pointer">
+              <input type="radio" name="childMatch" checked={selectedChildId === child.id}
+                onChange={() => setSelectedChildId(child.id)} />
+              <span>{child.firstName} {child.lastName}</span>
+              {child.schoolName && <span className="text-gray-400">· {child.schoolName}</span>}
+            </label>
+          ))}
+          <label className="flex items-center gap-2 text-sm px-2 py-1.5 rounded hover:bg-indigo-50 cursor-pointer border-t border-gray-100 pt-2">
+            <input type="radio" name="childMatch" checked={selectedChildId === 'new'}
+              onChange={() => setSelectedChildId('new')} />
+            <span>Não é a mesma — criar criança nova</span>
+          </label>
+        </div>
+      )}
+
       <div className="flex gap-2 pt-1">
-        <button onClick={submit} disabled={!isValid || saving}
+        <button onClick={submit} disabled={!isValid || !selectedChildId || saving}
           className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
           {saving ? 'A guardar…' : 'Guardar inscrição'}
         </button>

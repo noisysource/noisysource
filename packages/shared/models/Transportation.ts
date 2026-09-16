@@ -81,7 +81,14 @@ export interface TransportationSubscription {
   // Schedule
   weekPattern: WeekPattern;
   schedule: SubscriptionSchedule[]; // Array of scheduled trips
-  
+
+  // Set when an admin edits a subscription already linked to a family/child — the
+  // parent must confirm/edit/reject before it's considered reviewed.
+  needsClientReview?: boolean;
+  clientReviewedAt?: Date;
+  clientReviewRejected?: boolean;
+  clientReviewRejectedAt?: Date;
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;

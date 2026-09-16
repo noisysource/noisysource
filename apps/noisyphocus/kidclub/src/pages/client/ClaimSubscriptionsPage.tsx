@@ -3,7 +3,7 @@ import { getDocs, addDoc, updateDoc, query, where } from 'firebase/firestore';
 import { useUser } from '@shared/hooks';
 import { col, docRef } from '../../lib/db';
 import { familyService } from '../../services/familyService';
-import { calculateAge } from '../../lib/utils';
+import { calculateAge, normalizeName } from '../../lib/utils';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
@@ -32,14 +32,6 @@ interface ChildForm {
 const PT_DAY: Record<string, string> = {
   monday: 'Seg', tuesday: 'Ter', wednesday: 'Qua', thursday: 'Qui', friday: 'Sex',
 };
-
-function normalizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function transportScheduleLabel(schedule: any[]): string {
   const days = [...new Set(schedule.map((s: any) => PT_DAY[s.dayOfWeek] ?? s.dayOfWeek))];

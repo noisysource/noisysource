@@ -47,6 +47,8 @@ export default function TransportSubscriptionDetailPage() {
   const [accepting, setAccepting] = useState(false);
   const [showDeclineConfirm, setShowDeclineConfirm] = useState(false);
   const [declining, setDeclining] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [showReviewReject, setShowReviewReject] = useState(false);
 
   useEffect(() => {
     if (id) loadData();
@@ -204,6 +206,31 @@ export default function TransportSubscriptionDetailPage() {
     } finally { setDeclining(false); }
   };
 
+  const confirmReview = async () => {
+    if (!id) return;
+    setReviewing(true);
+    try {
+      await updateDoc(docRef('transportationSubscriptions', id), {
+        needsClientReview: false, clientReviewedAt: new Date(), updatedAt: new Date(),
+      });
+      setSubscription(prev => prev ? { ...prev, needsClientReview: false } as any : prev);
+    } finally { setReviewing(false); }
+  };
+
+  const rejectReview = async () => {
+    if (!id) return;
+    setReviewing(true);
+    try {
+      // Doesn't auto-revert the edit — flags it for the team to follow up on directly,
+      // since there's no snapshot of the pre-edit values to restore.
+      await updateDoc(docRef('transportationSubscriptions', id), {
+        needsClientReview: false, clientReviewRejected: true, clientReviewRejectedAt: new Date(), updatedAt: new Date(),
+      });
+      setSubscription(prev => prev ? { ...prev, needsClientReview: false } as any : prev);
+      setShowReviewReject(false);
+    } finally { setReviewing(false); }
+  };
+
   const cancelSubscription = async () => {
     if (!id) return;
     setCancelling(true);
@@ -223,6 +250,7 @@ export default function TransportSubscriptionDetailPage() {
   const isActive = subscription?.status === 'active' || subscription?.status === 'confirmed';
   const isPending = subscription?.status === 'pending' || subscription?.status === 'planned';
   const isOffered = subscription?.status === 'offered';
+  const needsReview = (subscription as any)?.needsClientReview === true;
 
   const priceBreakdown = useMemo(() => {
     if (!config || !subscription) return null;
@@ -362,6 +390,39 @@ export default function TransportSubscriptionDetailPage() {
         </div>
       </div>
 
+      {/* Admin edited this subscription — parent must review */}
+      {needsReview && (
+        <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
+          <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
+          <p className="text-sm text-purple-700 mb-4">
+            A equipa fez alterações à inscrição de transporte de <strong>{subscription.childName}</strong>.
+            Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={confirmReview}
+              disabled={reviewing}
+              className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-purple-700 disabled:opacity-60"
+            >
+              {reviewing ? 'A confirmar…' : 'Confirmar alteração'}
+            </button>
+            <Link
+              to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
+              className="flex-1 text-center bg-white text-purple-700 border border-purple-200 py-2.5 rounded-lg text-sm font-medium hover:bg-purple-50"
+            >
+              Editar
+            </Link>
+            <button
+              onClick={() => setShowReviewReject(true)}
+              disabled={reviewing}
+              className="flex-1 bg-white text-gray-600 border border-gray-200 py-2.5 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-60"
+            >
+              Recusar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Offered: parent must accept */}
       {isOffered && (
         <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
@@ -481,6 +542,32 @@ export default function TransportSubscriptionDetailPage() {
           >
             Cancelar subscrição
           </button>
+        </div>
+      )}
+
+      {showReviewReject && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+            <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
+            <p className="text-gray-600 text-sm mb-6">
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={rejectReview}
+                disabled={reviewing}
+                className="flex-1 bg-red-600 text-white py-2.5 rounded-lg hover:bg-red-700 disabled:opacity-60 text-sm font-medium"
+              >
+                {reviewing ? 'A recusar...' : 'Confirmar recusa'}
+              </button>
+              <button
+                onClick={() => setShowReviewReject(false)}
+                className="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-lg hover:bg-gray-200 text-sm"
+              >
+                Voltar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

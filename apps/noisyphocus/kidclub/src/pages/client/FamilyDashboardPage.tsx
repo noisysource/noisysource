@@ -164,8 +164,8 @@ export default function FamilyDashboardPage() {
                 transport.filter(t => !isCancelled(t.status ?? '')).reduce((s, x) => s + (x.monthlyFee ?? 0), 0);
 
               const allSubs = [
-                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, appliedDiscounts: s.appliedDiscounts ?? [] })),
-                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, appliedDiscounts: t.appliedDiscounts ?? [] })),
+                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, appliedDiscounts: s.appliedDiscounts ?? [], needsClientReview: (s as any).needsClientReview === true })),
+                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, appliedDiscounts: t.appliedDiscounts ?? [], needsClientReview: (t as any).needsClientReview === true })),
               ];
 
               return (
@@ -214,6 +214,14 @@ export default function FamilyDashboardPage() {
                               className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5 hover:bg-purple-100 transition-colors w-fit"
                             >
                               ✅ Lugar disponível — confirme aqui
+                            </Link>
+                          )}
+                          {sub.needsClientReview && (
+                            <Link
+                              to={`/client/${sub.subType === 'transport' ? 'transport' : 'study'}/${sub.id}`}
+                              className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5 hover:bg-purple-100 transition-colors w-fit"
+                            >
+                              ✅ Inscrição foi alterada — confirme aqui
                             </Link>
                           )}
                         </div>

@@ -1,11 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useLocation, Navigate, useNavigate } from 'react-router-dom';
-import { getDocs, query, where } from 'firebase/firestore';
 import { useUser } from '@shared/hooks';
 import Header from '../../components/Header';
 import ClientSidebar from '../../components/client/ClientSidebar';
 import { familyService } from '../../services/familyService';
-import { col } from '../../lib/db';
 import { Family } from '@shared/models';
 import FamilyProfileSetupPage from './FamilyProfileSetupPage';
 import ClaimSubscriptionsPage from './ClaimSubscriptionsPage';
@@ -37,10 +35,7 @@ export default function ClientLayout() {
         // Check for admin-created subscriptions linked by email but not yet claimed
         if (user.email && fam.profileComplete) {
           try {
-            const snap = await getDocs(
-              query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))
-            );
-            setHasUnclaimed(snap.docs.some(d => !d.data().familyId && d.data().status !== 'cancelled'));
+            setHasUnclaimed(await familyService.hasUnclaimedSubscriptions(user.email));
           } catch {
             // Silently ignore — non-blocking
           }
@@ -78,10 +73,7 @@ export default function ClientLayout() {
             // Check for unclaimed subscriptions after profile is complete
             if (user?.email) {
               try {
-                const snap = await getDocs(
-                  query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))
-                );
-                setHasUnclaimed(snap.docs.some(d => !d.data().familyId && d.data().status !== 'cancelled'));
+                setHasUnclaimed(await familyService.hasUnclaimedSubscriptions(user.email));
               } catch { /* non-blocking */ }
             }
             setChecking(false);

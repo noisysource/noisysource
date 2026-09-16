@@ -1,4 +1,15 @@
 /**
+ * Normalize a person's name for fuzzy matching: lowercase, strip accents, collapse whitespace.
+ */
+export function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Calculate age from date of birth
  */
 export function calculateAge(dateOfBirth: Date): number {

@@ -12,6 +12,8 @@ import { addDoc, getDoc, getDocs, updateDoc, query, where } from 'firebase/fires
 import { col, docRef } from '../../../lib/db';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS } from '../../../components/EnrollmentDetailsForm';
+import { calculateAge } from '../../../lib/utils';
 
 const ACTIVE_STATUSES = ['active', 'planned', 'offered', 'pending'];
 
@@ -52,6 +54,39 @@ export default function StudyRoomEnrollPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // No childId yet: collect child details inline (same shared form the admin flow uses)
+  // and create the child before continuing to the schedule step below.
+  const [newChildDetails, setNewChildDetails] = useState<EnrollmentDetailsValue>(EMPTY_ENROLLMENT_DETAILS);
+  const [newChildErrors, setNewChildErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
+  const [creatingChild, setCreatingChild] = useState(false);
+
+  const handleCreateChild = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const errs: typeof newChildErrors = {};
+    if (!newChildDetails.firstName.trim()) errs.firstName = 'Obrigatório';
+    if (!newChildDetails.lastName.trim()) errs.lastName = 'Obrigatório';
+    if (!newChildDetails.dateOfBirth) errs.dateOfBirth = 'Obrigatório';
+    if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
+    setCreatingChild(true);
+    try {
+      const fam = await familyService.getOrCreateFamily(user.uid, user.name || '', user.email || '');
+      const dob = new Date(newChildDetails.dateOfBirth + 'T12:00:00');
+      const newChildId = await familyService.addChild(fam.id, user.uid, {
+        firstName: newChildDetails.firstName.trim(),
+        lastName: newChildDetails.lastName.trim(),
+        dateOfBirth: dob,
+        age: calculateAge(dob),
+        schoolName: newChildDetails.schoolName.trim() || undefined,
+        schoolYear: newChildDetails.schoolYear.trim() || undefined,
+        status: 'active',
+      });
+      navigate(`/client/enroll/study?childId=${newChildId}`, { replace: true });
+    } finally {
+      setCreatingChild(false);
+    }
+  };
 
   const [schedule, setSchedule] = useState<WeekScheduleValue>({ weekPattern: 'all', days: [] });
 
@@ -143,6 +178,9 @@ export default function StudyRoomEnrollPage() {
           weekPattern: schedule.weekPattern,
           monthlyPrice: monthlyFee,
           basePrice: monthlyFee,
+          // The parent editing directly (e.g. from an admin-edit review prompt) counts
+          // as having acted on it — clear the flag rather than leaving it stuck open.
+          needsClientReview: false,
           updatedAt: new Date(),
         });
         navigate(`/client/study/${editId}`, { replace: true });
@@ -185,7 +223,24 @@ export default function StudyRoomEnrollPage() {
     }
   };
 
-  if (!childId) return <Navigate to="/client/children" replace />;
+  if (!childId) {
+    return (
+      <div className="max-w-lg">
+        <div className="mb-6">
+          <Link to="/client/children" className="text-blue-600 hover:underline text-sm">← Voltar</Link>
+          <h1 className="text-2xl font-bold mt-2">Sala de Estudo</h1>
+          <p className="text-gray-600 mt-1">Para começar, diga-nos para quem é a inscrição.</p>
+        </div>
+        <form onSubmit={handleCreateChild} className="space-y-5">
+          <EnrollmentDetailsForm value={newChildDetails} onChange={setNewChildDetails} showContactFields={false} errors={newChildErrors} />
+          <button type="submit" disabled={creatingChild}
+            className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60">
+            {creatingChild ? 'A continuar…' : 'Continuar'}
+          </button>
+        </form>
+      </div>
+    );
+  }
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
 
   if (submitted) {
