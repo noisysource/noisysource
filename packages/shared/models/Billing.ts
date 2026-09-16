@@ -21,8 +21,9 @@ export interface BillingLineItem {
   type?: 'study' | 'transport';
   grossAmount?: number;               // before discounts and exclusions
   appliedDiscounts?: AppliedDiscount[];
-  excludedDates?: string[];           // ISO yyyy-mm-dd, admin-marked "not provided" for THIS record only
+  excludedDates?: string[];           // "yyyy-mm-dd" (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
   scheduleDays?: string[];            // weekday names (english, lowercase) this line item is actually billed for
+  tripsByDay?: Record<string, ('pickup' | 'dropoff' | 'both')[]>; // transport only — trip(s) scheduled per weekday
 }
 
 export interface BillingRecord {

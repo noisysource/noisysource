@@ -44,14 +44,28 @@ function subtotals(records: BillingRecord[]) {
   };
 }
 
+function formatExclusionEntry(entry: string): string {
+  const [iso, direction] = entry.split(':');
+  const dateLabel = new Date(`${iso}T12:00:00`).toLocaleDateString('pt-PT');
+  if (direction === 'pickup') return `${dateLabel} (manhã)`;
+  if (direction === 'dropoff') return `${dateLabel} (tarde)`;
+  return dateLabel;
+}
+
+const SERVICE_META = {
+  study:     { label: 'Sala de Estudo',     icon: '📚', accent: 'indigo' as const },
+  transport: { label: 'Transporte Escolar', icon: '🚐', accent: 'violet' as const },
+};
+
 // Read-only summary of a line item inside the expanded row detail. Editing
 // now happens in DayExclusionModal, opened directly from the row via the
 // "Dias" button — no need to expand the row first to reach it.
 function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
+  const meta = lineItem.type ? SERVICE_META[lineItem.type] : null;
   return (
     <div className="py-1">
       <div className="flex justify-between text-xs text-gray-600">
-        <span>{lineItem.title}</span>
+        <span>{meta && <span className="mr-1">{meta.icon}</span>}{lineItem.title}</span>
         <span className="font-medium">
           {lineItem.excludedDates?.length ? <span className="text-gray-400 line-through mr-1.5">{fmtEur(lineItem.grossAmount ?? lineItem.amount)}</span> : null}
           {fmtEur(lineItem.amount)}
@@ -61,7 +75,7 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
         <div className="flex items-center gap-1.5 flex-wrap mt-1 pl-2">
           {lineItem.excludedDates.map(d => (
             <span key={d} className="text-[11px] bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2 py-0.5">
-              {new Date(`${d}T12:00:00`).toLocaleDateString('pt-PT')}
+              {formatExclusionEntry(d)}
             </span>
           ))}
         </div>
@@ -81,12 +95,104 @@ function monthGrid(year: number, month: number): (number | null)[] {
   return cells;
 }
 
+const ACCENT_CLASSES = {
+  indigo: {
+    header: 'bg-indigo-50 text-indigo-700 border-indigo-100',
+    marked: 'bg-indigo-500 text-white font-semibold hover:bg-indigo-600',
+    idle: 'bg-gray-50 text-gray-700 hover:bg-indigo-100 border border-gray-200',
+    half: 'bg-indigo-500 text-white',
+  },
+  violet: {
+    header: 'bg-violet-50 text-violet-700 border-violet-100',
+    marked: 'bg-violet-500 text-white font-semibold hover:bg-violet-600',
+    idle: 'bg-gray-50 text-gray-700 hover:bg-violet-100 border border-gray-200',
+    half: 'bg-violet-500 text-white',
+  },
+};
+
+// One line item's calendar. Transport days with two distinct trips (a
+// morning pickup and an afternoon dropoff) render as a split cell so each
+// leg can be excluded independently — e.g. a parent drives to a doctor's
+// appointment in the morning but the child still rides home in the
+// afternoon, and still attends study room as normal either way.
+function ServiceCalendar({ li, year, month, grid, markedSet, onToggle, saving }: {
+  li: BillingLineItem;
+  year: number; month: number;
+  grid: (number | null)[];
+  markedSet: Set<string>;
+  onToggle: (entry: string) => void;
+  saving: boolean;
+}) {
+  const meta = SERVICE_META[li.type!];
+  const accent = ACCENT_CLASSES[meta.accent];
+  const scheduleSet = new Set(li.scheduleDays ?? []);
+
+  return (
+    <div className={`rounded-lg border ${accent.header.split(' ').pop()} overflow-hidden`}>
+      <div className={`flex items-baseline justify-between px-3 py-2 ${accent.header}`}>
+        <p className="text-sm font-semibold flex items-center gap-1.5">{meta.icon} {meta.label}</p>
+        <p className="text-xs opacity-80">{markedSet.size > 0 ? `${markedSet.size} marcado(s)` : 'nenhum dia marcado'}</p>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center p-3">
+        {WEEK_HEADER.map(w => <div key={w} className="text-[10px] font-medium text-gray-400 py-1">{w}</div>)}
+        {grid.map((day, i) => {
+          if (day == null) return <div key={i} />;
+          const iso = toIsoDate(new Date(year, month, day));
+          const weekday = WEEKDAY_NAMES[new Date(year, month, day).getDay()];
+          const trips = li.type === 'transport' ? (li.tripsByDay?.[weekday] ?? []) : (scheduleSet.has(weekday) ? ['both'] : []);
+          const isSplit = trips.includes('pickup') && trips.includes('dropoff');
+          const isSchedulable = trips.length > 0;
+
+          if (!isSchedulable) {
+            return <div key={i} className="aspect-square rounded-md text-xs flex items-center justify-center text-gray-300">{day}</div>;
+          }
+
+          if (isSplit) {
+            const pickupMarked = markedSet.has(`${iso}:pickup`) || markedSet.has(iso);
+            const dropoffMarked = markedSet.has(`${iso}:dropoff`) || markedSet.has(iso);
+            return (
+              <div key={i} className="aspect-square rounded-md overflow-hidden flex flex-col border border-gray-200" title={`${day} — manhã / tarde`}>
+                <button type="button" disabled={saving} onClick={() => onToggle(`${iso}:pickup`)}
+                  title="Viagem da manhã — clicar para marcar/desmarcar"
+                  className={`flex-1 text-[9px] leading-none ${pickupMarked ? accent.half : 'bg-gray-50 hover:bg-gray-100 text-gray-500'}`}>
+                  M
+                </button>
+                <button type="button" disabled={saving} onClick={() => onToggle(`${iso}:dropoff`)}
+                  title="Viagem da tarde — clicar para marcar/desmarcar"
+                  className={`flex-1 text-[9px] leading-none border-t border-white/40 ${dropoffMarked ? accent.half : 'bg-gray-50 hover:bg-gray-100 text-gray-500'}`}>
+                  T
+                </button>
+                <span className="sr-only">{day}</span>
+              </div>
+            );
+          }
+
+          const isMarked = markedSet.has(iso);
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={saving}
+              onClick={() => onToggle(iso)}
+              title={isMarked ? 'Marcado como sem serviço — clicar para desmarcar' : 'Marcar como sem serviço'}
+              className={`aspect-square rounded-md text-xs flex items-center justify-center transition-colors ${isMarked ? accent.marked : accent.idle}`}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Calendar picker for marking "no service" days on one billing record. Every
-// line item (study / transport) gets its own mini calendar, since their
-// weekday schedules can differ — only those scheduled weekdays are clickable,
-// so an admin can't accidentally mark a day the child was never billed for
-// anyway. Changes are staged locally and sent in one call per line item on
-// "Guardar", instead of round-tripping the server on every single click.
+// line item (study / transport) gets its own visually distinct calendar —
+// indigo for study, violet for transport — since a family can have both, and
+// they're billed and excluded completely independently: skipping the ride
+// doesn't mean skipping study room, and vice versa. Changes are staged
+// locally and sent in one call per line item on "Guardar", instead of
+// round-tripping the server on every single click.
 function DayExclusionModal({ record, onClose, onUpdated }: {
   record: BillingRecord;
   onClose: () => void;
@@ -106,22 +212,23 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
   const month = record.periodStart.toDate().getMonth();
   const grid = monthGrid(year, month);
 
-  const toggleDay = (lineItemIndex: number, day: number) => {
+  const toggleEntry = (lineItemIndex: number, entry: string) => {
     setStaged(prev => {
       const next = new Map(prev);
       const set = new Set(next.get(lineItemIndex));
-      const iso = toIsoDate(new Date(year, month, day));
-      if (set.has(iso)) set.delete(iso); else set.add(iso);
+      if (set.has(entry)) set.delete(entry); else set.add(entry);
       next.set(lineItemIndex, set);
       return next;
     });
   };
 
-  const hasChanges = editableItems.some(({ li, index }) => {
+  const isChanged = (li: BillingLineItem, index: number) => {
     const original = new Set(li.excludedDates ?? []);
     const now = staged.get(index) ?? new Set();
     return original.size !== now.size || [...original].some(d => !now.has(d));
-  });
+  };
+
+  const hasChanges = editableItems.some(({ li, index }) => isChanged(li, index));
 
   const handleSave = async () => {
     setSaving(true);
@@ -131,11 +238,8 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
         'setBillingLineItemExcludedDays'
       );
       for (const { li, index } of editableItems) {
-        const original = new Set(li.excludedDates ?? []);
-        const now = staged.get(index) ?? new Set();
-        const changed = original.size !== now.size || [...original].some(d => !now.has(d));
-        if (!changed) continue;
-        const dates = [...now].sort();
+        if (!isChanged(li, index)) continue;
+        const dates = [...(staged.get(index) ?? new Set())].sort();
         const res = await fn({ billingId: record.id, subscriptionId: li.subscriptionId!, excludedDates: dates });
         onUpdated(record.id, index, { amount: res.data.amount, excludedDates: dates.length ? dates : undefined }, res.data.total);
       }
@@ -160,54 +264,30 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
-        <div className="px-5 py-4 space-y-6">
+        <div className="px-5 py-4 space-y-4">
           {editableItems.length === 0 && (
             <p className="text-sm text-gray-400">Este registo não tem parcelas editáveis.</p>
           )}
-          {editableItems.map(({ li, index }) => {
-            const scheduleSet = new Set(li.scheduleDays ?? []);
-            const markedSet = staged.get(index) ?? new Set();
-            return (
-              <div key={index}>
-                <div className="flex items-baseline justify-between mb-2">
-                  <p className="text-sm font-medium text-gray-700">{li.type === 'study' ? 'Sala de Estudo' : 'Transporte Escolar'}</p>
-                  <p className="text-xs text-gray-400">{markedSet.size > 0 ? `${markedSet.size} dia(s) marcado(s)` : 'nenhum dia marcado'}</p>
-                </div>
-                <div className="grid grid-cols-7 gap-1 text-center">
-                  {WEEK_HEADER.map(w => <div key={w} className="text-[10px] font-medium text-gray-400 py-1">{w}</div>)}
-                  {grid.map((day, i) => {
-                    if (day == null) return <div key={i} />;
-                    const iso = toIsoDate(new Date(year, month, day));
-                    const weekday = WEEKDAY_NAMES[new Date(year, month, day).getDay()];
-                    const isSchedulable = scheduleSet.has(weekday);
-                    const isMarked = markedSet.has(iso);
-                    return (
-                      <button
-                        key={i}
-                        type="button"
-                        disabled={!isSchedulable || saving}
-                        onClick={() => toggleDay(index, day)}
-                        title={isSchedulable ? (isMarked ? 'Marcado como sem serviço — clicar para desmarcar' : 'Marcar como sem serviço') : 'Sem serviço agendado neste dia'}
-                        className={[
-                          'aspect-square rounded-md text-xs flex items-center justify-center transition-colors',
-                          !isSchedulable ? 'text-gray-300 cursor-default' :
-                          isMarked ? 'bg-amber-500 text-white font-semibold hover:bg-amber-600' :
-                          'bg-gray-50 text-gray-700 hover:bg-amber-100 border border-gray-200',
-                        ].join(' ')}
-                      >
-                        {day}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
+          {editableItems.map(({ li, index }) => (
+            <ServiceCalendar
+              key={index}
+              li={li}
+              year={year}
+              month={month}
+              grid={grid}
+              markedSet={staged.get(index) ?? new Set()}
+              onToggle={entry => toggleEntry(index, entry)}
+              saving={saving}
+            />
+          ))}
+          {editableItems.some(({ li }) => li.type === 'transport' && Object.values(li.tripsByDay ?? {}).some(t => t.includes('pickup') && t.includes('dropoff'))) && (
+            <p className="text-[11px] text-gray-400">Dias de transporte com viagem de manhã e de tarde mostram duas metades — <strong>M</strong> (manhã) e <strong>T</strong> (tarde) — que pode marcar em separado.</p>
+          )}
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
 
         <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between gap-3">
-          <p className="text-[11px] text-gray-400">Clique num dia com serviço agendado para o marcar como não prestado.</p>
+          <p className="text-[11px] text-gray-400">Cada serviço é independente — marcar um dia num não afeta o outro.</p>
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={onClose} disabled={saving} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 disabled:opacity-50">Cancelar</button>
             <button

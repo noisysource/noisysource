@@ -58,6 +58,16 @@ function studyPerDayRate(cfg: any): number {
   return 0;
 }
 
+// Transport excluded-date entries can target a single trip instead of the
+// whole day — "2026-09-08" (bare) excludes every trip that day, while
+// "2026-09-08:pickup" / "2026-09-08:dropoff" excludes only that direction.
+// This is what lets an admin mark "skipped the morning ride but still came
+// to study room, and still took the ride home" as two independent facts.
+function parseExclusionEntry(entry: string): { isoDate: string; direction?: "pickup" | "dropoff" } {
+  const [isoDate, direction] = entry.split(":");
+  return direction === "pickup" || direction === "dropoff" ? { isoDate, direction } : { isoDate };
+}
+
 // Gross (pre-discount) amount to remove for a set of excluded calendar dates.
 // Discount is reapplied afterwards via applyDiscounts(), the same function
 // that already computes every other discounted price in the app — so a
@@ -75,9 +85,15 @@ function computeExclusionDeduction(
   }
   const rate = transportConfig?.flatRatePerTrip ?? 0;
   let deduction = 0;
-  for (const isoDate of excludedDates) {
+  for (const entry of excludedDates) {
+    const { isoDate, direction } = parseExclusionEntry(entry);
     const weekday = weekdayOfIsoDate(isoDate);
-    const tripsThatDay = (sub.schedule ?? []).filter((s: any) => s.dayOfWeek === weekday).length;
+    // A schedule entry with direction "both" is priced (and can only be
+    // excluded) as a single indivisible trip — it matches a direction-scoped
+    // exclusion too, since there's no separate leg to leave billed.
+    const tripsThatDay = (sub.schedule ?? []).filter((s: any) =>
+      s.dayOfWeek === weekday && (!direction || s.direction === direction || s.direction === "both")
+    ).length;
     deduction += tripsThatDay * rate;
   }
   return deduction;
@@ -189,8 +205,9 @@ export interface BillingLineItem {
   subscriptionId: string;
   type: "study" | "transport";
   appliedDiscounts: AppliedDiscount[];
-  excludedDates?: string[];     // ISO yyyy-mm-dd, admin-marked "not provided" for THIS record only
+  excludedDates?: string[];     // ISO yyyy-mm-dd (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
   scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI only offer real service days
+  tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday, so the UI can offer per-trip exclusion when a day has more than one
 }
 
 interface BillingConfigs { studyConfig: any; transportConfig: any }
@@ -231,10 +248,14 @@ function computeLineItems(
     const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
     const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
     const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
+    const tripsByDay: Record<string, ("pickup" | "dropoff" | "both")[]> = {};
+    for (const s of sub.schedule ?? []) {
+      (tripsByDay[s.dayOfWeek] ??= []).push(s.direction ?? "both");
+    }
     const daysStr = (sub.schedule ?? []).map((s: any) => dayLabel(s.dayOfWeek)).join(", ");
     lineItems.push({
       title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
-      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts, scheduleDays,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts, scheduleDays, tripsByDay,
       ...(excludedDates.length ? { excludedDates } : {}),
     });
     total += amount;
@@ -874,7 +895,9 @@ export const setBillingLineItemExcludedDays = onCall(
     const periodEnd: Date = billing.periodEnd.toDate();
     const validDates: string[] = excludedDates.filter((d: unknown) => {
       if (typeof d !== "string") return false;
-      const dt = new Date(`${d}T12:00:00Z`);
+      const { isoDate, direction } = parseExclusionEntry(d);
+      if (d.includes(":") && !direction) return false; // malformed suffix
+      const dt = new Date(`${isoDate}T12:00:00Z`);
       return !isNaN(dt.getTime()) && dt >= periodStart && dt <= periodEnd;
     });
 
