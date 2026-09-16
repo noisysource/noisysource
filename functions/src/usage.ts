@@ -59,7 +59,13 @@ async function sumMetric(projectId: string, metricType: string, start: Date, end
   }
 }
 
-export const getUsageSnapshot = onCall<unknown, any>({ region: "europe-west3" }, async () => {
+// Real deployment is us-central1 (verified via `firebase functions:list`), not
+// Terraform's europe-west3, which is an inert placeholder for this function —
+// see functions/src/OrgDataTools.ts's comment for the full story. The caller
+// (apps/noisysource/finances/src/lib/firebase.ts's shared `functions` export)
+// currently points at europe-west3 too and needs the same correction — flagged
+// separately since that file is shared by more than just this one call site.
+export const getUsageSnapshot = onCall<unknown, any>({ region: "us-central1" }, async () => {
   const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
   if (!projectId) throw new Error("Missing project id");
   const { start, end, label } = monthWindowUTC();

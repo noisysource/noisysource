@@ -3,16 +3,21 @@ import { AppUser } from '@shared/models';
 import { employeeService } from '../../services/employeeService';
 import { Link } from 'react-router-dom';
 
+import { getApp } from 'firebase/app';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { signInWithCustomToken } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
-import { callable } from '../../lib/callable';
 
 function EmployeeCard({ employee }: { employee: AppUser }) {
   const role = Object.keys(employee.roles).find(role => employee.roles[role as keyof typeof employee.roles]);
 
   const handleImpersonate = async () => {
     try {
-      const impersonateUser = callable<{ uid: string }, { token: string }>('impersonateUser');
+      // impersonateUser lives in us-central1, not the europe-west3 every other
+      // KidClub callable uses (see functions/src/impersonation.ts) — can't go
+      // through lib/callable.ts's shared europe-west3 instance for this one.
+      const functions = getFunctions(getApp(), 'us-central1');
+      const impersonateUser = httpsCallable<{ uid: string }, { token: string }>(functions, 'impersonateUser');
       const result = await impersonateUser({ uid: employee.uid });
       const { token } = result.data;
 

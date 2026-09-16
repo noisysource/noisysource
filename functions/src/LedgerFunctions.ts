@@ -445,7 +445,10 @@ const colPlanned = (orgId: string) => db.collection("orgs").doc(orgId).collectio
 const colLedger = (orgId: string) => db.collection("orgs").doc(orgId).collection("ledgerTransactions");
 
 /** ---------- Callable: expandTemplatesInRange ---------- */
-export const expandTemplatesInRange = onCall({ region: "europe-west3" }, async (req) => {
+// Real deployment is us-central1 (verified via `firebase functions:list`), not
+// Terraform's europe-west3, which is an inert placeholder for this function —
+// see OrgDataTools.ts's comment for the full story.
+export const expandTemplatesInRange = onCall({ region: "us-central1" }, async (req) => {
   const { orgId, from, to, templateIds, dryRun } = (req.data ?? {}) as {
     orgId: string;
     from: string;
@@ -538,7 +541,8 @@ export const expandTemplatesInRange = onCall({ region: "europe-west3" }, async (
 });
 
 /** ---------- Callable: postPlannedInstance ---------- */
-export const postPlannedInstance = onCall({ region: "europe-west3" }, async (req) => {
+// Same as expandTemplatesInRange above — real deployment is us-central1.
+export const postPlannedInstance = onCall({ region: "us-central1" }, async (req) => {
   const { orgId, instanceId, cashAccountId, createdBy, postDate } = (req.data ?? {}) as {
     orgId: string;
     instanceId: string;
