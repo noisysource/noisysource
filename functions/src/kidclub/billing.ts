@@ -1,6 +1,6 @@
 import * as admin from "firebase-admin";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
-import { onDocumentUpdated } from "firebase-functions/v2/firestore";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
@@ -733,54 +733,32 @@ export const backfillBillingSchedules = onCall(
   }
 );
 
-export const onStudyroomConfirmed = onDocumentUpdated(
+// Re-runs the full billing recompute for the family on every create/update of
+// a linked subscription — not just status transitions. Covers cases the old
+// status-diffing triggers missed: a subscription created already active (no
+// update event at all), and one that's already active but only gets familyId
+// attached later when the client claims it (familyId changes, not status).
+// autoCreateBillingSchedule() re-queries current subscription state itself,
+// so it's naturally idempotent here — a create, an unrelated field edit, and
+// a status change all converge on the same recomputed result.
+export const onStudyroomBillingSync = onDocumentWritten(
   { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
   async (event) => {
-    const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || !["active", "confirmed"].includes(after.status)) return;
+    if (!after) return; // deleted
     const familyId: string = after.familyId;
-    if (!familyId) { console.warn("studyroom doc missing familyId"); return; }
+    if (!familyId) return;
     await autoCreateBillingSchedule(familyId, after.userId ?? "");
   }
 );
 
-export const onTransportConfirmed = onDocumentUpdated(
+export const onTransportBillingSync = onDocumentWritten(
   { document: "_apps/arcoiris/transportationSubscriptions/{subId}", region: "europe-west3" },
   async (event) => {
-    const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "active") return;
+    if (!after) return; // deleted
     const familyId: string = after.familyId;
-    if (!familyId) { console.warn("transportationSubscriptions doc missing familyId"); return; }
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
-  }
-);
-
-export const onStudyroomCancelled = onDocumentUpdated(
-  { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
-  async (event) => {
-    const before = event.data?.before?.data();
-    const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "cancelled") return;
-    const familyId: string = after.familyId;
-    if (!familyId) { console.warn("studyroom doc missing familyId"); return; }
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
-  }
-);
-
-export const onTransportCancelled = onDocumentUpdated(
-  { document: "_apps/arcoiris/transportationSubscriptions/{subId}", region: "europe-west3" },
-  async (event) => {
-    const before = event.data?.before?.data();
-    const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "cancelled") return;
-    const familyId: string = after.familyId;
-    if (!familyId) { console.warn("transportationSubscriptions doc missing familyId"); return; }
+    if (!familyId) return;
     await autoCreateBillingSchedule(familyId, after.userId ?? "");
   }
 );
