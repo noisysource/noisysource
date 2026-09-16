@@ -53,8 +53,9 @@ function formatExclusionEntry(entry: string): string {
 }
 
 const SERVICE_META = {
-  study:     { label: 'Sala de Estudo',     icon: '📚', accent: 'indigo' as const },
-  transport: { label: 'Transporte Escolar', icon: '🚐', accent: 'violet' as const },
+  study:      { label: 'Sala de Estudo',       icon: '📚', accent: 'indigo' as const },
+  transport:  { label: 'Transporte Escolar',   icon: '🚐', accent: 'violet' as const },
+  enrollment: { label: 'Taxa de Inscrição e Seguro', icon: '🧾', accent: 'indigo' as const },
 };
 
 // Read-only summary of a line item inside the expanded row detail. Editing
@@ -200,7 +201,7 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
 }) {
   const editableItems = record.lineItems
     .map((li, index) => ({ li, index }))
-    .filter(({ li }) => !!li.subscriptionId && !!li.type);
+    .filter(({ li }) => !!li.subscriptionId && (li.type === 'study' || li.type === 'transport'));
 
   const [staged, setStaged] = useState<Map<number, Set<string>>>(
     () => new Map(editableItems.map(({ li, index }) => [index, new Set(li.excludedDates ?? [])]))
@@ -364,7 +365,7 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                   </td>
                   <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-2 flex-wrap">
-                      {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && li.type) && (
+                      {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && (li.type === 'study' || li.type === 'transport')) && (
                         <button
                           onClick={() => onOpenDayEditor(r)}
                           className="px-3 py-1 bg-white border border-amber-300 text-amber-700 text-xs font-medium rounded hover:bg-amber-50 whitespace-nowrap">

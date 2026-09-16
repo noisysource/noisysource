@@ -18,7 +18,7 @@ export interface BillingLineItem {
   // Present on records generated after the day-exclusion feature shipped;
   // absent on older legacy line items.
   subscriptionId?: string;
-  type?: 'study' | 'transport';
+  type?: 'study' | 'transport' | 'enrollment'; // 'enrollment' = one-time registration+insurance fee, not day-editable
   grossAmount?: number;               // before discounts and exclusions
   appliedDiscounts?: AppliedDiscount[];
   excludedDates?: string[];           // "yyyy-mm-dd" (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only

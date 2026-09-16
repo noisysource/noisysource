@@ -86,6 +86,13 @@ export interface StudyRoomEntry {
   // Admin fields
   recalculatedMonthlyPrice?: number;
   isOutdated?: boolean;
+
+  // Billing bookkeeping — set once by the billing function itself, never by
+  // any client form, when the one-time registration+insurance fee has been
+  // added to this subscription's first invoice. Never reset for the life of
+  // this document, which is what makes the fee bill exactly once per
+  // subscription; a new school year means a new StudyRoomEntry doc.
+  enrollmentFeeBilled?: boolean;
 }
 
 /** If you have a create/edit form, use this shape when saving */
