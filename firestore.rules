@@ -55,6 +55,15 @@ service cloud.firestore {
         allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
         allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
         allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+        // Email-based access: admin-created subscriptions with a contactEmail but no familyId yet.
+        // studyroom docs still use both `email` and `contactEmail` inconsistently, so check both.
+        allow read: if isAuthenticated() &&
+          (resource.data.contactEmail == request.auth.token.email || resource.data.email == request.auth.token.email);
+        allow update: if isAuthenticated()
+          && (resource.data.contactEmail == request.auth.token.email || resource.data.email == request.auth.token.email)
+          && !('familyId' in resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['userId', 'familyId', 'childId', 'childAge', 'source']);
       }
 
       // Transportation subscriptions
