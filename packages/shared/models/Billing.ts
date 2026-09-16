@@ -22,6 +22,7 @@ export interface BillingLineItem {
   grossAmount?: number;               // before discounts and exclusions
   appliedDiscounts?: AppliedDiscount[];
   excludedDates?: string[];           // ISO yyyy-mm-dd, admin-marked "not provided" for THIS record only
+  scheduleDays?: string[];            // weekday names (english, lowercase) this line item is actually billed for
 }
 
 export interface BillingRecord {

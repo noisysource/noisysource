@@ -190,6 +190,7 @@ export interface BillingLineItem {
   type: "study" | "transport";
   appliedDiscounts: AppliedDiscount[];
   excludedDates?: string[];     // ISO yyyy-mm-dd, admin-marked "not provided" for THIS record only
+  scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI only offer real service days
 }
 
 interface BillingConfigs { studyConfig: any; transportConfig: any }
@@ -214,10 +215,11 @@ function computeLineItems(
     const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
     const deduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
     const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+    const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
     const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
     lineItems.push({
       title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
-      amount, grossAmount: gross, subscriptionId: sub.id, type: "study", appliedDiscounts,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "study", appliedDiscounts, scheduleDays,
       ...(excludedDates.length ? { excludedDates } : {}),
     });
     total += amount;
@@ -228,10 +230,11 @@ function computeLineItems(
     const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
     const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
     const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+    const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
     const daysStr = (sub.schedule ?? []).map((s: any) => dayLabel(s.dayOfWeek)).join(", ");
     lineItems.push({
       title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
-      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts, scheduleDays,
       ...(excludedDates.length ? { excludedDates } : {}),
     });
     total += amount;

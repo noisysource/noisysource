@@ -44,52 +44,10 @@ function subtotals(records: BillingRecord[]) {
   };
 }
 
-// Per-line-item day exclusion editor — only usable while the record is still
-// "pending" (same rule the backend enforces). Every add/remove calls the
-// setBillingLineItemExcludedDays callable immediately and takes the returned
-// amount/total as-is, rather than re-deriving the discount/rate math here —
-// one source of truth for that calculation, same principle as the discount
-// toggles elsewhere in the admin panel.
-function LineItemRow({ record, lineItem, index, onUpdated }: {
-  record: BillingRecord;
-  lineItem: BillingLineItem;
-  index: number;
-  onUpdated: (recordId: string, lineItemIndex: number, patch: { amount: number; excludedDates?: string[] }, newTotal: number) => void;
-}) {
-  const [newDate, setNewDate] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const canEdit = record.status === 'pending' && !!lineItem.subscriptionId && !!lineItem.type;
-  const periodStartIso = record.periodStart ? toIsoDate(record.periodStart.toDate()) : undefined;
-  const periodEndIso = record.periodEnd ? toIsoDate(record.periodEnd.toDate()) : undefined;
-
-  const save = async (dates: string[]) => {
-    setSaving(true);
-    setError(null);
-    try {
-      const fn = callable<{ billingId: string; subscriptionId: string; excludedDates: string[] }, { amount: number; total: number }>(
-        'setBillingLineItemExcludedDays'
-      );
-      const res = await fn({ billingId: record.id, subscriptionId: lineItem.subscriptionId!, excludedDates: dates });
-      onUpdated(record.id, index, { amount: res.data.amount, ...(dates.length ? { excludedDates: dates } : { excludedDates: undefined }) }, res.data.total);
-    } catch (err: any) {
-      setError(err.message ?? 'Falha ao guardar');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addDate = () => {
-    if (!newDate) return;
-    const next = [...new Set([...(lineItem.excludedDates ?? []), newDate])].sort();
-    setNewDate('');
-    save(next);
-  };
-  const removeDate = (d: string) => {
-    save((lineItem.excludedDates ?? []).filter(x => x !== d));
-  };
-
+// Read-only summary of a line item inside the expanded row detail. Editing
+// now happens in DayExclusionModal, opened directly from the row via the
+// "Dias" button — no need to expand the row first to reach it.
+function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
   return (
     <div className="py-1">
       <div className="flex justify-between text-xs text-gray-600">
@@ -99,35 +57,173 @@ function LineItemRow({ record, lineItem, index, onUpdated }: {
           {fmtEur(lineItem.amount)}
         </span>
       </div>
-      {canEdit && (
+      {!!lineItem.excludedDates?.length && (
         <div className="flex items-center gap-1.5 flex-wrap mt-1 pl-2">
-          {(lineItem.excludedDates ?? []).map(d => (
-            <span key={d} className="text-[11px] bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1">
+          {lineItem.excludedDates.map(d => (
+            <span key={d} className="text-[11px] bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2 py-0.5">
               {new Date(`${d}T12:00:00`).toLocaleDateString('pt-PT')}
-              <button onClick={() => removeDate(d)} disabled={saving} className="hover:text-amber-950 disabled:opacity-50" title="Remover">×</button>
             </span>
           ))}
-          <input
-            type="date"
-            value={newDate}
-            min={periodStartIso}
-            max={periodEndIso}
-            onChange={e => setNewDate(e.target.value)}
-            disabled={saving}
-            className="text-[11px] border border-gray-200 rounded px-1.5 py-0.5 disabled:opacity-50"
-          />
-          <button onClick={addDate} disabled={saving || !newDate}
-            className="text-[11px] text-amber-700 hover:text-amber-900 underline disabled:opacity-50 whitespace-nowrap">
-            {saving ? 'a guardar…' : '+ marcar dia sem serviço'}
-          </button>
-          {error && <span className="text-[11px] text-red-600">{error}</span>}
         </div>
       )}
     </div>
   );
 }
 
-function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExpandRecord, sendingId, sendResult, onSendNotice, onLineItemUpdated }: {
+const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const WEEK_HEADER = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+
+function monthGrid(year: number, month: number): (number | null)[] {
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7; // Monday = 0
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (number | null)[] = [...Array(firstWeekday).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+// Calendar picker for marking "no service" days on one billing record. Every
+// line item (study / transport) gets its own mini calendar, since their
+// weekday schedules can differ — only those scheduled weekdays are clickable,
+// so an admin can't accidentally mark a day the child was never billed for
+// anyway. Changes are staged locally and sent in one call per line item on
+// "Guardar", instead of round-tripping the server on every single click.
+function DayExclusionModal({ record, onClose, onUpdated }: {
+  record: BillingRecord;
+  onClose: () => void;
+  onUpdated: (recordId: string, lineItemIndex: number, patch: { amount: number; excludedDates?: string[] }, newTotal: number) => void;
+}) {
+  const editableItems = record.lineItems
+    .map((li, index) => ({ li, index }))
+    .filter(({ li }) => !!li.subscriptionId && !!li.type);
+
+  const [staged, setStaged] = useState<Map<number, Set<string>>>(
+    () => new Map(editableItems.map(({ li, index }) => [index, new Set(li.excludedDates ?? [])]))
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const year = record.periodStart.toDate().getFullYear();
+  const month = record.periodStart.toDate().getMonth();
+  const grid = monthGrid(year, month);
+
+  const toggleDay = (lineItemIndex: number, day: number) => {
+    setStaged(prev => {
+      const next = new Map(prev);
+      const set = new Set(next.get(lineItemIndex));
+      const iso = toIsoDate(new Date(year, month, day));
+      if (set.has(iso)) set.delete(iso); else set.add(iso);
+      next.set(lineItemIndex, set);
+      return next;
+    });
+  };
+
+  const hasChanges = editableItems.some(({ li, index }) => {
+    const original = new Set(li.excludedDates ?? []);
+    const now = staged.get(index) ?? new Set();
+    return original.size !== now.size || [...original].some(d => !now.has(d));
+  });
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const fn = callable<{ billingId: string; subscriptionId: string; excludedDates: string[] }, { amount: number; total: number }>(
+        'setBillingLineItemExcludedDays'
+      );
+      for (const { li, index } of editableItems) {
+        const original = new Set(li.excludedDates ?? []);
+        const now = staged.get(index) ?? new Set();
+        const changed = original.size !== now.size || [...original].some(d => !now.has(d));
+        if (!changed) continue;
+        const dates = [...now].sort();
+        const res = await fn({ billingId: record.id, subscriptionId: li.subscriptionId!, excludedDates: dates });
+        onUpdated(record.id, index, { amount: res.data.amount, excludedDates: dates.length ? dates : undefined }, res.data.total);
+      }
+      onClose();
+    } catch (err: any) {
+      setError(err.message ?? 'Falha ao guardar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const monthName = record.periodStart.toDate().toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between">
+          <div>
+            <h3 className="font-semibold text-gray-800">Dias sem serviço</h3>
+            <p className="text-xs text-gray-400">{record.billingName} · <span className="capitalize">{monthName}</span></p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        </div>
+
+        <div className="px-5 py-4 space-y-6">
+          {editableItems.length === 0 && (
+            <p className="text-sm text-gray-400">Este registo não tem parcelas editáveis.</p>
+          )}
+          {editableItems.map(({ li, index }) => {
+            const scheduleSet = new Set(li.scheduleDays ?? []);
+            const markedSet = staged.get(index) ?? new Set();
+            return (
+              <div key={index}>
+                <div className="flex items-baseline justify-between mb-2">
+                  <p className="text-sm font-medium text-gray-700">{li.type === 'study' ? 'Sala de Estudo' : 'Transporte Escolar'}</p>
+                  <p className="text-xs text-gray-400">{markedSet.size > 0 ? `${markedSet.size} dia(s) marcado(s)` : 'nenhum dia marcado'}</p>
+                </div>
+                <div className="grid grid-cols-7 gap-1 text-center">
+                  {WEEK_HEADER.map(w => <div key={w} className="text-[10px] font-medium text-gray-400 py-1">{w}</div>)}
+                  {grid.map((day, i) => {
+                    if (day == null) return <div key={i} />;
+                    const iso = toIsoDate(new Date(year, month, day));
+                    const weekday = WEEKDAY_NAMES[new Date(year, month, day).getDay()];
+                    const isSchedulable = scheduleSet.has(weekday);
+                    const isMarked = markedSet.has(iso);
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        disabled={!isSchedulable || saving}
+                        onClick={() => toggleDay(index, day)}
+                        title={isSchedulable ? (isMarked ? 'Marcado como sem serviço — clicar para desmarcar' : 'Marcar como sem serviço') : 'Sem serviço agendado neste dia'}
+                        className={[
+                          'aspect-square rounded-md text-xs flex items-center justify-center transition-colors',
+                          !isSchedulable ? 'text-gray-300 cursor-default' :
+                          isMarked ? 'bg-amber-500 text-white font-semibold hover:bg-amber-600' :
+                          'bg-gray-50 text-gray-700 hover:bg-amber-100 border border-gray-200',
+                        ].join(' ')}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between gap-3">
+          <p className="text-[11px] text-gray-400">Clique num dia com serviço agendado para o marcar como não prestado.</p>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={onClose} disabled={saving} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 disabled:opacity-50">Cancelar</button>
+            <button
+              onClick={handleSave}
+              disabled={saving || !hasChanges}
+              className="px-4 py-1.5 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700 disabled:opacity-50">
+              {saving ? 'A guardar…' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExpandRecord, sendingId, sendResult, onSendNotice, onOpenDayEditor }: {
   monthKey: string;
   records: BillingRecord[];
   expanded: boolean;
@@ -137,7 +233,7 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
   sendingId: string | null;
   sendResult: Record<string, string>;
   onSendNotice: (r: BillingRecord) => void;
-  onLineItemUpdated: (recordId: string, lineItemIndex: number, patch: { amount: number; excludedDates?: string[] }, newTotal: number) => void;
+  onOpenDayEditor: (r: BillingRecord) => void;
 }) {
   const sub = subtotals(records);
   const label = records[0]?.periodLabel ?? monthKey;
@@ -187,24 +283,31 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                     </span>
                   </td>
                   <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
-                    {['pending', 'failed'].includes(r.status) && (
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && li.type) && (
+                        <button
+                          onClick={() => onOpenDayEditor(r)}
+                          className="px-3 py-1 bg-white border border-amber-300 text-amber-700 text-xs font-medium rounded hover:bg-amber-50 whitespace-nowrap">
+                          📅 Dias
+                        </button>
+                      )}
+                      {['pending', 'failed'].includes(r.status) && (
                         <button
                           onClick={() => onSendNotice(r)}
                           disabled={sendingId === r.id}
                           className="px-3 py-1 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap">
                           {sendingId === r.id ? 'A enviar...' : 'Enviar aviso'}
                         </button>
-                        {sendResult[r.id] && <span className="text-xs text-gray-600">{sendResult[r.id]}</span>}
-                      </div>
-                    )}
+                      )}
+                      {sendResult[r.id] && <span className="text-xs text-gray-600">{sendResult[r.id]}</span>}
+                    </div>
                   </td>
                 </tr>
                 {expandedId === r.id && (
                   <tr>
                     <td colSpan={6} className="px-6 py-3 bg-gray-50 border-t border-gray-100 space-y-1">
                       {r.lineItems?.map((li, i) => (
-                        <LineItemRow key={i} record={r} lineItem={li} index={i} onUpdated={onLineItemUpdated} />
+                        <LineItemRow key={i} lineItem={li} />
                       ))}
                       {r.multibancoEntity && (
                         <p className="text-xs text-gray-500 mt-1">Multibanco: Entidade <strong>{r.multibancoEntity}</strong> · Referência <strong>{r.multibancoReference}</strong></p>
@@ -233,6 +336,7 @@ export default function BillingAdminPage() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<Record<string, string>>({});
   const [expandedMonths, setExpandedMonths] = useState<Set<string> | null>(null);
+  const [dayEditorRecordId, setDayEditorRecordId] = useState<string | null>(null);
 
   const [filterStatus, setFilterStatus] = useState('pending');
   const [filterPeriod, setFilterPeriod] = useState('all');
@@ -412,11 +516,23 @@ export default function BillingAdminPage() {
               sendingId={sendingId}
               sendResult={sendResult}
               onSendNotice={handleSendNotice}
-              onLineItemUpdated={handleLineItemUpdated}
+              onOpenDayEditor={r => setDayEditorRecordId(r.id)}
             />
           ))}
         </div>
       )}
+
+      {dayEditorRecordId && (() => {
+        const record = records.find(r => r.id === dayEditorRecordId);
+        if (!record) return null;
+        return (
+          <DayExclusionModal
+            record={record}
+            onClose={() => setDayEditorRecordId(null)}
+            onUpdated={handleLineItemUpdated}
+          />
+        );
+      })()}
     </div>
   );
 }
