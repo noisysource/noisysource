@@ -4,18 +4,18 @@ import { Link } from 'react-router-dom';
 import { col, docRef } from '../../lib/db';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
-import { normalizeSubStatus } from '../../lib/utils';
+import { normalizeSubStatus, SubStatus } from '../../lib/utils';
 
 interface TransportSub {
   id: string;
-  status: string;
+  status: SubStatus;
   monthlyFee: number;
   scheduleLength: number;
 }
 
 interface StudySub {
   id: string;
-  status: string;
+  status: SubStatus;
   daysCount: number;
 }
 
@@ -28,10 +28,27 @@ interface RouteSnapshot {
   monthlyRevenueActive: number;
 }
 
-const T_ACTIVE = ['active'];
-const T_PIPELINE = ['active', 'pending'];
-const S_ACTIVE = ['active'];
-const S_PIPELINE = ['active', 'pending'];
+type ServiceFilter = 'both' | 'transport' | 'study';
+
+const ALL_STATUSES: SubStatus[] = ['active', 'pending', 'cancelled'];
+
+const STATUS_LABEL: Record<SubStatus, string> = {
+  active: 'Ativo',
+  pending: 'Pendente',
+  cancelled: 'Cancelado',
+};
+
+const STATUS_PILL_CLASS: Record<SubStatus, string> = {
+  active: 'bg-green-100 text-green-700',
+  pending: 'bg-yellow-100 text-yellow-700',
+  cancelled: 'bg-gray-100 text-gray-500',
+};
+
+const PRESETS: { label: string; statuses: SubStatus[] }[] = [
+  { label: 'Apenas ativos', statuses: ['active'] },
+  { label: 'Ativos + pendentes', statuses: ['active', 'pending'] },
+  { label: 'Tudo (incl. cancelados)', statuses: ['active', 'pending', 'cancelled'] },
+];
 
 function eur(n: number) {
   const abs = Math.abs(Math.round(n));
@@ -39,6 +56,10 @@ function eur(n: number) {
 }
 
 function sign(n: number) { return n >= 0 ? '+' : '−'; }
+
+function samePreset(a: SubStatus[], b: SubStatus[]) {
+  return a.length === b.length && a.every(s => b.includes(s));
+}
 
 function KPI({ label, value, sub, color = 'text-gray-900' }: {
   label: string; value: string; sub?: string; color?: string;
@@ -58,7 +79,7 @@ function ScenarioRow({ label, revenue, cost, color }: {
   const profit = revenue - cost;
   return (
     <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0 text-sm">
-      <span className="text-gray-500 w-28 shrink-0">{label}</span>
+      <span className={`w-40 shrink-0 ${color}`}>{label}</span>
       <span className="font-mono text-blue-600 w-20 text-right">{eur(revenue)}</span>
       <span className="font-mono text-red-500 w-20 text-right">−{eur(cost)}</span>
       <span className={`font-mono font-semibold w-24 text-right ${profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
@@ -78,6 +99,11 @@ export default function FinancialSummaryPage() {
   const [savingOverride, setSavingOverride] = useState(false);
   const [loading, setLoading] = useState(true);
   const overrideRef = useRef<HTMLInputElement>(null);
+
+  // Filters — drive every revenue/count figure on the page. Default mirrors
+  // the old "Receita Estimada" scenario (active + pending).
+  const [statusFilter, setStatusFilter] = useState<SubStatus[]>(['active', 'pending']);
+  const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('both');
 
   useEffect(() => {
     const load = async () => {
@@ -103,30 +129,30 @@ export default function FinancialSummaryPage() {
         if (snap) setLatestSnapshot(snap);
       }
 
-      setTSubs(tSnap.docs
-        .map(d => { const x = d.data(); return { id: d.id, status: normalizeSubStatus(x.status), monthlyFee: x.monthlyFee ?? 0, scheduleLength: (x.schedule ?? []).length }; })
-        .filter(s => s.status !== 'cancelled')
-      );
-      setSSubs(sSnap.docs
-        .map(d => { const x = d.data(); return { id: d.id, status: normalizeSubStatus(x.status), daysCount: (x.days ?? []).filter((dd: any) => dd.day).length }; })
-        .filter(s => s.status !== 'cancelled')
-      );
+      // Note: cancelled subs are now kept (not filtered out here) so the
+      // status filter below can include them on request.
+      setTSubs(tSnap.docs.map(d => {
+        const x = d.data();
+        return { id: d.id, status: normalizeSubStatus(x.status), monthlyFee: x.monthlyFee ?? 0, scheduleLength: (x.schedule ?? []).length };
+      }));
+      setSSubs(sSnap.docs.map(d => {
+        const x = d.data();
+        return { id: d.id, status: normalizeSubStatus(x.status), daysCount: (x.days ?? []).filter((dd: any) => dd.day).length };
+      }));
       setLoading(false);
     };
     load();
   }, []);
 
-  const tRevenue = (subs: TransportSub[], statuses: string[]) => {
-    const pool = subs.filter(s => statuses.includes(s.status));
+  const tRevenueFor = (subs: TransportSub[]) => {
     const flatRate = tConfig?.flatRatePerTrip ?? 0;
     const weeks = tConfig?.weeksPerMonth ?? 4.33;
-    return pool.reduce((sum, s) => sum + (s.monthlyFee > 0 ? s.monthlyFee : s.scheduleLength * flatRate * weeks), 0);
+    return subs.reduce((sum, s) => sum + (s.monthlyFee > 0 ? s.monthlyFee : s.scheduleLength * flatRate * weeks), 0);
   };
 
-  const sRevenue = (subs: StudySub[], statuses: string[]) => {
-    const pool = subs.filter(s => statuses.includes(s.status));
+  const sRevenueFor = (subs: StudySub[]) => {
     const dayRate = sConfig?.monthlyPricePerWeekday ?? 24;
-    return pool.reduce((sum, s) => sum + s.daysCount * dayRate, 0);
+    return subs.reduce((sum, s) => sum + s.daysCount * dayRate, 0);
   };
 
   const overrideParsed = overrideInput.trim() !== '' ? parseFloat(overrideInput) : null;
@@ -139,28 +165,6 @@ export default function FinancialSummaryPage() {
   // Effective driver cost: override > planner snapshot > 0
   const effectiveDriverCost = savedOverride ?? plannerDriverCost ?? 0;
 
-  const { tReal, tForecast, sReal, sForecast, tCost, sCost, tCount, sCount, vanCost, driverCost, electricityCost } = useMemo(() => {
-    const tReal = tRevenue(tSubs, T_ACTIVE);
-    const tForecast = tRevenue(tSubs, T_PIPELINE);
-    const sReal = sRevenue(sSubs, S_ACTIVE);
-    const sForecast = sRevenue(sSubs, S_PIPELINE);
-    const vanCost = tConfig?.vanMonthlyCost ?? 0;
-    const driverCost = effectiveDriverCost;
-    const electricityCost = plannerElectricityCost;
-    const tCost = vanCost + driverCost + electricityCost;
-    const sCost = (sConfig?.teacherMonthlyCost ?? 0) + (sConfig?.rentMonthlyCost ?? 0);
-    const tCount = { real: tSubs.filter(s => T_ACTIVE.includes(s.status)).length, forecast: tSubs.filter(s => T_PIPELINE.includes(s.status)).length };
-    const sCount = { real: sSubs.filter(s => S_ACTIVE.includes(s.status)).length, forecast: sSubs.filter(s => S_PIPELINE.includes(s.status)).length };
-    return { tReal, tForecast, sReal, sForecast, tCost, sCost, tCount, sCount, vanCost, driverCost, electricityCost };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tSubs, sSubs, tConfig, sConfig, effectiveDriverCost, plannerElectricityCost]);
-
-  const totalCost = tCost + sCost;
-  const totalForecastRevenue = tForecast + sForecast;
-  const totalRealRevenue = tReal + sReal;
-  const totalForecastProfit = totalForecastRevenue - totalCost;
-  const totalRealProfit = totalRealRevenue - totalCost;
-
   const tByStatus = useMemo(() => {
     const m: Record<string, number> = {};
     for (const s of tSubs) m[s.status] = (m[s.status] ?? 0) + 1;
@@ -171,6 +175,46 @@ export default function FinancialSummaryPage() {
     for (const s of sSubs) m[s.status] = (m[s.status] ?? 0) + 1;
     return m;
   }, [sSubs]);
+
+  const {
+    tFiltered, sFiltered, tRevenue, sRevenue, activeOnlyRevenue,
+    tCost, sCost, vanCost, driverCost, electricityCost,
+  } = useMemo(() => {
+    const tFiltered = tSubs.filter(s => statusFilter.includes(s.status));
+    const sFiltered = sSubs.filter(s => statusFilter.includes(s.status));
+    const tRevenue = tRevenueFor(tFiltered);
+    const sRevenue = sRevenueFor(sFiltered);
+
+    const activeOnlyRevenue =
+      tRevenueFor(tSubs.filter(s => s.status === 'active')) +
+      sRevenueFor(sSubs.filter(s => s.status === 'active'));
+
+    const vanCost = tConfig?.vanMonthlyCost ?? 0;
+    const driverCost = effectiveDriverCost;
+    const electricityCost = plannerElectricityCost;
+    const tCost = vanCost + driverCost + electricityCost;
+    const sCost = (sConfig?.teacherMonthlyCost ?? 0) + (sConfig?.rentMonthlyCost ?? 0);
+
+    return { tFiltered, sFiltered, tRevenue, sRevenue, activeOnlyRevenue, tCost, sCost, vanCost, driverCost, electricityCost };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tSubs, sSubs, tConfig, sConfig, effectiveDriverCost, plannerElectricityCost, statusFilter]);
+
+  const showTransport = serviceFilter !== 'study';
+  const showStudy = serviceFilter !== 'transport';
+
+  const totalRevenue = (showTransport ? tRevenue : 0) + (showStudy ? sRevenue : 0);
+  const totalCost = (showTransport ? tCost : 0) + (showStudy ? sCost : 0);
+  const totalProfit = totalRevenue - totalCost;
+  const deltaVsActive = totalRevenue - activeOnlyRevenue;
+  const isActiveOnlyFilter = samePreset(statusFilter, ['active']);
+
+  const filterLabel = statusFilter.length === 0
+    ? 'nenhum estado selecionado'
+    : statusFilter.map(s => STATUS_LABEL[s]).join(' + ');
+
+  function toggleStatus(s: SubStatus) {
+    setStatusFilter(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+  }
 
   async function saveDriverOverride(valueOverride?: number | null) {
     if (!isOverrideValid && valueOverride === undefined) return;
@@ -200,18 +244,74 @@ export default function FinancialSummaryPage() {
         </div>
       </div>
 
-      {/* Combined KPIs */}
+      {/* Filter bar */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Estado das inscrições</div>
+            <div className="flex gap-1.5">
+              {ALL_STATUSES.map(s => (
+                <button
+                  key={s}
+                  onClick={() => toggleStatus(s)}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+                    statusFilter.includes(s)
+                      ? STATUS_PILL_CLASS[s] + ' border-transparent'
+                      : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  {STATUS_LABEL[s]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Serviço</div>
+            <div className="flex gap-1.5">
+              {(['both', 'transport', 'study'] as ServiceFilter[]).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setServiceFilter(f)}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+                    serviceFilter === f
+                      ? 'bg-indigo-100 text-indigo-700 border-transparent'
+                      : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  {f === 'both' ? 'Ambos' : f === 'transport' ? 'Transporte' : 'Sala de Estudo'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Atalhos</div>
+            <div className="flex gap-1.5">
+              {PRESETS.map(p => (
+                <button
+                  key={p.label}
+                  onClick={() => setStatusFilter(p.statuses)}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+                    samePreset(statusFilter, p.statuses)
+                      ? 'bg-gray-900 text-white border-transparent'
+                      : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Combined KPIs — all driven by the filter above */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KPI
-          label="Receita estimada"
-          value={eur(totalForecastRevenue)}
-          sub={`${tCount.forecast} transp. + ${sCount.forecast} sala`}
-          color="text-indigo-600"
-        />
-        <KPI
-          label="Receita realidade"
-          value={eur(totalRealRevenue)}
-          sub={`${tCount.real} transp. + ${sCount.real} sala`}
+          label="Receita (filtro atual)"
+          value={eur(totalRevenue)}
+          sub={filterLabel}
           color="text-blue-600"
         />
         <KPI
@@ -221,10 +321,16 @@ export default function FinancialSummaryPage() {
           color="text-red-600"
         />
         <KPI
-          label="Lucro estimado"
-          value={`${sign(totalForecastProfit)}${eur(Math.abs(totalForecastProfit))}`}
-          sub={totalForecastRevenue > 0 ? (totalForecastProfit >= 0 ? `${Math.round(totalForecastProfit / totalForecastRevenue * 100)}% margem` : 'deficit') : '—'}
-          color={totalForecastProfit >= 0 ? 'text-green-600' : 'text-red-600'}
+          label="Lucro (filtro atual)"
+          value={`${sign(totalProfit)}${eur(Math.abs(totalProfit))}`}
+          sub={totalRevenue > 0 ? (totalProfit >= 0 ? `${Math.round(totalProfit / totalRevenue * 100)}% margem` : 'deficit') : '—'}
+          color={totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}
+        />
+        <KPI
+          label="Δ vs. apenas ativos"
+          value={`${sign(deltaVsActive)}${eur(Math.abs(deltaVsActive))}`}
+          sub={isActiveOnlyFilter ? 'filtro atual = ativos' : 'receita adicional incluída pelo filtro'}
+          color={deltaVsActive === 0 ? 'text-gray-500' : deltaVsActive > 0 ? 'text-indigo-600' : 'text-red-600'}
         />
       </div>
 
@@ -232,52 +338,51 @@ export default function FinancialSummaryPage() {
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-700">Demonstração de resultados</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Nota: receita é calculada a partir do estado das inscrições (não confirma pagamento efetuado).
+          </p>
         </div>
         <div className="px-5 py-3">
           <div className="flex items-center justify-between pb-2 border-b border-gray-200 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-            <span className="w-28">Cenário</span>
+            <span className="w-40">Cenário</span>
             <span className="w-20 text-right">Receita</span>
             <span className="w-20 text-right">Custos</span>
             <span className="w-24 text-right">Lucro</span>
           </div>
-          <ScenarioRow label="Realidade" revenue={totalRealRevenue} cost={totalCost} color="text-blue-600" />
-          <ScenarioRow label="Estimado" revenue={totalForecastRevenue} cost={totalCost} color="text-indigo-600" />
-          {totalForecastRevenue > totalRealRevenue && (
+          <ScenarioRow label={`Filtro atual (${filterLabel})`} revenue={totalRevenue} cost={totalCost} color="text-blue-600" />
+          {!isActiveOnlyFilter && (
+            <ScenarioRow label="Referência: apenas ativos" revenue={activeOnlyRevenue} cost={totalCost} color="text-gray-400" />
+          )}
+          {deltaVsActive > 0 && (
             <div className="pt-2 text-xs text-gray-400">
-              Pipeline por converter: <span className="font-semibold text-gray-600">{eur(totalForecastRevenue - totalRealRevenue)}</span> de receita adicional possível
+              Face a "apenas ativos": <span className="font-semibold text-gray-600">{eur(deltaVsActive)}</span> de receita adicional incluída pelo filtro
             </div>
           )}
         </div>
       </div>
 
       {/* Service breakdown */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={`grid grid-cols-1 gap-4 ${showTransport && showStudy ? 'md:grid-cols-2' : ''}`}>
         {/* Transport */}
+        {showTransport && (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700">🚌 Transporte</h2>
             <Link to="/admin/transport-planner" className="text-xs text-indigo-600 hover:underline">Ver planeador →</Link>
           </div>
           <div className="px-5 py-4 space-y-3">
-            <div className="flex gap-4">
-              <div className="flex-1">
-                <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Estimado</div>
-                <div className="text-xl font-bold text-indigo-600">{eur(tForecast)}</div>
-                <div className="text-xs text-gray-400">{tCount.forecast} inscrições</div>
-              </div>
-              <div className="flex-1">
-                <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Realidade</div>
-                <div className="text-xl font-bold text-blue-600">{eur(tReal)}</div>
-                <div className="text-xs text-gray-400">{tCount.real} ativas</div>
-              </div>
+            <div>
+              <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Receita (filtro atual)</div>
+              <div className="text-xl font-bold text-blue-600">{eur(tRevenue)}</div>
+              <div className="text-xs text-gray-400">{tFiltered.length} inscrições — {filterLabel}</div>
             </div>
 
             {/* Status pills */}
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(tByStatus).sort().map(([status, n]) => (
-                <span key={status} className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                }`}>{n} {status}</span>
+                <span key={status} className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_PILL_CLASS[status as SubStatus] ?? 'bg-gray-100 text-gray-500'}`}>
+                  {n} {STATUS_LABEL[status as SubStatus] ?? status}
+                </span>
               ))}
             </div>
 
@@ -335,7 +440,7 @@ export default function FinancialSummaryPage() {
                   />
                 </div>
                 <button
-                  onClick={saveDriverOverride}
+                  onClick={() => saveDriverOverride()}
                   disabled={savingOverride || !isOverrideValid}
                   className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 shrink-0"
                 >
@@ -363,33 +468,28 @@ export default function FinancialSummaryPage() {
             )}
           </div>
         </div>
+        )}
 
         {/* Study Room */}
+        {showStudy && (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700">📚 Sala de Estudo</h2>
             <Link to="/admin/study-room-planner" className="text-xs text-indigo-600 hover:underline">Ver planeador →</Link>
           </div>
           <div className="px-5 py-4 space-y-3">
-            <div className="flex gap-4">
-              <div className="flex-1">
-                <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Estimado</div>
-                <div className="text-xl font-bold text-indigo-600">{eur(sForecast)}</div>
-                <div className="text-xs text-gray-400">{sCount.forecast} inscrições</div>
-              </div>
-              <div className="flex-1">
-                <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Realidade</div>
-                <div className="text-xl font-bold text-blue-600">{eur(sReal)}</div>
-                <div className="text-xs text-gray-400">{sCount.real} confirmadas</div>
-              </div>
+            <div>
+              <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Receita (filtro atual)</div>
+              <div className="text-xl font-bold text-blue-600">{eur(sRevenue)}</div>
+              <div className="text-xs text-gray-400">{sFiltered.length} inscrições — {filterLabel}</div>
             </div>
 
             {/* Status pills */}
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(sByStatus).sort().map(([status, n]) => (
-                <span key={status} className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                }`}>{n} {status}</span>
+                <span key={status} className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_PILL_CLASS[status as SubStatus] ?? 'bg-gray-100 text-gray-500'}`}>
+                  {n} {STATUS_LABEL[status as SubStatus] ?? status}
+                </span>
               ))}
             </div>
 
@@ -416,6 +516,7 @@ export default function FinancialSummaryPage() {
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );
