@@ -1040,12 +1040,23 @@ export default function SubscriptionsAdminPage() {
     } finally { setProcessing(null); }
   };
 
-  const clearAdminReview = async (item: SubItem) => {
+  // Clears the review flag, and — when the client's last action was
+  // "confirmed" — also actually activates the subscription. The badge for
+  // that case reads "✅ Confirmado — ativar", so it has to do what it says;
+  // for every other lastClientAction (cancel request, edit, rejection) this
+  // just dismisses the flag, since those need the admin to act elsewhere
+  // (cancel it, review the edit) rather than a status flip.
+  const resolveClientAction = async (item: SubItem) => {
     setProcessing(item.id);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      await updateDoc(docRef(colName, item.id), { adminReviewPending: false, lastClientAction: deleteField(), updatedAt: new Date() });
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, adminReviewPending: false, lastClientAction: undefined } : i));
+      const shouldActivate = item.lastClientAction === 'confirmed' && item.status !== 'active';
+      const patch: Record<string, unknown> = { adminReviewPending: false, lastClientAction: deleteField(), updatedAt: new Date() };
+      if (shouldActivate) { patch.status = 'active'; patch.approvedAt = new Date(); }
+      await updateDoc(docRef(colName, item.id), patch);
+      setItems(prev => prev.map(i => i.id === item.id
+        ? { ...i, adminReviewPending: false, lastClientAction: undefined, status: shouldActivate ? 'active' : i.status }
+        : i));
     } finally { setProcessing(null); }
   };
 
@@ -1335,9 +1346,9 @@ export default function SubscriptionsAdminPage() {
                               <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">⚠ rever mensalidade</span>
                             )}
                             {item.adminReviewPending && (
-                              <button onClick={() => clearAdminReview(item)} disabled={processing === item.id}
+                              <button onClick={() => resolveClientAction(item)} disabled={processing === item.id}
                                 className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].cls : 'bg-pink-100 text-pink-800 hover:bg-pink-200'}`}
-                                title="Clique para marcar como revisto">
+                                title={item.lastClientAction === 'confirmed' ? 'Clique para ativar a inscrição' : 'Clique para marcar como revisto'}>
                                 {item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].label : '🔔 alteração do cliente'}
                               </button>
                             )}
