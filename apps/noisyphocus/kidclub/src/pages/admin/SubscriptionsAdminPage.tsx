@@ -346,11 +346,10 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
       }
 
       // Child-level fields (dateOfBirth/homeAddress/schoolName/schoolYear/name)
-      // live on the children doc, not the subscription. Only reachable when a
-      // real child is linked — see the "não está associada" warning above for
-      // the alternative case.
+      // live on the children doc, not the subscription.
+      const dob = new Date(details.dateOfBirth + 'T12:00:00');
+      let newChildId: string | undefined;
       if (item.childId) {
-        const dob = new Date(details.dateOfBirth + 'T12:00:00');
         try {
           await updateDoc(docRef('children', item.childId), {
             firstName: details.firstName.trim(), lastName: details.lastName.trim(),
@@ -367,6 +366,37 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
           setSaveError(`Inscrição guardada, mas os dados da criança (nome, data de nascimento, escola, morada) falharam ao guardar: ${err?.message ?? 'erro desconhecido'}`);
           // Subscription patch already succeeded — still reflect it below.
         }
+      } else {
+        // No child linked yet — legacy gap from before enrollment always
+        // created one (ManualEnrollForm/client enroll pages both guarantee
+        // it now). A subscription still missing familyId self-heals when the
+        // parent claims it (ClaimSubscriptionsPage creates/links a child as
+        // part of claiming) — but one already linked to a family never will,
+        // since the claim flow only looks at unclaimed subs. Either way,
+        // create the child now from what was just typed in and link it,
+        // same familyId: '' placeholder pattern ManualEnrollForm already
+        // uses for a brand-new admin-created child pending claim — the claim
+        // flow already knows to link to an existing childId rather than
+        // duplicate it (see PendingChild.existingChild).
+        try {
+          const childRef = await addDoc(col('children'), {
+            familyId: item.familyId ?? '',
+            firstName: details.firstName.trim(), lastName: details.lastName.trim(),
+            dateOfBirth: dob, age: calculateAge(dob),
+            schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
+            homeAddress: {
+              street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
+              postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
+            },
+            status: 'active',
+            createdAt: new Date(), updatedAt: new Date(),
+          });
+          await updateDoc(docRef(colName, item.id), { childId: childRef.id, updatedAt: new Date() });
+          newChildId = childRef.id;
+        } catch (err: any) {
+          console.error(`Failed to create child for ${colName}/${item.id}:`, err);
+          setSaveError(`Inscrição guardada, mas não foi possível criar o registo da criança: ${err?.message ?? 'erro desconhecido'}`);
+        }
       }
 
       onSave({
@@ -382,6 +412,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         weekPattern: schedule.weekPattern,
         appliedDiscounts: selectedDiscounts,
         clientReviewPending: linkedToFamily || item.clientReviewPending,
+        ...(newChildId ? { childId: newChildId } : {}),
       });
     } finally { setSaving(false); }
   };
@@ -402,7 +433,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         <EnrollmentDetailsForm value={details} onChange={setDetails} errors={detailErrors} />
       )}
       {!item.childId && (
-        <p className="text-xs text-amber-600">Esta inscrição não está associada a nenhuma criança (provavelmente anterior à associação automática) — nome e escola abaixo ficam guardados na própria inscrição, mas data de nascimento e morada não têm onde ser guardadas e serão ignoradas.</p>
+        <p className="text-xs text-amber-600">Esta inscrição não está associada a nenhuma criança (provavelmente anterior à associação automática) — ao guardar, cria-se automaticamente um registo de criança com os dados abaixo e a inscrição fica associada a ele.</p>
       )}
       {!existingChild && item.childId && !loadingChild && (
         <p className="text-xs text-amber-600">Não foi possível carregar a criança associada — a alterar apenas os dados da inscrição.</p>
