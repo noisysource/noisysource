@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
-import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
+import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 
@@ -162,8 +162,15 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
 
   const vendusClient: VendusClient = { id: vendusClientId };
   const isCampBilling = billing.type === "camp_deposit" || billing.type === "camp_balance";
+  const vendusProductId = (title: string): number => {
+    if (isCampBilling) return PRODUCT_STUDY;
+    if (title.startsWith("Transporte")) return PRODUCT_TRANSPORT;
+    if (title.startsWith("Taxa de Inscrição")) return PRODUCT_ENROLLMENT_FEE;
+    if (title.startsWith("Seguro")) return PRODUCT_INSURANCE;
+    return PRODUCT_STUDY;
+  };
   const items: VendusLineItem[] = lineItems.map((li: any) => ({
-    id: (!isCampBilling && li.title.startsWith("Transporte")) ? PRODUCT_TRANSPORT : PRODUCT_STUDY,
+    id: vendusProductId(li.title),
     title: li.title,
     qty: 1,
     gross_price: li.amount,
@@ -238,35 +245,68 @@ function computeLineItems(
   const childFeeBilled = new Set<string>();
   for (const sub of [...group.study, ...group.transport]) if (sub.childId && sub.enrollmentFeeBilled) childFeeBilled.add(sub.childId);
 
-  // One-time enrollment fee (registration + insurance) — billed once per
+  // One-time enrollment fees (registration + insurance) — billed once per
   // CHILD, on whichever service (study or transport) they first appear in,
   // never discounted, so a transport-only family pays it too, not just
-  // study-room families. A child with both is only charged once, guarded
-  // here by billedThisCall. When it's actually billed, every one of that
+  // study-room families. Kept as two separate line items, not one combined
+  // one — Vendus has two distinct products for these ("Taxa de Inscrição",
+  // "Seguro"), each with its own price/VAT, and createVendusInvoiceForBilling
+  // maps by title, so a combined line couldn't invoice correctly under
+  // either product. A child with both services is only charged once,
+  // guarded here by billedThisCall. When actually billed, every one of that
   // child's currently active subscriptions (both collections) gets flagged
   // — not just the one being processed — so the fee can't be missed if the
   // family later drops one service and keeps only the other, within the
-  // same school year. A prior fee line item on THIS specific billing record
-  // is carried forward untouched (same pattern as excludedDates) so a later
-  // recompute can't silently drop or duplicate it.
+  // same school year. Prior fee line items on THIS specific billing record
+  // are carried forward untouched (same pattern as excludedDates) so a
+  // later recompute can't silently drop or duplicate them.
   const maybeAddEnrollmentFee = (sub: any) => {
     if (!sub.childId) return;
-    const priorFee = priorFor(`${sub.childId}:enrollment`);
-    if (priorFee) {
+    const priorReg = priorFor(`${sub.childId}:registration`);
+    const priorIns = priorFor(`${sub.childId}:insurance`);
+    if (priorReg || priorIns) {
       if (billedThisCall.has(sub.childId)) return;
-      lineItems.push(priorFee);
-      total += priorFee.amount;
+      if (priorReg) { lineItems.push(priorReg); total += priorReg.amount; }
+      if (priorIns) { lineItems.push(priorIns); total += priorIns.amount; }
+      billedThisCall.add(sub.childId);
+      return;
+    }
+    const registrationFee = Math.round((configs.studyConfig?.registrationFee ?? 0) * 100) / 100;
+    const insuranceFee = Math.round((configs.studyConfig?.insuranceFee ?? 0) * 100) / 100;
+    // One-time migration: an existing record from before the combined
+    // "Taxa de Inscrição e Seguro" line item was split in two. It was never
+    // discounted or partially excluded, so re-deriving the two amounts from
+    // this period's configured fees is exact, not a guess.
+    const priorCombined = priorFor(`${sub.childId}:enrollment`);
+    if (priorCombined) {
+      if (billedThisCall.has(sub.childId)) return;
+      if (registrationFee > 0) {
+        lineItems.push({ title: `Taxa de Inscrição — ${sub.childName}`, amount: registrationFee, grossAmount: registrationFee, subscriptionId: `${sub.childId}:registration`, type: "enrollment", appliedDiscounts: [] });
+        total += registrationFee;
+      }
+      if (insuranceFee > 0) {
+        lineItems.push({ title: `Seguro — ${sub.childName}`, amount: insuranceFee, grossAmount: insuranceFee, subscriptionId: `${sub.childId}:insurance`, type: "enrollment", appliedDiscounts: [] });
+        total += insuranceFee;
+      }
       billedThisCall.add(sub.childId);
       return;
     }
     if (billedThisCall.has(sub.childId) || childFeeBilled.has(sub.childId)) return;
-    const fee = Math.round(((configs.studyConfig?.registrationFee ?? 0) + (configs.studyConfig?.insuranceFee ?? 0)) * 100) / 100;
-    if (fee <= 0) return;
-    lineItems.push({
-      title: `Taxa de Inscrição e Seguro — ${sub.childName}`,
-      amount: fee, grossAmount: fee, subscriptionId: `${sub.childId}:enrollment`, type: "enrollment", appliedDiscounts: [],
-    });
-    total += fee;
+    if (registrationFee <= 0 && insuranceFee <= 0) return;
+    if (registrationFee > 0) {
+      lineItems.push({
+        title: `Taxa de Inscrição — ${sub.childName}`,
+        amount: registrationFee, grossAmount: registrationFee, subscriptionId: `${sub.childId}:registration`, type: "enrollment", appliedDiscounts: [],
+      });
+      total += registrationFee;
+    }
+    if (insuranceFee > 0) {
+      lineItems.push({
+        title: `Seguro — ${sub.childName}`,
+        amount: insuranceFee, grossAmount: insuranceFee, subscriptionId: `${sub.childId}:insurance`, type: "enrollment", appliedDiscounts: [],
+      });
+      total += insuranceFee;
+    }
     billedThisCall.add(sub.childId);
     for (const s of group.study) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "studyroom", id: s.id });
     for (const s of group.transport) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "transportationSubscriptions", id: s.id });
