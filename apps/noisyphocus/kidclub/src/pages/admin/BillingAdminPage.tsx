@@ -235,14 +235,17 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
     setSaving(true);
     setError(null);
     try {
-      const fn = callable<{ billingId: string; subscriptionId: string; excludedDates: string[] }, { amount: number; total: number }>(
+      const fn = callable<{ billingId: string; subscriptionId: string; excludedDates: string[] }, { amount: number; total: number; excludedDates: string[] }>(
         'setBillingLineItemExcludedDays'
       );
       for (const { li, index } of editableItems) {
         if (!isChanged(li, index)) continue;
         const dates = [...(staged.get(index) ?? new Set())].sort();
         const res = await fn({ billingId: record.id, subscriptionId: li.subscriptionId!, excludedDates: dates });
-        onUpdated(record.id, index, { amount: res.data.amount, excludedDates: dates.length ? dates : undefined }, res.data.total);
+        // Use what the server actually kept, not what was staged locally — a date whose
+        // weekday no longer matches the subscription's current schedule is dropped
+        // server-side, and the UI must reflect that, not the pre-save selection.
+        onUpdated(record.id, index, { amount: res.data.amount, excludedDates: res.data.excludedDates.length ? res.data.excludedDates : undefined }, res.data.total);
       }
       onClose();
     } catch (err: any) {

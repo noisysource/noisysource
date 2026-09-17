@@ -1113,7 +1113,7 @@ export const setBillingLineItemExcludedDays = onCall(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return { amount: newAmount, total: newTotal };
+    return { amount: newAmount, total: newTotal, excludedDates: matchedDates };
   }
 );
 
