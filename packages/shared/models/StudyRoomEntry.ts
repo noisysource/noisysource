@@ -5,7 +5,10 @@ import { WeekPattern } from './weekPattern';
 export type { WeekPattern };
 export type DaySelection = { day: string; hour: string };
 
-export type StudyStatus = "pending" | "confirmed" | "canceled" | "archived";
+// Collapsed to 3 states (pending / active / cancelled) — legacy Firestore
+// docs may still hold "confirmed"/"canceled"/"archived"; normalizeStatus()
+// below maps them so every consumer only ever sees these three.
+export type StudyStatus = "pending" | "active" | "cancelled";
 
 export interface SubscriptionVersion {
   days: DaySelection[];
@@ -78,7 +81,19 @@ export interface StudyRoomEntry {
   uploadedFiles?: UploadedFile[];
   statusHistory?: StatusChangeHistory[];
   entryHistory?: EntryChangeHistory[];
-  
+
+  // Two-way in-app review flags (no email). clientReviewPending: set whenever
+  // admin changes this subscription while it's linked to a family — cleared
+  // when the client views it. adminReviewPending: set whenever a client-
+  // initiated change happens (e.g. a cancel request) — cleared when admin
+  // views it. lastClientAction records *what* the client did, so the admin
+  // badge can say what to do next instead of one generic "review needed".
+  clientReviewPending?: boolean;
+  clientReviewedAt?: Date;
+  adminReviewPending?: boolean;
+  adminReviewedAt?: Date;
+  lastClientAction?: 'confirmed' | 'cancelRequested' | 'edited' | 'rejected';
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;
@@ -114,8 +129,10 @@ const toDate = (v: AnyDate): Date => {
 };
 
 export const normalizeStatus = (raw: any): StudyStatus => {
-  const s = (raw?.status as StudyStatus) ?? "pending";
-  return s === "pending" || s === "confirmed" || s === "canceled" || s === "archived" ? s : "pending";
+  const s = raw?.status;
+  if (s === "active" || s === "confirmed" || s === "offered") return "active";
+  if (s === "cancelled" || s === "canceled" || s === "archived" || s === "inactive") return "cancelled";
+  return "pending";
 };
 
 export const fromStudyDoc = (raw: any, id: string): StudyRoomEntry => ({

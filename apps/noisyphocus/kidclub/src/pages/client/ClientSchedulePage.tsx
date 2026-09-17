@@ -203,7 +203,7 @@ export default function ClientSchedulePage() {
   };
 
   studySubscriptions
-    .filter(sub => sub.status === 'confirmed' || sub.status === 'pending')
+    .filter(sub => sub.status === 'active' || sub.status === 'pending')
     .forEach(sub => {
       sub.days.forEach(day => {
         const dayKey = normalizeDayName(day.day);
@@ -276,7 +276,7 @@ export default function ClientSchedulePage() {
   }
 
   const hasActiveSubscriptions =
-    studySubscriptions.some(s => s.status === 'confirmed' || s.status === 'pending') ||
+    studySubscriptions.some(s => s.status === 'active' || s.status === 'pending') ||
     transportSubscriptions.some(t => t.status === 'active' || t.status === 'pending');
 
   return (
@@ -324,11 +324,11 @@ export default function ClientSchedulePage() {
             <div>
               <p className="text-sm text-gray-600">Active Subscriptions</p>
               <p className="text-2xl font-bold mt-1">
-                {studySubscriptions.filter(s => s.status === 'confirmed' || s.status === 'pending').length +
+                {studySubscriptions.filter(s => s.status === 'active' || s.status === 'pending').length +
                   transportSubscriptions.filter(t => t.status === 'active' || t.status === 'pending').length}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                {studySubscriptions.filter(s => s.status === 'confirmed' || s.status === 'pending').length} study · {transportSubscriptions.filter(t => t.status === 'active' || t.status === 'pending').length} transport
+                {studySubscriptions.filter(s => s.status === 'active' || s.status === 'pending').length} study · {transportSubscriptions.filter(t => t.status === 'active' || t.status === 'pending').length} transport
               </p>
             </div>
             <div className="text-3xl">📚</div>

@@ -6,6 +6,7 @@ import { col, docRef } from "../../lib/db";
 import type { StudyRoomEntry } from "@shared/models/StudyRoomEntry";
 import type { TransportationSubscription } from "@shared/models/Transportation";
 import type { Family } from "@shared/models";
+import { normalizeSubStatus } from "../../lib/utils";
 
 type Audience = "studyroom" | "transport" | "all";
 
@@ -94,8 +95,8 @@ export default function AdminEmailCenter() {
         needsTransport
           ? getDocs(col("transportationSubscriptions")).then(
               (snap) => snap.docs
-                .map((d) => ({ id: d.id, ...d.data() } as TransportationSubscription))
-                .filter((s) => s.status !== "cancelled" && s.status !== "canceled" && (s.contactEmail?.includes("@")))
+                .map((d) => ({ id: d.id, ...d.data(), status: normalizeSubStatus(d.data().status) } as TransportationSubscription))
+                .filter((s) => s.status !== "cancelled" && (s.contactEmail?.includes("@")))
             )
           : Promise.resolve(transportSubs),
       ]);
@@ -261,8 +262,8 @@ export default function AdminEmailCenter() {
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={fieldCls}>
               <option value="">Todos</option>
               <option value="pending">Pendente</option>
-              <option value="confirmed">Confirmado</option>
-              <option value="canceled">Cancelado</option>
+              <option value="active">Ativo</option>
+              <option value="cancelled">Cancelado</option>
             </select>
           </div>
         )}

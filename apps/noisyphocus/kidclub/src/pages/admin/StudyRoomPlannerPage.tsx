@@ -3,6 +3,7 @@ import { getDocs, getDoc, setDoc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { WeekPattern } from '@shared/models/weekPattern';
+import { normalizeSubStatus } from '../../lib/utils';
 
 const WEEKDAYS = [
   { value: 'monday', label: 'Segunda' },
@@ -12,8 +13,8 @@ const WEEKDAYS = [
   { value: 'friday', label: 'Sexta' },
 ];
 
-type StudyStatus = 'pending' | 'confirmed' | 'canceled' | 'archived';
-const ACTIVE: StudyStatus[] = ['pending', 'confirmed'];
+type StudyStatus = 'pending' | 'active' | 'cancelled';
+const ACTIVE: StudyStatus[] = ['pending', 'active'];
 
 interface StudyEntry {
   id: string;
@@ -216,7 +217,7 @@ export default function StudyRoomPlannerPage() {
             schoolYear: x.schoolYear,
             familyId: x.familyId,
             contactEmail: x.email || x.contactEmail,
-            status: (x.status === 'confirmed' ? 'confirmed' : x.status) as StudyStatus,
+            status: normalizeSubStatus(x.status),
             days: (x.days || []).map((d: any) => ({ day: d.day, hour: d.hour })),
             monthlyPrice: x.monthlyPrice ?? 0,
             weekPattern: (x.weekPattern ?? 'all') as WeekPattern,
@@ -232,7 +233,7 @@ export default function StudyRoomPlannerPage() {
   const activeEntries = useMemo(() => entries.filter(e => ACTIVE.includes(e.status)), [entries]);
 
   const filtered = useMemo(() => {
-    let pool = statusFilter === 'active' ? entries.filter(e => e.status === 'confirmed')
+    let pool = statusFilter === 'active' ? entries.filter(e => e.status === 'active')
       : statusFilter === 'pending' ? entries.filter(e => e.status === 'pending')
       : activeEntries;
     if (selectedWeek != null) {
@@ -243,7 +244,7 @@ export default function StudyRoomPlannerPage() {
 
   // Financial summary — two scenarios regardless of the grid's status filter
   const confirmedRevenue = useMemo(() =>
-    entries.filter(e => e.status === 'confirmed').reduce((sum, e) => sum + entryMonthlyPrice(e, config), 0),
+    entries.filter(e => e.status === 'active').reduce((sum, e) => sum + entryMonthlyPrice(e, config), 0),
     [entries, config]);
   const forecastRevenue = useMemo(() =>
     activeEntries.reduce((sum, e) => sum + entryMonthlyPrice(e, config), 0),
@@ -306,7 +307,7 @@ export default function StudyRoomPlannerPage() {
 
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar…</div>;
 
-  const confirmedCount = activeEntries.filter(e => e.status === 'confirmed').length;
+  const confirmedCount = activeEntries.filter(e => e.status === 'active').length;
   const pendingCount = activeEntries.filter(e => e.status === 'pending').length;
 
   return (
@@ -487,9 +488,9 @@ export default function StudyRoomPlannerPage() {
                             </span>
                           )}
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                            entry.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                            entry.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
                           }`}>
-                            {entry.status === 'confirmed' ? 'Confirmado' : 'Pendente'}
+                            {entry.status === 'active' ? 'Confirmado' : 'Pendente'}
                           </span>
                         </div>
                       </div>

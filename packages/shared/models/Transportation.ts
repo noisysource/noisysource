@@ -48,7 +48,10 @@ export const inferDirection = (s: Partial<SubscriptionSchedule>): 'pickup' | 'dr
 
 import { WeekPattern } from './weekPattern';
 export type { WeekPattern };
-export type SubscriptionStatus = 'active' | 'inactive' | 'cancelled' | 'pending' | 'planned' | 'offered';
+// Collapsed to 3 states (pending / active / cancelled) — legacy Firestore docs
+// may still hold "planned"/"offered"/"inactive"; normalizeSubStatus() in the
+// app's lib/utils.ts maps them so every consumer only ever sees these three.
+export type SubscriptionStatus = 'active' | 'cancelled' | 'pending';
 
 export interface TransportationSubscription {
   id: string;
@@ -81,7 +84,24 @@ export interface TransportationSubscription {
   // Schedule
   weekPattern: WeekPattern;
   schedule: SubscriptionSchedule[]; // Array of scheduled trips
-  
+
+  // Operational tracking only — never gates status. Used to double as the old
+  // "planned" status's real meaning ("awaiting route assignment"); now an
+  // independent boolean instead of a hidden third status axis.
+  routeAssigned?: boolean;
+
+  // Two-way in-app review flags (no email). clientReviewPending: set whenever
+  // admin changes this subscription while it's linked to a family — cleared
+  // when the client views it. adminReviewPending: set whenever a client-
+  // initiated change happens (e.g. a cancel request) — cleared when admin
+  // views it. lastClientAction records *what* the client did, so the admin
+  // badge can say what to do next instead of one generic "review needed".
+  clientReviewPending?: boolean;
+  clientReviewedAt?: Date;
+  adminReviewPending?: boolean;
+  adminReviewedAt?: Date;
+  lastClientAction?: 'confirmed' | 'cancelRequested' | 'edited' | 'rejected';
+
   // Metadata
   createdAt: Date;
   updatedAt: Date;

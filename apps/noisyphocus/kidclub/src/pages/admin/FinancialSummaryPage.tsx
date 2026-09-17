@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { col, docRef } from '../../lib/db';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
+import { normalizeSubStatus } from '../../lib/utils';
 
 interface TransportSub {
   id: string;
@@ -28,9 +29,9 @@ interface RouteSnapshot {
 }
 
 const T_ACTIVE = ['active'];
-const T_PIPELINE = ['active', 'planned', 'offered', 'pending'];
-const S_ACTIVE = ['confirmed'];
-const S_PIPELINE = ['confirmed', 'pending'];
+const T_PIPELINE = ['active', 'pending'];
+const S_ACTIVE = ['active'];
+const S_PIPELINE = ['active', 'pending'];
 
 function eur(n: number) {
   const abs = Math.abs(Math.round(n));
@@ -103,12 +104,12 @@ export default function FinancialSummaryPage() {
       }
 
       setTSubs(tSnap.docs
-        .map(d => { const x = d.data(); return { id: d.id, status: x.status ?? 'pending', monthlyFee: x.monthlyFee ?? 0, scheduleLength: (x.schedule ?? []).length }; })
-        .filter(s => s.status !== 'cancelled' && s.status !== 'canceled')
+        .map(d => { const x = d.data(); return { id: d.id, status: normalizeSubStatus(x.status), monthlyFee: x.monthlyFee ?? 0, scheduleLength: (x.schedule ?? []).length }; })
+        .filter(s => s.status !== 'cancelled')
       );
       setSSubs(sSnap.docs
-        .map(d => { const x = d.data(); return { id: d.id, status: x.status ?? 'pending', daysCount: (x.days ?? []).filter((dd: any) => dd.day).length }; })
-        .filter(s => s.status !== 'canceled' && s.status !== 'archived')
+        .map(d => { const x = d.data(); return { id: d.id, status: normalizeSubStatus(x.status), daysCount: (x.days ?? []).filter((dd: any) => dd.day).length }; })
+        .filter(s => s.status !== 'cancelled')
       );
       setLoading(false);
     };
@@ -275,10 +276,7 @@ export default function FinancialSummaryPage() {
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(tByStatus).sort().map(([status, n]) => (
                 <span key={status} className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  status === 'active' ? 'bg-green-100 text-green-700' :
-                  status === 'planned' ? 'bg-blue-100 text-blue-700' :
-                  status === 'offered' ? 'bg-purple-100 text-purple-700' :
-                  'bg-yellow-100 text-yellow-700'
+                  status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
                 }`}>{n} {status}</span>
               ))}
             </div>
@@ -390,7 +388,7 @@ export default function FinancialSummaryPage() {
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(sByStatus).sort().map(([status, n]) => (
                 <span key={status} className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                  status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
                 }`}>{n} {status}</span>
               ))}
             </div>

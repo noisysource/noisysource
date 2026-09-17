@@ -39,7 +39,10 @@ interface PlannerKid {
   monthlyFee: number;
   requestedSchedule: ScheduleSlot[];
   notes?: string;
-  status?: 'pending' | 'active' | 'planned' | 'offered';
+  status?: 'pending' | 'active';
+  // Operational tracking only — never gates status. Set when this kid is seated
+  // in a saved route below; independent of the 3-state subscription status.
+  routeAssigned?: boolean;
   contactEmail?: string;
   weekPattern: WeekPattern;
 }
@@ -1463,7 +1466,8 @@ export default function TransportPlannerPage() {
           schoolName: childSchoolMap[x.childId] || x.schoolName || undefined,
           requestedSchedule: parseSchedule(x.schedule || []),
           contactEmail: x.contactEmail, notes: x.note || undefined,
-          status: x.status === 'confirmed' ? 'active' : x.status === 'planned' ? 'pending' : (x.status as any) || 'pending',
+          status: x.status === 'active' || x.status === 'confirmed' ? 'active' : 'pending',
+          routeAssigned: x.routeAssigned ?? false,
           weekPattern: (x.weekPattern ?? 'all') as WeekPattern,
         };
       }).filter(Boolean) as PlannerKid[];
@@ -1740,23 +1744,22 @@ export default function TransportPlannerPage() {
         snapshot: { driverCost, vanCost, electricityCost, monthlyCost, monthlyRevenue, monthlyRevenueActive },
       });
 
-      // Update subscription statuses in batch
+      // Update route-assignment tracking in batch — operational only, never touches status
       const batch = writeBatch(db);
       for (const kid of dbKids) {
         if (kid.source === 'manual') continue;
-        if (seatedKidIds.has(kid.id) && kid.status === 'pending') {
-          batch.update(docRef('transportationSubscriptions', kid.id), { status: 'planned', updatedAt: now });
-        } else if (!seatedKidIds.has(kid.id) && kid.status === 'planned') {
-          batch.update(docRef('transportationSubscriptions', kid.id), { status: 'pending', updatedAt: now });
+        if (seatedKidIds.has(kid.id) && !kid.routeAssigned) {
+          batch.update(docRef('transportationSubscriptions', kid.id), { routeAssigned: true, updatedAt: now });
+        } else if (!seatedKidIds.has(kid.id) && kid.routeAssigned) {
+          batch.update(docRef('transportationSubscriptions', kid.id), { routeAssigned: false, updatedAt: now });
         }
       }
       await batch.commit();
 
-      // Refresh local kid statuses
+      // Refresh local kid routeAssigned flags
       setDbKids(prev => prev.map(k => {
         if (k.source === 'manual') return k;
-        if (seatedKidIds.has(k.id) && k.status === 'pending') return { ...k, status: 'pending' as const };
-        if (!seatedKidIds.has(k.id) && k.status === 'planned') return { ...k, status: 'pending' as const };
+        if (seatedKidIds.has(k.id) !== !!k.routeAssigned) return { ...k, routeAssigned: seatedKidIds.has(k.id) };
         return k;
       }));
 

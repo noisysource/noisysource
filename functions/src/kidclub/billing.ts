@@ -24,7 +24,7 @@ function applyDiscounts(gross: number, discounts: AppliedDiscount[]): number {
 
 const COMPANY_NAME = "Arco-Íris da Pequenada";
 
-// ── Helpers (shared with generateMonthlyInvoices) ─────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function periodForDate(date: Date) {
   const y = date.getFullYear();

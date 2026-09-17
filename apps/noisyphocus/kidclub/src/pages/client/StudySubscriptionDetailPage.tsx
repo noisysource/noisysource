@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
-import { StudyRoomEntry } from '@shared/models';
+import { StudyRoomEntry, normalizeStatus } from '@shared/models';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -42,6 +42,8 @@ export default function StudySubscriptionDetailPage() {
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [showReviewReject, setShowReviewReject] = useState(false);
 
   useEffect(() => {
     if (id) loadData();
@@ -57,6 +59,7 @@ export default function StudySubscriptionDetailPage() {
       const sub = {
         ...data,
         id: subSnap.id,
+        status: normalizeStatus(data),
         startDate: data.startDate?.toDate?.() ?? (data.startDate ? new Date(data.startDate) : null),
         endDate: data.endDate?.toDate?.() ?? (data.endDate ? new Date(data.endDate) : null),
       } as StudyRoomEntry;
@@ -163,12 +166,46 @@ export default function StudySubscriptionDetailPage() {
       await updateDoc(docRef('studyroom', id), {
         status: 'cancelled',
         cancelledAt: new Date(),
+        // Client-initiated change — surfaced to admin as a review prompt on next login.
+        adminReviewPending: true,
+        lastClientAction: 'cancelRequested',
         updatedAt: new Date(),
       });
       navigate('/client/subscriptions', { replace: true });
     } finally {
       setCancelling(false);
     }
+  };
+
+  const confirmReview = async () => {
+    if (!id) return;
+    setReviewing(true);
+    try {
+      await updateDoc(docRef('studyroom', id), {
+        clientReviewPending: false, clientReviewedAt: new Date(),
+        // Lets admin see "parent confirmed, ready to activate" rather than
+        // just a generic review flag once they act on this.
+        adminReviewPending: true, lastClientAction: 'confirmed',
+        updatedAt: new Date(),
+      });
+      setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
+    } finally { setReviewing(false); }
+  };
+
+  const rejectReview = async () => {
+    if (!id) return;
+    setReviewing(true);
+    try {
+      // Doesn't auto-revert the edit — flags it for the team to follow up on directly,
+      // since there's no snapshot of the pre-edit values to restore.
+      await updateDoc(docRef('studyroom', id), {
+        clientReviewPending: false, clientReviewedAt: new Date(),
+        adminReviewPending: true, lastClientAction: 'rejected',
+        updatedAt: new Date(),
+      });
+      setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
+      setShowReviewReject(false);
+    } finally { setReviewing(false); }
   };
 
   if (isLoading) {
@@ -184,8 +221,9 @@ export default function StudySubscriptionDetailPage() {
     );
   }
 
-  const isActive = subscription.status === 'confirmed' || (subscription.status as string) === 'active';
-  const isPending = subscription.status === 'pending' || (subscription.status as string) === 'planned';
+  const isActive = subscription.status === 'active';
+  const isPending = subscription.status === 'pending';
+  const needsReview = subscription.clientReviewPending === true;
 
   const statusBadge = isActive
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }
@@ -209,9 +247,19 @@ export default function StudySubscriptionDetailPage() {
             <p className="font-semibold text-lg">{subscription.childName}</p>
             <p className="text-gray-500 text-sm">{subscription.schoolName}</p>
           </div>
-          <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
-            {statusBadge.label}
-          </span>
+          <div className="flex flex-col items-end gap-1.5">
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
+              {statusBadge.label}
+            </span>
+            {isPending && (
+              <Link
+                to={`/client/enroll/study?childId=${subscription.childId}&editId=${id}`}
+                className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+              >
+                ✏️ Editar pedido
+              </Link>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 space-y-2">
@@ -297,16 +345,36 @@ export default function StudySubscriptionDetailPage() {
         )}
       </div>
 
-      {/* Pending notice */}
-      {isPending && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4">
-          <p className="text-sm text-yellow-800 mb-3">O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.</p>
-          <Link
-            to={`/client/enroll/study?childId=${subscription.childId}&editId=${id}`}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-yellow-900 bg-white border border-yellow-300 px-3 py-1.5 rounded-lg hover:bg-yellow-50 transition-colors"
-          >
-            ✏️ Editar pedido
-          </Link>
+      {/* Admin edited this subscription — parent must review */}
+      {needsReview && (
+        <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
+          <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
+          <p className="text-sm text-purple-700 mb-4">
+            A equipa fez alterações à inscrição na Sala de Estudo de <strong>{subscription.childName}</strong>.
+            Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={confirmReview}
+              disabled={reviewing}
+              className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-purple-700 disabled:opacity-60"
+            >
+              {reviewing ? 'A confirmar…' : 'Confirmar alteração'}
+            </button>
+            <Link
+              to={`/client/enroll/study?childId=${subscription.childId}&editId=${id}`}
+              className="flex-1 text-center bg-white text-purple-700 border border-purple-200 py-2.5 rounded-lg text-sm font-medium hover:bg-purple-50"
+            >
+              Editar
+            </Link>
+            <button
+              onClick={() => setShowReviewReject(true)}
+              disabled={reviewing}
+              className="flex-1 bg-white text-gray-600 border border-gray-200 py-2.5 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-60"
+            >
+              Recusar
+            </button>
+          </div>
         </div>
       )}
 
@@ -374,6 +442,32 @@ export default function StudySubscriptionDetailPage() {
           >
             Cancelar subscrição
           </button>
+        </div>
+      )}
+
+      {showReviewReject && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+            <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
+            <p className="text-gray-600 text-sm mb-6">
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={rejectReview}
+                disabled={reviewing}
+                className="flex-1 bg-red-600 text-white py-2.5 rounded-lg hover:bg-red-700 disabled:opacity-60 text-sm font-medium"
+              >
+                {reviewing ? 'A recusar...' : 'Confirmar recusa'}
+              </button>
+              <button
+                onClick={() => setShowReviewReject(false)}
+                className="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-lg hover:bg-gray-200 text-sm"
+              >
+                Voltar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

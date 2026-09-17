@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { getDocs, addDoc, updateDoc, query, where } from 'firebase/firestore';
 import { useUser } from '@shared/hooks';
+import { Child } from '@shared/models';
 import { col, docRef } from '../../lib/db';
 import { familyService } from '../../services/familyService';
-import { calculateAge } from '../../lib/utils';
+import { calculateAge, normalizeName } from '../../lib/utils';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
@@ -13,12 +14,17 @@ interface LinkedSub {
   monthlyFee: number;
   scheduleLabel: string;
   notes?: string;
+  childId?: string;
 }
 
 interface PendingChild {
   key: string;
   childName: string;
   subs: LinkedSub[];
+  // Set when a sub already carries a real childId (from ManualEnrollForm's
+  // child-matching) — the admin already created this child, with whatever
+  // details they entered. Claiming must link to it, not create a duplicate.
+  existingChild?: Child | null;
 }
 
 interface ChildForm {
@@ -33,14 +39,6 @@ const PT_DAY: Record<string, string> = {
   monday: 'Seg', tuesday: 'Ter', wednesday: 'Qua', thursday: 'Qui', friday: 'Sex',
 };
 
-function normalizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function transportScheduleLabel(schedule: any[]): string {
   const days = [...new Set(schedule.map((s: any) => PT_DAY[s.dayOfWeek] ?? s.dayOfWeek))];
   return `🚌 ${days.join(' · ')}` + (schedule.length === 1 ? ' — 1 viagem/semana' : ` — ${schedule.length} viagens/semana`);
@@ -49,6 +47,11 @@ function transportScheduleLabel(schedule: any[]): string {
 function studyScheduleLabel(days: any[]): string {
   const labels = [...new Set(days.map((d: any) => PT_DAY[d.day] ?? d.day))];
   return `📚 Sala de Estudo — ${labels.join(' · ')}`;
+}
+
+function toDateInputValue(d: Date | undefined): string {
+  if (!d || isNaN(d.getTime())) return '';
+  return d.toISOString().split('T')[0];
 }
 
 export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () => void }) {
@@ -98,6 +101,7 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
           monthlyFee: data.monthlyFee ?? 0,
           scheduleLabel: transportScheduleLabel(data.schedule ?? []),
           notes: data.notes ?? '',
+          childId: data.childId || undefined,
         });
         groups.set(key, group);
       }
@@ -114,22 +118,52 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
           monthlyFee: data.monthlyPrice ?? 0,
           scheduleLabel: studyScheduleLabel(data.days ?? []),
           notes: data.note ?? '',
+          childId: data.childId || undefined,
         });
         groups.set(key, group);
       }
 
       const unclaimed = [...groups.values()];
+
+      // Resolve any existing childId per group (the admin already created this child
+      // via ManualEnrollForm's matching flow) — fetch it so we link to it instead of
+      // creating a duplicate, and so the form can be pre-filled/protected accordingly.
+      await Promise.all(unclaimed.map(async child => {
+        const existingChildId = child.subs.find(s => s.childId)?.childId;
+        if (existingChildId) {
+          try {
+            child.existingChild = await familyService.getChild(existingChildId);
+          } catch (e) {
+            // Permission-denied or any other read failure here shouldn't strand the
+            // whole page on an infinite spinner — fall back to the create-new-child
+            // path (same as if no childId had been set at all).
+            console.error('[ClaimSubscriptionsPage] failed to fetch existing child', existingChildId, e);
+          }
+        }
+      }));
+
       setChildren(unclaimed);
       const initial: Record<string, ChildForm> = {};
       for (const child of unclaimed) {
-        const parts = child.childName.trim().split(' ');
-        initial[child.key] = {
-          firstName: parts[0] ?? '',
-          lastName: parts.slice(1).join(' '),
-          dateOfBirth: '',
-          schoolName: '',
-          schoolYear: '',
-        };
+        if (child.existingChild) {
+          const c = child.existingChild;
+          initial[child.key] = {
+            firstName: c.firstName ?? '',
+            lastName: c.lastName ?? '',
+            dateOfBirth: toDateInputValue(c.dateOfBirth),
+            schoolName: c.schoolName ?? '',
+            schoolYear: c.schoolYear ?? '',
+          };
+        } else {
+          const parts = child.childName.trim().split(' ');
+          initial[child.key] = {
+            firstName: parts[0] ?? '',
+            lastName: parts.slice(1).join(' '),
+            dateOfBirth: '',
+            schoolName: '',
+            schoolYear: '',
+          };
+        }
       }
       setForms(initial);
       setLoading(false);
@@ -145,9 +179,14 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
     const newErrors: Record<string, string> = {};
     for (const child of children) {
       const f = forms[child.key];
-      if (!f.firstName.trim()) newErrors[`${child.key}.firstName`] = 'Obrigatório';
-      if (!f.lastName.trim()) newErrors[`${child.key}.lastName`] = 'Obrigatório';
-      if (!f.dateOfBirth) newErrors[`${child.key}.dateOfBirth`] = 'Obrigatório';
+      const existing = child.existingChild;
+      // firstName/lastName always already exist on a linked child — nothing to require.
+      if (!existing) {
+        if (!f.firstName.trim()) newErrors[`${child.key}.firstName`] = 'Obrigatório';
+        if (!f.lastName.trim()) newErrors[`${child.key}.lastName`] = 'Obrigatório';
+      }
+      const dobMissing = !existing || !existing.dateOfBirth || isNaN(existing.dateOfBirth.getTime());
+      if (dobMissing && !f.dateOfBirth) newErrors[`${child.key}.dateOfBirth`] = 'Obrigatório';
     }
     if (Object.keys(newErrors).length) { setErrors(newErrors); return; }
 
@@ -159,27 +198,51 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
 
       for (const child of children) {
         const f = forms[child.key];
-        const dob = new Date(f.dateOfBirth);
-        const age = calculateAge(dob);
+        const existing = child.existingChild;
+        let childId: string;
+        let age: number;
 
-        const childRef = await addDoc(col('children'), {
-          familyId: family.id,
-          userId: user!.uid,
-          firstName: f.firstName.trim(),
-          lastName: f.lastName.trim(),
-          dateOfBirth: dob,
-          age,
-          schoolName: f.schoolName.trim() || null,
-          schoolYear: f.schoolYear.trim() || null,
-          status: 'active',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
+        if (existing) {
+          // Link to the child the admin already created — never duplicate it, and
+          // never overwrite fields the admin already filled in. Only fill genuine
+          // gaps (legacy children from before these fields were required).
+          childId = existing.id;
+          const patch: Record<string, any> = { familyId: family.id, userId: user!.uid };
+
+          let dob = existing.dateOfBirth;
+          if (!existing.dateOfBirth || isNaN(existing.dateOfBirth.getTime())) {
+            dob = new Date(f.dateOfBirth);
+            patch.dateOfBirth = dob;
+          }
+          age = calculateAge(dob);
+          patch.age = age;
+          if (!existing.schoolName) patch.schoolName = f.schoolName.trim() || null;
+          if (!existing.schoolYear) patch.schoolYear = f.schoolYear.trim() || null;
+
+          await updateDoc(docRef('children', childId), patch);
+        } else {
+          const dob = new Date(f.dateOfBirth);
+          age = calculateAge(dob);
+          const childRef = await addDoc(col('children'), {
+            familyId: family.id,
+            userId: user!.uid,
+            firstName: f.firstName.trim(),
+            lastName: f.lastName.trim(),
+            dateOfBirth: dob,
+            age,
+            schoolName: f.schoolName.trim() || null,
+            schoolYear: f.schoolYear.trim() || null,
+            status: 'active',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+          childId = childRef.id;
+        }
 
         for (const sub of child.subs) {
           await updateDoc(docRef(sub.collection, sub.id), {
             familyId: family.id,
-            childId: childRef.id,
+            childId,
             userId: user!.uid,
             childAge: age,
             source: 'web',
@@ -222,6 +285,14 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
           const f = forms[child.key] ?? { firstName: '', lastName: '', dateOfBirth: '', schoolName: '', schoolYear: '' };
           const err = (field: keyof ChildForm) => errors[`${child.key}.${field}`];
           const totalFee = child.subs.reduce((sum, s) => sum + s.monthlyFee, 0);
+          const existing = child.existingChild;
+          const nameLocked = !!existing;
+          const dobLocked = !!existing && !!existing.dateOfBirth && !isNaN(existing.dateOfBirth.getTime());
+          const schoolNameLocked = !!existing?.schoolName;
+          const schoolYearLocked = !!existing?.schoolYear;
+          const lockedCls = 'w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500 border-gray-200';
+          const editableCls = (field: keyof ChildForm) =>
+            `w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err(field) ? 'border-red-400' : 'border-gray-300'}`;
           return (
             <div key={child.key} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
               {/* Sub summary */}
@@ -239,66 +310,94 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
 
               {/* Form */}
               <div className="px-6 py-5 space-y-4">
-                <p className="text-sm font-medium text-gray-700">Confirme os dados da criança</p>
+                <p className="text-sm font-medium text-gray-700">
+                  {existing ? 'Confirme os dados da criança (já registados pela equipa)' : 'Confirme os dados da criança'}
+                </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Primeiro nome *</label>
-                    <input
-                      type="text"
-                      value={f.firstName}
-                      onChange={e => setField(child.key, 'firstName', e.target.value)}
-                      className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err('firstName') ? 'border-red-400' : 'border-gray-300'}`}
-                    />
-                    {err('firstName') && <p className="text-xs text-red-500 mt-1">{err('firstName')}</p>}
+                    <label className="block text-xs text-gray-500 mb-1">Primeiro nome {!nameLocked && '*'}</label>
+                    {nameLocked ? (
+                      <div className={lockedCls}>{f.firstName}</div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          value={f.firstName}
+                          onChange={e => setField(child.key, 'firstName', e.target.value)}
+                          className={editableCls('firstName')}
+                        />
+                        {err('firstName') && <p className="text-xs text-red-500 mt-1">{err('firstName')}</p>}
+                      </>
+                    )}
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Apelido *</label>
-                    <input
-                      type="text"
-                      value={f.lastName}
-                      onChange={e => setField(child.key, 'lastName', e.target.value)}
-                      className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err('lastName') ? 'border-red-400' : 'border-gray-300'}`}
-                    />
-                    {err('lastName') && <p className="text-xs text-red-500 mt-1">{err('lastName')}</p>}
+                    <label className="block text-xs text-gray-500 mb-1">Apelido {!nameLocked && '*'}</label>
+                    {nameLocked ? (
+                      <div className={lockedCls}>{f.lastName}</div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          value={f.lastName}
+                          onChange={e => setField(child.key, 'lastName', e.target.value)}
+                          className={editableCls('lastName')}
+                        />
+                        {err('lastName') && <p className="text-xs text-red-500 mt-1">{err('lastName')}</p>}
+                      </>
+                    )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Data de nascimento *</label>
-                  <input
-                    type="date"
-                    value={f.dateOfBirth}
-                    onChange={e => setField(child.key, 'dateOfBirth', e.target.value)}
-                    max={new Date().toISOString().split('T')[0]}
-                    className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 ${err('dateOfBirth') ? 'border-red-400' : 'border-gray-300'}`}
-                  />
-                  {err('dateOfBirth') && <p className="text-xs text-red-500 mt-1">{err('dateOfBirth')}</p>}
+                  <label className="block text-xs text-gray-500 mb-1">Data de nascimento {!dobLocked && '*'}</label>
+                  {dobLocked ? (
+                    <div className={lockedCls}>{f.dateOfBirth}</div>
+                  ) : (
+                    <>
+                      <input
+                        type="date"
+                        value={f.dateOfBirth}
+                        onChange={e => setField(child.key, 'dateOfBirth', e.target.value)}
+                        max={new Date().toISOString().split('T')[0]}
+                        className={editableCls('dateOfBirth')}
+                      />
+                      {err('dateOfBirth') && <p className="text-xs text-red-500 mt-1">{err('dateOfBirth')}</p>}
+                    </>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Escola</label>
-                    <input
-                      type="text"
-                      value={f.schoolName}
-                      onChange={e => setField(child.key, 'schoolName', e.target.value)}
-                      placeholder="Nome da escola"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    />
+                    {schoolNameLocked ? (
+                      <div className={lockedCls}>{f.schoolName}</div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={f.schoolName}
+                        onChange={e => setField(child.key, 'schoolName', e.target.value)}
+                        placeholder="Nome da escola"
+                        className={editableCls('schoolName')}
+                      />
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Ano escolar</label>
-                    <select
-                      value={f.schoolYear}
-                      onChange={e => setField(child.key, 'schoolYear', e.target.value)}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
-                    >
-                      <option value="">Selecionar</option>
-                      {['1.º', '2.º', '3.º', '4.º', '5.º', '6.º', '7.º', '8.º', '9.º', '10.º', '11.º', '12.º'].map(y => (
-                        <option key={y} value={y}>{y} ano</option>
-                      ))}
-                    </select>
+                    {schoolYearLocked ? (
+                      <div className={lockedCls}>{f.schoolYear}</div>
+                    ) : (
+                      <select
+                        value={f.schoolYear}
+                        onChange={e => setField(child.key, 'schoolYear', e.target.value)}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+                      >
+                        <option value="">Selecionar</option>
+                        {['1.º', '2.º', '3.º', '4.º', '5.º', '6.º', '7.º', '8.º', '9.º', '10.º', '11.º', '12.º'].map(y => (
+                          <option key={y} value={y}>{y} ano</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </div>
 

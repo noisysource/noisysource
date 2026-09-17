@@ -1,8 +1,10 @@
 import { getDocs, query, where, getDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { col, docRef } from '../lib/db';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
-import { calculateAge } from '../lib/utils';
+import { calculateAge, normalizeName, normalizeSubStatus } from '../lib/utils';
 import type { ImpersonationState } from '../contexts/ImpersonationContext';
+
+const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
 // Set by ImpersonationContext — when non-null, getOrCreateFamily returns this family directly.
 let _impersonation: ImpersonationState | null = null;
@@ -82,7 +84,60 @@ export const familyService = {
     return mapChild(snap.id, snap.data());
   },
 
-  async addChild(familyId: string, userId: string, data: Omit<Child, 'id' | 'createdAt' | 'updatedAt' | 'familyId'>): Promise<void> {
+  /**
+   * Find existing children that could plausibly already be this one — by normalized
+   * name, and/or via the family matched by contactEmail. Used before creating a new
+   * subscription so admins link to a real, existing child instead of creating a
+   * duplicate. Not exhaustive/fuzzy beyond exact normalized-name matching; it's a
+   * candidate list for a human to confirm, not an automatic merge.
+   */
+  async findMatchingChildren(firstName: string, lastName: string, contactEmail?: string): Promise<Child[]> {
+    const target = normalizeName(`${firstName} ${lastName}`);
+    const matches = new Map<string, Child>();
+
+    if (contactEmail) {
+      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', contactEmail)));
+      for (const famDoc of famSnap.docs) {
+        const childSnap = await getDocs(query(col('children'), where('familyId', '==', famDoc.id)));
+        for (const d of childSnap.docs) matches.set(d.id, mapChild(d.id, d.data()));
+      }
+    }
+
+    if (target) {
+      const allSnap = await getDocs(col('children'));
+      for (const d of allSnap.docs) {
+        const data = d.data();
+        if (normalizeName(`${data.firstName ?? ''} ${data.lastName ?? ''}`) === target) {
+          matches.set(d.id, mapChild(d.id, data));
+        }
+      }
+    }
+
+    return [...matches.values()];
+  },
+
+  /**
+   * True if this email has any subscription (transport or study room) that isn't yet
+   * linked to a family and isn't cancelled. Study-room docs inconsistently use `email`
+   * or `contactEmail` depending on which admin flow created them, so both are queried
+   * and deduped by doc id — this is the single source of truth for that check; don't
+   * reimplement it at call sites (see ClientLayout.tsx, ClaimSubscriptionsPage.tsx).
+   */
+  async hasUnclaimedSubscriptions(email: string): Promise<boolean> {
+    const [transportSnap, studyByEmailSnap, studyByContactEmailSnap] = await Promise.all([
+      getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', email))),
+      getDocs(query(col('studyroom'), where('email', '==', email))),
+      getDocs(query(col('studyroom'), where('contactEmail', '==', email))),
+    ]);
+    const isUnclaimed = (d: any) => !d.data().familyId && !CANCELLED_STATUSES.has(d.data().status);
+    if (transportSnap.docs.some(isUnclaimed)) return true;
+    const studyDocsById = new Map(
+      [...studyByEmailSnap.docs, ...studyByContactEmailSnap.docs].map(d => [d.id, d])
+    );
+    return [...studyDocsById.values()].some(isUnclaimed);
+  },
+
+  async addChild(familyId: string, userId: string, data: Omit<Child, 'id' | 'createdAt' | 'updatedAt' | 'familyId'>): Promise<string> {
     const clean: any = {
       firstName: data.firstName,
       lastName: data.lastName,
@@ -97,12 +152,15 @@ export const familyService = {
     if (data.schoolName) clean.schoolName = data.schoolName;
     if (data.schoolYear) clean.schoolYear = data.schoolYear;
     if (data.schoolGrade) clean.schoolGrade = data.schoolGrade;
+    if (data.homeAddress) clean.homeAddress = data.homeAddress;
+    if (data.homeAddressSource) clean.homeAddressSource = data.homeAddressSource;
     if (data.contactPhone) clean.contactPhone = data.contactPhone;
     if (data.contactEmail) clean.contactEmail = data.contactEmail;
     if (data.medicalNotes) clean.medicalNotes = data.medicalNotes;
     if (data.allergies?.length) clean.allergies = data.allergies;
     if (data.notes) clean.notes = data.notes;
-    await addDoc(col('children'), clean);
+    const ref = await addDoc(col('children'), clean);
+    return ref.id;
   },
 
   async updateChild(childId: string, updates: Partial<Child>): Promise<void> {
@@ -157,6 +215,7 @@ export const familyService = {
     return {
       study: studySnap.docs.filter(filterByChild).map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         startDate: toDate(d.data().startDate),
         endDate: toDate(d.data().endDate),
         createdAt: toDate(d.data().createdAt),
@@ -164,6 +223,7 @@ export const familyService = {
       } as StudyRoomEntry)),
       transport: transportSnap.docs.filter(filterByChild).map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         createdAt: toDate(d.data().createdAt),
         updatedAt: toDate(d.data().updatedAt),
       } as TransportationSubscription)),
@@ -195,6 +255,7 @@ export const familyService = {
     return {
       study: studySnap.docs.map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         startDate: toDate(d.data().startDate),
         endDate: toDate(d.data().endDate),
         createdAt: toDate(d.data().createdAt),
@@ -202,6 +263,7 @@ export const familyService = {
       } as StudyRoomEntry)),
       transport: transportSnap.docs.map(d => ({
         ...d.data(), id: d.id,
+        status: normalizeSubStatus(d.data().status),
         createdAt: toDate(d.data().createdAt),
         updatedAt: toDate(d.data().updatedAt),
       } as TransportationSubscription)),

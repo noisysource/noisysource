@@ -16,7 +16,20 @@ export interface Child {
   schoolName?: string;
   schoolYear?: string;
   schoolGrade?: string;
-  
+
+  // Home address — shaped like Family.billingAddress, but not assumed to match it
+  homeAddress?: {
+    street: string;
+    city: string;
+    postalCode: string;
+    country?: string;
+  };
+  // Set when homeAddress was backfilled from the family's billing address rather
+  // than provided/confirmed directly for this child — a reasonable default, not a
+  // guarantee the child actually lives there. Cleared once someone confirms/edits
+  // the address directly (see the missing-child-details export/import).
+  homeAddressSource?: 'family_billing_address';
+
   // Contact information (if different from family)
   contactPhone?: string;
   contactEmail?: string;
