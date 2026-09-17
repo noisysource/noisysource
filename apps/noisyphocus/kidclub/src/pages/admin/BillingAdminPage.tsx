@@ -53,6 +53,13 @@ function subtotals(records: BillingRecord[]) {
   };
 }
 
+// Line items only carry a combined title ("Sala de Estudo — Beatriz Apóstolo (4ª, 6ª) — Setembro
+// 2026"), no separate child-name field — pull it back out for display in the exclusion calendar.
+function childNameFromTitle(title: string): string {
+  const middle = title.split(' — ')[1] ?? '';
+  return middle.replace(/\s*\([^)]*\)\s*$/, '').trim();
+}
+
 function formatExclusionEntry(entry: string): string {
   const [iso, direction] = entry.split(':');
   const dateLabel = new Date(`${iso}T12:00:00`).toLocaleDateString('pt-PT');
@@ -136,15 +143,19 @@ function ServiceCalendar({ li, year, month, grid, markedSet, onToggle, saving }:
   const meta = SERVICE_META[li.type!];
   const accent = ACCENT_CLASSES[meta.accent];
   const scheduleSet = new Set(li.scheduleDays ?? []);
+  const childName = childNameFromTitle(li.title);
 
   return (
     <div className={`rounded-lg border ${accent.header.split(' ').pop()} overflow-hidden`}>
-      <div className={`flex items-baseline justify-between px-3 py-2 ${accent.header}`}>
-        <p className="text-sm font-semibold flex items-center gap-1.5">{meta.icon} {meta.label}</p>
-        <p className="text-xs opacity-80">{markedSet.size > 0 ? `${markedSet.size} marcado(s)` : 'nenhum dia marcado'}</p>
+      <div className={`flex items-baseline justify-between px-3 py-1.5 ${accent.header}`}>
+        <p className="text-sm font-semibold flex items-center gap-1.5 min-w-0">
+          <span className="shrink-0">{meta.icon} {meta.label}</span>
+          {childName && <span className="font-normal opacity-70 truncate">— {childName}</span>}
+        </p>
+        <p className="text-xs opacity-80 shrink-0 ml-2">{markedSet.size > 0 ? `${markedSet.size} marcado(s)` : 'nenhum dia marcado'}</p>
       </div>
-      <div className="grid grid-cols-7 gap-1 text-center p-3">
-        {WEEK_HEADER.map(w => <div key={w} className="text-[10px] font-medium text-gray-400 py-1">{w}</div>)}
+      <div className="grid grid-cols-7 gap-0.5 text-center p-2">
+        {WEEK_HEADER.map(w => <div key={w} className="text-[9px] font-medium text-gray-400 py-0.5">{w}</div>)}
         {grid.map((day, i) => {
           if (day == null) return <div key={i} />;
           const iso = toIsoDate(new Date(year, month, day));
@@ -268,8 +279,8 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-gray-100 flex items-start justify-between">
           <div>
             <h3 className="font-semibold text-gray-800">Dias sem serviço</h3>
             <p className="text-xs text-gray-400">{record.billingName} · <span className="capitalize">{monthName}</span></p>
@@ -277,22 +288,24 @@ function DayExclusionModal({ record, onClose, onUpdated }: {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
-        <div className="px-5 py-4 space-y-4">
+        <div className="px-5 py-3 space-y-3">
           {editableItems.length === 0 && (
             <p className="text-sm text-gray-400">Este registo não tem parcelas editáveis.</p>
           )}
-          {editableItems.map(({ li, index }) => (
-            <ServiceCalendar
-              key={index}
-              li={li}
-              year={year}
-              month={month}
-              grid={grid}
-              markedSet={staged.get(index) ?? new Set()}
-              onToggle={entry => toggleEntry(index, entry)}
-              saving={saving}
-            />
-          ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+            {editableItems.map(({ li, index }) => (
+              <ServiceCalendar
+                key={index}
+                li={li}
+                year={year}
+                month={month}
+                grid={grid}
+                markedSet={staged.get(index) ?? new Set()}
+                onToggle={entry => toggleEntry(index, entry)}
+                saving={saving}
+              />
+            ))}
+          </div>
           {editableItems.some(({ li }) => li.type === 'transport' && Object.values(li.tripsByDay ?? {}).some(t => t.includes('pickup') && t.includes('dropoff'))) && (
             <p className="text-[11px] text-gray-400">Dias de transporte com viagem de manhã e de tarde mostram duas metades — <strong>M</strong> (manhã) e <strong>T</strong> (tarde) — que pode marcar em separado.</p>
           )}
