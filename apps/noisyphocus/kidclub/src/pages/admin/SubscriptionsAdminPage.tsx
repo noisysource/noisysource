@@ -86,11 +86,6 @@ const DAY_PT: Record<string, string> = {
   monday: 'Seg', tuesday: 'Ter', wednesday: 'Qua',
   thursday: 'Qui', friday: 'Sex', saturday: 'Sáb', sunday: 'Dom',
 };
-const dayLabel = (d: any): string => {
-  if (typeof d === 'string') return DAY_PT[d] ?? d;
-  return DAY_PT[d?.day ?? d?.dayOfWeek] ?? d?.day ?? d?.dayOfWeek ?? '';
-};
-
 // ─── Badges ───────────────────────────────────────────────────────────────────
 const StatusBadge = ({ status, cancelRequested }: { status: SubStatus; cancelRequested?: boolean }) => {
   if (cancelRequested && status === 'active')
@@ -908,12 +903,7 @@ export default function SubscriptionsAdminPage() {
   const [transportConfig, setTransportConfig] = useState<TransportationConfig | null>(null);
   const [studyConfig, setStudyConfig] = useState<StudyCenterConfig | null>(null);
   const [discountRules, setDiscountRules] = useState<DiscountRule[]>([]);
-  const [importing, setImporting] = useState(false);
-  const importRef = useRef<HTMLInputElement>(null);
   const [historyItem, setHistoryItem] = useState<SubItem | null>(null);
-  const [exportingChildren, setExportingChildren] = useState(false);
-  const [importingChildren, setImportingChildren] = useState(false);
-  const importChildRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     setIsLoading(true); setError(null);
@@ -1067,203 +1057,6 @@ export default function SubscriptionsAdminPage() {
       await deleteDoc(docRef(colName, item.id));
       setItems(prev => prev.filter(i => i.id !== item.id));
     } finally { setProcessing(null); }
-  };
-
-  const exportCSV = () => {
-    const sep = ';';
-    const q = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-    const headers = ['id', 'tipo', 'nome', 'email', 'telefone', 'escola', 'ano_letivo', 'horario_dias', 'mensalidade', 'estado', 'nota', 'data_inscricao'];
-    const rows = filtered.map(item => [
-      item.id,
-      item._type === 'transport' ? 'Transporte' : 'Sala de Estudo',
-      item.childName,
-      item.contactEmail ?? '',
-      item.contactPhone ?? '',
-      item.schoolName ?? '',
-      item.schoolYear ?? '',
-      item._type === 'study'
-        ? (item.days ?? []).map((d: any) => dayLabel(d)).join(', ')
-        : (item.schedule ?? []).map((s: any) => `${DAY_PT[s.dayOfWeek] ?? s.dayOfWeek} ${s.pickupTime ?? ''}`).join(' / '),
-      ((item.monthlyFee ?? item.monthlyPrice) ?? 0).toFixed(2),
-      item.status,
-      item.note ?? '',
-      item.createdAt.toLocaleDateString('pt-PT'),
-    ]);
-    const csv = [headers.map(q).join(sep), ...rows.map(r => r.map(q).join(sep))].join('\r\n');
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `inscricoes_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importCSV = async (file: File) => {
-    setImporting(true);
-    try {
-      const text = await file.text();
-      const content = text.startsWith('﻿') ? text.slice(1) : text;
-      const lines = content.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) return;
-      const sep = lines[0].includes(';') ? ';' : ',';
-      const parseRow = (line: string) => {
-        const cols: string[] = [];
-        let cur = ''; let inQ = false;
-        for (const ch of line + sep) {
-          if (ch === '"') { inQ = !inQ; }
-          else if (ch === sep && !inQ) { cols.push(cur); cur = ''; }
-          else cur += ch;
-        }
-        return cols;
-      };
-      const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
-      const idx = (name: string) => headers.indexOf(name);
-      let updated = 0;
-      for (const line of lines.slice(1)) {
-        const cols = parseRow(line);
-        const id = cols[idx('id')]?.trim();
-        if (!id) continue;
-        const item = items.find(i => i.id === id);
-        if (!item) continue;
-        const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-        const patch: Record<string, any> = { updatedAt: new Date() };
-        const feeRaw = cols[idx('mensalidade')]?.replace(',', '.').trim();
-        if (feeRaw) {
-          const fee = parseFloat(feeRaw);
-          if (!isNaN(fee)) patch[item._type === 'transport' ? 'monthlyFee' : 'monthlyPrice'] = fee;
-        }
-        const nota = cols[idx('nota')]?.trim();
-        if (nota !== undefined) patch.note = nota;
-        if (Object.keys(patch).length > 1) { await updateDoc(docRef(colName, id), patch); updated++; }
-      }
-      await load();
-      alert(`${updated} inscrição(ões) atualizadas.`);
-    } catch (e: any) {
-      alert(`Erro ao importar: ${e?.message}`);
-    } finally {
-      setImporting(false);
-      if (importRef.current) importRef.current.value = '';
-    }
-  };
-
-  // ─── Missing child details (homeAddress/schoolName/schoolYear) export/import ──
-  // Same CSV format/mechanism as exportCSV/importCSV above: ';' separator, quoted
-  // fields, BOM for Excel, import matches rows back to docs by the `id` column.
-  const addressComplete = (a: any) => !!(a && String(a.street ?? '').trim() && String(a.city ?? '').trim() && String(a.postalCode ?? '').trim());
-
-  const exportMissingChildDetailsCSV = async () => {
-    setExportingChildren(true);
-    try {
-      const [childrenSnap, familiesSnap] = await Promise.all([
-        getDocs(col('children')),
-        getDocs(col('families')),
-      ]);
-      const familiesById = new Map(familiesSnap.docs.map(d => [d.id, d.data() as any]));
-
-      const sep = ';';
-      const q = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-      const headers = [
-        'id', 'nome', 'contacto_nome', 'contacto_email',
-        'escola', 'ano_letivo', 'morada_rua', 'morada_cidade', 'morada_codigo_postal', 'morada_pais',
-      ];
-      const rows: string[][] = [];
-
-      for (const doc of childrenSnap.docs) {
-        const c = doc.data() as any;
-        const missingSchool = !String(c.schoolName ?? '').trim();
-        const missingYear = !String(c.schoolYear ?? '').trim();
-        const missingAddress = !addressComplete(c.homeAddress);
-        if (!missingSchool && !missingYear && !missingAddress) continue;
-
-        const family = c.familyId ? familiesById.get(c.familyId) : undefined;
-        rows.push([
-          doc.id,
-          `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim(),
-          family?.primaryContact?.name ?? c.contactName ?? '',
-          family?.primaryContact?.email ?? c.contactEmail ?? '',
-          c.schoolName ?? '',
-          c.schoolYear ?? '',
-          c.homeAddress?.street ?? '',
-          c.homeAddress?.city ?? '',
-          c.homeAddress?.postalCode ?? '',
-          c.homeAddress?.country ?? '',
-        ]);
-      }
-
-      if (rows.length === 0) {
-        alert('Nenhuma criança com dados em falta.');
-        return;
-      }
-
-      const csv = [headers.map(q).join(sep), ...rows.map(r => r.map(q).join(sep))].join('\r\n');
-      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `criancas_dados_em_falta_${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExportingChildren(false);
-    }
-  };
-
-  const importMissingChildDetailsCSV = async (file: File) => {
-    setImportingChildren(true);
-    try {
-      const text = await file.text();
-      const content = text.startsWith('﻿') ? text.slice(1) : text;
-      const lines = content.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) return;
-      const sep = lines[0].includes(';') ? ';' : ',';
-      const parseRow = (line: string) => {
-        const cols: string[] = [];
-        let cur = ''; let inQ = false;
-        for (const ch of line + sep) {
-          if (ch === '"') { inQ = !inQ; }
-          else if (ch === sep && !inQ) { cols.push(cur); cur = ''; }
-          else cur += ch;
-        }
-        return cols;
-      };
-      const headers = parseRow(lines[0]).map(h => h.toLowerCase().trim());
-      const idx = (name: string) => headers.indexOf(name);
-      let updated = 0;
-      for (const line of lines.slice(1)) {
-        const cols = parseRow(line);
-        const id = cols[idx('id')]?.trim();
-        if (!id) continue;
-        const patch: Record<string, any> = {};
-
-        const schoolName = cols[idx('escola')]?.trim();
-        if (schoolName) patch.schoolName = schoolName;
-        const schoolYear = cols[idx('ano_letivo')]?.trim();
-        if (schoolYear) patch.schoolYear = schoolYear;
-
-        const street = cols[idx('morada_rua')]?.trim();
-        const city = cols[idx('morada_cidade')]?.trim();
-        const postalCode = cols[idx('morada_codigo_postal')]?.trim();
-        if (street && city && postalCode) {
-          patch.homeAddress = { street, city, postalCode, country: cols[idx('morada_pais')]?.trim() || null };
-          // A manually-provided/confirmed address supersedes the "inherited from
-          // billing address, unconfirmed" flag.
-          patch.homeAddressSource = null;
-        }
-
-        if (Object.keys(patch).length > 0) {
-          patch.updatedAt = new Date();
-          await updateDoc(docRef('children', id), patch);
-          updated++;
-        }
-      }
-      alert(`${updated} criança(s) atualizada(s).`);
-    } catch (e: any) {
-      alert(`Erro ao importar: ${e?.message}`);
-    } finally {
-      setImportingChildren(false);
-      if (importChildRef.current) importChildRef.current.value = '';
-    }
   };
 
   const isUnlinked = (i: SubItem) =>
@@ -1422,35 +1215,14 @@ export default function SubscriptionsAdminPage() {
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
-          <button onClick={exportCSV}
-            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium"
-            title="Exportar lista atual para CSV (Excel)">
-            ↓ Exportar CSV
-          </button>
-          <button onClick={() => importRef.current?.click()} disabled={importing}
-            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium disabled:opacity-50"
-            title="Importar CSV preenchido — atualiza mensalidade e nota">
-            {importing ? '…' : '↑ Importar CSV'}
-          </button>
-          <input ref={importRef} type="file" accept=".csv" className="hidden"
-            onChange={e => { const f = e.target.files?.[0]; if (f) importCSV(f); }} />
-          <button onClick={exportMissingChildDetailsCSV} disabled={exportingChildren}
-            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium disabled:opacity-50"
-            title="Exportar crianças com escola/ano letivo/morada em falta">
-            {exportingChildren ? '…' : '↓ Dados em falta (crianças)'}
-          </button>
-          <button onClick={() => importChildRef.current?.click()} disabled={importingChildren}
-            className="text-sm text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 font-medium disabled:opacity-50"
-            title="Importar CSV preenchido — atualiza escola/ano letivo/morada">
-            {importingChildren ? '…' : '↑ Dados em falta (crianças)'}
-          </button>
-          <input ref={importChildRef} type="file" accept=".csv" className="hidden"
-            onChange={e => { const f = e.target.files?.[0]; if (f) importMissingChildDetailsCSV(f); }} />
           <button onClick={() => setShowManualForm(v => !v)}
             className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 font-medium">
             {showManualForm ? '✕ Cancelar' : '+ Inscrever'}
           </button>
-          <button onClick={load} className="text-sm text-blue-600 hover:underline">Atualizar</button>
+          <button onClick={load} className="text-sm text-blue-600 hover:underline"
+            title="Recarregar a lista a partir da base de dados (esta página não atualiza sozinha)">
+            ↻ Atualizar
+          </button>
         </div>
       </div>
 
@@ -1499,8 +1271,9 @@ export default function SubscriptionsAdminPage() {
           </button>
         ))}
         <button onClick={() => setOnlyAdminReview(v => !v)}
+          title="O cliente fez uma alteração (pedido, edição, cancelamento) que precisa da sua revisão"
           className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${onlyAdminReview ? 'bg-pink-600 text-white border-pink-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
-          🔔 Por rever (cliente){counts.adminReview > 0 ? ` (${counts.adminReview})` : ''}
+          🔔 Ação do cliente{counts.adminReview > 0 ? ` (${counts.adminReview})` : ''}
         </button>
         <button onClick={() => setOnlyClientReview(v => !v)}
           className={`text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${onlyClientReview ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
