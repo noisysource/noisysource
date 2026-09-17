@@ -1015,15 +1015,29 @@ export default function SubscriptionsAdminPage() {
 
       // Already linked to a family — flag this change for the parent to review
       // on next login (in-app only, replaces the old offered-status email dance).
+      // Exception: activating a subscription the client already confirmed
+      // fulfills what they agreed to — it's not a new change for them to
+      // review, so don't re-raise clientReviewPending here or they'd get
+      // looped back into "please review" for something they already
+      // accepted. Clear the review flags instead, same as resolving the
+      // "✅ Confirmado — ativar" badge directly.
       const linked = item.familyId || (patch.familyId as string | undefined);
-      if (linked) patch.clientReviewPending = true;
+      const fulfillsClientConfirmation = newStatus === 'active' && item.lastClientAction === 'confirmed';
+      if (fulfillsClientConfirmation) {
+        patch.adminReviewPending = false;
+        patch.lastClientAction = deleteField();
+      } else if (linked) {
+        patch.clientReviewPending = true;
+      }
 
       await updateDoc(docRef(colName, item.id), patch);
       setItems(prev => prev.map(i => i.id === item.id
         ? {
             ...i, status: newStatus,
             familyId: (patch.familyId as string | undefined) ?? i.familyId,
-            clientReviewPending: linked ? true : i.clientReviewPending,
+            clientReviewPending: fulfillsClientConfirmation ? i.clientReviewPending : (linked ? true : i.clientReviewPending),
+            adminReviewPending: fulfillsClientConfirmation ? false : i.adminReviewPending,
+            lastClientAction: fulfillsClientConfirmation ? undefined : i.lastClientAction,
           }
         : i
       ));
@@ -1040,23 +1054,23 @@ export default function SubscriptionsAdminPage() {
     } finally { setProcessing(null); }
   };
 
-  // Clears the review flag, and — when the client's last action was
-  // "confirmed" — also actually activates the subscription. The badge for
-  // that case reads "✅ Confirmado — ativar", so it has to do what it says;
-  // for every other lastClientAction (cancel request, edit, rejection) this
-  // just dismisses the flag, since those need the admin to act elsewhere
-  // (cancel it, review the edit) rather than a status flip.
+  // When the client's last action was "confirmed", actually activates the
+  // subscription (via setStatus, which also clears the review flags for
+  // this exact case — see its own comment) — the badge for that case reads
+  // "✅ Confirmado — ativar", so it has to do what it says. Every other
+  // lastClientAction (cancel request, edit, rejection) just dismisses the
+  // flag, since those need the admin to act elsewhere (cancel it, review
+  // the edit) rather than a status flip.
   const resolveClientAction = async (item: SubItem) => {
+    if (item.lastClientAction === 'confirmed' && item.status !== 'active') {
+      await setStatus(item, 'active');
+      return;
+    }
     setProcessing(item.id);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      const shouldActivate = item.lastClientAction === 'confirmed' && item.status !== 'active';
-      const patch: Record<string, unknown> = { adminReviewPending: false, lastClientAction: deleteField(), updatedAt: new Date() };
-      if (shouldActivate) { patch.status = 'active'; patch.approvedAt = new Date(); }
-      await updateDoc(docRef(colName, item.id), patch);
-      setItems(prev => prev.map(i => i.id === item.id
-        ? { ...i, adminReviewPending: false, lastClientAction: undefined, status: shouldActivate ? 'active' : i.status }
-        : i));
+      await updateDoc(docRef(colName, item.id), { adminReviewPending: false, lastClientAction: deleteField(), updatedAt: new Date() });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, adminReviewPending: false, lastClientAction: undefined } : i));
     } finally { setProcessing(null); }
   };
 
