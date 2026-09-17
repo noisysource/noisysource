@@ -27,7 +27,16 @@ function fmtDateTime(ts?: Timestamp) {
   if (!ts) return '—';
   return ts.toDate().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' });
 }
-function toIsoDate(d: Date) { return d.toISOString().split('T')[0]; }
+// toISOString() converts to UTC first — in a timezone ahead of UTC (e.g.
+// Portugal in summer, UTC+1), local midnight of a given day lands on the
+// PREVIOUS UTC day, silently shifting every exclusion date back by one.
+// Use the calendar cell's own local y/m/d instead of round-tripping through UTC.
+function toIsoDate(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 function monthGroupKey(r: BillingRecord): string {
   return r.periodStart ? toIsoDate(r.periodStart.toDate()).slice(0, 7) : r.periodLabel;
