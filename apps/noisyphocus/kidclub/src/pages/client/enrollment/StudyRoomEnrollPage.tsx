@@ -12,8 +12,9 @@ import { addDoc, getDoc, getDocs, updateDoc, query, where } from 'firebase/fires
 import { col, docRef } from '../../../lib/db';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
+import { calculateAge, normalizeSubStatus } from '../../../lib/utils';
 
-const ACTIVE_STATUSES = ['active', 'planned', 'offered', 'pending'];
 
 function buildTransportCoverage(subs: any[]) {
   const coverage: { weekday: string; direction: 'pickup' | 'dropoff' | 'both' }[] = [];
@@ -53,7 +54,44 @@ export default function StudyRoomEnrollPage() {
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // No childId yet: collect child details inline (same shared form the admin flow uses)
+  // and create the child before continuing to the schedule step below.
+  const [newChildDetails, setNewChildDetails] = useState<EnrollmentDetailsValue>(EMPTY_ENROLLMENT_DETAILS);
+  const [newChildErrors, setNewChildErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
+  const [creatingChild, setCreatingChild] = useState(false);
+
+  const handleCreateChild = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const errs = validateEnrollmentDetails(newChildDetails);
+    if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
+    setCreatingChild(true);
+    try {
+      const fam = await familyService.getOrCreateFamily(user.uid, user.name || '', user.email || '');
+      const dob = new Date(newChildDetails.dateOfBirth + 'T12:00:00');
+      const newChildId = await familyService.addChild(fam.id, user.uid, {
+        firstName: newChildDetails.firstName.trim(),
+        lastName: newChildDetails.lastName.trim(),
+        dateOfBirth: dob,
+        age: calculateAge(dob),
+        schoolName: newChildDetails.schoolName.trim() || undefined,
+        schoolYear: newChildDetails.schoolYear.trim() || undefined,
+        homeAddress: {
+          street: newChildDetails.homeAddress.street.trim(),
+          city: newChildDetails.homeAddress.city.trim(),
+          postalCode: newChildDetails.homeAddress.postalCode.trim(),
+          country: newChildDetails.homeAddress.country.trim() || undefined,
+        },
+        status: 'active',
+      });
+      navigate(`/client/enroll/study?childId=${newChildId}`, { replace: true });
+    } finally {
+      setCreatingChild(false);
+    }
+  };
+
   const [schedule, setSchedule] = useState<WeekScheduleValue>({ weekPattern: 'all', days: [] });
+  const [note, setNote] = useState('');
 
   useEffect(() => {
     if (!user || !childId) return;
@@ -76,7 +114,7 @@ export default function StudyRoomEnrollPage() {
         setTransportCoverage(buildTransportCoverage(
           transSnap.docs
             .map((d: any) => ({ id: d.id, ...d.data() }))
-            .filter((s: any) => ACTIVE_STATUSES.includes(s.status))
+            .filter((s: any) => normalizeSubStatus(s.status) !== 'cancelled')
         ));
 
         // Sibling count for discount preview: both collections, any non-cancelled status
@@ -95,19 +133,23 @@ export default function StudyRoomEnrollPage() {
         } catch { /* best-effort */ }
         if (existingSnap?.exists()) {
           const sub = existingSnap.data();
+          // Legacy/corrupted docs may hold plain day-name strings instead of
+          // {day, hour} objects (an admin-side edit bug); handle both so this
+          // page never silently renders a blank schedule from either shape.
           const days: DayConfig[] = (sub.days ?? []).map((d: any) => ({
-            weekday: d.day,
-            hour: d.hour ?? '16:00',
+            weekday: typeof d === 'string' ? d : (d?.day ?? d?.dayOfWeek ?? ''),
+            hour: (typeof d === 'string' ? undefined : d?.hour) ?? '16:00',
             services: { study: true },
           }));
           setSchedule({ weekPattern: sub.weekPattern ?? 'all', days });
+          setNote(sub.note ?? '');
         }
       } finally {
         setIsLoading(false);
       }
     };
     load();
-  }, [user, childId]);
+  }, [user, childId, editId]);
 
   const studyDays = schedule.days.filter(d => d.services.study);
   const monthlyFee = config ? computeStudyFee(schedule.days, config, schedule.weekPattern) : 0;
@@ -125,7 +167,7 @@ export default function StudyRoomEnrollPage() {
           const data = d.data();
           return !data.canceled &&
             data.schoolYear === (child.schoolYear || '') &&
-            ['pending', 'confirmed', 'active', 'planned', 'offered'].includes(data.status);
+            normalizeSubStatus(data.status) !== 'cancelled';
         });
         if (hasDup) {
           setSubmitError('Já existe uma inscrição na Sala de Estudo para este aluno este ano letivo.');
@@ -143,6 +185,12 @@ export default function StudyRoomEnrollPage() {
           weekPattern: schedule.weekPattern,
           monthlyPrice: monthlyFee,
           basePrice: monthlyFee,
+          note: note.trim() || null,
+          // The parent editing directly (e.g. from an admin-edit review prompt) counts
+          // as having acted on it — clear the flag rather than leaving it stuck open.
+          // The edit itself is a client-initiated change, so admin gets notified too.
+          clientReviewPending: false,
+          adminReviewPending: true, lastClientAction: 'edited',
           updatedAt: new Date(),
         });
         navigate(`/client/study/${editId}`, { replace: true });
@@ -168,6 +216,7 @@ export default function StudyRoomEnrollPage() {
         monthlyPrice: discountedFee,
         basePrice: monthlyFee,
         appliedDiscounts,
+        note: note.trim() || null,
         startDate: today,
         endDate: nextJuly,
         status: 'pending',
@@ -185,7 +234,24 @@ export default function StudyRoomEnrollPage() {
     }
   };
 
-  if (!childId) return <Navigate to="/client/children" replace />;
+  if (!childId) {
+    return (
+      <div className="max-w-lg">
+        <div className="mb-6">
+          <Link to="/client/children" className="text-blue-600 hover:underline text-sm">← Voltar</Link>
+          <h1 className="text-2xl font-bold mt-2">Sala de Estudo</h1>
+          <p className="text-gray-600 mt-1">Para começar, diga-nos para quem é a inscrição.</p>
+        </div>
+        <form onSubmit={handleCreateChild} className="space-y-5">
+          <EnrollmentDetailsForm value={newChildDetails} onChange={setNewChildDetails} showContactFields={false} errors={newChildErrors} />
+          <button type="submit" disabled={creatingChild}
+            className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60">
+            {creatingChild ? 'A continuar…' : 'Continuar'}
+          </button>
+        </form>
+      </div>
+    );
+  }
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
 
   if (submitted) {
@@ -247,6 +313,8 @@ export default function StudyRoomEnrollPage() {
           <h2 className="font-semibold mb-2">Observações</h2>
           <textarea
             rows={3}
+            value={note}
+            onChange={e => setNote(e.target.value)}
             placeholder="Necessidades especiais, alergias, outras informações..."
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 resize-none"
           />

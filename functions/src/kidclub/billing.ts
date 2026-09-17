@@ -1,16 +1,30 @@
 import * as admin from "firebase-admin";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
-import { onDocumentUpdated } from "firebase-functions/v2/firestore";
-import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
+// functions/ deploys as an isolated directory — Cloud Build's remote install
+// only sees functions/package.json, with no monorepo/pnpm-workspace context,
+// so a real "@shared" dependency can't be added here (confirmed the hard
+// way: Cloud Build's npm rejects "@shared" outright as an invalid package
+// name, since it's a scope prefix with no name after it — breaks EVERY
+// function in the deploy, not just ones that import it). Duplicated from
+// packages/shared/models/discountLogic.ts's applyDiscounts() instead of
+// importing it; keep the two in sync if that one ever changes.
+interface AppliedDiscount { ruleId: string; name: string; percentage: number; appliedAt: Date; appliedBy: "auto" | "admin" }
+function applyDiscounts(gross: number, discounts: AppliedDiscount[]): number {
+  const totalPct = Math.min(discounts.reduce((s, d) => s + d.percentage, 0), 1);
+  return Math.round(gross * (1 - totalPct) * 100) / 100;
+}
+
 const COMPANY_NAME = "Arco-Íris da Pequenada";
 
-// ── Helpers (shared with generateMonthlyInvoices) ─────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function periodForDate(date: Date) {
   const y = date.getFullYear();
@@ -29,6 +43,60 @@ function periodForDate(date: Date) {
 function dayLabel(day: string): string {
   const map: Record<string, string> = { monday:"2ª", tuesday:"3ª", wednesday:"4ª", thursday:"5ª", friday:"6ª" };
   return map[day] ?? day;
+}
+
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const weekdayOfIsoDate = (isoDate: string): string => WEEKDAY_NAMES[new Date(`${isoDate}T12:00:00Z`).getUTCDay()];
+
+// Same per-occurrence rate used to price the subscription in the first place
+// (StudyCenterConfig.pricePerDayPerWeek / TransportationConfig.flatRatePerTrip)
+// — reused here rather than back-deriving a rate from the monthly total, so
+// "one excluded day" always means the same euro amount everywhere in the app.
+function studyPerDayRate(cfg: any): number {
+  if (cfg?.pricePerDayPerWeek != null) return cfg.pricePerDayPerWeek;
+  if (cfg?.monthlyPricePerWeekday != null) return cfg.monthlyPricePerWeekday / (cfg?.weeksPerMonth ?? 4);
+  return 0;
+}
+
+// Transport excluded-date entries can target a single trip instead of the
+// whole day — "2026-09-08" (bare) excludes every trip that day, while
+// "2026-09-08:pickup" / "2026-09-08:dropoff" excludes only that direction.
+// This is what lets an admin mark "skipped the morning ride but still came
+// to study room, and still took the ride home" as two independent facts.
+function parseExclusionEntry(entry: string): { isoDate: string; direction?: "pickup" | "dropoff" } {
+  const [isoDate, direction] = entry.split(":");
+  return direction === "pickup" || direction === "dropoff" ? { isoDate, direction } : { isoDate };
+}
+
+// Gross (pre-discount) amount to remove for a set of excluded calendar dates.
+// Discount is reapplied afterwards via applyDiscounts(), the same function
+// that already computes every other discounted price in the app — so a
+// subscription's discount rate is preserved on the days it IS billed for,
+// instead of being partly eaten by the excluded days.
+function computeExclusionDeduction(
+  type: "study" | "transport",
+  excludedDates: string[],
+  sub: any,
+  studyConfig: any,
+  transportConfig: any,
+): number {
+  if (type === "study") {
+    return excludedDates.length * studyPerDayRate(studyConfig);
+  }
+  const rate = transportConfig?.flatRatePerTrip ?? 0;
+  let deduction = 0;
+  for (const entry of excludedDates) {
+    const { isoDate, direction } = parseExclusionEntry(entry);
+    const weekday = weekdayOfIsoDate(isoDate);
+    // A schedule entry with direction "both" is priced (and can only be
+    // excluded) as a single indivisible trip — it matches a direction-scoped
+    // exclusion too, since there's no separate leg to leave billed.
+    const tripsThatDay = (sub.schedule ?? []).filter((s: any) =>
+      s.dayOfWeek === weekday && (!direction || s.direction === direction || s.direction === "both")
+    ).length;
+    deduction += tripsThatDay * rate;
+  }
+  return deduction;
 }
 
 // Returns all months from fromDate through August of the following year
@@ -60,8 +128,24 @@ async function getActiveSubs() {
 
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
 
+// dev and prod currently share the exact same live Vendus account, API key
+// and register — there is no sandbox. Every invoice created from here is a
+// real Fatura-Recibo, reported to the tax authority, under the real company.
+// Until a genuine Vendus sandbox exists for dev, refuse to create real
+// fiscal documents from test billing records. Remove this guard once dev
+// has its own sandbox VENDUS_API_KEY/VENDUS_REGISTER_ID.
+const DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX = new Set(["kidclub-dev"]);
+
 async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
   console.log(`[Vendus] start billingId=${billingId}`);
+
+  const currentProject = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
+  if (DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX.has(currentProject)) {
+    throw new Error(
+      `Vendus invoicing is disabled on ${currentProject}: this project has no Vendus sandbox, ` +
+      `only the real production account, so creating an invoice here would generate a real fiscal document.`
+    );
+  }
 
   const billingRef = appCol("billing").doc(billingId);
   const billing = (await billingRef.get()).data();
@@ -94,8 +178,15 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
 
   const vendusClient: VendusClient = { id: vendusClientId };
   const isCampBilling = billing.type === "camp_deposit" || billing.type === "camp_balance";
+  const vendusProductId = (title: string): number => {
+    if (isCampBilling) return PRODUCT_STUDY;
+    if (title.startsWith("Transporte")) return PRODUCT_TRANSPORT;
+    if (title.startsWith("Taxa de Inscrição")) return PRODUCT_ENROLLMENT_FEE;
+    if (title.startsWith("Seguro")) return PRODUCT_INSURANCE;
+    return PRODUCT_STUDY;
+  };
   const items: VendusLineItem[] = lineItems.map((li: any) => ({
-    id: (!isCampBilling && li.title.startsWith("Transporte")) ? PRODUCT_TRANSPORT : PRODUCT_STUDY,
+    id: vendusProductId(li.title),
     title: li.title,
     qty: 1,
     gross_price: li.amount,
@@ -128,27 +219,170 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
   });
 }
 
-// ── Compute line items for a group (pure, no DB access) ──────────────────────
+// ── Compute line items for a group ────────────────────────────────────────────
 
+export interface BillingLineItem {
+  title: string;
+  amount: number;               // net, after discounts AND excluded days
+  grossAmount: number;          // before discounts and exclusions
+  subscriptionId: string;
+  type: "study" | "transport" | "enrollment";
+  appliedDiscounts: AppliedDiscount[];
+  excludedDates?: string[];     // ISO yyyy-mm-dd (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
+  scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI only offer real service days
+  tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday, so the UI can offer per-trip exclusion when a day has more than one
+}
+
+interface BillingConfigs { studyConfig: any; transportConfig: any }
+
+// existingLineItems (previous version of this specific billing record, if any)
+// carries forward each subscription's excludedDates — admin's per-month
+// adjustment must survive a recompute triggered by an unrelated subscription
+// edit, not just get silently overwritten with the fresh gross amount.
 function computeLineItems(
   group: { study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
-): { lineItems: { title: string; amount: number }[]; total: number } {
-  const lineItems: { title: string; amount: number }[] = [];
+  configs: BillingConfigs,
+  existingLineItems: BillingLineItem[] = [],
+): { lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } {
+  const lineItems: BillingLineItem[] = [];
   let total = 0;
+  const newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] = [];
+  const billedThisCall = new Set<string>();
+  const priorFor = (subId: string) => existingLineItems.find(li => li.subscriptionId === subId);
+
+  // "Already billed" is read straight off the currently active subscription
+  // docs themselves — sub.enrollmentFeeBilled — rather than a persistent
+  // child-level record, deliberately: a Child document outlives the school
+  // year, but this fee must NOT (per the original ask — paid again whenever
+  // a family starts a fresh subscription next year). A subscription doc IS
+  // scoped to one enrollment, so checking it resets automatically: next
+  // year's subscription is a brand new doc with no flag.
+  const childFeeBilled = new Set<string>();
+  for (const sub of [...group.study, ...group.transport]) if (sub.childId && sub.enrollmentFeeBilled) childFeeBilled.add(sub.childId);
+
+  // One-time enrollment fees (registration + insurance) — billed once per
+  // CHILD, on whichever service (study or transport) they first appear in,
+  // never discounted, so a transport-only family pays it too, not just
+  // study-room families. Kept as two separate line items, not one combined
+  // one — Vendus has two distinct products for these ("Taxa de Inscrição",
+  // "Seguro"), each with its own price/VAT, and createVendusInvoiceForBilling
+  // maps by title, so a combined line couldn't invoice correctly under
+  // either product. A child with both services is only charged once,
+  // guarded here by billedThisCall. When actually billed, every one of that
+  // child's currently active subscriptions (both collections) gets flagged
+  // — not just the one being processed — so the fee can't be missed if the
+  // family later drops one service and keeps only the other, within the
+  // same school year. Prior fee line items on THIS specific billing record
+  // are carried forward untouched (same pattern as excludedDates) so a
+  // later recompute can't silently drop or duplicate them.
+  const maybeAddEnrollmentFee = (sub: any) => {
+    if (!sub.childId) return;
+    const priorReg = priorFor(`${sub.childId}:registration`);
+    const priorIns = priorFor(`${sub.childId}:insurance`);
+    if (priorReg || priorIns) {
+      if (billedThisCall.has(sub.childId)) return;
+      if (priorReg) { lineItems.push(priorReg); total += priorReg.amount; }
+      if (priorIns) { lineItems.push(priorIns); total += priorIns.amount; }
+      billedThisCall.add(sub.childId);
+      return;
+    }
+    const registrationFee = Math.round((configs.studyConfig?.registrationFee ?? 0) * 100) / 100;
+    const insuranceFee = Math.round((configs.studyConfig?.insuranceFee ?? 0) * 100) / 100;
+    // One-time migration: an existing record from before the combined
+    // "Taxa de Inscrição e Seguro" line item was split in two. It was never
+    // discounted or partially excluded, so re-deriving the two amounts from
+    // this period's configured fees is exact, not a guess.
+    const priorCombined = priorFor(`${sub.childId}:enrollment`);
+    if (priorCombined) {
+      if (billedThisCall.has(sub.childId)) return;
+      if (registrationFee > 0) {
+        lineItems.push({ title: `Taxa de Inscrição — ${sub.childName}`, amount: registrationFee, grossAmount: registrationFee, subscriptionId: `${sub.childId}:registration`, type: "enrollment", appliedDiscounts: [] });
+        total += registrationFee;
+      }
+      if (insuranceFee > 0) {
+        lineItems.push({ title: `Seguro — ${sub.childName}`, amount: insuranceFee, grossAmount: insuranceFee, subscriptionId: `${sub.childId}:insurance`, type: "enrollment", appliedDiscounts: [] });
+        total += insuranceFee;
+      }
+      billedThisCall.add(sub.childId);
+      return;
+    }
+    if (billedThisCall.has(sub.childId) || childFeeBilled.has(sub.childId)) return;
+    if (registrationFee <= 0 && insuranceFee <= 0) return;
+    if (registrationFee > 0) {
+      lineItems.push({
+        title: `Taxa de Inscrição — ${sub.childName}`,
+        amount: registrationFee, grossAmount: registrationFee, subscriptionId: `${sub.childId}:registration`, type: "enrollment", appliedDiscounts: [],
+      });
+      total += registrationFee;
+    }
+    if (insuranceFee > 0) {
+      lineItems.push({
+        title: `Seguro — ${sub.childName}`,
+        amount: insuranceFee, grossAmount: insuranceFee, subscriptionId: `${sub.childId}:insurance`, type: "enrollment", appliedDiscounts: [],
+      });
+      total += insuranceFee;
+    }
+    billedThisCall.add(sub.childId);
+    for (const s of group.study) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "studyroom", id: s.id });
+    for (const s of group.transport) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "transportationSubscriptions", id: s.id });
+  };
+
   for (const sub of group.study) {
-    const amount = sub.monthlyPrice ?? 0;
+    const gross = sub.basePrice ?? sub.monthlyPrice ?? 0;
+    const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
+    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
+    const deduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+    const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
     const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
-    lineItems.push({ title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`, amount });
+    lineItems.push({
+      title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "study", appliedDiscounts, scheduleDays,
+      ...(excludedDates.length ? { excludedDates } : {}),
+    });
     total += amount;
+    maybeAddEnrollmentFee(sub);
   }
   for (const sub of group.transport) {
-    const amount = sub.monthlyFee ?? 0;
+    const gross = sub.originalFee ?? sub.monthlyFee ?? 0;
+    const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
+    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
+    const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+    const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
+    const tripsByDay: Record<string, ("pickup" | "dropoff" | "both")[]> = {};
+    for (const s of sub.schedule ?? []) {
+      (tripsByDay[s.dayOfWeek] ??= []).push(s.direction ?? "both");
+    }
     const daysStr = (sub.schedule ?? []).map((s: any) => dayLabel(s.dayOfWeek)).join(", ");
-    lineItems.push({ title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`, amount });
+    lineItems.push({
+      title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
+      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts, scheduleDays, tripsByDay,
+      ...(excludedDates.length ? { excludedDates } : {}),
+    });
     total += amount;
+    maybeAddEnrollmentFee(sub);
   }
-  return { lineItems, total };
+  return { lineItems, total: Math.round(total * 100) / 100, newlyBilledEnrollmentFeeSubs };
+}
+
+// Marks each given subscription's enrollment fee as billed, permanently,
+// right after the billing record carrying it has actually been written —
+// this is the guard that stops the fee from being added on every subsequent
+// recompute of the same or a later period. Written on the subscription docs
+// themselves (both collections, every currently active sub for the billed
+// child), not a persistent child-level record — see computeLineItems for why.
+async function markEnrollmentFeeBilled(subs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[]): Promise<void> {
+  await Promise.all(subs.map(s => appCol(s.collection).doc(s.id).update({ enrollmentFeeBilled: true })));
+}
+
+async function loadBillingConfigs(): Promise<BillingConfigs> {
+  const [studySnap, transportSnap] = await Promise.all([
+    appCol("config").doc("studyCenter").get(),
+    appCol("config").doc("transportation").get(),
+  ]);
+  return { studyConfig: studySnap.data() ?? {}, transportConfig: transportSnap.data() ?? {} };
 }
 
 // ── Send billing notices for a period ────────────────────────────────────────
@@ -157,8 +391,9 @@ async function buildBillingRecord(
   group: { familyId: string; userId: string; study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
   dryRun: boolean,
+  configs: BillingConfigs,
   opts: { docId?: string; sendEmail?: boolean } = {},
-): Promise<string | undefined> {
+): Promise<{ id: string; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } | undefined> {
   const { familyId, userId, study, transport } = group;
   const { docId, sendEmail = !dryRun } = opts;
 
@@ -170,7 +405,7 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
 
-  const { lineItems, total } = computeLineItems({ study, transport }, period);
+  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems({ study, transport }, period, configs);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -196,6 +431,7 @@ async function buildBillingRecord(
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
+  if (!dryRun && newlyBilledEnrollmentFeeSubs.length) await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs);
 
   if (sendEmail && billingEmail) {
     await appCol("emailOutbox").add({
@@ -207,7 +443,7 @@ async function buildBillingRecord(
     });
   }
 
-  return billingRef.id;
+  return { id: billingRef.id, newlyBilledEnrollmentFeeSubs: dryRun ? [] : newlyBilledEnrollmentFeeSubs };
 }
 
 export const sendBillingNotice = onCall(
@@ -624,13 +860,25 @@ export const setPaymentMethod = onCall(
 
 // ── Auto-billing on subscription confirmation ─────────────────────────────────
 
+// A billing record is eligible for recompute if it's still "pending", or if
+// it was cancelled by THIS logic itself (autoCancelled: true) because the
+// family had zero billable subscriptions that period — not a deliberate
+// admin cancellation of a specific invoice. Without this, reactivating a
+// subscription after a stretch with none active would leave every affected
+// period's record stuck "cancelled" forever, since nothing else ever
+// revisits a non-pending record.
+function isRecomputable(data: any): boolean {
+  return data?.status === "pending" || (data?.status === "cancelled" && data?.autoCancelled === true);
+}
+
 async function autoCreateBillingSchedule(familyId: string, userId: string): Promise<void> {
-  const [studySnap, transportSnap] = await Promise.all([
+  const [studySnap, transportSnap, configs] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
+    loadBillingConfigs(),
   ]);
 
-  const group = {
+  const group: { familyId: string; userId: string; study: any[]; transport: any[] } = {
     familyId,
     userId,
     study: studySnap.docs.map(d => ({ id: d.id, ...d.data() })),
@@ -640,22 +888,41 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
   const periods = periodsUntilSchoolYearEnd(new Date());
   let created = 0, updated = 0, cancelled = 0;
 
+  // group.study/group.transport are fetched once and reused across every
+  // period below — computeLineItems reads enrollmentFeeBilled straight off
+  // these in-memory sub objects, so once the fee is billed on one period,
+  // that flag must be reflected here too before the next period in this
+  // same loop is computed, or it would see the same stale "not yet billed"
+  // objects and add the fee again.
+  const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
+    for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
+  };
+
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
-    const { lineItems, total } = computeLineItems(group, period);
+    const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
+    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
-      if (existing.data()?.status === "pending") {
+      if (isRecomputable(existing.data())) {
         if (lineItems.length === 0 || total === 0) {
-          // All subscriptions for this family are now cancelled/inactive
-          await appCol("billing").doc(docId).update({
-            status: "cancelled",
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-          cancelled++;
+          // All subscriptions for this family are now cancelled/inactive.
+          // autoCancelled marks this as OUR doing, not a deliberate admin
+          // cancellation — see isRecomputable's comment for why that matters.
+          if (existing.data()?.status !== "cancelled") {
+            await appCol("billing").doc(docId).update({
+              status: "cancelled", autoCancelled: true,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            cancelled++;
+          }
         } else {
-          await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          await appCol("billing").doc(docId).update({
+            status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
+            lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
           updated++;
         }
       }
@@ -663,7 +930,8 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     }
 
     if (lineItems.length > 0 && total > 0) {
-      await buildBillingRecord(group, period, false, { docId, sendEmail: false });
+      const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
+      if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
       created++;
     }
   }
@@ -682,7 +950,7 @@ export const backfillBillingSchedules = onCall(
     const roles = userDoc.data()?.roles ?? {};
     if (!roles.owner && !roles.rainbowAdmin) throw new Error("Unauthorized");
 
-    const groups = await getActiveSubs();
+    const [groups, configs] = await Promise.all([getActiveSubs(), loadBillingConfigs()]);
     let created = 0, updated = 0, skipped = 0, cancelled = 0, failed = 0;
     const familiesWithActiveSubs = new Set(groups.map(g => g.familyId));
 
@@ -699,18 +967,32 @@ export const backfillBillingSchedules = onCall(
     // Recalculate / create billing records for families with active subscriptions
     for (const group of groups) {
       try {
+        // Same in-memory-staleness guard as autoCreateBillingSchedule.
+        const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
+          for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
+        };
+
         const periods = periodsUntilSchoolYearEnd(new Date());
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
-          const { lineItems, total } = computeLineItems(group, period);
+          const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
+          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
-            if (existing.data()?.status === "pending") {
+            if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
-                await existing.ref.update({ status: "cancelled", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-                cancelled++;
+                if (existing.data()?.status !== "cancelled") {
+                  await existing.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                  cancelled++;
+                } else {
+                  skipped++;
+                }
               } else {
-                await existing.ref.update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                await existing.ref.update({
+                  status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
+                  lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                });
+                if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
                 updated++;
               }
             } else {
@@ -719,7 +1001,8 @@ export const backfillBillingSchedules = onCall(
             continue;
           }
           if (lineItems.length > 0 && total > 0) {
-            await buildBillingRecord(group, period, false, { docId, sendEmail: false });
+            const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
+            if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
             created++;
           }
         }
@@ -733,54 +1016,110 @@ export const backfillBillingSchedules = onCall(
   }
 );
 
-export const onStudyroomConfirmed = onDocumentUpdated(
+// ── Admin: exclude specific days from one billing record's line item ─────────
+// For marking vacation/no-show days out of a single month's invoice, without
+// touching the subscription itself (which keeps its normal recurring
+// schedule for every other month). Only allowed while the record is still
+// "pending" — same protection every other write in this file already has for
+// paid/processing/invoiced/failed/cancelled records.
+
+export const setBillingLineItemExcludedDays = onCall(
+  { region: "europe-west3", invoker: "public" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
+    const userDoc = await db.collection("users").doc(uid).get();
+    const roles = userDoc.data()?.roles ?? {};
+    if (!roles.owner && !roles.rainbowAdmin) throw new HttpsError("permission-denied", "Unauthorized");
+
+    const { billingId, subscriptionId, excludedDates } = request.data ?? {};
+    if (!billingId || !subscriptionId || !Array.isArray(excludedDates)) {
+      throw new HttpsError("invalid-argument", "billingId, subscriptionId, excludedDates[] required");
+    }
+
+    const billingRef = appCol("billing").doc(billingId);
+    const billingSnap = await billingRef.get();
+    const billing = billingSnap.data();
+    if (!billing) throw new HttpsError("not-found", "Billing record not found");
+    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Cannot edit a "${billing.status}" record`);
+
+    const lineItems: BillingLineItem[] = billing.lineItems ?? [];
+    const idx = lineItems.findIndex((li) => li.subscriptionId === subscriptionId);
+    if (idx === -1) throw new HttpsError("not-found", "Line item not found on this billing record");
+    const li = lineItems[idx];
+    // Enrollment fees are a flat one-time charge, not a per-day service — and
+    // their subscriptionId is always suffixed (":enrollment"), so a real
+    // subscriptionId from the client can never actually match one here.
+    if (li.type !== "study" && li.type !== "transport") throw new HttpsError("failed-precondition", "This line item does not support day exclusions");
+
+    // Only dates within this record's own period are honoured — this is a
+    // per-record adjustment, not a general-purpose date list.
+    const periodStart: Date = billing.periodStart.toDate();
+    const periodEnd: Date = billing.periodEnd.toDate();
+    const validDates: string[] = excludedDates.filter((d: unknown) => {
+      if (typeof d !== "string") return false;
+      const { isoDate, direction } = parseExclusionEntry(d);
+      if (d.includes(":") && !direction) return false; // malformed suffix
+      const dt = new Date(`${isoDate}T12:00:00Z`);
+      return !isNaN(dt.getTime()) && dt >= periodStart && dt <= periodEnd;
+    });
+
+    const colName = li.type === "study" ? "studyroom" : "transportationSubscriptions";
+    const [subSnap, configs] = await Promise.all([
+      appCol(colName).doc(subscriptionId).get(),
+      loadBillingConfigs(),
+    ]);
+    const sub = subSnap.data() ?? {};
+
+    // Anchored to this line item's own stored gross/discounts, not a fresh
+    // read of the subscription's current price — keeps the math consistent
+    // with the total already shown on this specific invoice.
+    const gross = li.grossAmount ?? 0;
+    const appliedDiscounts = li.appliedDiscounts ?? [];
+    const deduction = computeExclusionDeduction(li.type, validDates, sub, configs.studyConfig, configs.transportConfig);
+    const newAmount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+
+    const newLineItems = [...lineItems];
+    newLineItems[idx] = { ...li, amount: newAmount, ...(validDates.length ? { excludedDates: validDates } : {}) };
+    if (!validDates.length) delete (newLineItems[idx] as any).excludedDates;
+    const newTotal = Math.round(newLineItems.reduce((s, x) => s + (x.amount ?? 0), 0) * 100) / 100;
+
+    await billingRef.update({
+      lineItems: newLineItems,
+      total: newTotal,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { amount: newAmount, total: newTotal };
+  }
+);
+
+// Re-runs the full billing recompute for the family on every create/update of
+// a linked subscription — not just status transitions. Covers cases the old
+// status-diffing triggers missed: a subscription created already active (no
+// update event at all), and one that's already active but only gets familyId
+// attached later when the client claims it (familyId changes, not status).
+// autoCreateBillingSchedule() re-queries current subscription state itself,
+// so it's naturally idempotent here — a create, an unrelated field edit, and
+// a status change all converge on the same recomputed result.
+export const onStudyroomBillingSync = onDocumentWritten(
   { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
   async (event) => {
-    const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || !["active", "confirmed"].includes(after.status)) return;
+    if (!after) return; // deleted
     const familyId: string = after.familyId;
-    if (!familyId) { console.warn("studyroom doc missing familyId"); return; }
+    if (!familyId) return;
     await autoCreateBillingSchedule(familyId, after.userId ?? "");
   }
 );
 
-export const onTransportConfirmed = onDocumentUpdated(
+export const onTransportBillingSync = onDocumentWritten(
   { document: "_apps/arcoiris/transportationSubscriptions/{subId}", region: "europe-west3" },
   async (event) => {
-    const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "active") return;
+    if (!after) return; // deleted
     const familyId: string = after.familyId;
-    if (!familyId) { console.warn("transportationSubscriptions doc missing familyId"); return; }
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
-  }
-);
-
-export const onStudyroomCancelled = onDocumentUpdated(
-  { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
-  async (event) => {
-    const before = event.data?.before?.data();
-    const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "cancelled") return;
-    const familyId: string = after.familyId;
-    if (!familyId) { console.warn("studyroom doc missing familyId"); return; }
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
-  }
-);
-
-export const onTransportCancelled = onDocumentUpdated(
-  { document: "_apps/arcoiris/transportationSubscriptions/{subId}", region: "europe-west3" },
-  async (event) => {
-    const before = event.data?.before?.data();
-    const after = event.data?.after?.data();
-    if (!before || !after) return;
-    if (before.status === after.status || after.status !== "cancelled") return;
-    const familyId: string = after.familyId;
-    if (!familyId) { console.warn("transportationSubscriptions doc missing familyId"); return; }
+    if (!familyId) return;
     await autoCreateBillingSchedule(familyId, after.userId ?? "");
   }
 );

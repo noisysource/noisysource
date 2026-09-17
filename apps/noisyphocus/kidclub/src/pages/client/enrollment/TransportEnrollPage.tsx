@@ -14,6 +14,8 @@ import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
 import { DiscountRule } from '@shared/models/Discount';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
+import { calculateAge, normalizeSubStatus } from '../../../lib/utils';
 
 function computeTransportFee(
   days: DayConfig[],
@@ -57,6 +59,42 @@ export default function TransportEnrollPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // No childId yet: collect child details inline (same shared form the admin flow uses)
+  // and create the child before continuing to the schedule step below.
+  const [newChildDetails, setNewChildDetails] = useState<EnrollmentDetailsValue>(EMPTY_ENROLLMENT_DETAILS);
+  const [newChildErrors, setNewChildErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
+  const [creatingChild, setCreatingChild] = useState(false);
+
+  const handleCreateChild = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const errs = validateEnrollmentDetails(newChildDetails);
+    if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
+    setCreatingChild(true);
+    try {
+      const fam = await familyService.getOrCreateFamily(user.uid, user.name || '', user.email || '');
+      const dob = new Date(newChildDetails.dateOfBirth + 'T12:00:00');
+      const newChildId = await familyService.addChild(fam.id, user.uid, {
+        firstName: newChildDetails.firstName.trim(),
+        lastName: newChildDetails.lastName.trim(),
+        dateOfBirth: dob,
+        age: calculateAge(dob),
+        schoolName: newChildDetails.schoolName.trim() || undefined,
+        schoolYear: newChildDetails.schoolYear.trim() || undefined,
+        homeAddress: {
+          street: newChildDetails.homeAddress.street.trim(),
+          city: newChildDetails.homeAddress.city.trim(),
+          postalCode: newChildDetails.homeAddress.postalCode.trim(),
+          country: newChildDetails.homeAddress.country.trim() || undefined,
+        },
+        status: 'active',
+      });
+      navigate(`/client/enroll/transport?childId=${newChildId}`, { replace: true });
+    } finally {
+      setCreatingChild(false);
+    }
+  };
 
   const [schedule, setSchedule] = useState<WeekScheduleValue>({
     weekPattern: 'all',
@@ -145,15 +183,12 @@ export default function TransportEnrollPage() {
           getDocs(query(col('transportationSubscriptions'), where('childId', '==', child.id))),
           studyDays.length > 0 ? getDocs(query(col('studyroom'), where('childId', '==', child.id))) : Promise.resolve(null),
         ]);
-        const hasTransportDup = tDupSnap.docs.some(d => {
-          const data = d.data();
-          return ['pending', 'confirmed', 'active', 'planned', 'offered'].includes(data.status);
-        });
+        const hasTransportDup = tDupSnap.docs.some(d => normalizeSubStatus(d.data().status) !== 'cancelled');
         const hasStudyDup = sDupSnap?.docs.some(d => {
           const data = d.data();
           return !data.canceled &&
             data.schoolYear === (child.schoolYear || '') &&
-            ['pending', 'confirmed', 'active', 'planned', 'offered'].includes(data.status);
+            normalizeSubStatus(data.status) !== 'cancelled';
         });
         if (hasTransportDup) {
           setSubmitError('Já existe uma inscrição de transporte ativa para este aluno.');
@@ -185,6 +220,11 @@ export default function TransportEnrollPage() {
           weekPattern: schedule.weekPattern,
           monthlyFee: tFee,
           appliedDiscounts,
+          // The parent editing directly (e.g. from an admin-edit review prompt) counts
+          // as having acted on it — clear the flag rather than leaving it stuck open.
+          // The edit itself is a client-initiated change, so admin gets notified too.
+          clientReviewPending: false,
+          adminReviewPending: true, lastClientAction: 'edited',
           updatedAt: new Date(),
         });
         navigate(`/client/transport/${editId}`, { replace: true });
@@ -245,7 +285,24 @@ export default function TransportEnrollPage() {
     }
   };
 
-  if (!childId) return <Navigate to="/client/children" replace />;
+  if (!childId) {
+    return (
+      <div className="max-w-lg">
+        <div className="mb-6">
+          <Link to="/client/children" className="text-blue-600 hover:underline text-sm">← Voltar</Link>
+          <h1 className="text-2xl font-bold mt-2">Transporte Escolar</h1>
+          <p className="text-gray-600 mt-1">Para começar, diga-nos para quem é a inscrição.</p>
+        </div>
+        <form onSubmit={handleCreateChild} className="space-y-5">
+          <EnrollmentDetailsForm value={newChildDetails} onChange={setNewChildDetails} showContactFields={false} errors={newChildErrors} />
+          <button type="submit" disabled={creatingChild}
+            className="w-full bg-green-600 text-white py-3 rounded-xl font-semibold hover:bg-green-700 disabled:opacity-60">
+            {creatingChild ? 'A continuar…' : 'Continuar'}
+          </button>
+        </form>
+      </div>
+    );
+  }
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
 
   if (submitted) {

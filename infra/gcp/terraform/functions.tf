@@ -104,6 +104,7 @@ locals {
     # KidClub — billing
     "sendBillingNotice",
     "backfillBillingSchedules",
+    "setBillingLineItemExcludedDays",
     "initiateMbwayPayment",
     "initiateMultibancoPayment",
     "initiateCardPayment",

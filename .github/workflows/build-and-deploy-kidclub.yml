@@ -75,6 +75,16 @@ jobs:
           service_account: 'github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com'
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
+      # Rules deploy before the app deploy, same branch/environment already selected
+      # above, so the app is never live against stale rules. No continue-on-error /
+      # if: always() here on purpose — a failed rules deploy must stop the job before
+      # the app deploy step runs, not fail silently and let a stale-rules app go live.
+      - name: Deploy Firestore Rules (Dev)
+        if: github.event.inputs.environment == 'dev'
+        run: firebase deploy --only firestore:rules --project=kidclub-dev --token "$(gcloud auth print-access-token)"
+      - name: Deploy Firestore Rules (Prod)
+        if: github.event.inputs.environment == 'prod'
+        run: firebase deploy --only firestore:rules --project=rainbow-prod-2454b --token "$(gcloud auth print-access-token)"
       - name: Deploy KidClub App (Dev)
         if: github.event.inputs.environment == 'dev'
         run: firebase deploy --only hosting:kidclub --project=kidclub-dev --token "$(gcloud auth print-access-token)"

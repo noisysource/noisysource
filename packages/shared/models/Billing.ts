@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase/firestore';
+import type { AppliedDiscount } from './Discount';
 
 export type BillingPaymentMethod = 'mbway' | 'multibanco' | 'card' | 'subscription';
 
@@ -13,7 +14,16 @@ export type BillingStatus =
 
 export interface BillingLineItem {
   title: string;
-  amount: number;
+  amount: number;                    // net, after discounts AND excluded days
+  // Present on records generated after the day-exclusion feature shipped;
+  // absent on older legacy line items.
+  subscriptionId?: string;
+  type?: 'study' | 'transport' | 'enrollment'; // 'enrollment' = one-time registration+insurance fee, not day-editable
+  grossAmount?: number;               // before discounts and exclusions
+  appliedDiscounts?: AppliedDiscount[];
+  excludedDates?: string[];           // "yyyy-mm-dd" (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
+  scheduleDays?: string[];            // weekday names (english, lowercase) this line item is actually billed for
+  tripsByDay?: Record<string, ('pickup' | 'dropoff' | 'both')[]>; // transport only — trip(s) scheduled per weekday
 }
 
 export interface BillingRecord {
@@ -35,6 +45,12 @@ export interface BillingRecord {
   paymentMethod: BillingPaymentMethod;
 
   status: BillingStatus;
+  // Set alongside status: 'cancelled' only when the billing sync itself
+  // cancelled this period because the family had zero billable subscriptions
+  // — never for a deliberate admin cancellation of one invoice. Lets a later
+  // reactivation revive this specific record instead of it staying cancelled
+  // forever; a manually-cancelled record has no such flag and is left alone.
+  autoCancelled?: boolean;
 
   // Easypay
   easypayId?: string;

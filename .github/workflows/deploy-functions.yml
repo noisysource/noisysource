@@ -2,11 +2,19 @@ name: Deploy Functions
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: 'Environment to deploy to'
+        required: true
+        options:
+          - dev
+          - prod
 
 jobs:
   deploy-dev-functions:
     name: 'Deploy: dev-functions'
-    if: github.ref == 'refs/heads/staging'
+    if: github.event.inputs.environment == 'dev'
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
@@ -25,10 +33,6 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
-      - name: Prepare Functions for deployment
-        run: |
-          cd functions
-          pnpm install --prod
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -41,7 +45,7 @@ jobs:
 
   deploy-prod-functions:
     name: 'Deploy: prod-functions'
-    if: github.ref == 'refs/heads/main'
+    if: github.event.inputs.environment == 'prod'
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
@@ -60,10 +64,6 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
-      - name: Prepare Functions for deployment
-        run: |
-          cd functions
-          pnpm install --prod
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:

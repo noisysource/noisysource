@@ -20,3 +20,5 @@ export * from './Child';
 export * from './EventModification';
 export * from './Camp';
 export * from './Event';
+export * from './Discount';
+export * from './discountLogic';

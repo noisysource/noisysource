@@ -4,7 +4,13 @@ import { onCall, HttpsError, type CallableRequest } from "firebase-functions/v2/
 import { setGlobalOptions } from "firebase-functions/v2";
 
 if (!admin.apps.length) admin.initializeApp();
-setGlobalOptions({ maxInstances: 5 }); // Region is set by Terraform
+// Terraform's region (functions.tf) only defines an infrastructure shell with
+// dummy source — it is NOT where these functions actually run. They were
+// first deployed via `firebase deploy` with no region in code, which silently
+// defaulted them to us-central1; that's the real, live deployment (confirmed
+// via `firebase functions:list`). Explicit us-central1 below matches reality,
+// not Terraform's europe-west3, which is an inert placeholder for these three.
+setGlobalOptions({ maxInstances: 5 });
 const db = admin.firestore();
 
 const ALL_COLLECTIONS = [
@@ -64,6 +70,7 @@ function pruneUndefined(input: any): any {
 
 /* --------------------------------- EXPORT --------------------------------- */
 export const exportOrgData = onCall<{ orgId?: string; collections?: Col[] }>(
+  { region: "us-central1" },
   async (req) => {
     ensureAuth(req);
     const { orgId, collections } = req.data || {};
@@ -92,7 +99,7 @@ export const importOrgData = onCall<{
   orgId?: string;
   data?: Record<string, any[]>;
   options?: { keepIds?: boolean; merge?: boolean; collections?: Col[] };
-}>(async (req) => {
+}>({ region: "us-central1" }, async (req) => {
   ensureAuth(req);
 
   const orgId = req.data?.orgId;
@@ -154,6 +161,7 @@ export const importOrgData = onCall<{
 
 /* ---------------------------------- WIPE ---------------------------------- */
 export const wipeOrgData = onCall<{ orgId?: string; collections?: Col[]; alsoSettings?: boolean }>(
+  { region: "us-central1" },
   async (req) => {
     ensureAuth(req);
 

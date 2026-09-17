@@ -16,7 +16,10 @@ interface Expense {
   recurrenceEndDate?: Timestamp | Date;
 }
 
-export const createRecurringExpenses = onSchedule('every 24 hours', async (context) => {
+// Real deployment is us-central1 (verified via `firebase functions:list`), not
+// Terraform's europe-west3, which is an inert placeholder for this function —
+// see functions/src/OrgDataTools.ts's comment for the full story.
+export const createRecurringExpenses = onSchedule({ schedule: 'every 24 hours', region: 'us-central1' }, async (context) => {
   const db = admin.firestore();
   const expensesRef = db.collection('expenses');
 

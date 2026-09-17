@@ -1,8 +1,10 @@
 {
   "compilerOptions": {
+    // Root only, deliberately — "@shared/*" subpaths type-check fine here but
+    // can never actually resolve at runtime (see packages/shared/package.json's
+    // "//exports" note). Import from "@shared" root and this stays honest.
     "paths": {
-      "@shared": ["../packages/shared/dist/index"],
-      "@shared/*": ["../packages/shared/dist/*"]
+      "@shared": ["../packages/shared/dist/index"]
     },
     "outDir": "lib",
     "rootDir": "src",

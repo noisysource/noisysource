@@ -4,7 +4,11 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-export const impersonateUser = onCall(async (request) => {
+// Real deployment is us-central1 (verified via `firebase functions:list`), not
+// Terraform's europe-west3, which is an inert placeholder for this function —
+// see functions/src/OrgDataTools.ts's comment for the full story. The caller
+// (apps/noisyphocus/kidclub/src/pages/admin/EmployeesPage.tsx) must match.
+export const impersonateUser = onCall({ region: 'us-central1' }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
   }

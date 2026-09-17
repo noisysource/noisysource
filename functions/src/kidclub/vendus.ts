@@ -3,6 +3,8 @@ const BASE_URL = "https://www.vendus.pt/ws/v1.1";
 // Stable Vendus product IDs for KidClub services
 export const PRODUCT_STUDY = 286916222;    // Serviço de apoio ao ensino (NOR 23%)
 export const PRODUCT_TRANSPORT = 286916284; // Serviço Transporte (RED 6%)
+export const PRODUCT_ENROLLMENT_FEE = 287413994; // Taxa de Inscricão — €35, matches config/studyCenter.registrationFee
+export const PRODUCT_INSURANCE = 287414358;      // Seguro — €25, matches config/studyCenter.insuranceFee
 
 // Vendus payment method IDs (FR documents require a payments[] array)
 export const PAYMENT_METHOD_MULTIBANCO = 286783130;

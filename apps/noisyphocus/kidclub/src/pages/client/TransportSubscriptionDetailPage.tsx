@@ -4,6 +4,7 @@ import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'fir
 import { col, docRef } from '../../lib/db';
 import { TransportationSubscription } from '@shared/models';
 import { TransportationConfig } from '@shared/models/Transportation';
+import { normalizeSubStatus } from '../../lib/utils';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -44,9 +45,8 @@ export default function TransportSubscriptionDetailPage() {
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [accepting, setAccepting] = useState(false);
-  const [showDeclineConfirm, setShowDeclineConfirm] = useState(false);
-  const [declining, setDeclining] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [showReviewReject, setShowReviewReject] = useState(false);
 
   useEffect(() => {
     if (id) loadData();
@@ -63,7 +63,7 @@ export default function TransportSubscriptionDetailPage() {
       ]);
       if (!subSnap.exists()) return;
       const data = subSnap.data();
-      const sub = { ...data, id: subSnap.id } as TransportationSubscription;
+      const sub = { ...data, id: subSnap.id, status: normalizeSubStatus(data.status) } as TransportationSubscription;
       setSubscription(sub);
 
       if (cfgSnap.exists()) setConfig(cfgSnap.data() as TransportationConfig);
@@ -182,26 +182,35 @@ export default function TransportSubscriptionDetailPage() {
     }
   };
 
-  const acceptOffer = async () => {
+  const confirmReview = async () => {
     if (!id) return;
-    setAccepting(true);
+    setReviewing(true);
     try {
       await updateDoc(docRef('transportationSubscriptions', id), {
-        status: 'active', acceptedAt: new Date(), updatedAt: new Date(),
+        clientReviewPending: false, clientReviewedAt: new Date(),
+        // Lets admin see "parent confirmed, ready to activate" rather than
+        // just a generic review flag once they act on this.
+        adminReviewPending: true, lastClientAction: 'confirmed',
+        updatedAt: new Date(),
       });
-      setSubscription(prev => prev ? { ...prev, status: 'active' } : prev);
-    } finally { setAccepting(false); }
+      setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
+    } finally { setReviewing(false); }
   };
 
-  const declineOffer = async () => {
+  const rejectReview = async () => {
     if (!id) return;
-    setDeclining(true);
+    setReviewing(true);
     try {
+      // Doesn't auto-revert the edit — flags it for the team to follow up on directly,
+      // since there's no snapshot of the pre-edit values to restore.
       await updateDoc(docRef('transportationSubscriptions', id), {
-        status: 'cancelled', cancelledAt: new Date(), updatedAt: new Date(),
+        clientReviewPending: false, clientReviewedAt: new Date(),
+        adminReviewPending: true, lastClientAction: 'rejected',
+        updatedAt: new Date(),
       });
-      navigate('/client/subscriptions', { replace: true });
-    } finally { setDeclining(false); }
+      setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
+      setShowReviewReject(false);
+    } finally { setReviewing(false); }
   };
 
   const cancelSubscription = async () => {
@@ -211,6 +220,9 @@ export default function TransportSubscriptionDetailPage() {
       await updateDoc(docRef('transportationSubscriptions', id), {
         status: 'cancelled',
         cancelledAt: new Date(),
+        // Client-initiated change — surfaced to admin as a review prompt on next login.
+        adminReviewPending: true,
+        lastClientAction: 'cancelRequested',
         updatedAt: new Date(),
       });
       navigate('/client/subscriptions', { replace: true });
@@ -220,9 +232,9 @@ export default function TransportSubscriptionDetailPage() {
   };
 
   // Derived state — must stay before any early returns (rules of hooks)
-  const isActive = subscription?.status === 'active' || subscription?.status === 'confirmed';
-  const isPending = subscription?.status === 'pending' || subscription?.status === 'planned';
-  const isOffered = subscription?.status === 'offered';
+  const isActive = subscription?.status === 'active';
+  const isPending = subscription?.status === 'pending';
+  const needsReview = subscription?.clientReviewPending === true;
 
   const priceBreakdown = useMemo(() => {
     if (!config || !subscription) return null;
@@ -283,8 +295,6 @@ export default function TransportSubscriptionDetailPage() {
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }
     : isPending
     ? { label: 'Pendente de aprovação', cls: 'bg-yellow-100 text-yellow-800' }
-    : isOffered
-    ? { label: 'Aguarda a sua confirmação', cls: 'bg-purple-100 text-purple-800' }
     : { label: 'Cancelada', cls: 'bg-gray-100 text-gray-600' };
 
   if (isLoading) {
@@ -318,9 +328,19 @@ export default function TransportSubscriptionDetailPage() {
               <p className="text-gray-500 text-sm">{subscription.contactEmail}</p>
             )}
           </div>
-          <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
-            {statusBadge.label}
-          </span>
+          <div className="flex flex-col items-end gap-1.5">
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
+              {statusBadge.label}
+            </span>
+            {isPending && (
+              <Link
+                to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
+                className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+              >
+                ✏️ Editar pedido
+              </Link>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 space-y-2">
@@ -362,46 +382,36 @@ export default function TransportSubscriptionDetailPage() {
         </div>
       </div>
 
-      {/* Offered: parent must accept */}
-      {isOffered && (
+      {/* Admin edited this subscription — parent must review */}
+      {needsReview && (
         <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
-          <h3 className="font-semibold text-purple-900 mb-1">Lugar encontrado!</h3>
+          <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
           <p className="text-sm text-purple-700 mb-4">
-            A equipa encontrou um lugar para <strong>{subscription.childName}</strong>.
-            Confirme a inscrição para ativar o serviço de transporte.
+            A equipa fez alterações à inscrição de transporte de <strong>{subscription.childName}</strong>.
+            Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
           </p>
           <div className="flex gap-3">
             <button
-              onClick={acceptOffer}
-              disabled={accepting || declining}
+              onClick={confirmReview}
+              disabled={reviewing}
               className="flex-1 bg-purple-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-purple-700 disabled:opacity-60"
             >
-              {accepting ? 'A confirmar…' : 'Aceitar e confirmar'}
+              {reviewing ? 'A confirmar…' : 'Confirmar alteração'}
             </button>
+            <Link
+              to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
+              className="flex-1 text-center bg-white text-purple-700 border border-purple-200 py-2.5 rounded-lg text-sm font-medium hover:bg-purple-50"
+            >
+              Editar
+            </Link>
             <button
-              onClick={() => setShowDeclineConfirm(true)}
-              disabled={accepting || declining}
+              onClick={() => setShowReviewReject(true)}
+              disabled={reviewing}
               className="flex-1 bg-white text-gray-600 border border-gray-200 py-2.5 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-60"
             >
               Recusar
             </button>
           </div>
-          <p className="text-xs text-purple-600 mt-3">
-            Precisa de alterar algo? Recuse e submeta um novo pedido, ou contacte-nos pelo 925 581 565.
-          </p>
-        </div>
-      )}
-
-      {/* Pending notice */}
-      {isPending && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4">
-          <p className="text-sm text-yellow-800 mb-3">O seu pedido está a ser analisado pela equipa. Receberá confirmação em breve.</p>
-          <Link
-            to={`/client/enroll/transport?childId=${subscription.childId}&editId=${id}`}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-yellow-900 bg-white border border-yellow-300 px-3 py-1.5 rounded-lg hover:bg-yellow-50 transition-colors"
-          >
-            ✏️ Editar pedido
-          </Link>
         </div>
       )}
 
@@ -469,7 +479,7 @@ export default function TransportSubscriptionDetailPage() {
       )}
 
       {/* Cancel subscription */}
-      {(isActive || isPending || isOffered) && (
+      {(isActive || isPending) && (
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="font-semibold text-gray-800 mb-1">Cancelar subscrição</h2>
           <p className="text-sm text-gray-500 mb-4">
@@ -484,24 +494,23 @@ export default function TransportSubscriptionDetailPage() {
         </div>
       )}
 
-      {showDeclineConfirm && (
+      {showReviewReject && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-            <h3 className="font-bold text-lg mb-2">Recusar proposta?</h3>
+            <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A inscrição de transporte de <strong>{subscription.childName}</strong> será cancelada.
-              Para retomar o serviço terá de fazer uma nova inscrição.
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
             </p>
             <div className="flex gap-3">
               <button
-                onClick={declineOffer}
-                disabled={declining}
+                onClick={rejectReview}
+                disabled={reviewing}
                 className="flex-1 bg-red-600 text-white py-2.5 rounded-lg hover:bg-red-700 disabled:opacity-60 text-sm font-medium"
               >
-                {declining ? 'A recusar...' : 'Confirmar recusa'}
+                {reviewing ? 'A recusar...' : 'Confirmar recusa'}
               </button>
               <button
-                onClick={() => setShowDeclineConfirm(false)}
+                onClick={() => setShowReviewReject(false)}
                 className="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-lg hover:bg-gray-200 text-sm"
               >
                 Voltar
