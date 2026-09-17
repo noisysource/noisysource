@@ -82,12 +82,6 @@ const WEEKDAYS = [
   { value: 'thursday', label: 'Quinta' },
   { value: 'friday', label: 'Sexta' },
 ];
-// Matches WeekSchedulePicker's ARRIVAL_TIMES — the study-day editor below writes
-// the same {day, hour} shape clients read, so times must stay in sync with it.
-const STUDY_ARRIVAL_TIMES = [
-  '13:30', '14:00', '14:30', '15:00', '15:30', '16:00',
-  '16:30', '17:00', '17:30', '18:00', '18:30', '19:00',
-];
 const DAY_PT: Record<string, string> = {
   monday: 'Seg', tuesday: 'Ter', wednesday: 'Qua',
   thursday: 'Qui', friday: 'Sex', saturday: 'Sáb', sunday: 'Dom',
@@ -139,71 +133,6 @@ const tripsFromSchedule = (schedule: any[]): TripTemplate[] => {
   }
   return map.size > 0 ? Array.from(map.values()) : [newTrip()];
 };
-
-const tripsToSchedule = (trips: TripTemplate[]) =>
-  trips.flatMap(t => t.days.map(day => ({
-    dayOfWeek: day, pickupTime: t.time, pickupLocation: t.pickup, dropoffLocation: t.dropoff,
-  })));
-
-// One DayLike entry per weekday that has at least one trip, with transportTrips.length
-// set to how many trips run that day — structurally enough for resolveAutoDiscounts'
-// auto_multitrip check, without needing the trips grouped by day already.
-const daysLikeFromTrips = (trips: TripTemplate[]): DayLike[] => {
-  const perDay = new Map<string, number>();
-  for (const t of trips) for (const d of t.days) perDay.set(d, (perDay.get(d) ?? 0) + 1);
-  return [...perDay.values()].map(count => ({ services: { transportTrips: Array(count).fill(null) } }));
-};
-
-// ─── Reusable trip list editor ────────────────────────────────────────────────
-function TripEditor({ trips, onChange, accent = 'indigo' }: { trips: TripTemplate[]; onChange: (t: TripTemplate[]) => void; accent?: string }) {
-  const inputCls = `w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-${accent}-400`;
-  const update = (id: string, patch: Partial<TripTemplate>) =>
-    onChange(trips.map(t => t.id === id ? { ...t, ...patch } : t));
-  const toggleDay = (id: string, day: string) =>
-    update(id, { days: trips.find(t => t.id === id)!.days.includes(day)
-      ? trips.find(t => t.id === id)!.days.filter(d => d !== day)
-      : [...trips.find(t => t.id === id)!.days, day] });
-
-  return (
-    <div className="space-y-3">
-      {trips.map((trip, idx) => (
-        <div key={trip.id} className="border border-gray-200 rounded-lg bg-white p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Viagem {idx + 1}</span>
-            {trips.length > 1 && (
-              <button type="button" onClick={() => onChange(trips.filter(t => t.id !== trip.id))}
-                className="text-xs text-red-400 hover:text-red-600">remover</button>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-500 shrink-0">Hora</label>
-            <input type="time" value={trip.time} onChange={e => update(trip.id, { time: e.target.value })}
-              className="border border-gray-300 rounded px-1.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400 w-28" />
-          </div>
-          <div>
-            <p className="text-xs text-gray-500 mb-1">Dias</p>
-            <div className="flex gap-1 flex-wrap">
-              {WEEKDAYS.map(w => (
-                <button key={w.value} type="button" onClick={() => toggleDay(trip.id, w.value)}
-                  className={`text-xs px-2.5 py-1 rounded border font-medium transition-colors ${trip.days.includes(w.value) ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'}`}>
-                  {w.label.slice(0, 3)}
-                </button>
-              ))}
-            </div>
-          </div>
-          <PlacesInput value={trip.pickup} onChange={v => update(trip.id, { pickup: v })} placeholder="Local de recolha *"
-            className={inputCls} />
-          <PlacesInput value={trip.dropoff} onChange={v => update(trip.id, { dropoff: v })} placeholder="Destino / entrega"
-            className={inputCls} />
-        </div>
-      ))}
-      <button type="button" onClick={() => onChange([...trips, newTrip()])}
-        className="w-full text-sm text-indigo-700 border border-indigo-200 border-dashed rounded-lg py-2 hover:bg-indigo-50 transition">
-        + Adicionar viagem
-      </button>
-    </div>
-  );
-}
 
 // ─── Discount picker (shared by ManualEnrollForm and EditForm) ────────────────
 // Single source of truth for the fee math: applyDiscounts() here is the exact
@@ -266,24 +195,40 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
   });
   const [detailErrors, setDetailErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
   const [note, setNote] = useState(item.note ?? '');
-  const [trips, setTrips] = useState<TripTemplate[]>(
-    item._type === 'transport' ? tripsFromSchedule(item.schedule ?? []) : [newTrip()]
-  );
-  // {day, hour} pairs — matches StudyRoomEntry.days (DaySelection[]), the shape
-  // the client-side enrollment/edit page reads back. Bare day-name strings here
-  // would silently drop the hour and break that page's pre-fill (d.day/d.hour
-  // on a string is undefined) — that's the bug this shape guards against.
-  const [studyDays, setStudyDays] = useState<{ day: string; hour: string }[]>(
-    item._type === 'study'
-      ? (item.days ?? []).map((d: any) => typeof d === 'string'
-          ? { day: d, hour: '16:00' }
-          : { day: d?.day ?? d?.dayOfWeek ?? '', hour: d?.hour ?? '16:00' })
-      : []
-  );
+
+  // Same WeekSchedulePicker ManualEnrollForm (and the client's own enroll/edit
+  // pages) use, scoped to this subscription's single existing service —
+  // converted from whichever shape is actually stored, defensively tolerating
+  // the flat day-name-string corruption a since-fixed EditForm bug could have
+  // left behind (same guard as StudyRoomEnrollPage's identical conversion).
+  const [schedule, setSchedule] = useState<WeekScheduleValue>(() => {
+    if (item._type === 'transport') {
+      const dayMap: Record<string, DayConfig> = {};
+      for (const s of (item.schedule ?? [])) {
+        if (!dayMap[s.dayOfWeek]) dayMap[s.dayOfWeek] = { weekday: s.dayOfWeek, hour: '17:00', services: { transportTrips: [] } };
+        dayMap[s.dayOfWeek].services.transportTrips!.push({
+          time: s.pickupTime ?? '08:00',
+          pickupAddress: locationStr(s.pickupLocation),
+          dropoffAddress: locationStr(s.dropoffLocation),
+        });
+      }
+      return { weekPattern: item.weekPattern ?? 'all', days: Object.values(dayMap) };
+    }
+    const days: DayConfig[] = (item.days ?? []).map((d: any) => ({
+      weekday: typeof d === 'string' ? d : (d?.day ?? d?.dayOfWeek ?? ''),
+      hour: (typeof d === 'string' ? undefined : d?.hour) ?? '16:00',
+      services: { study: true },
+    }));
+    return { weekPattern: item.weekPattern ?? 'all', days };
+  });
+
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [existingChild, setExistingChild] = useState<Child | null>(null);
   const [loadingChild, setLoadingChild] = useState(!!item.childId);
+  // Other children in this family with an active subscription — same
+  // auto-discount preview basis ManualEnrollForm uses when creating.
+  const [siblingCount, setSiblingCount] = useState(0);
 
   // dateOfBirth/homeAddress live on the children doc, not the subscription —
   // fetch it once so the shared form can be pre-filled with what the admin
@@ -305,13 +250,39 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
     }).finally(() => setLoadingChild(false));
   }, [item.childId]);
 
+  useEffect(() => {
+    if (!item.familyId) return;
+    (async () => {
+      try {
+        const CANCELLED = new Set(['cancelled', 'canceled']);
+        const [tSnap, sSnap] = await Promise.all([
+          getDocs(query(col('transportationSubscriptions'), where('familyId', '==', item.familyId))),
+          getDocs(query(col('studyroom'), where('familyId', '==', item.familyId))),
+        ]);
+        const siblingChildIds = new Set<string>();
+        for (const d of [...tSnap.docs, ...sSnap.docs]) {
+          const x = d.data();
+          if (!CANCELLED.has(x.status) && x.childId && x.childId !== item.childId) siblingChildIds.add(x.childId);
+        }
+        setSiblingCount(siblingChildIds.size);
+      } catch { /* best-effort */ }
+    })();
+  }, [item.familyId, item.childId]);
+
+  // Already linked to a family/child — the parent will see this edit and must
+  // acknowledge it, rather than it silently changing under them.
+  const linkedToFamily = !!item.familyId;
+  const scope: DiscountScope = item._type;
+  const scheduleDays: DayLike[] = item._type === 'transport'
+    ? schedule.days.filter(d => (d.services.transportTrips?.length ?? 0) > 0)
+    : schedule.days.filter(d => d.services.study);
+
   // Discount selection — seeded from the subscription's already-applied discounts
   // (respecting prior admin decisions); only falls back to resolveAutoDiscounts()
   // as a helpful default for legacy subscriptions that never had any recorded.
   const [selectedDiscounts, setSelectedDiscounts] = useState<AppliedDiscount[]>(() => {
     if (item.appliedDiscounts?.length) return item.appliedDiscounts;
-    const scopeDays: DayLike[] = item._type === 'transport' ? daysLikeFromTrips(trips) : [];
-    return resolveAutoDiscounts(discountRules, item._type, scopeDays, item.schoolName);
+    return resolveAutoDiscounts(discountRules, item._type, scheduleDays, item.schoolName, siblingCount);
   });
   const toggleDiscount = (rule: DiscountRule) => {
     setSelectedDiscounts(prev => prev.some(d => d.ruleId === rule.id)
@@ -319,33 +290,26 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
       : [...prev, { ruleId: rule.id, name: rule.name, percentage: rule.percentage, appliedAt: new Date(), appliedBy: 'admin' as const }]);
   };
 
-  const toggleStudyDay = (day: string) =>
-    setStudyDays(prev => prev.some(d => d.day === day) ? prev.filter(d => d.day !== day) : [...prev, { day, hour: '16:00' }]);
-  const setStudyDayHour = (day: string, hour: string) =>
-    setStudyDays(prev => prev.map(d => d.day === day ? { ...d, hour } : d));
-
-  // Already linked to a family/child — the parent will see this edit and must
-  // acknowledge it, rather than it silently changing under them.
-  const linkedToFamily = !!item.familyId;
-  const scope: DiscountScope = item._type;
-
+  const totalTrips = schedule.days.reduce((sum, d) => sum + (d.services.transportTrips?.length ?? 0), 0);
+  const studyDaysCount = schedule.days.filter(d => d.services.study).length;
   const gross = item._type === 'transport'
-    ? tripsToSchedule(trips).length * (transportConfig?.flatRatePerTrip ?? 0) * activeWeeksInPattern(item.weekPattern ?? 'all')
+    ? totalTrips * (transportConfig?.flatRatePerTrip ?? 0) * activeWeeksInPattern(schedule.weekPattern)
     : (() => {
         const ratePerDay = studyConfig
           ? (studyConfig.pricePerDayPerWeek != null && studyConfig.weeksPerMonth != null
               ? studyConfig.pricePerDayPerWeek * studyConfig.weeksPerMonth
               : studyConfig.monthlyPricePerWeekday)
           : 0;
-        const weeks = activeWeeksInPattern(item.weekPattern ?? 'all');
         const weeksBase = studyConfig?.weeksPerMonth ?? 4;
-        return studyDays.length * ratePerDay * (weeks / weeksBase);
+        return studyDaysCount * ratePerDay * (activeWeeksInPattern(schedule.weekPattern) / weeksBase);
       })();
   const netFee = Math.round(applyDiscounts(gross, selectedDiscounts) * 100) / 100;
 
   const submit = async () => {
     const errs = validateEnrollmentDetails(details);
     if (Object.keys(errs).length) { setDetailErrors(errs); return; }
+    if (item._type === 'transport' && totalTrips === 0) { setSaveError('Adicione pelo menos uma viagem.'); return; }
+    if (item._type === 'study' && studyDaysCount === 0) { setSaveError('Selecione pelo menos um dia.'); return; }
     setSaving(true);
     setSaveError(null);
     try {
@@ -356,18 +320,24 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         contactEmail: details.contactEmail.trim() || null,
         note: note.trim() || null, updatedAt: new Date(),
         appliedDiscounts: selectedDiscounts,
+        weekPattern: schedule.weekPattern,
       };
       if (linkedToFamily) patch.clientReviewPending = true;
       if (item._type === 'transport') {
         patch.contactMobile = details.contactPhone.trim() || null;
-        patch.schedule = tripsToSchedule(trips);
+        patch.schedule = schedule.days.flatMap(d =>
+          (d.services.transportTrips ?? []).map(t => ({
+            dayOfWeek: d.weekday, pickupTime: t.time, pickupLocation: t.pickupAddress, dropoffLocation: t.dropoffAddress,
+          }))
+        );
         patch.schoolName = details.schoolName.trim() || null;
         patch.monthlyFee = netFee;
+        patch.originalFee = gross;
       } else {
         patch.contactPhone = details.contactPhone.trim() || null;
         patch.schoolName = details.schoolName.trim() || null;
         patch.schoolYear = details.schoolYear.trim() || null;
-        patch.days = studyDays;
+        patch.days = schedule.days.filter(d => d.services.study).map(d => ({ day: d.weekday, hour: d.hour }));
         patch.monthlyPrice = netFee;
         patch.basePrice = gross;
       }
@@ -413,7 +383,8 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         monthlyPrice: item._type === 'study' ? netFee : item.monthlyPrice,
         basePrice: item._type === 'study' ? gross : item.basePrice,
         schoolName: details.schoolName.trim() || undefined, schoolYear: details.schoolYear.trim() || undefined,
-        days: item._type === 'study' ? studyDays : item.days,
+        days: item._type === 'study' ? patch.days : item.days,
+        weekPattern: schedule.weekPattern,
         appliedDiscounts: selectedDiscounts,
         clientReviewPending: linkedToFamily || item.clientReviewPending,
       });
@@ -442,33 +413,16 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         <p className="text-xs text-amber-600">Não foi possível carregar a criança associada — a alterar apenas os dados da inscrição.</p>
       )}
 
-      {item._type === 'study' && (
-        <div>
-          <p className="text-xs text-gray-500 mb-1">Dias</p>
-          <div className="flex gap-1 flex-wrap">
-            {WEEKDAYS.map(w => (
-              <button key={w.value} type="button" onClick={() => toggleStudyDay(w.value)}
-                className={`text-xs px-2.5 py-1 rounded border font-medium transition-colors ${studyDays.some(d => d.day === w.value) ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-200'}`}>
-                {w.label.slice(0, 3)}
-              </button>
-            ))}
-          </div>
-          {studyDays.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {studyDays.map(d => (
-                <div key={d.day} className="flex items-center gap-2 text-xs">
-                  <span className="w-16 text-gray-500">{WEEKDAYS.find(w => w.value === d.day)?.label ?? d.day}</span>
-                  <select value={d.hour} onChange={e => setStudyDayHour(d.day, e.target.value)}
-                    className="border border-gray-300 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                    {STUDY_ARRIVAL_TIMES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      {item._type === 'transport' && <TripEditor trips={trips} onChange={setTrips} accent="blue" />}
+      <WeekSchedulePicker
+        value={schedule}
+        onChange={setSchedule}
+        availableServices={[item._type]}
+        transportConfig={transportConfig}
+        studyCenterConfig={studyConfig}
+        discountRules={discountRules}
+        schoolName={details.schoolName || undefined}
+        activeSiblingCount={siblingCount}
+      />
 
       <DiscountPicker rules={discountRules} scope={scope} selected={selectedDiscounts} onToggle={toggleDiscount} gross={gross} />
 
