@@ -402,7 +402,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         <EnrollmentDetailsForm value={details} onChange={setDetails} errors={detailErrors} />
       )}
       {!item.childId && (
-        <p className="text-xs text-amber-600">Esta inscrição não está associada a nenhuma criança (provavelmente anterior à associação automática) — nome, data de nascimento, escola e morada abaixo não têm onde ser guardados e serão ignorados ao guardar.</p>
+        <p className="text-xs text-amber-600">Esta inscrição não está associada a nenhuma criança (provavelmente anterior à associação automática) — nome e escola abaixo ficam guardados na própria inscrição, mas data de nascimento e morada não têm onde ser guardadas e serão ignoradas.</p>
       )}
       {!existingChild && item.childId && !loadingChild && (
         <p className="text-xs text-amber-600">Não foi possível carregar a criança associada — a alterar apenas os dados da inscrição.</p>
