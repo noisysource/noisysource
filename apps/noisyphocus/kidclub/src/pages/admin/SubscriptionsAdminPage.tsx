@@ -479,6 +479,18 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
   const isValid = !!detailsFilled && (hasTransport || hasStudy) &&
     (!hasTransport || transportDays.every(d => d.services.transportTrips!.every(t => t.pickupAddress.trim() && t.dropoffAddress.trim())));
 
+  // isValid collapses several independent requirements into one boolean, so
+  // a disabled "Guardar inscrição" button gave no clue which one was unmet
+  // — surfaced explicitly instead of leaving the admin to guess.
+  const missingReasons: string[] = [];
+  if (Object.keys(validateEnrollmentDetails(details)).length > 0) missingReasons.push('Preencha os dados da criança/encarregado acima');
+  else if (!details.contactEmail.trim()) missingReasons.push('Email do encarregado é obrigatório');
+  if (!hasTransport && !hasStudy) missingReasons.push('Selecione pelo menos um dia (Sala de Estudo ou Transporte) no calendário acima');
+  if (hasTransport && !transportDays.every(d => d.services.transportTrips!.every(t => t.pickupAddress.trim() && t.dropoffAddress.trim()))) {
+    missingReasons.push('Preencha origem e destino de todas as viagens de transporte');
+  }
+  if (isValid && matches !== null && !selectedChildId) missingReasons.push('Escolha se é a mesma criança encontrada ou uma criança nova');
+
   const validateDetails = () => {
     const errs = validateEnrollmentDetails(details);
     if (!details.contactEmail.trim()) errs.contactEmail = 'Obrigatório';
@@ -704,6 +716,12 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
               onChange={() => setSelectedChildId('new')} />
             <span>Não é a mesma — criar criança nova</span>
           </label>
+        </div>
+      )}
+
+      {missingReasons.length > 0 && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
+          {missingReasons.map((r, i) => <p key={i}>⚠ {r}</p>)}
         </div>
       )}
 
