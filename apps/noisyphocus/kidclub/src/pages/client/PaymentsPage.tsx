@@ -4,6 +4,7 @@ import { callable } from '../../lib/callable';
 import { col } from '../../lib/db';
 import { useUser } from '@shared/hooks';
 import { BillingRecord } from '@shared/models';
+import { useImpersonation } from '../../contexts/ImpersonationContext';
 
 type FilterTab = 'pending' | 'overdue' | 'history';
 
@@ -25,6 +26,7 @@ function isOverdue(record: BillingRecord) {
 
 export default function PaymentsPage() {
   const user = useUser();
+  const { impersonation } = useImpersonation();
   const [records, setRecords] = useState<BillingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<FilterTab>('pending');
@@ -50,8 +52,12 @@ export default function PaymentsPage() {
     const load = async () => {
       setLoading(true);
       try {
+        // When admin is impersonating, the real signed-in uid is the admin's, not the
+        // family's — query by familyId instead, mirroring familyService's impersonation handling.
         const snap = await getDocs(
-          query(col('billing'), where('userId', '==', user.uid))
+          impersonation
+            ? query(col('billing'), where('familyId', '==', impersonation.familyId))
+            : query(col('billing'), where('userId', '==', user.uid))
         );
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as BillingRecord))
@@ -64,7 +70,7 @@ export default function PaymentsPage() {
       }
     };
     load();
-  }, [user]);
+  }, [user, impersonation]);
 
   const { pending, overdue, history } = useMemo(() => {
     const actionable = records.filter(r => ['pending', 'processing', 'failed'].includes(r.status));
