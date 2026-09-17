@@ -68,23 +68,44 @@ function parseExclusionEntry(entry: string): { isoDate: string; direction?: "pic
   return direction === "pickup" || direction === "dropoff" ? { isoDate, direction } : { isoDate };
 }
 
-// Gross (pre-discount) amount to remove for a set of excluded calendar dates.
+// Gross (pre-discount) amount to remove for a set of excluded calendar dates,
+// and which of those dates are actually still honoured.
 // Discount is reapplied afterwards via applyDiscounts(), the same function
 // that already computes every other discounted price in the app — so a
 // subscription's discount rate is preserved on the days it IS billed for,
 // instead of being partly eaten by the excluded days.
+//
+// Every date is validated against the subscription's CURRENT schedule (sub.days
+// / sub.schedule), not just counted blindly. This matters because a billing
+// record's excludedDates are carried forward across regenerations while
+// scheduleDays/tripsByDay are rebuilt fresh each time (see computeLineItems) —
+// if the child's schedule changes after a day was marked "not coming", that
+// mark would otherwise silently keep affecting (transport: stop affecting;
+// study: keep affecting for the wrong reason) the bill with no visible sign
+// that it no longer corresponds to a real scheduled day. Returning only the
+// still-valid dates lets the caller drop the rest, so what's stored/displayed
+// as "marked" always matches what's actually deducted.
 function computeExclusionDeduction(
   type: "study" | "transport",
   excludedDates: string[],
   sub: any,
   studyConfig: any,
   transportConfig: any,
-): number {
+): { deduction: number; matchedDates: string[] } {
+  const matchedDates: string[] = [];
+  let deduction = 0;
   if (type === "study") {
-    return excludedDates.length * studyPerDayRate(studyConfig);
+    const scheduleDays = new Set((sub.days ?? []).map((d: any) => d.day));
+    const rate = studyPerDayRate(studyConfig);
+    for (const entry of excludedDates) {
+      const { isoDate } = parseExclusionEntry(entry);
+      if (!scheduleDays.has(weekdayOfIsoDate(isoDate))) continue;
+      matchedDates.push(entry);
+      deduction += rate;
+    }
+    return { deduction, matchedDates };
   }
   const rate = transportConfig?.flatRatePerTrip ?? 0;
-  let deduction = 0;
   for (const entry of excludedDates) {
     const { isoDate, direction } = parseExclusionEntry(entry);
     const weekday = weekdayOfIsoDate(isoDate);
@@ -94,9 +115,11 @@ function computeExclusionDeduction(
     const tripsThatDay = (sub.schedule ?? []).filter((s: any) =>
       s.dayOfWeek === weekday && (!direction || s.direction === direction || s.direction === "both")
     ).length;
+    if (tripsThatDay <= 0) continue;
+    matchedDates.push(entry);
     deduction += tripsThatDay * rate;
   }
-  return deduction;
+  return { deduction, matchedDates };
 }
 
 // Returns all months from fromDate through August of the following year
@@ -331,8 +354,8 @@ function computeLineItems(
   for (const sub of group.study) {
     const gross = sub.basePrice ?? sub.monthlyPrice ?? 0;
     const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
-    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
-    const deduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const priorExcludedDates = priorFor(sub.id)?.excludedDates ?? [];
+    const { deduction, matchedDates: excludedDates } = computeExclusionDeduction("study", priorExcludedDates, sub, configs.studyConfig, configs.transportConfig);
     const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
     const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
     const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
@@ -347,8 +370,8 @@ function computeLineItems(
   for (const sub of group.transport) {
     const gross = sub.originalFee ?? sub.monthlyFee ?? 0;
     const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
-    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
-    const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const priorExcludedDates = priorFor(sub.id)?.excludedDates ?? [];
+    const { deduction, matchedDates: excludedDates } = computeExclusionDeduction("transport", priorExcludedDates, sub, configs.studyConfig, configs.transportConfig);
     const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
     const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
     const tripsByDay: Record<string, ("pickup" | "dropoff" | "both")[]> = {};
@@ -1076,12 +1099,12 @@ export const setBillingLineItemExcludedDays = onCall(
     // with the total already shown on this specific invoice.
     const gross = li.grossAmount ?? 0;
     const appliedDiscounts = li.appliedDiscounts ?? [];
-    const deduction = computeExclusionDeduction(li.type, validDates, sub, configs.studyConfig, configs.transportConfig);
+    const { deduction, matchedDates } = computeExclusionDeduction(li.type, validDates, sub, configs.studyConfig, configs.transportConfig);
     const newAmount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
 
     const newLineItems = [...lineItems];
-    newLineItems[idx] = { ...li, amount: newAmount, ...(validDates.length ? { excludedDates: validDates } : {}) };
-    if (!validDates.length) delete (newLineItems[idx] as any).excludedDates;
+    newLineItems[idx] = { ...li, amount: newAmount, ...(matchedDates.length ? { excludedDates: matchedDates } : {}) };
+    if (!matchedDates.length) delete (newLineItems[idx] as any).excludedDates;
     const newTotal = Math.round(newLineItems.reduce((s, x) => s + (x.amount ?? 0), 0) * 100) / 100;
 
     await billingRef.update({
