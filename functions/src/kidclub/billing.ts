@@ -128,8 +128,24 @@ async function getActiveSubs() {
 
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
 
+// dev and prod currently share the exact same live Vendus account, API key
+// and register — there is no sandbox. Every invoice created from here is a
+// real Fatura-Recibo, reported to the tax authority, under the real company.
+// Until a genuine Vendus sandbox exists for dev, refuse to create real
+// fiscal documents from test billing records. Remove this guard once dev
+// has its own sandbox VENDUS_API_KEY/VENDUS_REGISTER_ID.
+const DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX = new Set(["kidclub-dev"]);
+
 async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
   console.log(`[Vendus] start billingId=${billingId}`);
+
+  const currentProject = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
+  if (DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX.has(currentProject)) {
+    throw new Error(
+      `Vendus invoicing is disabled on ${currentProject}: this project has no Vendus sandbox, ` +
+      `only the real production account, so creating an invoice here would generate a real fiscal document.`
+    );
+  }
 
   const billingRef = appCol("billing").doc(billingId);
   const billing = (await billingRef.get()).data();

@@ -35,6 +35,16 @@ export const syncVendusClient = onDocumentWritten(
 
     if (!clientName && !clientEmail) return;
 
+    // dev and prod currently share the exact same live Vendus account — no
+    // sandbox exists yet. Creating "clients" there from every test family
+    // write pollutes the real account's contact list with test data. Skip
+    // until dev has its own sandbox VENDUS_API_KEY/VENDUS_REGISTER_ID.
+    const currentProject = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
+    if (currentProject === "kidclub-dev") {
+      console.log(`Skipping Vendus client sync for family ${familyId} — no Vendus sandbox on ${currentProject}`);
+      return;
+    }
+
     try {
       const vendusClientId = await createOrUpdateClient(familyId, {
         name: clientName,
