@@ -804,6 +804,17 @@ export const setPaymentMethod = onCall(
 
 // ── Auto-billing on subscription confirmation ─────────────────────────────────
 
+// A billing record is eligible for recompute if it's still "pending", or if
+// it was cancelled by THIS logic itself (autoCancelled: true) because the
+// family had zero billable subscriptions that period — not a deliberate
+// admin cancellation of a specific invoice. Without this, reactivating a
+// subscription after a stretch with none active would leave every affected
+// period's record stuck "cancelled" forever, since nothing else ever
+// revisits a non-pending record.
+function isRecomputable(data: any): boolean {
+  return data?.status === "pending" || (data?.status === "cancelled" && data?.autoCancelled === true);
+}
+
 async function autoCreateBillingSchedule(familyId: string, userId: string): Promise<void> {
   const [studySnap, transportSnap, configs] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
@@ -838,16 +849,23 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
-      if (existing.data()?.status === "pending") {
+      if (isRecomputable(existing.data())) {
         if (lineItems.length === 0 || total === 0) {
-          // All subscriptions for this family are now cancelled/inactive
-          await appCol("billing").doc(docId).update({
-            status: "cancelled",
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-          cancelled++;
+          // All subscriptions for this family are now cancelled/inactive.
+          // autoCancelled marks this as OUR doing, not a deliberate admin
+          // cancellation — see isRecomputable's comment for why that matters.
+          if (existing.data()?.status !== "cancelled") {
+            await appCol("billing").doc(docId).update({
+              status: "cancelled", autoCancelled: true,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            cancelled++;
+          }
         } else {
-          await appCol("billing").doc(docId).update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+          await appCol("billing").doc(docId).update({
+            status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
+            lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
           if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
           updated++;
         }
@@ -905,12 +923,19 @@ export const backfillBillingSchedules = onCall(
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
           const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
-            if (existing.data()?.status === "pending") {
+            if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
-                await existing.ref.update({ status: "cancelled", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-                cancelled++;
+                if (existing.data()?.status !== "cancelled") {
+                  await existing.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                  cancelled++;
+                } else {
+                  skipped++;
+                }
               } else {
-                await existing.ref.update({ lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                await existing.ref.update({
+                  status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
+                  lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                });
                 if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
                 updated++;
               }

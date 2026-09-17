@@ -45,6 +45,12 @@ export interface BillingRecord {
   paymentMethod: BillingPaymentMethod;
 
   status: BillingStatus;
+  // Set alongside status: 'cancelled' only when the billing sync itself
+  // cancelled this period because the family had zero billable subscriptions
+  // — never for a deliberate admin cancellation of one invoice. Lets a later
+  // reactivation revive this specific record instead of it staying cancelled
+  // forever; a manually-cancelled record has no such flag and is left alone.
+  autoCancelled?: boolean;
 
   // Easypay
   easypayId?: string;
