@@ -36,6 +36,7 @@ import FamilyDashboardPage from './pages/client/FamilyDashboardPage';
 import ChildManagementPage from './pages/client/ChildManagementPage';
 import ChildDetailPage from './pages/client/ChildDetailPage';
 import EventCalendarPage from './pages/client/EventCalendarPage';
+import FamilyCalendarPage from './pages/client/FamilyCalendarPage';
 import FamilySchedulePage from './pages/client/FamilySchedulePage';
 import StudySubscriptionDetailPage from './pages/client/StudySubscriptionDetailPage';
 import TransportSubscriptionDetailPage from './pages/client/TransportSubscriptionDetailPage';
@@ -117,6 +118,7 @@ export default function App() {
 
           {/* Subscriptions */}
           <Route path="subscriptions" element={<MySubscriptionsPage />} />
+          <Route path="calendar" element={<FamilyCalendarPage />} />
           <Route path="enroll/study" element={<StudyRoomEnrollPage />} />
           <Route path="enroll/transport" element={<TransportEnrollPage />} />
 

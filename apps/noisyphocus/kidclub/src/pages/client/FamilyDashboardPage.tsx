@@ -233,7 +233,12 @@ export default function FamilyDashboardPage() {
       </div>
 
       {/* Quick actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Link to="/client/calendar" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+          <div className="text-2xl mb-2">📅</div>
+          <div className="font-semibold text-sm">Calendário</div>
+          <div className="text-xs text-gray-500 mt-1">Cancelar um dia de Sala de Estudo ou Transporte</div>
+        </Link>
         <Link to="/client/children" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
           <div className="text-2xl mb-2">👧</div>
           <div className="font-semibold text-sm">As minhas crianças</div>

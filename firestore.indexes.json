@@ -23,6 +23,16 @@
         { "fieldPath": "accountId", "order": "ASCENDING" },
         { "fieldPath": "importedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "eventModifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subscriptionId", "order": "ASCENDING" },
+        { "fieldPath": "subscriptionType", "order": "ASCENDING" },
+        { "fieldPath": "modificationType", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

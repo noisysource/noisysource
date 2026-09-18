@@ -30,6 +30,9 @@ export default function ClientSidebar({ open, onClose }: ClientSidebarProps) {
       <Link to="/client/children" onClick={onClick} className={linkClass('/client/children')}>
         <span>👧</span> As minhas crianças
       </Link>
+      <Link to="/client/calendar" onClick={onClick} className={linkClass('/client/calendar')}>
+        <span>📅</span> Calendário
+      </Link>
       <Link to="/client/parties" onClick={onClick} className={linkClass('/client/parties')}>
         <span>🎈</span> Festas
       </Link>
