@@ -35,28 +35,34 @@ Not done in this session — separate scope from the impersonation fix below.
 - Branch `agent/impersonation-billing-fix` pushed, PR not yet opened (no `gh` CLI in this
   session — compare link: https://github.com/noisysource/noisysource/pull/new/agent/impersonation-billing-fix).
 - `pnpm --filter kidclub build` and `build:staging` both succeed, no new type errors.
-- Deployed to **kidclub-dev** (`pnpm --filter kidclub build:staging` +
-  `firebase deploy --only hosting:kidclub --project=kidclub-dev`) — confirmed the site
-  responds 200 at https://kidclub-dev-arcoiris.web.app. NOT smoke-tested behind login (no
-  dev-admin credentials available in this session) — the actual impersonate-and-check-Pagamentos
-  flow still needs a manual pass.
+- Deployed to **kidclub-dev** (build:staging) — https://kidclub-dev-arcoiris.web.app, 200 OK.
+  NOT smoke-tested behind login in that environment.
+- **Deployed straight to prod hosting** (`pnpm --filter kidclub build` — plain, not
+  build:staging — + `firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b`),
+  at Renato's explicit request, bypassing the usual PR-merge-triggers-deploy flow. Confirmed
+  both https://kidclub.pt and https://rainbow-prod-2454b-arcoiris.web.app respond 200.
+  NOT smoke-tested behind login on prod either.
 
 ## Next step
-1. Renato: log in to https://kidclub-dev-arcoiris.web.app as admin, impersonate a family with
-   real `billing` records, open `/client/payments`, confirm the records now show up
-   (previously always empty regardless of what existed).
-2. Open the PR from the link above, merge when happy — this is a pure query-scoping fix,
-   low risk, no schema/rules change.
+1. **`main` on GitHub does NOT have this commit yet** — prod hosting was pushed straight from
+   the branch, so the deployed bundle and the `main` branch are now out of sync. Renato:
+   open the PR from the link above and merge it, so the next person/CI that touches `main`
+   doesn't auto-deploy an older build over this fix (`build-and-deploy-kidclub.yml` deploys
+   hosting on every push to `main`).
+2. Smoke test on prod: impersonate a family with real `billing` records, open
+   `/client/payments`, confirm records show up.
 3. Separately, decide on the "As minhas faturas" feature work (see above) and scope it as
    its own task when ready.
 
 ## Open questions for Renato
-- None blocking the impersonation fix — just needs the dev smoke test above.
+- None blocking — just the `main` merge (to resync source with what's live) and a prod
+  smoke test.
 
 ## Anything risky in flight
-- PR `agent/impersonation-billing-fix` → `main` not yet opened/merged (link above). Dev
-  hosting deployed for review; no prod impact yet. Low-risk change (query filter only, no
-  writes/rules touched).
+- **Prod hosting was deployed ahead of `main`** — `agent/impersonation-billing-fix` is live
+  on kidclub.pt but not merged. Until merged, `main` doesn't reflect what's actually running
+  in prod, and the next push-to-main deploy will silently revert this fix unless that push
+  also contains it. Merge the PR (link above) to close this gap.
 - Unrelated, still open from a prior session: `git worktree list` shows several stale
   worktrees not cleaned up (`claim-studyroom-fix`, `deploy-functions-workflow-fix`,
   `kidclub-cicd-automation`, plus some pre-convention ones outside `.claude/worktrees/`).
