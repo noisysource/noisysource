@@ -10,7 +10,15 @@ resource "google_service_account" "gmail_sender" {
 resource "google_project_iam_member" "gmail_sender_firebase_roles" {
   for_each = toset([
     "roles/firebase.admin",      # Broad permissions for Firebase services
-    "roles/firebasehosting.admin" # Specific permissions for deploying to Hosting
+    "roles/firebasehosting.admin", # Specific permissions for deploying to Hosting
+    # This SA now also runs `terraform apply` from CI (deploy-dev.yml), not just
+    # firebase deploys. Every previous apply ran under a human's own broadly-
+    # privileged gcloud session, so this SA had never needed to read/manage the
+    # rest of the config (secrets metadata, pubsub topics, budgets, quotas,
+    # cross-project IAM, etc.) until CI actually tried it and failed on each one
+    # in turn. roles/editor over one-off grants per resource type, deliberately —
+    # this SA is meant to fully manage kidclub-dev's infra now.
+    "roles/editor",
   ])
   project = var.gcp_project_id
   role    = each.key
@@ -113,4 +121,17 @@ resource "google_bigquery_dataset_iam_member" "dev_compute_sa_bq_data_viewer_bil
   dataset_id = "billing_export"
   role       = "roles/bigquery.dataViewer"
   member     = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+# billing-cutoff.tf's google_project_iam_member.billing_cutoff_agent_prod[0]
+# grants the dev-project billing-cutoff-agent SA a role directly on
+# rainbow-prod-2454b. Terraform needs to read/manage that binding itself,
+# which needs the calling identity (this SA, running `terraform apply` from
+# CI) to be allowed to touch rainbow-prod-2454b's IAM policy at all —
+# exactly the permission the plan error asked for.
+resource "google_project_iam_member" "gmail_sender_service_usage_consumer_prod" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/serviceusage.serviceUsageConsumer"
+  member   = "serviceAccount:${google_service_account.gmail_sender.email}"
 }
