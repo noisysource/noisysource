@@ -14,6 +14,9 @@ on:
 jobs:
   deploy:
     uses: ./.github/workflows/_deploy-kidclub-env.yml
+    permissions:
+      contents: 'read'
+      id-token: 'write'
     with:
       environment: kidclub-dev
       firebase_project: kidclub-dev

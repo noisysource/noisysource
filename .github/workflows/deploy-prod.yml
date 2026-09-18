@@ -13,6 +13,9 @@ on:
 jobs:
   deploy:
     uses: ./.github/workflows/_deploy-kidclub-env.yml
+    permissions:
+      contents: 'read'
+      id-token: 'write'
     with:
       environment: rainbow-prod-2454b
       firebase_project: rainbow-prod-2454b
