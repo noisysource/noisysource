@@ -61,8 +61,14 @@ pnpm dev:kidclub:prod   # dev server against prod Firebase
 ```
 
 ## Deploy
+Automatic — see root CLAUDE.md's "Branch → environment pipeline". A PR into `staging`
+deploys this app (+ rules/indexes/functions/terraform) to `kidclub-dev`; a merge to `main`
+deploys everything to prod. You don't run these by hand in the normal flow.
+
+Manual commands below are for local debugging only (e.g. a CI service-account permission
+issue) — using them for a real deploy skips the PR review that's supposed to gate prod:
 ```bash
-# Build + deploy to prod
+# Build + deploy to prod (manual/debug only — prefer the PR flow)
 pnpm --filter kidclub build
 firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b
 ```

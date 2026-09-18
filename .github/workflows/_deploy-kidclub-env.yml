@@ -1,0 +1,101 @@
+name: Deploy KidClub Environment (reusable)
+
+# Shared deploy logic for one environment (dev or prod). Called by
+# deploy-dev.yml (PR/push to staging) and deploy-prod.yml (push to main).
+# Order matters: rules/indexes before functions/hosting, so nothing is ever
+# live against a schema it doesn't expect. No continue-on-error anywhere —
+# a failed step here must stop the job, not let a half-deployed state look
+# green.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Label for logs/backend prefix, e.g. 'kidclub-dev' or 'rainbow-prod-2454b'"
+        required: true
+        type: string
+      firebase_project:
+        description: "Firebase/GCP project id to deploy into"
+        required: true
+        type: string
+      service_account:
+        description: "Workload-identity service account to authenticate as"
+        required: true
+        type: string
+      build_command:
+        description: "Command that builds the KidClub app for this environment"
+        required: true
+        type: string
+      tf_var_file:
+        description: "Path (relative to infra/gcp/terraform) to this environment's tfvars"
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: "Deploy KidClub (${{ inputs.environment }})"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build KidClub app
+        run: ${{ inputs.build_command }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: ${{ inputs.service_account }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      # Exported once so every later step (firebase --token, terraform) can
+      # just reference $GOOGLE_OAUTH_ACCESS_TOKEN without re-invoking gcloud.
+      - name: Export access token
+        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
+
+      - name: Deploy Firestore Rules
+        run: firebase deploy --only firestore:rules --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy Firestore Indexes
+        run: firebase deploy --only firestore:indexes --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy Cloud Functions
+        run: firebase deploy --only functions --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy KidClub Hosting
+        run: firebase deploy --only hosting:kidclub --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: infra/gcp/terraform
+        run: terraform init -backend-config="prefix=${{ inputs.environment }}" -reconfigure
+
+      # Applies unconditionally (see root CLAUDE.md's "Branch → environment
+      # pipeline" for why). If the service account is missing an IAM role
+      # for some resource, this fails closed — no partial apply silently
+      # skipped, no separate manual apply step waiting after it.
+      - name: Terraform apply
+        working-directory: infra/gcp/terraform
+        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -auto-approve
