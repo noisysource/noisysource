@@ -16,6 +16,7 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
+    secrets: inherit
     with:
       environment: rainbow-prod-2454b
       firebase_project: rainbow-prod-2454b

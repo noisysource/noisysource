@@ -99,7 +99,6 @@ locals {
     "createRecurringExpenses",
     "impersonateUser",
     # KidClub — invoicing / VAT
-    "triggerInvoiceGeneration",
     "getKidclubVatSummary",
     # KidClub — billing
     "sendBillingNotice",

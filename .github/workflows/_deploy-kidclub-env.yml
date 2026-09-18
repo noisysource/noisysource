@@ -2,10 +2,15 @@ name: Deploy KidClub Environment (reusable)
 
 # Shared deploy logic for one environment (dev or prod). Called by
 # deploy-dev.yml (PR/push to staging) and deploy-prod.yml (push to main).
-# Order matters: rules/indexes before functions/hosting, so nothing is ever
-# live against a schema it doesn't expect. No continue-on-error anywhere —
-# a failed step here must stop the job, not let a half-deployed state look
-# green.
+#
+# Order: terraform first, then rules/indexes, then functions/hosting.
+# Terraform owns IAM (e.g. which secrets the deploy SA can read) — running
+# it first means a newly-added grant is live before the step that needs it
+# runs, instead of that step failing on the very same run that would have
+# fixed it. Rules/indexes still go before functions/hosting, so nothing is
+# ever live against a schema it doesn't expect. No continue-on-error
+# anywhere — a failed step here must stop the job, not let a half-deployed
+# state look green.
 
 on:
   workflow_call:
@@ -73,18 +78,6 @@ jobs:
       - name: Export access token
         run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
 
-      - name: Deploy Firestore Rules
-        run: firebase deploy --only firestore:rules --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
-
-      - name: Deploy Firestore Indexes
-        run: firebase deploy --only firestore:indexes --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
-
-      - name: Deploy Cloud Functions
-        run: firebase deploy --only functions --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
-
-      - name: Deploy KidClub Hosting
-        run: firebase deploy --only hosting:kidclub --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
@@ -96,6 +89,24 @@ jobs:
       # pipeline" for why). If the service account is missing an IAM role
       # for some resource, this fails closed — no partial apply silently
       # skipped, no separate manual apply step waiting after it.
+      #
+      # billing_account_id has no default (budget.tf) so every apply needs
+      # it regardless of environment, even though the budget resource
+      # itself only exists where manage_combined_budget is true. Comes from
+      # a repo secret, not committed — it's not highly sensitive, but
+      # there's no reason to put it in a file either.
       - name: Terraform apply
         working-directory: infra/gcp/terraform
-        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -auto-approve
+        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -auto-approve
+
+      - name: Deploy Firestore Rules
+        run: firebase deploy --only firestore:rules --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy Firestore Indexes
+        run: firebase deploy --only firestore:indexes --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy Cloud Functions
+        run: firebase deploy --only functions --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy KidClub Hosting
+        run: firebase deploy --only hosting:kidclub --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
