@@ -5,9 +5,11 @@ import { col } from '../../lib/db';
 import { Invoice } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
+import { useImpersonation } from '../../contexts/ImpersonationContext';
 
 export default function InvoiceListPage() {
   const user = useUser();
+  const { impersonation } = useImpersonation();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -16,10 +18,11 @@ export default function InvoiceListPage() {
     if (user) {
       const fetchInvoices = async () => {
         setIsLoading(true);
-        const invoicesQuery = query(
-          col('invoices'),
-          where('userId', '==', user.uid),
-        );
+        // While impersonating, query by familyId — the admin's own uid never
+        // matches the impersonated family's records (see familyService.ts).
+        const invoicesQuery = impersonation
+          ? query(col('invoices'), where('familyId', '==', impersonation.familyId))
+          : query(col('invoices'), where('userId', '==', user.uid));
         const snapshot = await getDocs(invoicesQuery);
         const invoicesData = snapshot.docs.map(doc => {
           const data = doc.data();
@@ -42,7 +45,7 @@ export default function InvoiceListPage() {
 
       fetchInvoices();
     }
-  }, [user]);
+  }, [user, impersonation]);
 
   const filteredInvoices = filterStatus === 'all' 
     ? invoices 
