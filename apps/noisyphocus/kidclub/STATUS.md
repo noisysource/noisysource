@@ -2,50 +2,62 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-17
+**Last updated:** 2026-09-18
 
 ## Currently working on
-Refactoring `FinancialSummaryPage.tsx` (Resumo Financeiro, admin) from two hardcoded
-revenue scenarios ("Receita Estimada" = active+pending, "Receita Realidade" = active-only)
-to a live filter bar (status checkboxes + service toggle + presets) driving all figures
-on the page. This was phase 1 of a 2-phase plan — see "Next step".
+Built a unified client-facing calendar (`/client/calendar`, nav label "Calendário") so
+parents can cancel a specific study-room day or transport trip from one place, instead of
+opening each subscription's own detail page. Triggered by Renato noticing transport
+cancellation felt buried — investigation showed the per-trip cancel button already existed
+on both `StudySubscriptionDetailPage.tsx` and `TransportSubscriptionDetailPage.tsx` (code +
+Firestore rules both check out), the real problem was discoverability/clicks, not a bug.
 
-Also found and fixed in passing: `packages/shared/package.json` declared `zod` as a
-dependency but it was never actually installed (missing from `pnpm-lock.yaml`/`node_modules`),
-which broke `pnpm --filter kidclub build:staging` for the whole app, not just this page.
-Fixed with a plain `pnpm install` at the repo root — worth checking other worktrees/checkouts
-don't have a stale `node_modules` that needs the same refresh.
+New page: `src/pages/client/FamilyCalendarPage.tsx` — lists every active child's upcoming
+study + transport occurrences for the next 4 weeks in one day-grouped agenda, with inline
+Cancelar/Restaurar per occurrence and a Tudo/Sala de Estudo/Transporte filter. Reuses the
+existing `eventModifications` doc shape and Firestore rules unchanged — no new write paths.
 
 ## Last completed
-- Branch `agent/financial-summary-filters` pushed, PR not yet opened (no `gh` CLI available
-  in that session — PR compare link: https://github.com/noisysource/noisysource/pull/new/agent/financial-summary-filters).
-- Deployed the branch's build to **kidclub-dev** (`pnpm --filter kidclub build:staging` +
-  `firebase deploy --only hosting:kidclub --project=kidclub-dev`) for visual review at
-  https://kidclub-dev-arcoiris.web.app/admin/financial-summary — NOT smoke-tested behind
-  login (no dev-admin credentials available in that session), only confirmed the site
-  responds 200.
+- Branch `agent/family-calendar` pushed, PR not yet opened (no `gh` CLI in this session —
+  compare link: https://github.com/noisysource/noisysource/pull/new/agent/family-calendar).
+- `pnpm --filter kidclub build` and `build:staging` both succeed. NOT deployed to kidclub-dev —
+  `firebase` CLI creds were expired in this session (`firebase login --reauth` needed, which
+  needs an interactive browser login only Renato can do) and NOT smoke-tested in a browser.
+- Added a composite Firestore index to `firestore.indexes.json` for `eventModifications`
+  (`subscriptionId`, `subscriptionType`, `modificationType`, `status`) — the new page's
+  cancellation lookup batches all of a family's active subscription IDs into a single
+  `subscriptionId in [...]` query (capped at 30, generous for a family), which needs this
+  composite index or it will throw at runtime. **Index is committed but not deployed anywhere
+  yet** — needs `firebase deploy --only firestore:indexes --project=kidclub-dev` before the
+  page will actually work on dev, and again for prod before/at merge.
 
 ## Next step
-1. Renato: open the PR from the link above, eyeball the filter bar on dev while logged in
-   as admin, merge when happy.
-2. Phase 2 (discussed, not started): wire in real paid/unpaid filtering. Today neither
-   "Receita Estimada" nor "Receita Realidade" (nor the new filter bar) reflects actual
-   payment collected — both are purely subscription-status-based. Real paid/invoiced
-   status already exists in `BillingAdminPage.tsx` (Vendus/EasyPay-backed) but isn't wired
-   into this page. Needs a decision on what "paid" means for a recurring monthly sub
-   (paid for the current period? ever invoiced?) before implementing — see open question below.
+1. Renato: `firebase login --reauth`, then either resume this session or a fresh one to:
+   a. `firebase deploy --only firestore:indexes --project=kidclub-dev`
+   b. `pnpm --filter kidclub build:staging` + `firebase deploy --only hosting:kidclub --project=kidclub-dev`
+   c. Log in as a test parent with an active study + transport subscription, smoke-test
+      `/client/calendar`: both show up, cancel one of each, confirm it flips to Restaurar,
+      confirm admin calendar reflects the cancellation.
+2. Open the PR from the link above, merge when the dev smoke test looks right.
+3. Before/at merge to `main` (which auto-deploys hosting to prod): also run
+   `firebase deploy --only firestore:indexes --project=rainbow-prod-2454b` — hosting deploy
+   alone won't create the index on prod, and the page will throw there without it.
 
 ## Open questions for Renato
-- For phase 2 (payment filter): what should "paid" mean for a subscription — paid for the
-  *current billing period*, or *has at least one invoice ever*? This determines whether the
-  filter needs a period selector or is a simple boolean per subscription.
+- None blocking — just needs the manual deploy + smoke test above since this session's
+  Firebase CLI session was signed out.
 
 ## Anything risky in flight
-- PR `agent/financial-summary-filters` → `main` not yet opened/merged (link above). No prod
-  impact either way — only a dev deploy was done, and the auto-deploy-on-push-to-main workflow
-  (`build-and-deploy-kidclub.yml`) means merging this PR will auto-deploy to prod hosting, so
-  give the dev preview a real look before merging.
-- Worktree `.claude/worktrees/financial-summary-filters` is still active (not cleaned up) —
-  it has its own `node_modules` symlinks pointing at the main checkout's `node_modules`
-  (root, `apps/noisyphocus/kidclub`, `packages/shared`) since the worktree had none of its
-  own. Fine to leave until the branch is merged, then `git worktree remove` it per CLAUDE.md.
+- PR `agent/family-calendar` → `main` not yet opened/merged (link above). No prod impact yet —
+  nothing deployed anywhere. `build-and-deploy-kidclub.yml` auto-deploys hosting to prod on
+  merge to `main`, but **does not** deploy Firestore indexes — that's a separate manual step
+  (see Next step #3) or this page 500s in prod for any family with subscriptions.
+- Worktree `.claude/worktrees/family-calendar` still active — has its own `node_modules`
+  symlinks into the main checkout's `node_modules` (root, `apps/noisyphocus/kidclub`,
+  `packages/shared`), same pattern as prior sessions. Fine to leave until merged, then
+  `git worktree remove .claude/worktrees/family-calendar` per CLAUDE.md.
+- Unrelated: `git worktree list` currently shows several other stale worktrees
+  (`claim-studyroom-fix`, `deploy-functions-workflow-fix`, `kidclub-cicd-automation`, plus a
+  few outside `.claude/worktrees/` from pre-convention sessions) that don't look cleaned up.
+  Not touched this session — worth Renato checking `git worktree list` and clearing out
+  whichever are actually merged/abandoned.
