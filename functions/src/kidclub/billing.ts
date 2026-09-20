@@ -99,6 +99,25 @@ function computeExclusionDeduction(
   return deduction;
 }
 
+// Same weeks-per-month convention discountRecalc.ts uses to price a transport
+// subscription in the first place — kept in sync with that file's own copy.
+function activeWeeksInPattern(pattern: string): 2 | 4 {
+  return pattern === "all" ? 4 : 2;
+}
+
+// True gross (pre-discount) transport fee, derived the same way discountRecalc.ts
+// derives it — from schedule × rate × weeks — rather than trusted off
+// sub.originalFee/sub.monthlyFee. Subscriptions created through the client
+// self-enroll flow never get an originalFee written, and once any discount
+// fires, discountRecalc.ts overwrites monthlyFee with the DISCOUNTED price;
+// treating that as gross here would apply appliedDiscounts a second time.
+function transportGrossAmount(sub: any, transportConfig: any): number {
+  const scheduleLen: number = sub.schedule?.length ?? 0;
+  const flatRatePerTrip: number = transportConfig?.flatRatePerTrip ?? 0;
+  const grossFromSchedule = scheduleLen * flatRatePerTrip * activeWeeksInPattern(sub.weekPattern ?? "all");
+  return grossFromSchedule > 0 ? grossFromSchedule : (sub.originalFee ?? sub.monthlyFee ?? 0);
+}
+
 // Returns all months from fromDate through August of the following year
 function periodsUntilSchoolYearEnd(fromDate: Date): ReturnType<typeof periodForDate>[] {
   const periods: ReturnType<typeof periodForDate>[] = [];
@@ -345,7 +364,7 @@ function computeLineItems(
     maybeAddEnrollmentFee(sub);
   }
   for (const sub of group.transport) {
-    const gross = sub.originalFee ?? sub.monthlyFee ?? 0;
+    const gross = transportGrossAmount(sub, configs.transportConfig);
     const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
     const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
     const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
