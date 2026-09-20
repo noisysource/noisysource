@@ -170,3 +170,22 @@ resource "google_billing_account_iam_member" "gmail_sender_billing_admin" {
   role               = "roles/billing.admin"
   member             = "serviceAccount:${google_service_account.gmail_sender.email}"
 }
+
+# Prod's CI deploy identity, github-action-1020915538@rainbow-prod-2454b -
+# NOT managed by Terraform at all (created out-of-band, predates this repo's
+# Terraform use; no google_service_account resource for it exists anywhere
+# here). Referenced by literal email, same pattern as the default compute SA
+# elsewhere in this file. run_terraform is currently false for the prod
+# pipeline (see deploy-prod.yml), so this resource doesn't apply automatically
+# yet - it documents a grant already made BY HAND on 2026-09-20 to unblock
+# deploy-prod.yml's first-ever `firestore:indexes` deploy (403, no prior grant
+# of any kind existed for index management - the old prod pipeline never
+# deployed indexes at all). Kept here so the eventual prod Terraform
+# reconciliation (see STATUS.md) finds this already reflected in code instead
+# of rediscovering it as more drift.
+resource "google_project_iam_member" "prod_ci_datastore_index_admin" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/datastore.indexAdmin"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
