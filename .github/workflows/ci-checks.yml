@@ -1,0 +1,40 @@
+name: CI Checks
+
+# Build/typecheck gate for a staging→main promotion PR (or a hotfix PR
+# straight to main). Deploy only happens after merge (deploy-prod.yml), so
+# this is the only signal available before that — no live preview here,
+# just "does it build."
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    name: 'Build & typecheck'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: pnpm install
+      - name: Build KidClub app
+        run: pnpm --filter kidclub build
+      - name: Build Functions
+        run: pnpm --filter functions build
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+      - name: Terraform validate
+        working-directory: infra/gcp/terraform
+        run: |
+          terraform init -backend=false
+          terraform validate

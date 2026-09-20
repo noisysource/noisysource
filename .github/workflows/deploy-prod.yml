@@ -1,0 +1,80 @@
+name: Deploy to Prod
+
+# Every merge to main deploys everything to prod — both a staging→main
+# promotion PR and a direct hotfix/* PR land here the same way, so there's
+# no separate hotfix pipeline: the entry point differs, the deploy doesn't.
+# After a successful deploy, sync-staging brings staging back up to date
+# with main so dev doesn't drift behind prod (this is also what closes the
+# loop for a hotfix — "deploy to prod, then update dev").
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-kidclub-env.yml
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    secrets: inherit
+    with:
+      environment: rainbow-prod-2454b
+      firebase_project: rainbow-prod-2454b
+      service_account: github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com
+      build_command: pnpm --filter kidclub build
+      tf_var_file: env/prod.tfvars
+      # Prod's "rainbow-prod-2454b" state prefix was found essentially
+      # empty (81 pending creates, plus a hard error in storage.tf) the
+      # first time this pipeline actually ran a plan against it — real
+      # prod infra was never brought under Terraform. Auto-applying that
+      # blind against live prod is not safe. Re-enable once prod state is
+      # deliberately reconciled (see apps/noisyphocus/kidclub/STATUS.md)
+      # — app/rules/indexes/functions/hosting deploy automatically either
+      # way, this only pauses the terraform step.
+      run_terraform: false
+
+  sync-staging:
+    name: 'Sync staging with main'
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'write'
+      pull-requests: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fast-forward staging to main
+        id: ff
+        run: |
+          git fetch origin main staging
+          git checkout staging
+          if git merge --ff-only origin/main; then
+            git push origin staging
+            echo "ff=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ff=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # staging has commits main doesn't (e.g. an in-progress feature not
+      # yet promoted) — can't fast-forward, so open a PR instead of forcing
+      # it. Someone needs to actually look at this merge.
+      - name: Open sync PR if fast-forward wasn't possible
+        if: steps.ff.outputs.ff == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="sync/main-to-staging-${{ github.run_id }}"
+          git checkout -b "$BRANCH" origin/main
+          git push origin "$BRANCH"
+          gh pr create --base staging --head "$BRANCH" \
+            --title "sync: bring staging up to date with main" \
+            --body "Automatic sync after a prod deploy (merge to main, run ${{ github.run_id }}). staging had commits main doesn't, so this couldn't fast-forward — resolve here before merging so dev doesn't drift from prod."
