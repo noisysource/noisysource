@@ -101,6 +101,33 @@ session introduced:
    deploy to prod automatically on merge — same as what's already done by hand today, so no
    new risk there. Only the terraform step is paused.
 
+## Parallel session (2026-09-20) — billing double-discount fix
+A different agent, working concurrently, investigated "igbpinto@gmail.com's billing looks
+wrong." Confirmed in **prod** (read-only): a transport subscription (Carolina Almeida,
+`XiblZZlEVZHsSLFdN5z5`) was billed €117.60 instead of the correct €168 — a 30% discount
+(20% school + 10% multi-trip) was being applied twice. Root cause: `computeLineItems()` in
+`functions/src/kidclub/billing.ts` read `sub.originalFee ?? sub.monthlyFee` as the *gross*
+transport fee, but `discountRecalc.ts` overwrites `monthlyFee` with the already-discounted
+price, and self-enrolled subscriptions never get `originalFee` set — so billing re-applied
+`appliedDiscounts` on top of an already-net price. Under-bills, doesn't overcharge.
+**Scope: 8 of 23 active transport subscriptions** affected (see the PR/commit for the full
+list — José Eduardo, Vasco Moura, Maria Manon, Diogo Mogo, Carolina Almeida, Bernardo Mogo,
+Gil Figueiredo, Leonardo Marques). Study room subs not currently affected, but
+`discountRecalc.ts`'s study-side calc has the same latent shape of bug, flagged not fixed.
+
+**Status as of this merge conflict resolution**: `agent/billing-double-discount-fix` PR was
+opened and **has been merged into `main`** (PR #13, confirmed via `git log`) — the code fix
+for `computeLineItems()` is now in `main`. **Still not done**, per that session's own notes:
+deploy functions to dev and verify, deploy to prod (`deploy-functions.yml`, manual), then run
+`backfillBillingSchedules` to recompute the 8 affected families' pending billing totals (a
+prod write — that session flagged it needs a decision from Renato since it's a standing-write
+question per CLAUDE.md's no-standing-prod-write-access rule, even though the callable itself
+already exists and already runs this logic on every subscription write). Worth noting: once
+`agent/cicd-prod-prep` merges, functions deploy to prod automatically on every `main` merge —
+so this fix's Cloud Function code will actually reach prod on that merge, without a separate
+manual `deploy-functions.yml` run. The backfill itself still needs to be triggered separately
+regardless.
+
 ## Last completed
 - All fixes above (1-9) pushed. Points 1-8 are on `staging` (merged via PR #12). Point 9 is
   on `agent/cicd-prod-prep`, PR opened against `main`:
@@ -120,31 +147,49 @@ session introduced:
 ## Next step
 1. Review and merge `agent/cicd-prod-prep` → `main`. On merge, `deploy-prod.yml` runs
    automatically: hosting, Firestore rules/indexes, and functions deploy to prod — terraform
-   apply is skipped (point 9). Watch that run; it's the pipeline's first-ever prod deploy.
-2. Separately, as its own deliberate piece of work (not blocking the merge above): reconcile
+   apply is skipped (point 9). Watch that run; it's the pipeline's first-ever prod deploy, and
+   it's also what actually gets the billing double-discount fix's code (already merged into
+   `main` as of PR #13) onto prod for the first time.
+2. After that deploy, verify the billing double-discount fix landed correctly (a transport
+   billing line item matches the sub's `monthlyFee`), then run/trigger `backfillBillingSchedules`
+   to recompute the 8 affected families' pending billing totals — check result counts against
+   the 8 names in the "Parallel session" note above before trusting it's fully caught. This is
+   a prod write; flagged as its own open question below.
+3. Separately, as its own deliberate piece of work (not blocking the merge above): reconcile
    prod's Terraform state so `run_terraform` can go back to `true` for prod. This means, at
    minimum: fix the `storage.tf` bucket-name/activation issue, then `terraform import` each
    of the 81 pending resources against real prod infra one at a time (or in batches, verifying
    each), the same pattern used for dev's smaller gaps (points 4, 7) but at much larger scale
    — this is real, careful work, not a quick unblock.
-3. Also still true for whenever terraform *does* get re-enabled for prod: prod's CI service
+4. Also still true for whenever terraform *does* get re-enabled for prod: prod's CI service
    account (`github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com`) is **not**
    the same identity as `gmail_sender` (prod's `gmail_sender_sa_id` is `gmail-sender-prod`, a
    different account). Every permission fix in this session targeted `gmail_sender` — prod's
    CI SA will need its own equivalent grants before its terraform step can safely run.
-4. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
+5. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
    in this session, flagged as a follow-up in CLAUDE.md.
+6. Separately, decide on the "As minhas faturas" feature work (dead `invoices` collection,
+   flagged in an earlier session) and scope it as its own task when ready.
 
 ## Open questions for Renato
 - None blocking the `main` merge — it's ready.
+- Billing fix: OK to run `backfillBillingSchedules` against **prod** once the fix is deployed?
+  It recomputes every family's billing, not just the 8 affected ones — low risk (it's the same
+  logic already running on every subscription write) but it is a prod write, flagging per the
+  no-standing-write-access rule.
 - Two things worth a deliberate look once the merge is in, not urgent: (a) is
   `roles/resourcemanager.projectIamAdmin` on prod for a dev-project CI service account the
   long-term shape you want, or should it get narrowed later to a custom role scoped to just
   the specific bindings CI manages? (b) when/whether to prioritize the prod Terraform state
-  reconciliation (point 2 above) — it's real effort, not urgent unless something starts
+  reconciliation (point 3 above) — it's real effort, not urgent unless something starts
   depending on Terraform managing prod resources.
 
 ## Anything risky in flight
+- **8 active prod transport subscriptions are currently under-billed** (double-discounted —
+  see "Parallel session" above) until the fix (already merged into `main`) actually deploys
+  to prod and a backfill runs. No prod data was changed investigating this originally — reads
+  only. Worktree `.claude/worktrees/billing-double-discount-fix` still exists — remove it,
+  its branch is merged.
 - **This PR changes how prod gets deployed** — merge to `main` now deploys hosting,
   Firestore rules/indexes, and functions to prod automatically (previously always a manual,
   human-run command). Terraform apply is deliberately excluded for now (point 9). No branch
@@ -164,7 +209,13 @@ session introduced:
 - Stale worktree/branch `agent/kidclub-cicd-automation` (2 days old, based on an old `main`,
   mixed with ~60 unrelated file changes to billing/models) was found and deliberately NOT
   built on or merged — flagged for Renato to delete.
-- Unrelated, still open: a unified client calendar (`agent/family-calendar` branch,
-  `/client/calendar`). Built, not deployed/reviewed yet, needs a Firestore composite index —
-  once this pipeline is live, that branch's own PR-to-staging will handle the index deploy
-  automatically instead of needing a manual one.
+- Unrelated, still open from a prior session: `git worktree list` shows several other stale
+  worktrees not cleaned up (`claim-studyroom-fix`, `deploy-functions-workflow-fix`, plus some
+  pre-convention ones outside `.claude/worktrees/`). Worth Renato clearing out whichever are
+  merged/abandoned.
+- Also unrelated, paused mid-session on 2026-09-18: a unified client calendar
+  (`agent/family-calendar` branch, `/client/calendar`) for cancelling study/transport days
+  in one place instead of per-subscription. Built, builds clean, not deployed/reviewed yet.
+  Needs a Firestore composite index deployed (`firestore.indexes.json`, committed on that
+  branch) before it's usable — once this pipeline is live, that branch's own PR-to-staging
+  will handle the index deploy automatically instead of needing a manual one.
