@@ -53,3 +53,17 @@ resource "google_secret_manager_secret_iam_member" "gmail_sender_secret_accessor
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.gmail_sender.member
 }
+
+# Same gap, prod's CI identity (github-action-1020915538, not managed by
+# Terraform at all — see iam.tf's prod_ci_datastore_index_admin comment).
+# Hit the exact same 403 dev did, for the same reason: nothing had ever
+# granted this SA secret access before deploy-prod.yml's first real run.
+# Granted by hand (terraform apply is off for prod); this documents it.
+resource "google_secret_manager_secret_iam_member" "prod_ci_secret_accessor" {
+  provider  = google.prod
+  for_each  = local.secret_ids
+  project   = "rainbow-prod-2454b"
+  secret_id = each.key
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
