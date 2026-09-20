@@ -58,7 +58,20 @@ async function notifyRenato(costAmount: number, budgetAmount: number, currency: 
   });
 }
 
-export const billingCutoff = onMessagePublished(
+// Deployed to kidclub-dev only. This is the single cross-project agent
+// (comment at the top of infra/gcp/terraform/billing-cutoff.tf) — its
+// Pub/Sub trigger topic and the budget that publishes to it are themselves
+// only ever created in dev's Terraform state (manage_combined_budget is
+// true only in env/kidclub-dev.tfvars). A copy deployed to any other
+// project would resolve `topic:` below to a same-named topic THERE, which
+// nothing publishes to, and would need its own service account anyway
+// since GCP's iam.disableCrossProjectServiceAccountUsage org policy blocks
+// a prod deploy from acting as this dev-project SA (hit deploying this via
+// CI on 2026-09-21). Rather than stand up a second, permanently-untriggered
+// copy just to satisfy that policy, skip exporting it outside dev entirely.
+const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
+
+export const billingCutoff = projectId !== "kidclub-dev" ? undefined : onMessagePublished(
   {
     topic: "billing-budget-cutoff-trigger",
     region: "europe-west3",
