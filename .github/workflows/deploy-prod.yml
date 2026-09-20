@@ -1,12 +1,21 @@
 name: Deploy to Prod
 
-# Every merge to main deploys everything to prod — both a staging→main
-# promotion PR and a direct hotfix/* PR land here the same way, so there's
-# no separate hotfix pipeline: the entry point differs, the deploy doesn't.
-# After a successful deploy, sync-staging brings staging back up to date
-# with main so dev doesn't drift behind prod (this is also what closes the
-# loop for a hotfix — "deploy to prod, then update dev").
+# Deploys on the PR itself (opened/updated against main), same pattern as
+# deploy-dev.yml/staging — so a prod deploy failure surfaces and gets fixed
+# on the PR branch, before merge, not after. Also re-runs on push to main
+# (i.e. right when the PR actually merges), which re-deploys the merged
+# state and is what triggers sync-staging below. A staging→main promotion
+# PR and a direct hotfix/* PR land here the same way, so there's no
+# separate hotfix pipeline: the entry point differs, the deploy doesn't.
+#
+# Pair this with a required-status-check branch protection rule on `main`
+# for the `deploy` job — without it, GitHub still lets you merge a PR whose
+# deploy failed or is still running. The workflow alone gives you the
+# signal; the branch rule is what actually blocks the merge button.
 on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
 
@@ -36,6 +45,10 @@ jobs:
   sync-staging:
     name: 'Sync staging with main'
     needs: deploy
+    # Only after an actual merge — the deploy job also runs on PR
+    # open/update (see the `on:` block above), and staging has no business
+    # being resynced from a PR that hasn't merged yet.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: 'write'

@@ -170,3 +170,69 @@ resource "google_billing_account_iam_member" "gmail_sender_billing_admin" {
   role               = "roles/billing.admin"
   member             = "serviceAccount:${google_service_account.gmail_sender.email}"
 }
+
+# Prod's CI deploy identity, github-action-1020915538@rainbow-prod-2454b -
+# NOT managed by Terraform at all (created out-of-band, predates this repo's
+# Terraform use; no google_service_account resource for it exists anywhere
+# here). Referenced by literal email, same pattern as the default compute SA
+# elsewhere in this file. run_terraform is currently false for the prod
+# pipeline (see deploy-prod.yml), so this resource doesn't apply automatically
+# yet - it documents a grant already made BY HAND on 2026-09-20 to unblock
+# deploy-prod.yml's first-ever `firestore:indexes` deploy (403, no prior grant
+# of any kind existed for index management - the old prod pipeline never
+# deployed indexes at all). Kept here so the eventual prod Terraform
+# reconciliation (see STATUS.md) finds this already reflected in code instead
+# of rediscovering it as more drift.
+resource "google_project_iam_member" "prod_ci_datastore_index_admin" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/datastore.indexAdmin"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
+
+# Same identity, next gap in the same functions-deploy run:
+# roles/serviceusage.serviceUsageConsumer (already granted) only lets it USE
+# already-enabled APIs; `firebase deploy --only functions` also tries to
+# enable cloudbilling.googleapis.com as a dependency and needs
+# serviceusage.services.enable for that, which requires
+# roles/serviceusage.serviceUsageAdmin instead. Granted by hand.
+resource "google_project_iam_member" "prod_ci_service_usage_admin" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/serviceusage.serviceUsageAdmin"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
+
+# Same identity, next gap: "Caller is missing permission
+# iam.serviceaccounts.actAs" while updating legrandSetState,
+# tuyaGetDevices, tuyaSetState, getKidclubVatSummary - a Cloud Functions
+# deploy needs the deploying identity to be allowed to actAs the function's
+# runtime service account (the default compute SA here, since these
+# functions don't set a custom one). roles/iam.serviceAccountUser at the
+# project level covers actAs on every SA in the project, matching how this
+# is granted project-wide rather than per-SA elsewhere in this repo.
+resource "google_project_iam_member" "prod_ci_service_account_user" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/iam.serviceAccountUser"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
+
+# Same identity, next gap: most functions deployed fine, but the
+# schedule-triggered ones (createRecurringExpenses, createCampBalanceBillings)
+# failed to upsert their Cloud Scheduler jobs, and the pubsub-triggered one
+# (billingCutoff) failed to create its topic. Two distinct resource types,
+# two distinct roles needed on top of everything granted so far.
+resource "google_project_iam_member" "prod_ci_cloudscheduler_admin" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/cloudscheduler.admin"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "prod_ci_pubsub_editor" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/pubsub.editor"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
