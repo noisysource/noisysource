@@ -236,3 +236,22 @@ resource "google_project_iam_member" "prod_ci_pubsub_editor" {
   role     = "roles/pubsub.editor"
   member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
 }
+
+# A different identity hit a different gap: secrets.tf's
+# prod_ci_secret_accessor/prod_ci_secret_viewer resources use the
+# google.prod provider unconditionally, so they're part of EVERY apply,
+# including a dev-triggered one (deploy-dev.yml runs as gmail_sender).
+# gmail_sender's roles/resourcemanager.projectIamAdmin on prod (granted
+# earlier) covers project-level IAM, but managing IAM on an individual
+# secret is a separate resource-level ACL that needs
+# secretmanager.secrets.setIamPolicy - only in roles/secretmanager.admin
+# (or owner). Without this, the very first PR against staging after
+# secrets.tf's prod resources were added failed terraform apply on
+# google_secret_manager_secret_iam_member.prod_ci_secret_viewer. Granted
+# by hand; documented here.
+resource "google_project_iam_member" "gmail_sender_secretmanager_admin_prod" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/secretmanager.admin"
+  member   = "serviceAccount:${google_service_account.gmail_sender.email}"
+}
