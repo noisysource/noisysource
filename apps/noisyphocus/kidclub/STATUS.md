@@ -2,11 +2,11 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 ## Currently working on
 
-### 1. Billing double-discount bug — FIXED, deployed to prod, backfilled
+### 1. Billing double-discount bug — FIXED, deployed to prod, partially backfilled
 Investigated "igbpinto@gmail.com's billing looks wrong". Root cause: `computeLineItems()` in
 `functions/src/kidclub/billing.ts` read `sub.originalFee ?? sub.monthlyFee` as the *gross*
 transport fee, but `discountRecalc.ts` overwrites `monthlyFee` with the already-discounted
@@ -19,12 +19,14 @@ derived from schedule length × `flatRatePerTrip` × weeks-in-pattern, same form
 `discountRecalc.ts` already uses, instead of trusting a field that can silently already be net.
 **Deployed to prod** (`onStudyroomBillingSync`, `onTransportBillingSync`,
 `backfillBillingSchedules`, `setBillingLineItemExcludedDays` — the 4 functions that actually
-use the fixed logic). One deploy gotcha hit along the way: the predeploy build script left a
-stale `lib/` on the first couple of attempts (functions silently missing from the bundle) —
-fixed by running `tsc` manually before deploying; each `firebase deploy --only functions:...`
-call also only actually updated one function at a time, so it took 4 separate invocations to
-land all 4. Verified live: Carolina Almeida's October billing line item now shows the correct
-**€168** (was €117.60).
+use the fixed logic). Verified live: Carolina Almeida's October billing line item now shows
+the correct **€168** (was €117.60).
+
+**Still under-billed, not yet backfilled**: José Eduardo (Miguel Melo) and Diogo+Bernardo Mogo
+(Sandra Abreu) — only Carolina Almeida's family has actually been recomputed so far (via a
+verification touch). Either trigger a no-op write on those subscriptions or run
+`backfillBillingSchedules` (recomputes everyone, not just these — confirm on dev first, and
+see the open question below on running it against prod).
 
 Study room subs are NOT currently affected by this exact bug (0 of 14 missing `basePrice`),
 but `discountRecalc.ts`'s study-side gross calc (`x.basePrice ?? x.monthlyPrice`) has the same
@@ -52,7 +54,7 @@ pass** — touches `discountRecalc.ts`, `billing.ts`, and the `AppliedDiscount` 
 discount, which doesn't hold once multi-trip/sibling are marginal). Not started. See Backlog
 section below.
 
-### 3. Financial Summary — decoupled from Route Planner, deployed to dev
+### 3. Financial Summary — decoupled from Route Planner, deployed to dev only
 `FinancialSummaryPage.tsx` was silently showing driver/electricity cost as €0 because it
 derived them from the latest saved snapshot in `transportRoutes`, which was **empty in prod**
 (nobody had ever run/saved a route plan) — meaning the page's "profit" figure was fake. Real
@@ -61,7 +63,8 @@ driver wage is **€1,400/month**; plugging that in flips prod from an apparent 
 along the way (an orphaned, never-actually-billed subscription for Leonardo Marques inflating
 revenue by €240/mo, and 3 subs with stale `monthlyFee` fields inflating it by €72/mo more).
 
-Refactored (branch `agent/financial-costs-decouple`, 2 commits, PR not opened — no `gh` CLI):
+Refactored (branch `agent/financial-costs-decouple`, currently mid-merge-conflict-resolution
+with `main` — see Next step #1):
 - Removed the `transportRoutes`-snapshot dependency and the override/fallback chain entirely.
 - Added `driverMonthlyCost` / `electricityMonthlyCost` as direct fields on
   `TransportationConfig` (alongside existing `vanMonthlyCost`), with a new **"Custos Fixos"**
@@ -76,7 +79,7 @@ Refactored (branch `agent/financial-costs-decouple`, 2 commits, PR not opened �
 Typecheck + build both pass. **Deployed to dev only** (`kidclub-dev-arcoiris.web.app`), smoke-
 tested manually by Renato (entered €1400/€300 into the new panel, numbers computed correctly:
 €3787 revenue − €3750 costs = +€37, 1% margin — dev's own subscription data, not prod's).
-**Not deployed to prod, PR not opened/merged.**
+**Not merged to main / not deployed to prod yet.**
 
 ### 4. Prod → dev data sync — done
 At Renato's request, did a full (non-anonymized) copy of KidClub's real data from
@@ -92,7 +95,7 @@ deleted from both buckets afterward.
 **Side effect (expected, flagged beforehand):** the import overwrote dev's `config/transportation`
 doc wholesale, clearing the `driverMonthlyCost: 1400` / `electricityMonthlyCost: 300` Renato had
 just entered for testing (prod's doc doesn't have those fields set) — needs re-entering in dev
-if still wanted there.
+if still wanted there (see Next step #4).
 
 **Caveat:** Firebase Auth UIDs are per-project — copied `users/{uid}` docs and every
 subscription's `userId` field still reference prod UIDs, which don't correspond to real dev
@@ -100,57 +103,72 @@ Auth accounts. Fine for admin-side testing (Financial Summary, billing admin), b
 client-login testing against this data won't work without also creating matching dev Auth
 accounts.
 
----
+### 5. CI/CD pipeline — rebuilt, now fully live (separate, now-closed thread of work)
+Rebuilt the whole deploy pipeline this week (see root `CLAUDE.md`'s "Branch → environment
+pipeline" for the full model). Now **fully merged and operational**, not in-progress:
+- PR into `staging` → auto-deploys app/rules/indexes/functions/terraform to `kidclub-dev`.
+- PR into `main` → auto-deploys app/rules/indexes/functions to prod immediately (before
+  merge) — **`terraform apply` stays disabled for prod specifically**, see below.
+- Merge to `main` → re-deploys + `sync-staging` fast-forwards `staging` to match.
+- **GitHub branch protection is now configured on `main`**: the `deploy` check must pass
+  before merge is even clickable. This was the missing piece that made the whole thing
+  trustworthy — closed out this session.
 
-Previous session (2026-09-18) — fixed a real bug found while investigating "Marisa Pratas can't see her billing records":
-impersonating a family in the admin panel and then visiting the client billing pages showed
-nothing, regardless of what records actually existed for that family.
+Getting the first real prod deploy green took a long chain of IAM fixes, all against prod's
+CI identity `github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com` (a
+completely different identity from dev's `gmail-sender-kidclub-dev`, which is why none of
+dev's earlier fixes carried over automatically). It now has, granted by hand and documented
+in `infra/gcp/terraform/iam.tf`/`secrets.tf`/`billing-cutoff.tf` (not yet applied via
+Terraform, since terraform apply is off for prod):
+`datastore.indexAdmin`, `secretmanager.secretAccessor` + `secretmanager.viewer` (on all 7
+secrets — accessor alone isn't enough, viewer is what `firebase deploy`'s validation step
+actually needs), `serviceusage.serviceUsageAdmin`, `iam.serviceAccountUser` (project-wide,
+for functions' actAs), `cloudscheduler.admin`, `pubsub.editor`.
 
-Root cause: `PaymentsPage.tsx` and `InvoiceListPage.tsx` query Firestore directly by
-`user.uid` (the real logged-in admin's own uid) instead of going through `familyService.ts`,
-which is the thing that actually knows how to resolve the impersonated family. Every other
-client page (dashboard, children, subscriptions) already switches to querying by `familyId`
-while impersonating — these two just never got that treatment.
+**`billingCutoff` no longer deploys to prod at all** — it's the "combined dev+prod billing
+circuit breaker" singleton agent, and GCP's `iam.disableCrossProjectServiceAccountUsage` org
+policy (confirmed enforced on `rainbow-prod-2454b`) categorically blocks prod's CI identity
+from acting as its dev-project service account, no IAM grant can override that. Traced
+further and found the prod copy would've been permanently untriggered anyway (its Pub/Sub
+topic and the budget that publishes to it only exist in dev's Terraform state) — so rather
+than build a redundant prod-native agent, `functions/src/billingCutoff.ts`'s export is now
+conditional on `GCLOUD_PROJECT === "kidclub-dev"`.
 
-Fixed both to query `familyId` when `impersonation` is active, same pattern as
-`familyService.ts` (`apps/noisyphocus/kidclub/src/services/familyService.ts:72-73`). No
-Firestore rules change needed — admins already have blanket read on `billing`/`invoices`.
-
-**Renato is already aware of the invoices/payments split** — noted here as a feature to
-implement, not a new finding: `InvoiceListPage.tsx` ("As minhas faturas" nav item) reads from
-an `invoices` Firestore collection that **nothing in the codebase writes to** — no Cloud
-Function, no admin page. It's empty for every family, not just Marisa. The billing system
-that's actually alive is `PaymentsPage.tsx` ("Pagamentos"), backed by the `billing`
-collection and `autoCreateBillingSchedule()` in `functions/src/kidclub/billing.ts`.
-
-**TODO / feature to implement:** wire "As minhas faturas" up to real invoice data (or decide
-to retire it and redirect to Pagamentos instead) — needs a decision on which, then either a
-Cloud Function that populates `invoices` (e.g. from Vendus documents) or removing the page.
-Not done in this session — separate scope from the impersonation fix below.
+**Prod's Terraform state is still essentially empty** (81 resources pending creation, real
+infra was never imported — found via `terraform plan -var-file=env/prod.tfvars`) — `apply`
+stays off for prod (`run_terraform: false` in `deploy-prod.yml`) until that's deliberately
+reconciled as its own task. Not urgent; app/rules/indexes/functions/hosting all deploy fine
+without it.
 
 ## Last completed
-- Billing double-discount fix: merged (PR #13), deployed to prod, verified live (Carolina
-  Almeida's October billing now shows €168 correctly).
-- Financial Summary refactor: committed on `agent/financial-costs-decouple` (2 commits),
-  deployed to **dev only**, smoke-tested manually by Renato through the new panel.
+- Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
+  Almeida. José Eduardo + Mogo siblings still need backfill.
+- Financial Summary refactor: on `agent/financial-costs-decouple`, deployed to dev only,
+  smoke-tested manually by Renato. Currently resolving a merge conflict against `main` (this
+  branch was opened before the CI/CD pipeline work landed, so it was ~23 commits behind).
 - Prod → dev data sync: done, verified, temp export files cleaned up from both buckets.
+- CI/CD pipeline: fully merged to `main`, branch protection configured, first real prod
+  deploy went green.
+- `agent/impersonation-billing-fix` (from the 2026-09-18 session) — confirmed merged into
+  `main` (PR #11) a while back; the "prod ahead of main" risk from that session is resolved,
+  no longer worth tracking.
 
 ## Next step
-1. **Backfill the remaining affected families' billing** — the billing fix is deployed and
-   self-correcting for *future* writes, but only Carolina Almeida's family has actually been
-   recomputed so far (via a verification touch). José Eduardo (Miguel Melo) and Diogo+Bernardo
-   Mogo (Sandra Abreu) still have under-billed pending records in prod. Either trigger a no-op
-   write on those subscriptions or run `backfillBillingSchedules` (recomputes everyone, not
-   just these — confirm on dev first).
-2. **Open + merge the Financial Summary PR**: no link generated yet (no `gh` CLI this
-   session) — push already done, branch is `agent/financial-costs-decouple`. Then deploy to
-   prod hosting once reviewed.
+1. **Finish merging `main` into `agent/financial-costs-decouple`**, push, then open the PR.
+   Because branch protection is now live, opening/updating this PR will trigger a real prod
+   deploy check (`deploy-prod.yml` on `pull_request`) — this is actually a good thing: it's
+   the first real validation this branch has had against the new pipeline. Watch it go green
+   before merging.
+2. **Backfill José Eduardo's and the Mogo siblings' billing** — same double-discount bug,
+   code fix is live, their existing records just haven't been recomputed yet. See open
+   question below on running `backfillBillingSchedules` against prod.
 3. Re-enter `driverMonthlyCost: 1400` (and whatever electricity figure) into dev's Custos
    Fixos panel — cleared by the prod→dev import.
-4. **`main` on GitHub does NOT have the impersonation-billing-fix commit** (from the
-   2026-09-18 session, see below) — still unresolved, prod hosting is ahead of `main`.
-5. Decide on the "As minhas faturas" feature work (see 2026-09-18 section below).
-6. See **Backlog** below for the two bigger features surfaced this session (discount model
+4. Decide on the "As minhas faturas" feature work (dead `invoices` collection, flagged in an
+   earlier session) — separate, not urgent.
+5. Prod Terraform state reconciliation (see item 5 above) — separate, not urgent, real effort.
+6. Decide whether to bring `deploy-finances.yml` onto the same staging/main pipeline model.
+7. See **Backlog** below for the two bigger features surfaced this week (discount model
    rework, route planner rework) — neither started, both need their own scoping pass.
 
 ## Open questions for Renato
@@ -159,28 +177,32 @@ Not done in this session — separate scope from the impersonation fix below.
   but flagging per the no-standing-write-access rule.
 - Discount model rework (marginal/per-unit, see above) — confirmed as the intended design,
   but not scoped/scheduled yet. When should this happen relative to other work?
-- `main` still doesn't have the impersonation-billing-fix commit from 2026-09-18 — same open
-  item as last session, carried forward.
+- Worth a deliberate look, not urgent: is `roles/resourcemanager.projectIamAdmin` +
+  `roles/billing.admin` on prod for dev's CI service account (granted earlier this week, for
+  the cross-project Terraform resources) the long-term shape you want, or should it get
+  narrowed to a custom role later?
 
 ## Anything risky in flight
 - **José Eduardo and the two Mogo siblings (Diogo, Bernardo) are still under-billed in prod**
   — the code fix is live, but their existing pending billing records haven't been recomputed
-  yet (only Carolina Almeida's has). Same double-discount bug as before, just not yet
-  backfilled for these three.
+  yet (only Carolina Almeida's has).
 - **Financial Summary refactor is only on dev** — `agent/financial-costs-decouple` not merged,
   prod's Financial Summary page still has the old planner-snapshot dependency (shows €0
   driver/electricity cost, fake profit) until this ships.
-- **Prod hosting was deployed ahead of `main`** (carried over from 2026-09-18) —
-  `agent/impersonation-billing-fix` is live on kidclub.pt but still not merged.
-- Worktrees now open: `.claude/worktrees/billing-double-discount-fix` (PR merged, safe to
-  remove), `.claude/worktrees/financial-costs-decouple` (PR not yet opened, keep until
-  merged). Plus the pre-existing stale ones from prior sessions (`claim-studyroom-fix`,
+- **Prod's CI service account has accumulated a lot of IAM roles this week**, granted
+  reactively as each deploy step hit a new gap (see item 5 above for the full list) — not
+  wrong, but worth knowing the shape of it if you're ever auditing prod IAM.
+- Worktrees now open: `.claude/worktrees/financial-costs-decouple` (this one, mid-merge, keep
+  until PR opens and merges). `.claude/worktrees/billing-double-discount-fix` — PR merged,
+  safe to remove. Several CI/CD-related worktrees from this week
+  (`cicd-prod-prep`, `cicd-prod-index-fix`, `cicd-prod-pr-gate`) are also fully merged now —
+  safe to remove. Plus pre-existing stale ones from prior sessions (`claim-studyroom-fix`,
   `deploy-functions-workflow-fix`, `kidclub-cicd-automation`, and some pre-convention ones) —
-  worth Renato clearing out whichever are merged/abandoned.
+  worth Renato doing a general `git worktree list` sweep and clearing out whatever's merged.
 - Unrelated, still paused: a unified client calendar (`agent/family-calendar` branch,
   `/client/calendar`) — built, builds clean, not deployed/reviewed. Needs a Firestore
-  composite index deployed (`firestore.indexes.json`, committed on that branch) before it's
-  usable.
+  composite index deployed (`firestore.indexes.json`, committed on that branch) — now that
+  the pipeline is live, opening its PR against `staging` will handle that automatically.
 
 ## Backlog — bigger features surfaced but not started
 - **Discount model rework** (surfaced 2026-09-20): live discount logic is flat-%-off-gross;

@@ -117,3 +117,21 @@ resource "google_cloud_run_service_iam_member" "billing_cutoff_invoker" {
   role     = "roles/run.invoker"
   member   = google_service_account.billing_cutoff_agent[0].member
 }
+
+# billingCutoff is exported from functions/src/index.ts, so `firebase
+# deploy --only functions` deploys it to BOTH projects (this file's
+# google_cloudfunctions2_function.billing_cutoff resource above only ever
+# exists in dev's state, per the singleton comment at the top of this file —
+# but the function code itself isn't gated by that, and always sets its
+# runtime service_account_email to this same cross-project agent, by
+# design). So prod's CI identity also needs to actAs this dev-project SA,
+# same reason as prod_ci_service_account_user in iam.tf, just cross-project
+# instead of same-project — that's a per-service-account grant, not
+# something roles/iam.serviceAccountUser on rainbow-prod-2454b can reach.
+# Granted by hand; documented here.
+resource "google_service_account_iam_member" "billing_cutoff_agent_prod_ci_actas" {
+  count              = var.manage_combined_budget ? 1 : 0
+  service_account_id = google_service_account.billing_cutoff_agent[0].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}

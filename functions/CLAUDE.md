@@ -50,8 +50,12 @@ Source files in `src/`:
 ---
 
 ## Deployment
+Automatic as part of the KidClub pipeline (see root CLAUDE.md) — a PR into `staging` deploys
+functions to `kidclub-dev`, a merge to `main` deploys them to prod. `deploy-functions.yml`
+still exists as a manual `workflow_dispatch` fallback (e.g. redeploying functions alone
+without a full app build):
 ```bash
-# Deploy all functions
+# Manual/fallback only
 firebase deploy --only functions --project=kidclub-dev
 firebase deploy --only functions --project=rainbow-prod-2454b
 

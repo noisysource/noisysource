@@ -42,14 +42,22 @@ Configured in `/firebase.json` and `/.firebaserc` at monorepo root.
 
 ## CI/CD (GitHub Actions)
 Workflows in `/.github/workflows/`. Auth uses Workload Identity Federation (no long-lived keys).
+Full flow (branches, when each fires) is in root CLAUDE.md's "Branch → environment pipeline" —
+this table is just the file map.
 
-| Workflow | Trigger | SA used |
-|---|---|---|
-| `build-and-deploy-kidclub.yml` | push to main/staging or manual | `gmail-sender-kidclub-dev` (dev), `github-action-1020915538` (prod) |
-| `deploy-finances.yml` | manual | same SAs |
-| `deploy-functions.yml` | manual | same SAs |
+| Workflow | Trigger | Deploys | SA used |
+|---|---|---|---|
+| `deploy-dev.yml` | PR opened/updated against `staging`, or push to `staging` | KidClub app, Firestore rules/indexes, functions, terraform apply — all to kidclub-dev | `gmail-sender-kidclub-dev` |
+| `deploy-prod.yml` | PR opened/updated against `main`, or push to `main` | same, to rainbow-prod-2454b (deploys pre-merge on the PR; `sync-staging` fast-forwards/PRs `staging` to match, only on the post-merge push) | `github-action-1020915538` |
+| `_deploy-kidclub-env.yml` | `workflow_call` only | the reusable deploy logic both of the above call | (whichever caller passes in) |
+| `ci-checks.yml` | PR opened/updated against `main` | nothing — build/typecheck/terraform-validate only | n/a |
+| `deploy-finances.yml` | manual | Finances hosting | `gmail-sender-kidclub-dev` (dev), `github-action-1020915538` (prod) |
+| `deploy-functions.yml` | manual | functions only, fallback (normally deployed via the two above) | same SAs |
 
 WIF pool lives in `kidclub-dev` project (`projects/245453200769/locations/global/workloadIdentityPools/github-pool`). Both dev and prod SAs are bound to `noisysource/noisysource`.
+
+`terraform apply` in CI needs a `BILLING_ACCOUNT_ID` repository secret (no default in `budget.tf`,
+required on every apply regardless of environment) — set once in GitHub repo Settings → Secrets.
 
 ---
 
