@@ -541,7 +541,7 @@ export default function FinancialSummaryPage() {
         <KPI
           label="Custos fixos"
           value={eur(totalCost)}
-          sub="van + motorista + professora + renda"
+          sub="van + motorista + eletricidade + professora + renda"
           color="text-red-600"
         />
         <KPI
