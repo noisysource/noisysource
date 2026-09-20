@@ -202,3 +202,18 @@ resource "google_project_iam_member" "prod_ci_service_usage_admin" {
   role     = "roles/serviceusage.serviceUsageAdmin"
   member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
 }
+
+# Same identity, next gap: "Caller is missing permission
+# iam.serviceaccounts.actAs" while updating legrandSetState,
+# tuyaGetDevices, tuyaSetState, getKidclubVatSummary - a Cloud Functions
+# deploy needs the deploying identity to be allowed to actAs the function's
+# runtime service account (the default compute SA here, since these
+# functions don't set a custom one). roles/iam.serviceAccountUser at the
+# project level covers actAs on every SA in the project, matching how this
+# is granted project-wide rather than per-SA elsewhere in this repo.
+resource "google_project_iam_member" "prod_ci_service_account_user" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/iam.serviceAccountUser"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
