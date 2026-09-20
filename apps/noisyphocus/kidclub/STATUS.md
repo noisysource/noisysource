@@ -2,74 +2,151 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-18
+**Last updated:** 2026-09-20
 
 ## Currently working on
-Fixed a real bug found while investigating "Marisa Pratas can't see her billing records":
-impersonating a family in the admin panel and then visiting the client billing pages showed
-nothing, regardless of what records actually existed for that family.
+Rebuilt the CI/CD pipeline at Renato's request (see root `CLAUDE.md`'s "Branch → environment
+pipeline" for the full model: PR into `staging` auto-deploys to kidclub-dev, merge to `main`
+auto-deploys everything to prod, hotfix branches PR straight to `main`, `staging` auto-syncs
+after every `main` merge). PR opened against `staging`:
+https://github.com/noisysource/noisysource/pull/staging...agent/cicd-staging-prod-pipeline
 
-Root cause: `PaymentsPage.tsx` and `InvoiceListPage.tsx` query Firestore directly by
-`user.uid` (the real logged-in admin's own uid) instead of going through `familyService.ts`,
-which is the thing that actually knows how to resolve the impersonated family. Every other
-client page (dashboard, children, subscriptions) already switches to querying by `familyId`
-while impersonating — these two just never got that treatment.
+**This is the pipeline's first real run, and it's earning its keep** — every failure below
+was a genuine pre-existing gap the old manual-deploy flow never surfaced, not something this
+session introduced:
 
-Fixed both to query `familyId` when `impersonation` is active, same pattern as
-`familyService.ts` (`apps/noisyphocus/kidclub/src/services/familyService.ts:72-73`). No
-Firestore rules change needed — admins already have blanket read on `billing`/`invoices`.
-
-**Renato is already aware of the invoices/payments split** — noted here as a feature to
-implement, not a new finding: `InvoiceListPage.tsx` ("As minhas faturas" nav item) reads from
-an `invoices` Firestore collection that **nothing in the codebase writes to** — no Cloud
-Function, no admin page. It's empty for every family, not just Marisa. The billing system
-that's actually alive is `PaymentsPage.tsx` ("Pagamentos"), backed by the `billing`
-collection and `autoCreateBillingSchedule()` in `functions/src/kidclub/billing.ts`.
-
-**TODO / feature to implement:** wire "As minhas faturas" up to real invoice data (or decide
-to retire it and redirect to Pagamentos instead) — needs a decision on which, then either a
-Cloud Function that populates `invoices` (e.g. from Vendus documents) or removing the page.
-Not done in this session — separate scope from the impersonation fix below.
+1. `Invalid workflow file` on first push — reusable `workflow_call` jobs don't get to request
+   their own `permissions`, they inherit (capped) from the caller. Fixed: added explicit
+   `permissions: { contents: read, id-token: write }` to the calling `deploy` job in both
+   `deploy-dev.yml` and `deploy-prod.yml`.
+2. `firebase deploy --only functions` 403'd on every secret (`SA_CLIENT_EMAIL`,
+   `VENDUS_API_KEY`, etc.) — the CI deploy SA (`gmail-sender-kidclub-dev`) had never been
+   granted `secretmanager.secretAccessor` on any of them; nothing in Terraform granted it.
+   Fixed: new `google_secret_manager_secret_iam_member` resource in
+   `infra/gcp/terraform/secrets.tf`, one per tracked secret.
+3. That fix only works if Terraform's `apply` runs *before* the functions deploy step in the
+   same job — it was previously last. Reordered `_deploy-kidclub-env.yml`: terraform first,
+   then rules/indexes, then functions/hosting.
+4. `EASYPAY_WEBHOOK_URL` was used by real function code (`easypay.ts`, `billing.ts`) but was
+   never added to Terraform's tracked `secret_ids` list, and the secret already existed in
+   GCP (created by hand, like the others originally were) — so just adding it to the list
+   would have made `apply` try to create a duplicate and fail. Imported it into kidclub-dev's
+   state by hand (`terraform import ... projects/kidclub-dev/secrets/EASYPAY_WEBHOOK_URL`)
+   before pushing the code change. **Prod's state still needs the same import** — see Next
+   step.
+5. `terraform apply` also needs `-var="billing_account_id=..."` (no default in `budget.tf`,
+   required on every apply regardless of environment) — never wired into CI before. Added via
+   a `BILLING_ACCOUNT_ID` GitHub repo secret + `secrets: inherit` on both callers (reusable
+   workflows don't inherit repo secrets automatically either). **Renato needs to add this
+   secret in GitHub repo Settings → Secrets → Actions** — value is the billing account linked
+   to kidclub-dev, looked up via the Cloud Billing API this session (not written here on
+   purpose — check `gcloud billing accounts list` or GCP console if you need it again).
+6. Before pushing, ran `terraform plan` against real kidclub-dev state and found ~31 items of
+   *pre-existing* drift unrelated to this work (Cloud Function configs catching up to what's
+   actually deployed, a new Firebase Storage bucket resource, and — notably — enabling
+   `places.googleapis.com`). Checked it against `quotas.tf`: the Places API's hard daily quota
+   cap (100 autocomplete requests/day) was already verified live on 2026-09-14, so this wasn't
+   new uncapped exposure, just Terraform catching up to already-intentional, already-guarded
+   config. Applied that full plan by hand against kidclub-dev with Renato's explicit sign-off.
+7. That apply surfaced two more real, pre-existing gaps: (a) `triggerInvoiceGeneration` was
+   listed in `functions.tf`'s tracked function set since 2026-07-27 with **no corresponding
+   function in `functions/src` at all** — pure dead config, predates this session entirely.
+   Removed it. (b) Four real, already-deployed functions (`tuyaSetState`, `tuyaGetDevices`,
+   `getKidclubVatSummary`, `setBillingLineItemExcludedDays`) had never been imported into
+   Terraform state, so `apply` tried to create them fresh and got `409: already exists`.
+   Imported all four. One follow-up apply hit a transient "Container Healthcheck failed" on
+   two of them mid-rollout — checked directly against the Cloud Functions API afterward: both
+   are `state: ACTIVE` and serving, and a final `terraform plan` now reports **"No changes.
+   Your infrastructure matches the configuration"** — kidclub-dev is fully reconciled.
+8. Next CI run got past all of the above and failed differently: 5 resources
+   (`dev_sa_bq_job_user_prod`, `dev_compute_sa_bq_job_user_prod`, `billing_cutoff_agent_prod`,
+   `combined_budget`, and last session's own `gmail_sender_service_usage_consumer_prod` grant)
+   all manage IAM/billing policy **on `rainbow-prod-2454b` or its billing account directly**,
+   and `roles/serviceusage.serviceUsageConsumer` (granted last session) only lets a service
+   account *be granted* roles on another project — it doesn't let it *read or manage* that
+   project's IAM policy, which Terraform itself needs to diff these resources at all.
+   **This is a materially bigger decision than every fix before it**: closing this gap the
+   same way means the dev-project CI service account (`gmail-sender-kidclub-dev`, federated
+   via GitHub Actions Workload Identity) gets IAM-admin rights on the **prod** project itself.
+   Presented the tradeoff directly to Renato — grant it, vs. excluding these 5 resources from
+   CI's automated apply and keeping them human-applied like before (arguably the more
+   conservative default) — and **Renato explicitly chose to grant it**. Added
+   `roles/resourcemanager.projectIamAdmin` on `rainbow-prod-2454b` and `roles/billing.admin`
+   on the billing account, both to `gmail_sender`, plus `cloudbilling.googleapis.com` enabled
+   on kidclub-dev (a prerequisite the billing-account grant needed, separate from the role
+   itself — hit its own `SERVICE_DISABLED` error, fixed by adding it to `project.tf`'s API
+   list rather than just clicking it on in the console).
+   **Read this if you're the next session touching prod IAM**: this SA can now read/modify
+   prod's IAM policy and the billing account's. If its WIF-federated credentials were ever
+   compromised, the blast radius includes prod IAM, not just kidclub-dev. That tradeoff was
+   made knowingly, but it's worth re-confirming it still feels right before doing more here.
+   Applied by hand against kidclub-dev; final `terraform plan` → no changes, fully reconciled.
 
 ## Last completed
-- Branch `agent/impersonation-billing-fix` pushed, PR not yet opened (no `gh` CLI in this
-  session — compare link: https://github.com/noisysource/noisysource/pull/new/agent/impersonation-billing-fix).
-- `pnpm --filter kidclub build` and `build:staging` both succeed, no new type errors.
-- Deployed to **kidclub-dev** (build:staging) — https://kidclub-dev-arcoiris.web.app, 200 OK.
-  NOT smoke-tested behind login in that environment.
-- **Deployed straight to prod hosting** (`pnpm --filter kidclub build` — plain, not
-  build:staging — + `firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b`),
-  at Renato's explicit request, bypassing the usual PR-merge-triggers-deploy flow. Confirmed
-  both https://kidclub.pt and https://rainbow-prod-2454b-arcoiris.web.app respond 200.
-  NOT smoke-tested behind login on prod either.
+- All fixes above (1-8) pushed to `agent/cicd-staging-prod-pipeline`.
+- `BILLING_ACCOUNT_ID` repo secret added by Renato.
+- `terraform validate` passes locally; full `terraform plan` reviewed before every apply.
+- kidclub-dev's Terraform state is fully clean (`terraform plan` → no changes) as of this
+  session — confirmed via both `terraform plan` and, for the functions specifically, a direct
+  Cloud Functions API check.
+- Auto mode's Bash permission classifier was blocking `git commit`/`git add` specifically
+  around this terraform/IAM work (even after the underlying `terraform apply` itself
+  succeeded) — Renato asked to loosen it; added `Bash(git commit *)`, `Bash(git add *)`,
+  `Bash(git status *)` to `.claude/settings.local.json`'s allow list (personal, gitignored,
+  not team-wide).
 
 ## Next step
-1. **`main` on GitHub does NOT have this commit yet** — prod hosting was pushed straight from
-   the branch, so the deployed bundle and the `main` branch are now out of sync. Renato:
-   open the PR from the link above and merge it, so the next person/CI that touches `main`
-   doesn't auto-deploy an older build over this fix (`build-and-deploy-kidclub.yml` deploys
-   hosting on every push to `main`).
-2. Smoke test on prod: impersonate a family with real `billing` records, open
-   `/client/payments`, confirm records show up.
-3. Separately, decide on the "As minhas faturas" feature work (see above) and scope it as
-   its own task when ready.
+1. Re-trigger the existing PR against `staging` (push a new commit, or re-run the failed
+   Actions job) and watch `deploy-dev.yml` run clean end to end — dev's Terraform state is
+   now the reconciled baseline, so this run should be a near-no-op on the terraform step.
+2. Once dev deploy succeeds, merge into `staging`, then open `staging` → `main` to promote
+   the pipeline itself into prod. **Before that merge**, prod's state prefix
+   (`rainbow-prod-2454b`) needs the same things done for it that dev just got by hand: the
+   `EASYPAY_WEBHOOK_URL` secret import, a check for the same untracked-but-deployed-functions
+   gap, and — given how many rounds of "CI SA needs one more permission" dev needed — a full
+   `terraform plan -var-file=env/prod.tfvars -var=billing_account_id=...` read end-to-end by
+   hand before merging, not just trusting CI's first prod run to surface gaps live one at a
+   time the way dev's did.
+3. Also worth knowing before the prod merge: prod's CI service account
+   (`github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com`) is **not** the
+   same identity as `gmail_sender` (prod's `gmail_sender_sa_id` is `gmail-sender-prod`, a
+   different account). Every fix this session targeted `gmail_sender` — prod's CI SA will
+   likely need the equivalent set of grants (secret access, `roles/editor` on its own
+   project, and possibly its own version of the prod-IAM-admin question above, if any of
+   these cross-project resources also need managing from the prod pipeline) before prod's
+   deploy succeeds. Don't assume dev's fixes silently cover prod.
+4. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
+   in this session, flagged as a follow-up in CLAUDE.md.
 
 ## Open questions for Renato
-- None blocking — just the `main` merge (to resync source with what's live) and a prod
-  smoke test.
+- None blocking — everything above is either done or a known, already-diagnosed next step.
+- Worth a deliberate re-look before this goes further: is `roles/resourcemanager.projectIamAdmin`
+  on prod for a dev-project CI service account the long-term shape you want, or was that a
+  reasonable unblock-now choice that should get narrowed later (e.g. to a custom role scoped
+  to just the specific bindings CI actually manages)? Flagging so it's a conscious call, not
+  something that just quietly stays maximally broad by default.
 
 ## Anything risky in flight
-- **Prod hosting was deployed ahead of `main`** — `agent/impersonation-billing-fix` is live
-  on kidclub.pt but not merged. Until merged, `main` doesn't reflect what's actually running
-  in prod, and the next push-to-main deploy will silently revert this fix unless that push
-  also contains it. Merge the PR (link above) to close this gap.
-- Unrelated, still open from a prior session: `git worktree list` shows several stale
-  worktrees not cleaned up (`claim-studyroom-fix`, `deploy-functions-workflow-fix`,
-  `kidclub-cicd-automation`, plus some pre-convention ones outside `.claude/worktrees/`).
-  Worth Renato clearing out whichever are merged/abandoned.
-- Also unrelated, paused mid-session on 2026-09-18: a unified client calendar
-  (`agent/family-calendar` branch, `/client/calendar`) for cancelling study/transport days
-  in one place instead of per-subscription. Built, builds clean, not deployed/reviewed yet.
-  Needs a Firestore composite index deployed (`firestore.indexes.json`, committed on that
-  branch) before it's usable — see that branch's own state for details, picking back up was
-  put on hold to investigate the Marisa billing issue.
+- **This PR changes how prod gets deployed** (merge to `main` now deploys everything
+  automatically, including a live `terraform apply` — previously always a manual, human-run
+  command). No branch protection backs this up per Renato's explicit choice; PR review is the
+  only gate now.
+- **The dev-project CI service account now has IAM-admin rights on the prod project and prod's
+  billing account** (see point 8 above) — a deliberate, explicit trade Renato chose after
+  being shown the alternative. Real increase in blast radius if that WIF-federated credential
+  is ever compromised; worth being aware of, not something to forget was decided this way.
+- Manual `terraform apply`/`import` was run directly against kidclub-dev this session (see
+  points 6-8) — real dev infra changed outside the PR flow, deliberately, with Renato's
+  sign-off, to give the pipeline's first automated run a clean starting point. One apply hit
+  a transient container health-check error on 2 functions mid-rollout; verified both are
+  `ACTIVE`/serving directly via the Cloud Functions API afterward, and state is now fully
+  reconciled (`terraform plan` → no changes) — but worth a manual click-through of
+  `getKidclubVatSummary` and `setBillingLineItemExcludedDays` on kidclub-dev if you want
+  extra confidence beyond what this session verified.
+- Stale worktree/branch `agent/kidclub-cicd-automation` (2 days old, based on an old `main`,
+  mixed with ~60 unrelated file changes to billing/models) was found and deliberately NOT
+  built on or merged — flagged for Renato to delete.
+- Unrelated, still open: a unified client calendar (`agent/family-calendar` branch,
+  `/client/calendar`). Built, not deployed/reviewed yet, needs a Firestore composite index —
+  once this pipeline is live, that branch's own PR-to-staging will handle the index deploy
+  automatically instead of needing a manual one.
