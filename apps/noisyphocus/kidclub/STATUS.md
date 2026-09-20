@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-18
+**Last updated:** 2026-09-20
 
 ## Currently working on
 Rebuilt the CI/CD pipeline at Renato's request (see root `CLAUDE.md`'s "Branch → environment
@@ -58,48 +58,85 @@ session introduced:
    two of them mid-rollout — checked directly against the Cloud Functions API afterward: both
    are `state: ACTIVE` and serving, and a final `terraform plan` now reports **"No changes.
    Your infrastructure matches the configuration"** — kidclub-dev is fully reconciled.
+8. Next CI run got past all of the above and failed differently: 5 resources
+   (`dev_sa_bq_job_user_prod`, `dev_compute_sa_bq_job_user_prod`, `billing_cutoff_agent_prod`,
+   `combined_budget`, and last session's own `gmail_sender_service_usage_consumer_prod` grant)
+   all manage IAM/billing policy **on `rainbow-prod-2454b` or its billing account directly**,
+   and `roles/serviceusage.serviceUsageConsumer` (granted last session) only lets a service
+   account *be granted* roles on another project — it doesn't let it *read or manage* that
+   project's IAM policy, which Terraform itself needs to diff these resources at all.
+   **This is a materially bigger decision than every fix before it**: closing this gap the
+   same way means the dev-project CI service account (`gmail-sender-kidclub-dev`, federated
+   via GitHub Actions Workload Identity) gets IAM-admin rights on the **prod** project itself.
+   Presented the tradeoff directly to Renato — grant it, vs. excluding these 5 resources from
+   CI's automated apply and keeping them human-applied like before (arguably the more
+   conservative default) — and **Renato explicitly chose to grant it**. Added
+   `roles/resourcemanager.projectIamAdmin` on `rainbow-prod-2454b` and `roles/billing.admin`
+   on the billing account, both to `gmail_sender`, plus `cloudbilling.googleapis.com` enabled
+   on kidclub-dev (a prerequisite the billing-account grant needed, separate from the role
+   itself — hit its own `SERVICE_DISABLED` error, fixed by adding it to `project.tf`'s API
+   list rather than just clicking it on in the console).
+   **Read this if you're the next session touching prod IAM**: this SA can now read/modify
+   prod's IAM policy and the billing account's. If its WIF-federated credentials were ever
+   compromised, the blast radius includes prod IAM, not just kidclub-dev. That tradeoff was
+   made knowingly, but it's worth re-confirming it still feels right before doing more here.
+   Applied by hand against kidclub-dev; final `terraform plan` → no changes, fully reconciled.
 
 ## Last completed
-- All fixes above pushed to `agent/cicd-staging-prod-pipeline`.
+- All fixes above (1-8) pushed to `agent/cicd-staging-prod-pipeline`.
+- `BILLING_ACCOUNT_ID` repo secret added by Renato.
 - `terraform validate` passes locally; full `terraform plan` reviewed before every apply.
-- kidclub-dev's Terraform state is now clean (`terraform plan` → no changes) — confirmed live
-  via a direct Cloud Functions API check, not just trusting a successful `apply` exit code.
+- kidclub-dev's Terraform state is fully clean (`terraform plan` → no changes) as of this
+  session — confirmed via both `terraform plan` and, for the functions specifically, a direct
+  Cloud Functions API check.
+- Auto mode's Bash permission classifier was blocking `git commit`/`git add` specifically
+  around this terraform/IAM work (even after the underlying `terraform apply` itself
+  succeeded) — Renato asked to loosen it; added `Bash(git commit *)`, `Bash(git add *)`,
+  `Bash(git status *)` to `.claude/settings.local.json`'s allow list (personal, gitignored,
+  not team-wide).
 
 ## Next step
-1. **Add the `BILLING_ACCOUNT_ID` repo secret** (GitHub → Settings → Secrets and variables →
-   Actions → New repository secret) — CI's `terraform apply` will fail without it, on both
-   dev and prod.
-2. Push a new commit or just re-trigger the existing PR against `staging` and watch
-   `deploy-dev.yml` run clean end to end — dev's Terraform state is now the reconciled
-   baseline, so this run should be a near-no-op on the terraform step, not another 31-change
-   surprise.
-3. Once dev deploy succeeds, merge into `staging`, then open `staging` → `main` to promote
+1. Re-trigger the existing PR against `staging` (push a new commit, or re-run the failed
+   Actions job) and watch `deploy-dev.yml` run clean end to end — dev's Terraform state is
+   now the reconciled baseline, so this run should be a near-no-op on the terraform step.
+2. Once dev deploy succeeds, merge into `staging`, then open `staging` → `main` to promote
    the pipeline itself into prod. **Before that merge**, prod's state prefix
-   (`rainbow-prod-2454b`) needs the same two things done for it that dev just got by hand:
-   the `EASYPAY_WEBHOOK_URL` secret import, and checking whether prod has the same
-   untracked-but-deployed-functions gap. Worth running `terraform plan -var-file=env/prod.tfvars`
-   by hand once before that merge, the same way this session did for dev, rather than letting
-   CI's first prod run discover it live.
-4. Also worth knowing before the prod merge: prod's CI service account
+   (`rainbow-prod-2454b`) needs the same things done for it that dev just got by hand: the
+   `EASYPAY_WEBHOOK_URL` secret import, a check for the same untracked-but-deployed-functions
+   gap, and — given how many rounds of "CI SA needs one more permission" dev needed — a full
+   `terraform plan -var-file=env/prod.tfvars -var=billing_account_id=...` read end-to-end by
+   hand before merging, not just trusting CI's first prod run to surface gaps live one at a
+   time the way dev's did.
+3. Also worth knowing before the prod merge: prod's CI service account
    (`github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com`) is **not** the
-   same identity as the `gmail_sender` SA the new secret-accessor grant targets (prod's
-   `gmail_sender_sa_id` is `gmail-sender-prod`, a different account). The secret-accessor fix
-   in `secrets.tf` will likely need a matching grant for `github-action-1020915538` before
-   prod's functions deploy step succeeds — expect this to fail the same way dev's did, and
-   fix it the same way (add the grant, since Terraform runs before functions deploy now).
-5. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
+   same identity as `gmail_sender` (prod's `gmail_sender_sa_id` is `gmail-sender-prod`, a
+   different account). Every fix this session targeted `gmail_sender` — prod's CI SA will
+   likely need the equivalent set of grants (secret access, `roles/editor` on its own
+   project, and possibly its own version of the prod-IAM-admin question above, if any of
+   these cross-project resources also need managing from the prod pipeline) before prod's
+   deploy succeeds. Don't assume dev's fixes silently cover prod.
+4. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
    in this session, flagged as a follow-up in CLAUDE.md.
 
 ## Open questions for Renato
 - None blocking — everything above is either done or a known, already-diagnosed next step.
+- Worth a deliberate re-look before this goes further: is `roles/resourcemanager.projectIamAdmin`
+  on prod for a dev-project CI service account the long-term shape you want, or was that a
+  reasonable unblock-now choice that should get narrowed later (e.g. to a custom role scoped
+  to just the specific bindings CI actually manages)? Flagging so it's a conscious call, not
+  something that just quietly stays maximally broad by default.
 
 ## Anything risky in flight
 - **This PR changes how prod gets deployed** (merge to `main` now deploys everything
   automatically, including a live `terraform apply` — previously always a manual, human-run
   command). No branch protection backs this up per Renato's explicit choice; PR review is the
   only gate now.
+- **The dev-project CI service account now has IAM-admin rights on the prod project and prod's
+  billing account** (see point 8 above) — a deliberate, explicit trade Renato chose after
+  being shown the alternative. Real increase in blast radius if that WIF-federated credential
+  is ever compromised; worth being aware of, not something to forget was decided this way.
 - Manual `terraform apply`/`import` was run directly against kidclub-dev this session (see
-  points 6-7) — real dev infra changed outside the PR flow, deliberately, with Renato's
+  points 6-8) — real dev infra changed outside the PR flow, deliberately, with Renato's
   sign-off, to give the pipeline's first automated run a clean starting point. One apply hit
   a transient container health-check error on 2 functions mid-rollout; verified both are
   `ACTIVE`/serving directly via the Cloud Functions API afterward, and state is now fully
