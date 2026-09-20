@@ -217,3 +217,22 @@ resource "google_project_iam_member" "prod_ci_service_account_user" {
   role     = "roles/iam.serviceAccountUser"
   member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
 }
+
+# Same identity, next gap: most functions deployed fine, but the
+# schedule-triggered ones (createRecurringExpenses, createCampBalanceBillings)
+# failed to upsert their Cloud Scheduler jobs, and the pubsub-triggered one
+# (billingCutoff) failed to create its topic. Two distinct resource types,
+# two distinct roles needed on top of everything granted so far.
+resource "google_project_iam_member" "prod_ci_cloudscheduler_admin" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/cloudscheduler.admin"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "prod_ci_pubsub_editor" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/pubsub.editor"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
