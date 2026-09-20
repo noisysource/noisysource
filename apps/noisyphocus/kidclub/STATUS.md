@@ -8,8 +8,10 @@
 Rebuilt the CI/CD pipeline at Renato's request (see root `CLAUDE.md`'s "Branch → environment
 pipeline" for the full model: PR into `staging` auto-deploys to kidclub-dev, merge to `main`
 auto-deploys everything to prod, hotfix branches PR straight to `main`, `staging` auto-syncs
-after every `main` merge). PR opened against `staging`:
-https://github.com/noisysource/noisysource/pull/staging...agent/cicd-staging-prod-pipeline
+after every `main` merge). `agent/cicd-staging-prod-pipeline` → `staging` PR went green and
+was merged (#12). Now promoting to `main`: PR opened as `agent/cicd-prod-prep` → `main`
+(branched from `staging`'s tip, so it carries everything from #12 plus one more fix — see
+point 9 below).
 
 **This is the pipeline's first real run, and it's earning its keep** — every failure below
 was a genuine pre-existing gap the old manual-deploy flow never surfaced, not something this
@@ -81,11 +83,31 @@ session introduced:
    compromised, the blast radius includes prod IAM, not just kidclub-dev. That tradeoff was
    made knowingly, but it's worth re-confirming it still feels right before doing more here.
    Applied by hand against kidclub-dev; final `terraform plan` → no changes, fully reconciled.
+9. Before opening the `main` promotion PR, ran `terraform plan -var-file=env/prod.tfvars`
+   by hand against the real `rainbow-prod-2454b` state prefix — the check flagged as a
+   prerequisite in point 3 below. Result: **81 resources pending creation, 0 to change**.
+   Prod's Terraform state is essentially empty — nobody has ever run `terraform apply`
+   against it; everything live in prod (functions, hosting, IAM, rules, Firestore) was set
+   up out-of-band (firebase CLI, gcloud, console clicks), never imported into Terraform
+   state. The plan also hard-errors on a `storage.tf` data lookup expecting an existing
+   `rainbow-prod-2454b.firebasestorage.app` bucket that doesn't exist — Firebase Storage was
+   likely never activated for this project via the console (see `storage.tf`'s own comment:
+   "must be activated via the Firebase Console once").
+   Presented this to Renato as a three-way choice — skip terraform for prod and merge
+   everything else, hold the whole merge until state is reconciled, or attempt the blind
+   81-resource apply anyway — and **Renato chose to skip terraform for prod, for now**.
+   Added a `run_terraform` input (default `true`) to the reusable `_deploy-kidclub-env.yml`,
+   set `false` in `deploy-prod.yml`. Hosting, Firestore rules/indexes, and functions still
+   deploy to prod automatically on merge — same as what's already done by hand today, so no
+   new risk there. Only the terraform step is paused.
 
 ## Last completed
-- All fixes above (1-8) pushed to `agent/cicd-staging-prod-pipeline`.
+- All fixes above (1-9) pushed. Points 1-8 are on `staging` (merged via PR #12). Point 9 is
+  on `agent/cicd-prod-prep`, PR opened against `main`:
+  https://github.com/noisysource/noisysource/pull/new/agent/cicd-prod-prep
 - `BILLING_ACCOUNT_ID` repo secret added by Renato.
-- `terraform validate` passes locally; full `terraform plan` reviewed before every apply.
+- `terraform validate` passes locally; full `terraform plan` reviewed before every apply, and
+  before this promotion PR was even opened.
 - kidclub-dev's Terraform state is fully clean (`terraform plan` → no changes) as of this
   session — confirmed via both `terraform plan` and, for the functions specifically, a direct
   Cloud Functions API check.
@@ -96,41 +118,37 @@ session introduced:
   not team-wide).
 
 ## Next step
-1. Re-trigger the existing PR against `staging` (push a new commit, or re-run the failed
-   Actions job) and watch `deploy-dev.yml` run clean end to end — dev's Terraform state is
-   now the reconciled baseline, so this run should be a near-no-op on the terraform step.
-2. Once dev deploy succeeds, merge into `staging`, then open `staging` → `main` to promote
-   the pipeline itself into prod. **Before that merge**, prod's state prefix
-   (`rainbow-prod-2454b`) needs the same things done for it that dev just got by hand: the
-   `EASYPAY_WEBHOOK_URL` secret import, a check for the same untracked-but-deployed-functions
-   gap, and — given how many rounds of "CI SA needs one more permission" dev needed — a full
-   `terraform plan -var-file=env/prod.tfvars -var=billing_account_id=...` read end-to-end by
-   hand before merging, not just trusting CI's first prod run to surface gaps live one at a
-   time the way dev's did.
-3. Also worth knowing before the prod merge: prod's CI service account
-   (`github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com`) is **not** the
-   same identity as `gmail_sender` (prod's `gmail_sender_sa_id` is `gmail-sender-prod`, a
-   different account). Every fix this session targeted `gmail_sender` — prod's CI SA will
-   likely need the equivalent set of grants (secret access, `roles/editor` on its own
-   project, and possibly its own version of the prod-IAM-admin question above, if any of
-   these cross-project resources also need managing from the prod pipeline) before prod's
-   deploy succeeds. Don't assume dev's fixes silently cover prod.
+1. Review and merge `agent/cicd-prod-prep` → `main`. On merge, `deploy-prod.yml` runs
+   automatically: hosting, Firestore rules/indexes, and functions deploy to prod — terraform
+   apply is skipped (point 9). Watch that run; it's the pipeline's first-ever prod deploy.
+2. Separately, as its own deliberate piece of work (not blocking the merge above): reconcile
+   prod's Terraform state so `run_terraform` can go back to `true` for prod. This means, at
+   minimum: fix the `storage.tf` bucket-name/activation issue, then `terraform import` each
+   of the 81 pending resources against real prod infra one at a time (or in batches, verifying
+   each), the same pattern used for dev's smaller gaps (points 4, 7) but at much larger scale
+   — this is real, careful work, not a quick unblock.
+3. Also still true for whenever terraform *does* get re-enabled for prod: prod's CI service
+   account (`github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com`) is **not**
+   the same identity as `gmail_sender` (prod's `gmail_sender_sa_id` is `gmail-sender-prod`, a
+   different account). Every permission fix in this session targeted `gmail_sender` — prod's
+   CI SA will need its own equivalent grants before its terraform step can safely run.
 4. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
    in this session, flagged as a follow-up in CLAUDE.md.
 
 ## Open questions for Renato
-- None blocking — everything above is either done or a known, already-diagnosed next step.
-- Worth a deliberate re-look before this goes further: is `roles/resourcemanager.projectIamAdmin`
-  on prod for a dev-project CI service account the long-term shape you want, or was that a
-  reasonable unblock-now choice that should get narrowed later (e.g. to a custom role scoped
-  to just the specific bindings CI actually manages)? Flagging so it's a conscious call, not
-  something that just quietly stays maximally broad by default.
+- None blocking the `main` merge — it's ready.
+- Two things worth a deliberate look once the merge is in, not urgent: (a) is
+  `roles/resourcemanager.projectIamAdmin` on prod for a dev-project CI service account the
+  long-term shape you want, or should it get narrowed later to a custom role scoped to just
+  the specific bindings CI manages? (b) when/whether to prioritize the prod Terraform state
+  reconciliation (point 2 above) — it's real effort, not urgent unless something starts
+  depending on Terraform managing prod resources.
 
 ## Anything risky in flight
-- **This PR changes how prod gets deployed** (merge to `main` now deploys everything
-  automatically, including a live `terraform apply` — previously always a manual, human-run
-  command). No branch protection backs this up per Renato's explicit choice; PR review is the
-  only gate now.
+- **This PR changes how prod gets deployed** — merge to `main` now deploys hosting,
+  Firestore rules/indexes, and functions to prod automatically (previously always a manual,
+  human-run command). Terraform apply is deliberately excluded for now (point 9). No branch
+  protection backs any of this up per Renato's explicit choice; PR review is the only gate.
 - **The dev-project CI service account now has IAM-admin rights on the prod project and prod's
   billing account** (see point 8 above) — a deliberate, explicit trade Renato chose after
   being shown the alternative. Real increase in blast radius if that WIF-federated credential
