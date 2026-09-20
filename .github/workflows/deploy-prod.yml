@@ -23,6 +23,15 @@ jobs:
       service_account: github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com
       build_command: pnpm --filter kidclub build
       tf_var_file: env/prod.tfvars
+      # Prod's "rainbow-prod-2454b" state prefix was found essentially
+      # empty (81 pending creates, plus a hard error in storage.tf) the
+      # first time this pipeline actually ran a plan against it — real
+      # prod infra was never brought under Terraform. Auto-applying that
+      # blind against live prod is not safe. Re-enable once prod state is
+      # deliberately reconciled (see apps/noisyphocus/kidclub/STATUS.md)
+      # — app/rules/indexes/functions/hosting deploy automatically either
+      # way, this only pauses the terraform step.
+      run_terraform: false
 
   sync-staging:
     name: 'Sync staging with main'

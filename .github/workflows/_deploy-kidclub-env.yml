@@ -35,6 +35,18 @@ on:
         description: "Path (relative to infra/gcp/terraform) to this environment's tfvars"
         required: true
         type: string
+      run_terraform:
+        description: >
+          Whether to run terraform init/apply for this environment. Default true.
+          Set false for an environment whose Terraform state isn't actually
+          reconciled with reality yet — e.g. prod's state prefix was found to be
+          essentially empty (81 pending creates against already-live infra) when
+          this was first wired up. Turning this off is a stopgap, not a fix: the
+          app/rules/indexes/functions/hosting steps below don't depend on it and
+          stay fully automated either way.
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   deploy:
@@ -79,16 +91,19 @@ jobs:
         run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
 
       - name: Set up Terraform
+        if: inputs.run_terraform
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform init
+        if: inputs.run_terraform
         working-directory: infra/gcp/terraform
         run: terraform init -backend-config="prefix=${{ inputs.environment }}" -reconfigure
 
-      # Applies unconditionally (see root CLAUDE.md's "Branch → environment
-      # pipeline" for why). If the service account is missing an IAM role
-      # for some resource, this fails closed — no partial apply silently
-      # skipped, no separate manual apply step waiting after it.
+      # Applies unconditionally when run_terraform is true (see root
+      # CLAUDE.md's "Branch → environment pipeline" for why). If the
+      # service account is missing an IAM role for some resource, this
+      # fails closed — no partial apply silently skipped, no separate
+      # manual apply step waiting after it.
       #
       # billing_account_id has no default (budget.tf) so every apply needs
       # it regardless of environment, even though the budget resource
@@ -96,6 +111,7 @@ jobs:
       # a repo secret, not committed — it's not highly sensitive, but
       # there's no reason to put it in a file either.
       - name: Terraform apply
+        if: inputs.run_terraform
         working-directory: infra/gcp/terraform
         run: terraform apply -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -auto-approve
 
