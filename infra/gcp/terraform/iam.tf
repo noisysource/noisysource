@@ -189,3 +189,16 @@ resource "google_project_iam_member" "prod_ci_datastore_index_admin" {
   role     = "roles/datastore.indexAdmin"
   member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
 }
+
+# Same identity, next gap in the same functions-deploy run:
+# roles/serviceusage.serviceUsageConsumer (already granted) only lets it USE
+# already-enabled APIs; `firebase deploy --only functions` also tries to
+# enable cloudbilling.googleapis.com as a dependency and needs
+# serviceusage.services.enable for that, which requires
+# roles/serviceusage.serviceUsageAdmin instead. Granted by hand.
+resource "google_project_iam_member" "prod_ci_service_usage_admin" {
+  provider = google.prod
+  project  = "rainbow-prod-2454b"
+  role     = "roles/serviceusage.serviceUsageAdmin"
+  member   = "serviceAccount:github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com"
+}
