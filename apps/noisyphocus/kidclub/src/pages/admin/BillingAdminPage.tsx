@@ -116,6 +116,18 @@ const ACCENT_CLASSES = {
 // leg can be excluded independently — e.g. a parent drives to a doctor's
 // appointment in the morning but the child still rides home in the
 // afternoon, and still attends study room as normal either way.
+// True if an excludedDates entry falls on a weekday this line item actually
+// has service scheduled — i.e. the calendar below has a clickable control
+// for it. An entry can fail this (and become "orphaned") if it was marked
+// before a schedule change, or via some other stale-data path — see billing.ts
+// computeLineItems's carry-forward comment for how that can happen.
+function isEntrySchedulable(li: BillingLineItem, entry: string): boolean {
+  const [iso] = entry.split(':');
+  const weekday = WEEKDAY_NAMES[new Date(`${iso}T12:00:00`).getDay()];
+  if (li.type === 'transport') return (li.tripsByDay?.[weekday]?.length ?? 0) > 0;
+  return (li.scheduleDays ?? []).includes(weekday);
+}
+
 function ServiceCalendar({ li, year, month, grid, markedSet, onToggle, saving }: {
   li: BillingLineItem;
   year: number; month: number;
@@ -127,6 +139,7 @@ function ServiceCalendar({ li, year, month, grid, markedSet, onToggle, saving }:
   const meta = SERVICE_META[li.type!];
   const accent = ACCENT_CLASSES[meta.accent];
   const scheduleSet = new Set(li.scheduleDays ?? []);
+  const orphanedEntries = [...markedSet].filter(entry => !isEntrySchedulable(li, entry)).sort();
 
   return (
     <div className={`rounded-lg border ${accent.header.split(' ').pop()} overflow-hidden`}>
@@ -183,6 +196,28 @@ function ServiceCalendar({ li, year, month, grid, markedSet, onToggle, saving }:
           );
         })}
       </div>
+      {orphanedEntries.length > 0 && (
+        <div className="px-3 pb-3 -mt-1">
+          <p className="text-[11px] text-amber-700 mb-1">
+            Dias marcados fora do horário atual — sem controlo no calendário acima, remova aqui:
+          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {orphanedEntries.map(entry => (
+              <button
+                key={entry}
+                type="button"
+                disabled={saving}
+                onClick={() => onToggle(entry)}
+                title="Remover esta marcação órfã"
+                className="text-[11px] bg-amber-50 text-amber-800 border border-amber-200 rounded-full pl-2 pr-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-100 disabled:opacity-50"
+              >
+                {formatExclusionEntry(entry)}
+                <span className="font-bold leading-none">×</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
