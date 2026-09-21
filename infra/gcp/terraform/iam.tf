@@ -9,7 +9,7 @@ resource "google_service_account" "gmail_sender" {
 # Grant Firebase deployment roles to the service account
 resource "google_project_iam_member" "gmail_sender_firebase_roles" {
   for_each = toset([
-    "roles/firebase.admin",      # Broad permissions for Firebase services
+    "roles/firebase.admin",        # Broad permissions for Firebase services
     "roles/firebasehosting.admin", # Specific permissions for deploying to Hosting
     # This SA now also runs `terraform apply` from CI (deploy-dev.yml), not just
     # firebase deploys. Every previous apply ran under a human's own broadly-
@@ -40,6 +40,31 @@ resource "google_project_iam_member" "gmail_sender_secretmanager_admin" {
   member  = google_service_account.gmail_sender.member
 }
 
+# Same "editor excludes setIamPolicy" gap, two more places it bit: applying
+# the grant above itself needs resourcemanager.projectIamAdmin ON
+# kidclub-dev (gmail_sender only had it on rainbow-prod-2454b, cross-project,
+# from an earlier fix - never on its own project); and billing-cutoff.tf's
+# billing_cutoff_agent_prod_ci_actas resource sets IAM on the
+# billing-cutoff-agent service account itself, which needs
+# iam.serviceAccounts.setIamPolicy - only in roles/iam.serviceAccountAdmin.
+# Both hit as real CI failures in the same run. Granted by hand;
+# documented here.
+resource "google_project_iam_member" "gmail_sender_project_iam_admin" {
+  project = var.gcp_project_id
+  role    = "roles/resourcemanager.projectIamAdmin"
+  member  = google_service_account.gmail_sender.member
+}
+
+# billing_cutoff_agent[0] only exists where manage_combined_budget is true
+# (dev) - gate this the same way or a prod-var-file plan errors on an
+# out-of-range index into an empty list.
+resource "google_service_account_iam_member" "gmail_sender_billing_cutoff_agent_sa_admin" {
+  count              = var.manage_combined_budget ? 1 : 0
+  service_account_id = google_service_account.billing_cutoff_agent[0].name
+  role               = "roles/iam.serviceAccountAdmin"
+  member             = google_service_account.gmail_sender.member
+}
+
 # Grant the default Compute SA Firebase/Firestore access so callable functions can
 # reach Firestore via the Admin SDK even before Terraform has set gmail_sender as SA.
 resource "google_project_iam_member" "compute_sa_firebase_roles" {
@@ -55,9 +80,9 @@ resource "google_project_iam_member" "compute_sa_firebase_roles" {
 # 6. Grant the Eventarc Service Agent role (ensures 2nd gen functions can be triggered)
 resource "google_project_iam_member" "eventarc_service_agent" {
   depends_on = [google_project_service.apis]
-  project = data.google_project.project.project_id
-  role    = "roles/eventarc.serviceAgent"
-  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
+  project    = data.google_project.project.project_id
+  role       = "roles/eventarc.serviceAgent"
+  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-eventarc.iam.gserviceaccount.com"
 }
 
 # Grant the Cloud Build service account necessary roles for deploying functions.
