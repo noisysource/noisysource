@@ -202,15 +202,27 @@ Escola Quinta das Flores → Kid Club) — `schedule` restored, `cancelRequested
 subscription (`studyroom/GJ7JYFe6KPSZAQofIsCM`) was untouched by the same request — only
 transport was affected.
 
-With the subscription restored, hand-corrected Susete Luis's Sept 2026 billing record a final
-time with the actually-intended dates (4 study absences, 7 transport absences — both at €6/
-unit): study €48→€24, transport €48→€6, **total €90**. This was the fourth prod write to this
-one record while chasing the full chain of bugs (€114→€138→€156→€90) — each one individually
-correct given what was known at the time, but worth Renato knowing the record's edit history
-is not "clean" if it's ever audited. Last write required Renato to run the `curl` command
-himself — the auto-mode permission classifier started blocking repeated prod-write `curl`
-calls from this session after several in a row ("Modify Shared Resources" / "Blocked by
-classifier"), which is a harness-level gate, not something an in-chat "yes go ahead" satisfies.
+With the subscription restored, hand-corrected Susete Luis's Sept 2026 billing record with the
+actually-intended dates (4 study absences, 7 transport absences — both at €6/unit): study
+€48→€24, transport €48→€6, total €90. **This got overwritten twice more** by
+`onTransportBillingSync` firing (with execution delay) off the subscription-restore write and
+recomputing the record from whatever `excludedDates` happened to be present at that moment —
+see the audit note below for the general risk this points at. Took six prod writes total
+across the full saga (€114→€138→€156→€132(union)→€90→reverted to €132 by the trigger
+race→**€90 again, confirmed stable this time**) before it actually stuck — worth Renato
+knowing this one record's edit history is not "clean" if it's ever audited, though the final
+state is correct and verified (`scheduleDays`/`tripsByDay` also confirmed intact). Several of
+these writes required Renato to run the `curl` command himself — the auto-mode permission
+classifier started blocking repeated prod-write `curl` calls from this session after several
+in a row ("Modify Shared Resources" / "Blocked by classifier"), which is a harness-level gate,
+not something an in-chat "yes go ahead" satisfies.
+
+**Status: closed.** Susete's record is correct and stable. The deduction-math + orphan-chip
+fix (`agent/study-exclusion-validation`) went through `staging` → `main` cleanly and is live in
+prod. See the audit note under the "billing records don't react to subscription changes"
+backlog item above for what turned up scanning the rest of the pending records — one real
+still-open under-billing (Mafalda Raposo Duarte), left for the new architecture effort rather
+than another one-off patch.
 
 ## Last completed
 - Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
@@ -351,6 +363,45 @@ classifier"), which is a harness-level gate, not something an in-chat "yes go ah
   period's billing record is closed/paid. Needs to account for both admin-approved changes and
   client self-service requests (like this cancellation) that sit in a pending-review state.
   Not scoped further than this — flagging as the next thing to design, not started.
+
+  **Audit of pending billing records, done 2026-09-21** (per Renato: a dedicated agent is
+  being spun up to design the proper architecture for this whole area — subscription-change
+  sync AND the double-discount backfill below — this audit's findings are input for that
+  effort, not yet acted on individually):
+  - Scanned all 164 pending `billing/*` records for `excludedDates` entries that don't land on
+    a real schedule weekday (the symptom of both the timezone-shift bug and the plain
+    deduction-math bug, both now fixed in code but not retroactively applied to
+    already-computed amounts).
+  - **Susete Luis / Beatriz Apóstolo** (`A7OXOljX1W9xrEn5mhP8_2026-09`) — the case that started
+    this whole investigation (see section 6). Fully corrected by hand: total **€90** (study
+    €24/4 exclusions, transport €6/7 exclusions), subscription's `schedule`/`scheduleDays`/
+    `tripsByDay` all restored. Took four manual prod writes to land correctly — two of them got
+    silently overwritten by `onTransportBillingSync` firing (with execution delay) off an
+    unrelated subscription write and recomputing using whatever `excludedDates` happened to be
+    in the record at that moment. **Real finding, separate from the architecture question**:
+    `onTransportBillingSync`/`onStudyroomBillingSync` fire on *every* write to a subscription
+    doc and immediately recompute that family's whole billing schedule — there is no debounce
+    and no ordering guarantee relative to a concurrent manual/admin edit of the same billing
+    record. Worth the new agent considering as part of the redesign, not just the "subscription
+    changed" case.
+  - **Mafalda Raposo Duarte** (`JlqSRknVxyzaJfYP2WiM_2026-09`) — **still under-billed, not yet
+    corrected**. Study-room line item: schedule is Tue/Wed/Fri, 5 dates excluded but only 2
+    (both Tuesday) are real; stored amount (€35.70) reflects the old pre-fix math (all 5
+    counted). Correct amount is **€51** (verified against her transport line item on the same
+    record, whose math was already correct and computes exactly that for the same discount
+    rate). Under-charged by €15.30 on this one line item. Needs the same kind of backfill as
+    the double-discount bug below — good candidate to fix via whatever `backfillBillingSchedules`
+    run addresses that one, rather than another one-off hand patch.
+  - Diogo Mogo, Bernardo Mogo, José Eduardo (all transport, `nnBmdqT7MEL3tNeTQqbM_2026-09` /
+    `zsKcaaic4P5nhDP6Z2Ms_2026-09`) — each has one stray `2026-09-06` (Sunday) in
+    `excludedDates` alongside a legitimate ~7-day absence block on real schedule days.
+    Confirmed harmless: transport's deduction math already correctly ignores non-schedule-day
+    entries, so it's a €0-impact data oddity, not a bug instance. No action needed.
+  - **Unrelated oddity spotted in passing, flagging only**: José Eduardo's line item title
+    lists his schedule days twice (`"2ª, 3ª, 4ª, 5ª, 6ª, 3ª, 4ª, 5ª, 6ª"`) and his gross (€216)
+    looks too high for a 5-day/week schedule at the standard rate — possibly a duplicate
+    schedule-entry bug on his subscription doc. Not investigated further, not part of this
+    audit's scope, just noted so it isn't lost.
 - **Discount model rework** (surfaced 2026-09-20): live discount logic is flat-%-off-gross;
   confirmed intended design is marginal/per-unit (multi-trip: only the 2nd+ trip in a day is
   discounted; sibling: only the 2nd+ enrolled child is discounted; school/manual discounts
