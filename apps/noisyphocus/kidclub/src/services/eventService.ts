@@ -5,6 +5,7 @@ import { col, docRef } from '../lib/db';
 import { Event } from '@shared/models/Event';
 import { FinancialEvent } from '@shared/models/FinancialEvent';
 import { EventModification, StudyRoomEntry, Booking, TransportationSubscription } from '@shared/models';
+import { CampSubscription } from '@shared/models/Camp';
 import { startOfMonth, endOfMonth, format, eachDayOfInterval, isSameDay } from 'date-fns';
 import { safeDate } from '@shared/lib/dates';
 import { getTransportBooking } from './transportationService';
@@ -61,6 +62,63 @@ const getActiveTransportSubscriptions = async () => {
   const transportSubQuery = query(col('transportationSubscriptions'), where('status', '==', 'active'));
   const snapshot = await getDocs(transportSubQuery);
   return snapshot.docs.map(doc => ({ ...doc.data() as TransportationSubscription, id: doc.id }));
+};
+
+// ── Pipeline (pending) fetches — for financial-event generation only.
+// Pending subs/entries are never turned into real calendar/expense-forecast
+// events (that stays confirmed/active-only), but they DO get a 'pipeline'
+// income FinancialEvent so the Financial Summary can show expected-but-not-
+// committed revenue as a clearly separate bucket.
+const getPendingStudyRoomEntries = async () => {
+  const q = query(col('studyroom'), where('status', '==', 'pending'));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ ...doc.data() as StudyRoomEntry, id: doc.id }));
+};
+
+const getPendingTransportSubscriptions = async () => {
+  const q = query(col('transportationSubscriptions'), where('status', '==', 'pending'));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ ...doc.data() as TransportationSubscription, id: doc.id }));
+};
+
+const getPendingPartyBookings = async (month: Date) => {
+  const start = startOfMonth(month);
+  const end = endOfMonth(month);
+  const q = query(
+    col('bookings'),
+    where('status', '==', 'pending'),
+    where('date', '>=', format(start, 'yyyy-MM-dd')),
+    where('date', '<=', format(end, 'yyyy-MM-dd'))
+  );
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map(doc => ({ ...doc.data() as Booking, id: doc.id }));
+};
+
+// Camp subscriptions have no date of their own — they reference a Camp
+// (campId) which owns the start/end date range. A subscription is included
+// for a given month if its camp overlaps that month.
+const getCampSubscriptionsForMonth = async (month: Date): Promise<(CampSubscription & { _campStart: Date })[]> => {
+  const start = startOfMonth(month);
+  const end = endOfMonth(month);
+  const [subsSnap, campsSnap] = await Promise.all([
+    getDocs(query(col('campSubscriptions'), where('status', 'in', ['pending', 'confirmed']))),
+    getDocs(col('camps')),
+  ]);
+  const campDates = new Map<string, { start: Date; end: Date }>();
+  campsSnap.docs.forEach(d => {
+    const c = d.data();
+    campDates.set(d.id, { start: safeDate(c.startDate), end: safeDate(c.endDate) });
+  });
+  const result: (CampSubscription & { _campStart: Date })[] = [];
+  subsSnap.docs.forEach(d => {
+    const sub = { ...d.data() as CampSubscription, id: d.id };
+    const dates = campDates.get(sub.campId);
+    if (!dates) return;
+    if (dates.start <= end && dates.end >= start) {
+      result.push({ ...sub, _campStart: dates.start });
+    }
+  });
+  return result;
 };
 
 const getTransportSubscriptionsForCalendar = async () => {
@@ -209,11 +267,29 @@ const createFinancialEvent = (batch: any, id: string, event: Partial<FinancialEv
 
 //<editor-fold desc="Mappers">
 
+// Committed = active/confirmed (real, billed as normal). Pipeline = pending
+// (not yet committed — could convert or could cancel; shown separately,
+// never summed into "current revenue"). Cancelled/rejected → no event at all.
+const studyRoomTier = (status: StudyRoomEntry['status']): 'committed' | 'pipeline' | null =>
+  status === 'active' ? 'committed' : status === 'pending' ? 'pipeline' : null;
+
+const transportSubTier = (status: TransportationSubscription['status']): 'committed' | 'pipeline' | null =>
+  status === 'active' ? 'committed' : status === 'pending' ? 'pipeline' : null;
+
+const bookingTier = (status: Booking['status']): 'committed' | 'pipeline' | null =>
+  status === 'confirmed' ? 'committed' : status === 'pending' ? 'pipeline' : null;
+
+const campSubTier = (status: CampSubscription['status']): 'committed' | 'pipeline' | null =>
+  status === 'confirmed' ? 'committed' : status === 'pending' ? 'pipeline' : null;
+
 const studyRoomIncomeMapper = (month: Date) => (entry: StudyRoomEntry) => {
   const startDate = startOfMonth(month);
   const endDate = endOfMonth(month);
   const year = month.getFullYear();
   const monthNumber = month.getMonth();
+
+  const tier = studyRoomTier(entry.status);
+  if (!tier) return null;
 
   const entryStartDate = safeDate(entry.startDate);
   const entryEndDate = safeDate(entry.endDate);
@@ -228,6 +304,9 @@ const studyRoomIncomeMapper = (month: Date) => (entry: StudyRoomEntry) => {
         amount: entry.basePrice,
         date: Timestamp.fromDate(startDate),
         category: 'Sala de Estudo',
+        tier,
+        sourceCollection: 'studyroom',
+        sourceId: entry.id,
       },
     };
     events.push(studyEvent);
@@ -240,6 +319,9 @@ const studyRoomIncomeMapper = (month: Date) => (entry: StudyRoomEntry) => {
           amount: entry.transportFee,
           date: Timestamp.fromDate(startDate),
           category: 'Transporte (Estudo)',
+          tier,
+          sourceCollection: 'studyroom',
+          sourceId: entry.id,
         },
       };
       events.push(transportEvent);
@@ -255,6 +337,9 @@ const transportSubIncomeMapper = (month: Date) => (sub: TransportationSubscripti
   const year = month.getFullYear();
   const monthNumber = month.getMonth();
 
+  const tier = transportSubTier(sub.status);
+  if (!tier) return null;
+
   const subStartDate = safeDate(sub.startDate);
   const subEndDate = sub.endDate ? safeDate(sub.endDate) : null;
 
@@ -266,6 +351,9 @@ const transportSubIncomeMapper = (month: Date) => (sub: TransportationSubscripti
         amount: sub.monthlyFee,
         date: Timestamp.fromDate(startDate),
         category: 'Transporte (Subscrição)',
+        tier,
+        sourceCollection: 'transportationSubscriptions',
+        sourceId: sub.id,
       },
     };
   }
@@ -277,6 +365,9 @@ const partyBookingIncomeMapper = (month: Date) => (booking: Booking) => {
   const endDate = endOfMonth(month);
   const bookingDate = safeDate(booking.date);
 
+  const tier = bookingTier(booking.status);
+  if (!tier) return null;
+
   if (bookingDate >= startDate && bookingDate <= endDate) {
     return {
       id: `booking-${booking.id}`,
@@ -285,10 +376,31 @@ const partyBookingIncomeMapper = (month: Date) => (booking: Booking) => {
         amount: booking.total,
         date: Timestamp.fromDate(bookingDate),
         category: 'Festas',
+        tier,
+        sourceCollection: 'bookings',
+        sourceId: booking.id,
       },
     };
   }
   return null;
+};
+
+const campBookingIncomeMapper = () => (sub: CampSubscription & { _campStart: Date }) => {
+  const tier = campSubTier(sub.status);
+  if (!tier) return null;
+
+  return {
+    id: `camp_${sub.id}`,
+    event: {
+      label: `Campo - ${sub.childName}`,
+      amount: sub.totalAmount,
+      date: Timestamp.fromDate(sub._campStart),
+      category: 'Campos',
+      tier,
+      sourceCollection: 'campSubscriptions',
+      sourceId: sub.id,
+    },
+  };
 };
 
 //</editor-fold>
@@ -571,10 +683,20 @@ export const eventService = {
     const batch = writeBatch(db);
     let eventCount = 0;
 
-    const [studyRoomEntries, partyBookings, transportSubscriptions, { driver, teacher, driverHourlyRate, teacherHourlyRate }, cancellations, existingEvents] = await Promise.all([
+    const [
+      studyRoomEntries, partyBookings, transportSubscriptions,
+      pendingStudyRoomEntries, pendingPartyBookings, pendingTransportSubscriptions,
+      campSubscriptions, transportConfigSnap,
+      { driver, teacher, driverHourlyRate, teacherHourlyRate }, cancellations, existingEvents,
+    ] = await Promise.all([
       getConfirmedStudyRoomEntries(),
       getConfirmedPartyBookings(month),
       getActiveTransportSubscriptions(),
+      getPendingStudyRoomEntries(),
+      getPendingPartyBookings(month),
+      getPendingTransportSubscriptions(),
+      getCampSubscriptionsForMonth(month),
+      getDoc(docRef('config', 'transportation')),
       getEmployeesWithContracts(),
       getApprovedCancellations(month),
       // Event Sourcing: Fetch existing events to avoid duplicates (preserve history)
@@ -600,10 +722,56 @@ export const eventService = {
     ]);
 
     // Generate financial events (income) - these are always generated regardless of cancellations
-    // because they represent subscription fees, not individual event fees
+    // because they represent subscription fees, not individual event fees.
+    // Committed (active/confirmed) and pipeline (pending) are generated from
+    // separate fetches, but the mappers themselves compute `tier` from each
+    // item's own status — never mix the two into one revenue number.
     generateFinancialEvents(batch, studyRoomEntries, studyRoomIncomeMapper(month));
     generateFinancialEvents(batch, transportSubscriptions, transportSubIncomeMapper(month));
     generateFinancialEvents(batch, partyBookings, partyBookingIncomeMapper(month));
+    generateFinancialEvents(batch, pendingStudyRoomEntries, studyRoomIncomeMapper(month));
+    generateFinancialEvents(batch, pendingTransportSubscriptions, transportSubIncomeMapper(month));
+    generateFinancialEvents(batch, pendingPartyBookings, partyBookingIncomeMapper(month));
+    generateFinancialEvents(batch, campSubscriptions, campBookingIncomeMapper());
+
+    // Operational expenses: van + electricity only (driver/teacher payroll is
+    // moving to the Finances app — see FinancialSummaryPage / STATUS.md).
+    // Always 'committed': these are fixed monthly costs, not subject to a
+    // pending/confirmed distinction.
+    if (transportConfigSnap.exists()) {
+      const tCfg = transportConfigSnap.data() as any;
+      const year = month.getFullYear();
+      const monthNumber = month.getMonth();
+      const monthStart = startOfMonth(month);
+      if (tCfg.vanMonthlyCost) {
+        createFinancialEvent(batch, `expense_van-${year}-${monthNumber}`, {
+          label: 'Van (custo fixo mensal)',
+          amount: tCfg.vanMonthlyCost,
+          type: 'expense',
+          date: Timestamp.fromDate(monthStart),
+          category: 'Transporte - Van',
+          accountId: 'van-cost',
+          tier: 'committed',
+          sourceCollection: 'config',
+          sourceId: 'transportation.vanMonthlyCost',
+        });
+        eventCount++;
+      }
+      if (tCfg.electricityMonthlyCost) {
+        createFinancialEvent(batch, `expense_electricity-${year}-${monthNumber}`, {
+          label: 'Eletricidade (custo fixo mensal)',
+          amount: tCfg.electricityMonthlyCost,
+          type: 'expense',
+          date: Timestamp.fromDate(monthStart),
+          category: 'Transporte - Eletricidade',
+          accountId: 'electricity-cost',
+          tier: 'committed',
+          sourceCollection: 'config',
+          sourceId: 'transportation.electricityMonthlyCost',
+        });
+        eventCount++;
+      }
+    }
 
     const daysOfMonth = eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) });
 
