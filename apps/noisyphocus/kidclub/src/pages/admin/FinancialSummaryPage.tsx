@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { getDocs, getDoc, query, orderBy, limit, setDoc } from 'firebase/firestore';
+import { useState, useEffect, useMemo } from 'react';
+import { getDocs, getDoc, setDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import { col, docRef } from '../../lib/db';
 import { TransportationConfig } from '@shared/models/Transportation';
@@ -27,16 +27,22 @@ interface StudySub {
   endDate: Date | null;
 }
 
-interface RouteSnapshot {
-  driverCost: number;
-  vanCost: number;
-  electricityCost: number;
-  monthlyCost: number;
-  monthlyRevenue: number;
-  monthlyRevenueActive: number;
-}
-
 type ServiceFilter = 'both' | 'transport' | 'study';
+
+type CostFieldKey =
+  | 'transport.vanMonthlyCost'
+  | 'transport.driverMonthlyCost'
+  | 'transport.electricityMonthlyCost'
+  | 'study.teacherMonthlyCost'
+  | 'study.rentMonthlyCost';
+
+const COST_FIELD_META: Record<CostFieldKey, { configDoc: 'transportation' | 'studyCenter'; field: string }> = {
+  'transport.vanMonthlyCost': { configDoc: 'transportation', field: 'vanMonthlyCost' },
+  'transport.driverMonthlyCost': { configDoc: 'transportation', field: 'driverMonthlyCost' },
+  'transport.electricityMonthlyCost': { configDoc: 'transportation', field: 'electricityMonthlyCost' },
+  'study.teacherMonthlyCost': { configDoc: 'studyCenter', field: 'teacherMonthlyCost' },
+  'study.rentMonthlyCost': { configDoc: 'studyCenter', field: 'rentMonthlyCost' },
+};
 
 const ALL_STATUSES: SubStatus[] = ['active', 'pending', 'cancelled'];
 
@@ -125,17 +131,50 @@ function ScenarioRow({ label, revenue, cost, color }: {
   );
 }
 
+function EditableCostRow({ label, value, saving, onChange, onSave }: {
+  label: string; value: string; saving: boolean; onChange: (v: string) => void; onSave: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <span className="text-sm text-gray-600">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <div className="relative">
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">€</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            onBlur={onSave}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            className="w-28 pl-6 pr-2 py-1 text-sm border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-indigo-400"
+          />
+        </div>
+        {saving && <span className="text-xs text-gray-400">…</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function FinancialSummaryPage() {
   const [tConfig, setTConfig] = useState<TransportationConfig | null>(null);
   const [sConfig, setSConfig] = useState<StudyCenterConfig | null>(null);
   const [tSubs, setTSubs] = useState<TransportSub[]>([]);
   const [sSubs, setSSubs] = useState<StudySub[]>([]);
-  const [latestSnapshot, setLatestSnapshot] = useState<RouteSnapshot | null>(null);
   const [families, setFamilies] = useState<Record<string, string>>({});
-  const [overrideInput, setOverrideInput] = useState('');
-  const [savingOverride, setSavingOverride] = useState(false);
   const [loading, setLoading] = useState(true);
-  const overrideRef = useRef<HTMLInputElement>(null);
+  // Fixed-cost inputs — edited directly here, not derived from a planned
+  // route snapshot. Keyed the same as CostFieldKey so one generic save
+  // handler covers all five fields.
+  const [costInputs, setCostInputs] = useState<Record<CostFieldKey, string>>({
+    'transport.vanMonthlyCost': '',
+    'transport.driverMonthlyCost': '',
+    'transport.electricityMonthlyCost': '',
+    'study.teacherMonthlyCost': '',
+    'study.rentMonthlyCost': '',
+  });
+  const [savingCostField, setSavingCostField] = useState<CostFieldKey | null>(null);
 
   // Filters — drive every revenue/count figure on the page. Default mirrors
   // the old "Receita Estimada" scenario (active + pending).
@@ -147,27 +186,31 @@ export default function FinancialSummaryPage() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      const [tCfgSnap, sCfgSnap, tSnap, sSnap, routeSnap, familiesSnap] = await Promise.all([
+      const [tCfgSnap, sCfgSnap, tSnap, sSnap, familiesSnap] = await Promise.all([
         getDoc(docRef('config', 'transportation')),
         getDoc(docRef('config', 'studyCenter')),
         getDocs(col('transportationSubscriptions')),
         getDocs(col('studyroom')),
-        getDocs(query(col('transportRoutes'), orderBy('savedAt', 'desc'), limit(1))),
         getDocs(col('families')),
       ]);
 
       let cfg: TransportationConfig | null = null;
+      let sCfg: StudyCenterConfig | null = null;
       if (tCfgSnap.exists()) {
         cfg = tCfgSnap.data() as TransportationConfig;
         setTConfig(cfg);
-        setOverrideInput(cfg.driverMonthlyCostOverride != null ? String(cfg.driverMonthlyCostOverride) : '');
       }
-      if (sCfgSnap.exists()) setSConfig(sCfgSnap.data() as StudyCenterConfig);
-
-      if (!routeSnap.empty) {
-        const snap = routeSnap.docs[0].data().snapshot as RouteSnapshot | undefined;
-        if (snap) setLatestSnapshot(snap);
+      if (sCfgSnap.exists()) {
+        sCfg = sCfgSnap.data() as StudyCenterConfig;
+        setSConfig(sCfg);
       }
+      setCostInputs({
+        'transport.vanMonthlyCost': cfg?.vanMonthlyCost != null ? String(cfg.vanMonthlyCost) : '',
+        'transport.driverMonthlyCost': cfg?.driverMonthlyCost != null ? String(cfg.driverMonthlyCost) : '',
+        'transport.electricityMonthlyCost': cfg?.electricityMonthlyCost != null ? String(cfg.electricityMonthlyCost) : '',
+        'study.teacherMonthlyCost': sCfg?.teacherMonthlyCost != null ? String(sCfg.teacherMonthlyCost) : '',
+        'study.rentMonthlyCost': sCfg?.rentMonthlyCost != null ? String(sCfg.rentMonthlyCost) : '',
+      });
 
       const familyNames: Record<string, string> = {};
       for (const d of familiesSnap.docs) {
@@ -221,16 +264,6 @@ export default function FinancialSummaryPage() {
   };
   const sRevenueFor = (subs: StudySub[]) => subs.reduce((sum, s) => sum + sAmountFor(s), 0);
 
-  const overrideParsed = overrideInput.trim() !== '' ? parseFloat(overrideInput) : null;
-  const isOverrideValid = overrideParsed === null || (!isNaN(overrideParsed) && overrideParsed >= 0);
-
-  const savedOverride = tConfig?.driverMonthlyCostOverride ?? null;
-  const plannerDriverCost = latestSnapshot?.driverCost ?? null;
-  const plannerElectricityCost = latestSnapshot?.electricityCost ?? 0;
-
-  // Effective driver cost: override > planner snapshot > 0
-  const effectiveDriverCost = savedOverride ?? plannerDriverCost ?? 0;
-
   const tByStatus = useMemo(() => {
     const m: Record<string, number> = {};
     for (const s of tSubs) m[s.status] = (m[s.status] ?? 0) + 1;
@@ -256,14 +289,14 @@ export default function FinancialSummaryPage() {
       sRevenueFor(sSubs.filter(s => s.status === 'active' && overlapsMonth(s.startDate, s.endDate, monthFilter)));
 
     const vanCost = tConfig?.vanMonthlyCost ?? 0;
-    const driverCost = effectiveDriverCost;
-    const electricityCost = plannerElectricityCost;
+    const driverCost = tConfig?.driverMonthlyCost ?? 0;
+    const electricityCost = tConfig?.electricityMonthlyCost ?? 0;
     const tCost = vanCost + driverCost + electricityCost;
     const sCost = (sConfig?.teacherMonthlyCost ?? 0) + (sConfig?.rentMonthlyCost ?? 0);
 
     return { tFiltered, sFiltered, tRevenue, sRevenue, activeOnlyRevenue, tCost, sCost, vanCost, driverCost, electricityCost };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tSubs, sSubs, tConfig, sConfig, effectiveDriverCost, plannerElectricityCost, statusFilter, monthFilter]);
+  }, [tSubs, sSubs, tConfig, sConfig, statusFilter, monthFilter]);
 
   const showTransport = serviceFilter !== 'study';
   const showStudy = serviceFilter !== 'transport';
@@ -320,21 +353,23 @@ export default function FinancialSummaryPage() {
     setStatusFilter(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
   }
 
-  async function saveDriverOverride(valueOverride?: number | null) {
-    if (!isOverrideValid && valueOverride === undefined) return;
-    setSavingOverride(true);
+  async function saveCostField(key: CostFieldKey) {
+    const raw = costInputs[key].trim();
+    const value = raw === '' ? 0 : parseFloat(raw);
+    if (isNaN(value) || value < 0) return;
+    const { configDoc, field } = COST_FIELD_META[key];
+    setSavingCostField(key);
     try {
-      const value = valueOverride !== undefined ? valueOverride : (overrideInput.trim() === '' ? null : overrideParsed);
-      await setDoc(docRef('config', 'transportation'), { driverMonthlyCostOverride: value ?? null }, { merge: true });
-      setTConfig(prev => prev ? { ...prev, driverMonthlyCostOverride: value ?? undefined } : prev);
+      await setDoc(docRef('config', configDoc), { [field]: value }, { merge: true });
+      if (configDoc === 'transportation') {
+        setTConfig(prev => prev ? { ...prev, [field]: value } : prev);
+      } else {
+        setSConfig(prev => prev ? { ...prev, [field]: value } : prev);
+      }
+      setCostInputs(prev => ({ ...prev, [key]: String(value) }));
     } finally {
-      setSavingOverride(false);
+      setSavingCostField(null);
     }
-  }
-
-  async function clearDriverOverride() {
-    setOverrideInput('');
-    await saveDriverOverride(null);
   }
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">A carregar…</div>;
@@ -442,6 +477,59 @@ export default function FinancialSummaryPage() {
         </div>
       </div>
 
+      {/* Fixed costs — edited here directly, independent of the Transport Planner.
+          The planner only estimates cost while planning a route; it never feeds
+          these numbers, so the P&L stays correct even with no route ever saved. */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100">
+          <h2 className="text-sm font-semibold text-gray-700">Custos Fixos</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Editar diretamente aqui — não depende do planeador de rotas.</p>
+        </div>
+        <div className="px-5 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y sm:divide-y-0 divide-gray-100">
+          <div className="divide-y divide-gray-100">
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">🚌 Transporte</div>
+            <EditableCostRow
+              label="Van"
+              value={costInputs['transport.vanMonthlyCost']}
+              saving={savingCostField === 'transport.vanMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.vanMonthlyCost': v }))}
+              onSave={() => saveCostField('transport.vanMonthlyCost')}
+            />
+            <EditableCostRow
+              label="Motorista"
+              value={costInputs['transport.driverMonthlyCost']}
+              saving={savingCostField === 'transport.driverMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.driverMonthlyCost': v }))}
+              onSave={() => saveCostField('transport.driverMonthlyCost')}
+            />
+            <EditableCostRow
+              label="Eletricidade"
+              value={costInputs['transport.electricityMonthlyCost']}
+              saving={savingCostField === 'transport.electricityMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.electricityMonthlyCost': v }))}
+              onSave={() => saveCostField('transport.electricityMonthlyCost')}
+            />
+          </div>
+          <div className="divide-y divide-gray-100">
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">📚 Sala de Estudo</div>
+            <EditableCostRow
+              label="Professora"
+              value={costInputs['study.teacherMonthlyCost']}
+              saving={savingCostField === 'study.teacherMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'study.teacherMonthlyCost': v }))}
+              onSave={() => saveCostField('study.teacherMonthlyCost')}
+            />
+            <EditableCostRow
+              label="Renda"
+              value={costInputs['study.rentMonthlyCost']}
+              saving={savingCostField === 'study.rentMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'study.rentMonthlyCost': v }))}
+              onSave={() => saveCostField('study.rentMonthlyCost')}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Combined KPIs — all driven by the filter above */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KPI
@@ -453,7 +541,7 @@ export default function FinancialSummaryPage() {
         <KPI
           label="Custos fixos"
           value={eur(totalCost)}
-          sub="van + motorista + professora + renda"
+          sub="van + motorista + eletricidade + professora + renda"
           color="text-red-600"
         />
         <KPI
@@ -576,79 +664,24 @@ export default function FinancialSummaryPage() {
               ))}
             </div>
 
-            {/* Costs */}
+            {/* Costs — read-only here; edited in the "Custos Fixos" panel above */}
             <div className="pt-2 border-t border-gray-100 text-xs text-gray-500 space-y-1">
               <div className="flex justify-between">
-                <span>Van (fixo)</span>
+                <span>Van</span>
                 <span className="font-mono text-red-500">{eur(vanCost)}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span>
-                  Motorista
-                  {savedOverride != null
-                    ? <span className="ml-1 text-amber-600">(override)</span>
-                    : plannerDriverCost != null
-                    ? <span className="ml-1 text-gray-400">(do planeador)</span>
-                    : <span className="ml-1 text-gray-300">(sem dados)</span>}
-                </span>
+              <div className="flex justify-between">
+                <span>Motorista</span>
                 <span className="font-mono text-red-500">{eur(driverCost)}</span>
               </div>
-              {electricityCost > 0 && (
-                <div className="flex justify-between">
-                  <span>Energia (do planeador)</span>
-                  <span className="font-mono text-red-500">{eur(electricityCost)}</span>
-                </div>
-              )}
+              <div className="flex justify-between">
+                <span>Eletricidade</span>
+                <span className="font-mono text-red-500">{eur(electricityCost)}</span>
+              </div>
               <div className="flex justify-between font-semibold border-t border-gray-100 pt-1 mt-1">
                 <span>Total transporte</span>
                 <span className="font-mono text-red-500">{eur(tCost)}</span>
               </div>
-            </div>
-
-            {/* Driver override input */}
-            <div className="pt-1 border-t border-gray-100">
-              <div className="text-xs text-gray-400 mb-1.5">
-                Custo motorista
-                {plannerDriverCost != null && (
-                  <span className="ml-1">· do planeador: <strong className="text-gray-600">{eur(plannerDriverCost)}</strong></span>
-                )}
-              </div>
-              <div className="flex gap-2 items-center">
-                <div className="relative flex-1">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">€</span>
-                  <input
-                    ref={overrideRef}
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder={plannerDriverCost != null ? String(Math.round(plannerDriverCost)) : 'Override manual'}
-                    value={overrideInput}
-                    onChange={e => setOverrideInput(e.target.value)}
-                    className={`w-full pl-6 pr-3 py-1.5 text-xs border rounded-lg outline-none focus:ring-1 ${
-                      !isOverrideValid ? 'border-red-300 focus:ring-red-400' : 'border-gray-200 focus:ring-indigo-400'
-                    }`}
-                  />
-                </div>
-                <button
-                  onClick={() => saveDriverOverride()}
-                  disabled={savingOverride || !isOverrideValid}
-                  className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 shrink-0"
-                >
-                  {savingOverride ? '…' : 'Guardar'}
-                </button>
-                {savedOverride != null && (
-                  <button
-                    onClick={clearDriverOverride}
-                    className="text-xs px-2 py-1.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50 shrink-0"
-                    title="Limpar override"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-              {savedOverride != null && (
-                <p className="text-xs text-amber-600 mt-1">Override activo — a ignorar valor do planeador.</p>
-              )}
             </div>
 
             {tConfig?.flatRatePerTrip && (

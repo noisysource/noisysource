@@ -2,220 +2,224 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 ## Currently working on
-Rebuilt the CI/CD pipeline at Renato's request (see root `CLAUDE.md`'s "Branch → environment
-pipeline" for the full model: PR into `staging` auto-deploys to kidclub-dev, merge to `main`
-auto-deploys everything to prod, hotfix branches PR straight to `main`, `staging` auto-syncs
-after every `main` merge). `agent/cicd-staging-prod-pipeline` → `staging` PR went green and
-was merged (#12). Now promoting to `main`: PR opened as `agent/cicd-prod-prep` → `main`
-(branched from `staging`'s tip, so it carries everything from #12 plus one more fix — see
-point 9 below).
 
-**This is the pipeline's first real run, and it's earning its keep** — every failure below
-was a genuine pre-existing gap the old manual-deploy flow never surfaced, not something this
-session introduced:
-
-1. `Invalid workflow file` on first push — reusable `workflow_call` jobs don't get to request
-   their own `permissions`, they inherit (capped) from the caller. Fixed: added explicit
-   `permissions: { contents: read, id-token: write }` to the calling `deploy` job in both
-   `deploy-dev.yml` and `deploy-prod.yml`.
-2. `firebase deploy --only functions` 403'd on every secret (`SA_CLIENT_EMAIL`,
-   `VENDUS_API_KEY`, etc.) — the CI deploy SA (`gmail-sender-kidclub-dev`) had never been
-   granted `secretmanager.secretAccessor` on any of them; nothing in Terraform granted it.
-   Fixed: new `google_secret_manager_secret_iam_member` resource in
-   `infra/gcp/terraform/secrets.tf`, one per tracked secret.
-3. That fix only works if Terraform's `apply` runs *before* the functions deploy step in the
-   same job — it was previously last. Reordered `_deploy-kidclub-env.yml`: terraform first,
-   then rules/indexes, then functions/hosting.
-4. `EASYPAY_WEBHOOK_URL` was used by real function code (`easypay.ts`, `billing.ts`) but was
-   never added to Terraform's tracked `secret_ids` list, and the secret already existed in
-   GCP (created by hand, like the others originally were) — so just adding it to the list
-   would have made `apply` try to create a duplicate and fail. Imported it into kidclub-dev's
-   state by hand (`terraform import ... projects/kidclub-dev/secrets/EASYPAY_WEBHOOK_URL`)
-   before pushing the code change. **Prod's state still needs the same import** — see Next
-   step.
-5. `terraform apply` also needs `-var="billing_account_id=..."` (no default in `budget.tf`,
-   required on every apply regardless of environment) — never wired into CI before. Added via
-   a `BILLING_ACCOUNT_ID` GitHub repo secret + `secrets: inherit` on both callers (reusable
-   workflows don't inherit repo secrets automatically either). **Renato needs to add this
-   secret in GitHub repo Settings → Secrets → Actions** — value is the billing account linked
-   to kidclub-dev, looked up via the Cloud Billing API this session (not written here on
-   purpose — check `gcloud billing accounts list` or GCP console if you need it again).
-6. Before pushing, ran `terraform plan` against real kidclub-dev state and found ~31 items of
-   *pre-existing* drift unrelated to this work (Cloud Function configs catching up to what's
-   actually deployed, a new Firebase Storage bucket resource, and — notably — enabling
-   `places.googleapis.com`). Checked it against `quotas.tf`: the Places API's hard daily quota
-   cap (100 autocomplete requests/day) was already verified live on 2026-09-14, so this wasn't
-   new uncapped exposure, just Terraform catching up to already-intentional, already-guarded
-   config. Applied that full plan by hand against kidclub-dev with Renato's explicit sign-off.
-7. That apply surfaced two more real, pre-existing gaps: (a) `triggerInvoiceGeneration` was
-   listed in `functions.tf`'s tracked function set since 2026-07-27 with **no corresponding
-   function in `functions/src` at all** — pure dead config, predates this session entirely.
-   Removed it. (b) Four real, already-deployed functions (`tuyaSetState`, `tuyaGetDevices`,
-   `getKidclubVatSummary`, `setBillingLineItemExcludedDays`) had never been imported into
-   Terraform state, so `apply` tried to create them fresh and got `409: already exists`.
-   Imported all four. One follow-up apply hit a transient "Container Healthcheck failed" on
-   two of them mid-rollout — checked directly against the Cloud Functions API afterward: both
-   are `state: ACTIVE` and serving, and a final `terraform plan` now reports **"No changes.
-   Your infrastructure matches the configuration"** — kidclub-dev is fully reconciled.
-8. Next CI run got past all of the above and failed differently: 5 resources
-   (`dev_sa_bq_job_user_prod`, `dev_compute_sa_bq_job_user_prod`, `billing_cutoff_agent_prod`,
-   `combined_budget`, and last session's own `gmail_sender_service_usage_consumer_prod` grant)
-   all manage IAM/billing policy **on `rainbow-prod-2454b` or its billing account directly**,
-   and `roles/serviceusage.serviceUsageConsumer` (granted last session) only lets a service
-   account *be granted* roles on another project — it doesn't let it *read or manage* that
-   project's IAM policy, which Terraform itself needs to diff these resources at all.
-   **This is a materially bigger decision than every fix before it**: closing this gap the
-   same way means the dev-project CI service account (`gmail-sender-kidclub-dev`, federated
-   via GitHub Actions Workload Identity) gets IAM-admin rights on the **prod** project itself.
-   Presented the tradeoff directly to Renato — grant it, vs. excluding these 5 resources from
-   CI's automated apply and keeping them human-applied like before (arguably the more
-   conservative default) — and **Renato explicitly chose to grant it**. Added
-   `roles/resourcemanager.projectIamAdmin` on `rainbow-prod-2454b` and `roles/billing.admin`
-   on the billing account, both to `gmail_sender`, plus `cloudbilling.googleapis.com` enabled
-   on kidclub-dev (a prerequisite the billing-account grant needed, separate from the role
-   itself — hit its own `SERVICE_DISABLED` error, fixed by adding it to `project.tf`'s API
-   list rather than just clicking it on in the console).
-   **Read this if you're the next session touching prod IAM**: this SA can now read/modify
-   prod's IAM policy and the billing account's. If its WIF-federated credentials were ever
-   compromised, the blast radius includes prod IAM, not just kidclub-dev. That tradeoff was
-   made knowingly, but it's worth re-confirming it still feels right before doing more here.
-   Applied by hand against kidclub-dev; final `terraform plan` → no changes, fully reconciled.
-9. Before opening the `main` promotion PR, ran `terraform plan -var-file=env/prod.tfvars`
-   by hand against the real `rainbow-prod-2454b` state prefix — the check flagged as a
-   prerequisite in point 3 below. Result: **81 resources pending creation, 0 to change**.
-   Prod's Terraform state is essentially empty — nobody has ever run `terraform apply`
-   against it; everything live in prod (functions, hosting, IAM, rules, Firestore) was set
-   up out-of-band (firebase CLI, gcloud, console clicks), never imported into Terraform
-   state. The plan also hard-errors on a `storage.tf` data lookup expecting an existing
-   `rainbow-prod-2454b.firebasestorage.app` bucket that doesn't exist — Firebase Storage was
-   likely never activated for this project via the console (see `storage.tf`'s own comment:
-   "must be activated via the Firebase Console once").
-   Presented this to Renato as a three-way choice — skip terraform for prod and merge
-   everything else, hold the whole merge until state is reconciled, or attempt the blind
-   81-resource apply anyway — and **Renato chose to skip terraform for prod, for now**.
-   Added a `run_terraform` input (default `true`) to the reusable `_deploy-kidclub-env.yml`,
-   set `false` in `deploy-prod.yml`. Hosting, Firestore rules/indexes, and functions still
-   deploy to prod automatically on merge — same as what's already done by hand today, so no
-   new risk there. Only the terraform step is paused.
-
-## Parallel session (2026-09-20) — billing double-discount fix
-A different agent, working concurrently, investigated "igbpinto@gmail.com's billing looks
-wrong." Confirmed in **prod** (read-only): a transport subscription (Carolina Almeida,
-`XiblZZlEVZHsSLFdN5z5`) was billed €117.60 instead of the correct €168 — a 30% discount
-(20% school + 10% multi-trip) was being applied twice. Root cause: `computeLineItems()` in
+### 1. Billing double-discount bug — FIXED, deployed to prod, partially backfilled
+Investigated "igbpinto@gmail.com's billing looks wrong". Root cause: `computeLineItems()` in
 `functions/src/kidclub/billing.ts` read `sub.originalFee ?? sub.monthlyFee` as the *gross*
 transport fee, but `discountRecalc.ts` overwrites `monthlyFee` with the already-discounted
-price, and self-enrolled subscriptions never get `originalFee` set — so billing re-applied
-`appliedDiscounts` on top of an already-net price. Under-bills, doesn't overcharge.
-**Scope: 8 of 23 active transport subscriptions** affected (see the PR/commit for the full
-list — José Eduardo, Vasco Moura, Maria Manon, Diogo Mogo, Carolina Almeida, Bernardo Mogo,
-Gil Figueiredo, Leonardo Marques). Study room subs not currently affected, but
-`discountRecalc.ts`'s study-side calc has the same latent shape of bug, flagged not fixed.
+price once any discount fires, and subscriptions from the client self-enroll flow never get
+`originalFee` set — so billing silently re-applied `appliedDiscounts` a second time. This
+under-billed customers (never overcharged). 8 of 23 active transport subs were affected.
 
-**Status as of this merge conflict resolution**: `agent/billing-double-discount-fix` PR was
-opened and **has been merged into `main`** (PR #13, confirmed via `git log`) — the code fix
-for `computeLineItems()` is now in `main`. **Still not done**, per that session's own notes:
-deploy functions to dev and verify, deploy to prod (`deploy-functions.yml`, manual), then run
-`backfillBillingSchedules` to recompute the 8 affected families' pending billing totals (a
-prod write — that session flagged it needs a decision from Renato since it's a standing-write
-question per CLAUDE.md's no-standing-prod-write-access rule, even though the callable itself
-already exists and already runs this logic on every subscription write). Worth noting: once
-`agent/cicd-prod-prep` merges, functions deploy to prod automatically on every `main` merge —
-so this fix's Cloud Function code will actually reach prod on that merge, without a separate
-manual `deploy-functions.yml` run. The backfill itself still needs to be triggered separately
-regardless.
+Fixed on branch `agent/billing-double-discount-fix` (PR #13, merged to `main`): gross is now
+derived from schedule length × `flatRatePerTrip` × weeks-in-pattern, same formula
+`discountRecalc.ts` already uses, instead of trusting a field that can silently already be net.
+**Deployed to prod** (`onStudyroomBillingSync`, `onTransportBillingSync`,
+`backfillBillingSchedules`, `setBillingLineItemExcludedDays` — the 4 functions that actually
+use the fixed logic). Verified live: Carolina Almeida's October billing line item now shows
+the correct **€168** (was €117.60).
+
+**Still under-billed, not yet backfilled**: José Eduardo (Miguel Melo) and Diogo+Bernardo Mogo
+(Sandra Abreu) — only Carolina Almeida's family has actually been recomputed so far (via a
+verification touch). Either trigger a no-op write on those subscriptions or run
+`backfillBillingSchedules` (recomputes everyone, not just these — confirm on dev first, and
+see the open question below on running it against prod).
+
+Study room subs are NOT currently affected by this exact bug (0 of 14 missing `basePrice`),
+but `discountRecalc.ts`'s study-side gross calc (`x.basePrice ?? x.monthlyPrice`) has the same
+latent shape — not fixed, no live instance found, flagging only.
+
+### 2. Discount *model* itself — confirmed wrong, NOT yet implemented
+Separately from the bug above: Renato confirmed the discount model that's actually live (flat
+% off the whole gross once a threshold is met — e.g. multi-trip discount applies to ALL trips
+that day, sibling discount applies to a sibling's ENTIRE fee) is **not** the intended design.
+Intended model is **marginal/per-unit**:
+- Multi-trip: within a day, the first (chronologically earliest) trip is full price; every
+  trip after it that same day gets the multi-trip discount.
+- Sibling: order children family-wide by earliest subscription/enrollment date; the
+  first-enrolled child's subscriptions stay full price; every subsequent child's subscriptions
+  get the sibling discount.
+- School discount (and flat manual discounts like "Aluno do ano anterior") still apply last,
+  as a flat % on the resulting sum — no natural per-unit basis for those.
+
+Comparison table run against 5 real prod subscriptions showed real, not-cosmetic differences
+(e.g. Carolina Almeida: €168 flat vs **€182.40** marginal; José Eduardo: €151.20 vs
+**€165.12**; Diogo Mogo loses his sibling discount entirely once his sibling-enrollment-order
+is accounted for, since he was enrolled before his brother). **This needs its own implementation
+pass** — touches `discountRecalc.ts`, `billing.ts`, and the `AppliedDiscount` display model
+(admin discount badges, client "was €X now €Y" comparisons currently assume one flat % per
+discount, which doesn't hold once multi-trip/sibling are marginal). Not started. See Backlog
+section below.
+
+### 3. Financial Summary — decoupled from Route Planner, deployed to dev only
+`FinancialSummaryPage.tsx` was silently showing driver/electricity cost as €0 because it
+derived them from the latest saved snapshot in `transportRoutes`, which was **empty in prod**
+(nobody had ever run/saved a route plan) — meaning the page's "profit" figure was fake. Real
+driver wage is **€1,400/month**; plugging that in flips prod from an apparent +€1,271.60/month
+"profit" to roughly **−€440/month** loss once corrected for other data-quality issues found
+along the way (an orphaned, never-actually-billed subscription for Leonardo Marques inflating
+revenue by €240/mo, and 3 subs with stale `monthlyFee` fields inflating it by €72/mo more).
+
+Refactored (branch `agent/financial-costs-decouple`, currently mid-merge-conflict-resolution
+with `main` — see Next step #1):
+- Removed the `transportRoutes`-snapshot dependency and the override/fallback chain entirely.
+- Added `driverMonthlyCost` / `electricityMonthlyCost` as direct fields on
+  `TransportationConfig` (alongside existing `vanMonthlyCost`), with a new **"Custos Fixos"**
+  panel on the page itself — Van/Motorista/Eletricidade/Professora/Renda all inline-editable,
+  saving straight to `config/transportation`/`config/studyCenter`.
+- `TransportPlannerPage.tsx` is untouched — it keeps planning routes and saving its own
+  `transportRoutes` version snapshots; Financial Summary just no longer reads them.
+- Fixed one cosmetic bug post-deploy: the "Custos Fixos" KPI subtitle said "van + motorista +
+  professora + renda", missing "eletricidade" even though it was already correctly included
+  in the total — fixed and redeployed.
+
+Typecheck + build both pass. **Deployed to dev only** (`kidclub-dev-arcoiris.web.app`), smoke-
+tested manually by Renato (entered €1400/€300 into the new panel, numbers computed correctly:
+€3787 revenue − €3750 costs = +€37, 1% margin — dev's own subscription data, not prod's).
+**Not merged to main / not deployed to prod yet.**
+
+### 4. Prod → dev data sync — done
+At Renato's request, did a full (non-anonymized) copy of KidClub's real data from
+`rainbow-prod-2454b` into `kidclub-dev`, to give dev realistic subscription/family data for
+testing (e.g. the Financial Summary work above). Method: `gcloud firestore export` (scoped to
+`billing, children, config, eventModifications, families, financialEvents, invoices, settings,
+studyroom, subscriptionVersions, transportationSubscriptions, users` — deliberately excluding
+`emailOutbox`/`emailCampaigns` so nothing risks re-queuing real emails) → copied the export
+between each project's own `*-exports` GCS bucket → `gcloud firestore import` into
+`kidclub-dev`. Verified Inês Pinto's family record landed correctly. Temporary export files
+deleted from both buckets afterward.
+
+**Side effect (expected, flagged beforehand):** the import overwrote dev's `config/transportation`
+doc wholesale, clearing the `driverMonthlyCost: 1400` / `electricityMonthlyCost: 300` Renato had
+just entered for testing (prod's doc doesn't have those fields set) — needs re-entering in dev
+if still wanted there (see Next step #4).
+
+**Caveat:** Firebase Auth UIDs are per-project — copied `users/{uid}` docs and every
+subscription's `userId` field still reference prod UIDs, which don't correspond to real dev
+Auth accounts. Fine for admin-side testing (Financial Summary, billing admin), but per-family
+client-login testing against this data won't work without also creating matching dev Auth
+accounts.
+
+### 5. CI/CD pipeline — rebuilt, now fully live (separate, now-closed thread of work)
+Rebuilt the whole deploy pipeline this week (see root `CLAUDE.md`'s "Branch → environment
+pipeline" for the full model). Now **fully merged and operational**, not in-progress:
+- PR into `staging` → auto-deploys app/rules/indexes/functions/terraform to `kidclub-dev`.
+- PR into `main` → auto-deploys app/rules/indexes/functions to prod immediately (before
+  merge) — **`terraform apply` stays disabled for prod specifically**, see below.
+- Merge to `main` → re-deploys + `sync-staging` fast-forwards `staging` to match.
+- **GitHub branch protection is now configured on `main`**: the `deploy` check must pass
+  before merge is even clickable. This was the missing piece that made the whole thing
+  trustworthy — closed out this session.
+
+Getting the first real prod deploy green took a long chain of IAM fixes, all against prod's
+CI identity `github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com` (a
+completely different identity from dev's `gmail-sender-kidclub-dev`, which is why none of
+dev's earlier fixes carried over automatically). It now has, granted by hand and documented
+in `infra/gcp/terraform/iam.tf`/`secrets.tf`/`billing-cutoff.tf` (not yet applied via
+Terraform, since terraform apply is off for prod):
+`datastore.indexAdmin`, `secretmanager.secretAccessor` + `secretmanager.viewer` (on all 7
+secrets — accessor alone isn't enough, viewer is what `firebase deploy`'s validation step
+actually needs), `serviceusage.serviceUsageAdmin`, `iam.serviceAccountUser` (project-wide,
+for functions' actAs), `cloudscheduler.admin`, `pubsub.editor`.
+
+**`billingCutoff` no longer deploys to prod at all** — it's the "combined dev+prod billing
+circuit breaker" singleton agent, and GCP's `iam.disableCrossProjectServiceAccountUsage` org
+policy (confirmed enforced on `rainbow-prod-2454b`) categorically blocks prod's CI identity
+from acting as its dev-project service account, no IAM grant can override that. Traced
+further and found the prod copy would've been permanently untriggered anyway (its Pub/Sub
+topic and the budget that publishes to it only exist in dev's Terraform state) — so rather
+than build a redundant prod-native agent, `functions/src/billingCutoff.ts`'s export is now
+conditional on `GCLOUD_PROJECT === "kidclub-dev"`.
+
+**Prod's Terraform state is still essentially empty** (81 resources pending creation, real
+infra was never imported — found via `terraform plan -var-file=env/prod.tfvars`) — `apply`
+stays off for prod (`run_terraform: false` in `deploy-prod.yml`) until that's deliberately
+reconciled as its own task. Not urgent; app/rules/indexes/functions/hosting all deploy fine
+without it.
 
 ## Last completed
-- All fixes above (1-9) pushed. Points 1-8 are on `staging` (merged via PR #12). Point 9 is
-  on `agent/cicd-prod-prep`, PR opened against `main`:
-  https://github.com/noisysource/noisysource/pull/new/agent/cicd-prod-prep
-- `BILLING_ACCOUNT_ID` repo secret added by Renato.
-- `terraform validate` passes locally; full `terraform plan` reviewed before every apply, and
-  before this promotion PR was even opened.
-- kidclub-dev's Terraform state is fully clean (`terraform plan` → no changes) as of this
-  session — confirmed via both `terraform plan` and, for the functions specifically, a direct
-  Cloud Functions API check.
-- Auto mode's Bash permission classifier was blocking `git commit`/`git add` specifically
-  around this terraform/IAM work (even after the underlying `terraform apply` itself
-  succeeded) — Renato asked to loosen it; added `Bash(git commit *)`, `Bash(git add *)`,
-  `Bash(git status *)` to `.claude/settings.local.json`'s allow list (personal, gitignored,
-  not team-wide).
+- Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
+  Almeida. José Eduardo + Mogo siblings still need backfill.
+- Financial Summary refactor: on `agent/financial-costs-decouple`, deployed to dev only,
+  smoke-tested manually by Renato. Currently resolving a merge conflict against `main` (this
+  branch was opened before the CI/CD pipeline work landed, so it was ~23 commits behind).
+- Prod → dev data sync: done, verified, temp export files cleaned up from both buckets.
+- CI/CD pipeline: fully merged to `main`, branch protection configured, first real prod
+  deploy went green.
+- `agent/impersonation-billing-fix` (from the 2026-09-18 session) — confirmed merged into
+  `main` (PR #11) a while back; the "prod ahead of main" risk from that session is resolved,
+  no longer worth tracking.
 
 ## Next step
-1. Review and merge `agent/cicd-prod-prep` → `main`. On merge, `deploy-prod.yml` runs
-   automatically: hosting, Firestore rules/indexes, and functions deploy to prod — terraform
-   apply is skipped (point 9). Watch that run; it's the pipeline's first-ever prod deploy, and
-   it's also what actually gets the billing double-discount fix's code (already merged into
-   `main` as of PR #13) onto prod for the first time.
-2. After that deploy, verify the billing double-discount fix landed correctly (a transport
-   billing line item matches the sub's `monthlyFee`), then run/trigger `backfillBillingSchedules`
-   to recompute the 8 affected families' pending billing totals — check result counts against
-   the 8 names in the "Parallel session" note above before trusting it's fully caught. This is
-   a prod write; flagged as its own open question below.
-3. Separately, as its own deliberate piece of work (not blocking the merge above): reconcile
-   prod's Terraform state so `run_terraform` can go back to `true` for prod. This means, at
-   minimum: fix the `storage.tf` bucket-name/activation issue, then `terraform import` each
-   of the 81 pending resources against real prod infra one at a time (or in batches, verifying
-   each), the same pattern used for dev's smaller gaps (points 4, 7) but at much larger scale
-   — this is real, careful work, not a quick unblock.
-4. Also still true for whenever terraform *does* get re-enabled for prod: prod's CI service
-   account (`github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com`) is **not**
-   the same identity as `gmail_sender` (prod's `gmail_sender_sa_id` is `gmail-sender-prod`, a
-   different account). Every permission fix in this session targeted `gmail_sender` — prod's
-   CI SA will need its own equivalent grants before its terraform step can safely run.
-5. Decide whether to bring `deploy-finances.yml` onto the same staging/main model — not done
-   in this session, flagged as a follow-up in CLAUDE.md.
-6. Separately, decide on the "As minhas faturas" feature work (dead `invoices` collection,
-   flagged in an earlier session) and scope it as its own task when ready.
+1. **Finish merging `main` into `agent/financial-costs-decouple`**, push, then open the PR.
+   Because branch protection is now live, opening/updating this PR will trigger a real prod
+   deploy check (`deploy-prod.yml` on `pull_request`) — this is actually a good thing: it's
+   the first real validation this branch has had against the new pipeline. Watch it go green
+   before merging.
+2. **Backfill José Eduardo's and the Mogo siblings' billing** — same double-discount bug,
+   code fix is live, their existing records just haven't been recomputed yet. See open
+   question below on running `backfillBillingSchedules` against prod.
+3. Re-enter `driverMonthlyCost: 1400` (and whatever electricity figure) into dev's Custos
+   Fixos panel — cleared by the prod→dev import.
+4. Decide on the "As minhas faturas" feature work (dead `invoices` collection, flagged in an
+   earlier session) — separate, not urgent.
+5. Prod Terraform state reconciliation (see item 5 above) — separate, not urgent, real effort.
+6. Decide whether to bring `deploy-finances.yml` onto the same staging/main pipeline model.
+7. See **Backlog** below for the two bigger features surfaced this week (discount model
+   rework, route planner rework) — neither started, both need their own scoping pass.
 
 ## Open questions for Renato
-- None blocking the `main` merge — it's ready.
-- Billing fix: OK to run `backfillBillingSchedules` against **prod** once the fix is deployed?
-  It recomputes every family's billing, not just the 8 affected ones — low risk (it's the same
-  logic already running on every subscription write) but it is a prod write, flagging per the
-  no-standing-write-access rule.
-- Two things worth a deliberate look once the merge is in, not urgent: (a) is
-  `roles/resourcemanager.projectIamAdmin` on prod for a dev-project CI service account the
-  long-term shape you want, or should it get narrowed later to a custom role scoped to just
-  the specific bindings CI manages? (b) when/whether to prioritize the prod Terraform state
-  reconciliation (point 3 above) — it's real effort, not urgent unless something starts
-  depending on Terraform managing prod resources.
+- OK to run `backfillBillingSchedules` against **prod** to catch José Eduardo's and the Mogo
+  siblings' still-under-billed records? Recomputes every family, not just these — low risk,
+  but flagging per the no-standing-write-access rule.
+- Discount model rework (marginal/per-unit, see above) — confirmed as the intended design,
+  but not scoped/scheduled yet. When should this happen relative to other work?
+- Worth a deliberate look, not urgent: is `roles/resourcemanager.projectIamAdmin` +
+  `roles/billing.admin` on prod for dev's CI service account (granted earlier this week, for
+  the cross-project Terraform resources) the long-term shape you want, or should it get
+  narrowed to a custom role later?
 
 ## Anything risky in flight
-- **8 active prod transport subscriptions are currently under-billed** (double-discounted —
-  see "Parallel session" above) until the fix (already merged into `main`) actually deploys
-  to prod and a backfill runs. No prod data was changed investigating this originally — reads
-  only. Worktree `.claude/worktrees/billing-double-discount-fix` still exists — remove it,
-  its branch is merged.
-- **This PR changes how prod gets deployed** — merge to `main` now deploys hosting,
-  Firestore rules/indexes, and functions to prod automatically (previously always a manual,
-  human-run command). Terraform apply is deliberately excluded for now (point 9). No branch
-  protection backs any of this up per Renato's explicit choice; PR review is the only gate.
-- **The dev-project CI service account now has IAM-admin rights on the prod project and prod's
-  billing account** (see point 8 above) — a deliberate, explicit trade Renato chose after
-  being shown the alternative. Real increase in blast radius if that WIF-federated credential
-  is ever compromised; worth being aware of, not something to forget was decided this way.
-- Manual `terraform apply`/`import` was run directly against kidclub-dev this session (see
-  points 6-8) — real dev infra changed outside the PR flow, deliberately, with Renato's
-  sign-off, to give the pipeline's first automated run a clean starting point. One apply hit
-  a transient container health-check error on 2 functions mid-rollout; verified both are
-  `ACTIVE`/serving directly via the Cloud Functions API afterward, and state is now fully
-  reconciled (`terraform plan` → no changes) — but worth a manual click-through of
-  `getKidclubVatSummary` and `setBillingLineItemExcludedDays` on kidclub-dev if you want
-  extra confidence beyond what this session verified.
-- Stale worktree/branch `agent/kidclub-cicd-automation` (2 days old, based on an old `main`,
-  mixed with ~60 unrelated file changes to billing/models) was found and deliberately NOT
-  built on or merged — flagged for Renato to delete.
-- Unrelated, still open from a prior session: `git worktree list` shows several other stale
-  worktrees not cleaned up (`claim-studyroom-fix`, `deploy-functions-workflow-fix`, plus some
-  pre-convention ones outside `.claude/worktrees/`). Worth Renato clearing out whichever are
-  merged/abandoned.
-- Also unrelated, paused mid-session on 2026-09-18: a unified client calendar
-  (`agent/family-calendar` branch, `/client/calendar`) for cancelling study/transport days
-  in one place instead of per-subscription. Built, builds clean, not deployed/reviewed yet.
-  Needs a Firestore composite index deployed (`firestore.indexes.json`, committed on that
-  branch) before it's usable — once this pipeline is live, that branch's own PR-to-staging
-  will handle the index deploy automatically instead of needing a manual one.
+- **José Eduardo and the two Mogo siblings (Diogo, Bernardo) are still under-billed in prod**
+  — the code fix is live, but their existing pending billing records haven't been recomputed
+  yet (only Carolina Almeida's has).
+- **Financial Summary refactor is only on dev** — `agent/financial-costs-decouple` not merged,
+  prod's Financial Summary page still has the old planner-snapshot dependency (shows €0
+  driver/electricity cost, fake profit) until this ships.
+- **Prod's CI service account has accumulated a lot of IAM roles this week**, granted
+  reactively as each deploy step hit a new gap (see item 5 above for the full list) — not
+  wrong, but worth knowing the shape of it if you're ever auditing prod IAM.
+- Worktrees now open: `.claude/worktrees/financial-costs-decouple` (this one, mid-merge, keep
+  until PR opens and merges). `.claude/worktrees/billing-double-discount-fix` — PR merged,
+  safe to remove. Several CI/CD-related worktrees from this week
+  (`cicd-prod-prep`, `cicd-prod-index-fix`, `cicd-prod-pr-gate`) are also fully merged now —
+  safe to remove. Plus pre-existing stale ones from prior sessions (`claim-studyroom-fix`,
+  `deploy-functions-workflow-fix`, `kidclub-cicd-automation`, and some pre-convention ones) —
+  worth Renato doing a general `git worktree list` sweep and clearing out whatever's merged.
+- Unrelated, still paused: a unified client calendar (`agent/family-calendar` branch,
+  `/client/calendar`) — built, builds clean, not deployed/reviewed. Needs a Firestore
+  composite index deployed (`firestore.indexes.json`, committed on that branch) — now that
+  the pipeline is live, opening its PR against `staging` will handle that automatically.
+
+## Backlog — bigger features surfaced but not started
+- **Discount model rework** (surfaced 2026-09-20): live discount logic is flat-%-off-gross;
+  confirmed intended design is marginal/per-unit (multi-trip: only the 2nd+ trip in a day is
+  discounted; sibling: only the 2nd+ enrolled child is discounted; school/manual discounts
+  stay flat on the resulting sum). Touches `discountRecalc.ts`, `billing.ts`, and the
+  `AppliedDiscount` display model across several admin/client pages. Needs its own scoping
+  pass before implementation — see "Currently working on" #2 above for the full spec and
+  worked examples.
+- **Transport Route Planner rework** (surfaced 2026-09-20, no prior note found anywhere in
+  this repo's docs or memory before now): `TransportPlannerPage.tsx` currently owns route
+  planning AND used to be the only source of driver/electricity cost for the Financial
+  Summary page (now decoupled, see above). The planner itself hasn't been touched — it's a
+  large (2300+ line) page that still needs a proper look: `transportRoutes` was completely
+  empty in prod (nobody had ever saved a route plan), which is how the driver-cost blind spot
+  happened in the first place. Worth a dedicated pass to figure out why it's never been used,
+  whether it should feed anything else now that Financial Summary doesn't depend on it, and
+  whether its own cost-estimate model (`driverRatePerHour`, `consumptionPer100km`,
+  `electricityPricePerKwh`) is still the right shape for actual route planning. Not scoped
+  further than this — flagging as a known future feature, not a plan.
