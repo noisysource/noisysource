@@ -24,6 +24,7 @@ export interface BillingLineItem {
   excludedDates?: string[];           // "yyyy-mm-dd" (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
   scheduleDays?: string[];            // weekday names (english, lowercase) this line item is actually billed for
   tripsByDay?: Record<string, ('pickup' | 'dropoff' | 'both')[]>; // transport only — trip(s) scheduled per weekday
+  absenceCreditDates?: string[];      // "yyyy-mm-dd" — the 3 approved eventModifications cancellations credited once the per-service absence threshold (3/month) was reached
 }
 
 export interface BillingRecord {

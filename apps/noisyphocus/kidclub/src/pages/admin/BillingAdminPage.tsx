@@ -90,6 +90,20 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           ))}
         </div>
       )}
+      {!!lineItem.absenceCreditDates?.length && (
+        <div className="mt-1 pl-2">
+          <p className="text-[11px] text-gray-500">
+            Crédito de 3 faltas (limite atingido este mês):
+          </p>
+          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+            {lineItem.absenceCreditDates.map(d => (
+              <span key={d} className="text-[11px] bg-blue-50 text-blue-800 border border-blue-200 rounded-full px-2 py-0.5">
+                {formatExclusionEntry(d)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

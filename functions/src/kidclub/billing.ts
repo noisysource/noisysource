@@ -158,6 +158,98 @@ async function getActiveSubs() {
   return Object.values(byFamily);
 }
 
+// Firestore 'in' queries accept at most 30 comparison values.
+function chunk<T>(arr: T[], size = 30): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+// Approved cancellations (parent self-service via the client portal, or
+// admin-entered) — the same `eventModifications` collection the client
+// calendar and admin calendar already read/write. This is the single
+// source of truth for "did this occurrence actually happen," distinct from
+// (and, per computeLineItems, deliberately kept separate from) the
+// admin-only `excludedDates` field on the billing record itself, which is a
+// manual per-invoice adjustment unrelated to attendance.
+async function fetchApprovedCancellations(
+  studyIds: string[],
+  transportIds: string[],
+): Promise<Map<string, { date: Date }[]>> {
+  const bySub = new Map<string, { date: Date }[]>();
+  if (studyIds.length === 0 && transportIds.length === 0) return bySub;
+
+  const queries: Promise<FirebaseFirestore.QuerySnapshot>[] = [];
+  for (const ids of chunk(studyIds)) {
+    queries.push(appCol("eventModifications")
+      .where("subscriptionType", "==", "study")
+      .where("modificationType", "==", "cancelled")
+      .where("status", "==", "approved")
+      .where("subscriptionId", "in", ids)
+      .get());
+  }
+  for (const ids of chunk(transportIds)) {
+    queries.push(appCol("eventModifications")
+      .where("subscriptionType", "==", "transport")
+      .where("modificationType", "==", "cancelled")
+      .where("status", "==", "approved")
+      .where("subscriptionId", "in", ids)
+      .get());
+  }
+
+  const snaps = await Promise.all(queries);
+  for (const snap of snaps) {
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      const date: Date = data.date?.toDate?.() ?? new Date(data.date);
+      const list = bySub.get(data.subscriptionId) ?? [];
+      list.push({ date });
+      bySub.set(data.subscriptionId, list);
+    }
+  }
+  return bySub;
+}
+
+// The agreed absence policy (Renato, 2026-09-21): under 3 approved
+// cancellations in a period, the family pays full price — no partial
+// pro-ration for 1 or 2 missed occurrences. At 3 or more, exactly 3 days'
+// worth is credited (not all of them, and not scaled beyond 3). Study and
+// transport are tracked as two entirely separate thresholds — a child can
+// miss transport three times and still owe full price for study room, and
+// vice versa. A cancellation counts here regardless of who initiated it
+// (parent self-service, or a call-in handled by staff) and regardless of
+// whether it was cancelled in advance or logged as a no-show after the
+// fact — both are the same `eventModifications` fact, visible to both the
+// family (client calendar) and staff (admin calendar).
+const ABSENCE_THRESHOLD = 3;
+
+function computeAbsenceThresholdCredit(
+  type: "study" | "transport",
+  cancellations: { date: Date }[],
+  period: ReturnType<typeof periodForDate>,
+  manualExcludedDates: string[],
+  studyConfig: any,
+  transportConfig: any,
+): { deduction: number; creditDates: string[] } {
+  // A date already accounted for via the manual excludedDates admin
+  // override must not ALSO generate a threshold credit for the same date —
+  // that would double-deduct the same absence through two paths, the exact
+  // class of bug just fixed in this file for discounts.
+  const alreadyManuallyExcluded = new Set(manualExcludedDates.map(e => e.split(":")[0]));
+
+  const inPeriod = cancellations
+    .filter(c => c.date >= period.start && c.date <= period.end)
+    .filter(c => !alreadyManuallyExcluded.has(`${c.date.getFullYear()}-${String(c.date.getMonth() + 1).padStart(2, "0")}-${String(c.date.getDate()).padStart(2, "0")}`))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  if (inPeriod.length < ABSENCE_THRESHOLD) return { deduction: 0, creditDates: [] };
+
+  const credited = inPeriod.slice(0, ABSENCE_THRESHOLD);
+  const creditDates = credited.map(c => `${c.date.getFullYear()}-${String(c.date.getMonth() + 1).padStart(2, "0")}-${String(c.date.getDate()).padStart(2, "0")}`);
+  const perDayRate = type === "study" ? studyPerDayRate(studyConfig) : (transportConfig?.flatRatePerTrip ?? 0);
+  return { deduction: ABSENCE_THRESHOLD * perDayRate, creditDates };
+}
+
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
 
 // dev and prod currently share the exact same live Vendus account, API key
@@ -263,6 +355,7 @@ export interface BillingLineItem {
   excludedDates?: string[];     // ISO yyyy-mm-dd (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
   scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI only offer real service days
   tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday, so the UI can offer per-trip exclusion when a day has more than one
+  absenceCreditDates?: string[]; // ISO yyyy-mm-dd — the 3 approved cancellations (eventModifications) credited once the absence threshold was reached this period
 }
 
 interface BillingConfigs { studyConfig: any; transportConfig: any }
@@ -276,6 +369,7 @@ function computeLineItems(
   period: ReturnType<typeof periodForDate>,
   configs: BillingConfigs,
   existingLineItems: BillingLineItem[] = [],
+  cancellationsBySub: Map<string, { date: Date }[]> = new Map(),
 ): { lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } {
   const lineItems: BillingLineItem[] = [];
   let total = 0;
@@ -364,14 +458,18 @@ function computeLineItems(
     const gross = sub.basePrice ?? sub.monthlyPrice ?? 0;
     const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
     const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
-    const deduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
-    const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+    const manualDeduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const { deduction: absenceDeduction, creditDates: absenceCreditDates } = computeAbsenceThresholdCredit(
+      "study", cancellationsBySub.get(sub.id) ?? [], period, excludedDates, configs.studyConfig, configs.transportConfig,
+    );
+    const amount = Math.round(applyDiscounts(Math.max(0, gross - manualDeduction - absenceDeduction), appliedDiscounts) * 100) / 100;
     const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
     const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
     lineItems.push({
       title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
       amount, grossAmount: gross, subscriptionId: sub.id, type: "study", appliedDiscounts, scheduleDays,
       ...(excludedDates.length ? { excludedDates } : {}),
+      ...(absenceCreditDates.length ? { absenceCreditDates } : {}),
     });
     total += amount;
     maybeAddEnrollmentFee(sub);
@@ -380,8 +478,11 @@ function computeLineItems(
     const gross = transportGrossAmount(sub, configs.transportConfig);
     const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
     const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
-    const deduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
-    const amount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
+    const manualDeduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
+    const { deduction: absenceDeduction, creditDates: absenceCreditDates } = computeAbsenceThresholdCredit(
+      "transport", cancellationsBySub.get(sub.id) ?? [], period, excludedDates, configs.studyConfig, configs.transportConfig,
+    );
+    const amount = Math.round(applyDiscounts(Math.max(0, gross - manualDeduction - absenceDeduction), appliedDiscounts) * 100) / 100;
     const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
     const tripsByDay: Record<string, ("pickup" | "dropoff" | "both")[]> = {};
     for (const s of sub.schedule ?? []) {
@@ -392,6 +493,7 @@ function computeLineItems(
       title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
       amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts, scheduleDays, tripsByDay,
       ...(excludedDates.length ? { excludedDates } : {}),
+      ...(absenceCreditDates.length ? { absenceCreditDates } : {}),
     });
     total += amount;
     maybeAddEnrollmentFee(sub);
@@ -437,7 +539,8 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
 
-  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems({ study, transport }, period, configs);
+  const cancellationsBySub = await fetchApprovedCancellations(study.map(s => s.id), transport.map(s => s.id));
+  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems({ study, transport }, period, configs, [], cancellationsBySub);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -917,6 +1020,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     transport: transportSnap.docs.map(d => ({ id: d.id, ...d.data() })),
   };
 
+  const cancellationsBySub = await fetchApprovedCancellations(group.study.map(s => s.id), group.transport.map(s => s.id));
   const periods = periodsUntilSchoolYearEnd(new Date());
   let created = 0, updated = 0, cancelled = 0;
 
@@ -934,7 +1038,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
     const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
+    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub);
 
     if (existing.exists) {
       if (isRecomputable(existing.data())) {
@@ -1004,12 +1108,13 @@ export const backfillBillingSchedules = onCall(
           for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
         };
 
+        const cancellationsBySub = await fetchApprovedCancellations(group.study.map(s => s.id), group.transport.map(s => s.id));
         const periods = periodsUntilSchoolYearEnd(new Date());
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems);
+          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub);
           if (existing.exists) {
             if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
