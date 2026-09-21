@@ -2,10 +2,47 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 ## Currently working on
-Investigated "igbpinto@gmail.com's billing looks wrong" (Renato's ask: monthly amount
+Fixed a second real billing bug found in prod (separate from the double-discount bug below,
+which is already merged — PR #13, `1a4aaec`): `computeExclusionDeduction()` for `type === "study"`
+in `functions/src/kidclub/billing.ts` counted every entry in a line item's `excludedDates`
+with no check that the date actually fell on one of the subscription's real schedule days
+(`sub.days`). The `transport` branch right below it already did this correctly. Found via a
+prod family with 7 study `excludedDates` but only 3 real Wed/Fri schedule days — the other 4
+(Tue/Thu) still fully counted as deductions, undercharging by 4 days. Renato hand-corrected
+that one prod record (`_apps/arcoiris/billing/A7OXOljX1W9xrEn5mhP8_2026-09`) directly; this
+session was the code fix so it can't recur.
+
+**Fixes made** (branch `agent/study-exclusion-validation`, commit `188d117`, not yet PR'd/merged):
+1. `computeExclusionDeduction("study", ...)` now mirrors the transport branch — only deducts
+   for excluded dates whose weekday is in `sub.days.map(d => d.day)`.
+2. `setBillingLineItemExcludedDays` (the callable behind the "Dias" modal) now applies the same
+   schedule-day check when validating dates to save, not just period-range — so a bad date can't
+   be saved from the client either.
+3. UI symptom fix: `ServiceCalendar` in `BillingAdminPage.tsx` only rendered a clickable toggle
+   for schedulable days, so an orphaned `excludedDates` entry (date not on a current schedule
+   day — however it got there) had no UI control to remove it. Added a small removable-chip list
+   below each calendar for exactly these orphaned entries, so an admin can clean them up.
+4. **Deliberately not changed**: `computeLineItems()`'s carry-forward of `excludedDates` from the
+   prior billing record still copies entries verbatim, even ones that no longer match the
+   subscription's *current* schedule (e.g. after a schedule change). This is the likely root
+   cause of how the prod orphan appeared in the first place. Left alone because (a) the
+   deduction fix above already makes a stale entry harmless financially, and (b) auto-dropping
+   it here would hide the entry from the new orphan-cleanup chips in fix #3 — an admin couldn't
+   see/confirm it was there. Worth a follow-up decision: silently drop on carry-forward, or keep
+   surfacing it for admin review as done here.
+
+Typechecked clean: `pnpm --filter functions exec tsc --noEmit` and
+`pnpm --filter kidclub exec tsc --noEmit` (kidclub has several pre-existing unrelated errors,
+same set present on `main` before this change — confirmed by diffing). Not deployed anywhere
+yet; PR not opened yet.
+
+---
+
+Previous session (2026-09-19, PR #13, already merged into `main` as of `1a4aaec`) —
+investigated "igbpinto@gmail.com's billing looks wrong" (Renato's ask: monthly amount
 should be base price − multi-trip discount − school discount). Confirmed in **prod** (read-only,
 via `gcloud auth print-access-token` + Firestore REST — no prod service account key exists,
 per org policy): her transport subscription (Carolina Almeida, `XiblZZlEVZHsSLFdN5z5`) has
@@ -87,12 +124,16 @@ Not done in this session — separate scope from the impersonation fix below.
   NOT smoke-tested behind login on prod either.
 
 ## Next step
-1. **Open + merge the billing double-discount PR**:
-   https://github.com/noisysource/noisysource/pull/new/agent/billing-double-discount-fix
-   — then deploy functions to dev, verify, deploy to prod
-   (`firebase deploy --only functions:onTransportBillingSync,functions:onStudyroomBillingSync`
-   or full functions deploy — currently manual `workflow_dispatch` only, stays that way).
-2. After that's live in prod, run/trigger `backfillBillingSchedules` (owner/rainbowAdmin
+0. **New (this session): open the PR for `agent/study-exclusion-validation`** (study exclusion
+   schedule-day validation fix, commit `188d117`), get it reviewed/merged, deploy functions to
+   dev then prod. Low urgency financially (the bug under-charges, doesn't over-charge) but it's
+   confirmed live in prod until this deploys. No backfill needed — the fix only changes how
+   *future* recomputes treat `excludedDates`; the one known-bad prod record was already
+   hand-corrected by Renato directly.
+1. ~~Open + merge the billing double-discount PR~~ — **done**, PR #13 merged (`1a4aaec`). Confirm
+   it's actually deployed to prod functions (not just merged to `main`) before considering this
+   fully closed — deploy is still manual `workflow_dispatch`.
+2. If not already done, run/trigger `backfillBillingSchedules` (owner/rainbowAdmin
    callable) to recompute the 8 affected families' pending billing totals — check the result
    counts against the 8 names listed above before trusting it's fully caught.
 3. **`main` on GitHub does NOT have the impersonation-billing-fix commit yet** — prod hosting
