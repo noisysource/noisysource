@@ -305,3 +305,17 @@ without it.
   whether its own cost-estimate model (`driverRatePerHour`, `consumptionPer100km`,
   `electricityPricePerKwh`) is still the right shape for actual route planning. Not scoped
   further than this — flagging as a known future feature, not a plan.
+- **"Paid but never invoiced" has no visibility anywhere** (surfaced 2026-09-21, while
+  testing the `financialEvents` consolidation above): `BillingStatus` (`packages/shared/models/Billing.ts`)
+  models `paid` and `invoiced` as one enum, not two independent facts. In the happy path
+  `easypayWebhook` (`functions/src/kidclub/billing.ts`) sets `status: "paid"` then
+  immediately calls `createVendusInvoiceForBilling()`, which sets `status: "invoiced"` —
+  same function call, milliseconds apart. But if Vendus invoice creation fails, the record
+  is stuck at `status: "paid"` with an `invoiceError` field set, until the next EasyPay
+  webhook retry or a manual `retryVendusInvoice` call succeeds — meaning real money was
+  received with no legal invoice issued, for an unbounded amount of time, with nothing
+  surfacing that state to an admin. Not touched here — `onBillingPaidEffectiveEvents`
+  (this session's new trigger) already treats `{paid, invoiced}` as one "money landed"
+  boundary and doesn't need this fixed to work correctly. But it's a real fiscal-compliance
+  gap independent of the financialEvents work: worth a visible "paid, not yet invoiced"
+  flag on a billing admin page at some point. Not scoped further than this.
