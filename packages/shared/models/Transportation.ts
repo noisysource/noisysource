@@ -18,14 +18,19 @@ export interface TransportationConfig {
   siblingDiscountPercentage: number;
   returningStudentDiscountPercentage: number;
   schoolDiscounts: SchoolDiscount[];
-  // Operations (planner cost model)
+  // Operations (planner cost model) — per-route cost ESTIMATES used only by
+  // the Transport Planner while planning, not read by the Financial Summary.
   driverRatePerHour: number;
   weeksPerMonth: number;
   vanCapacity: number;
-  vanMonthlyCost: number;
   consumptionPer100km: number;
   electricityPricePerKwh: number;
-  driverMonthlyCostOverride?: number; // manual override shown in financial summary
+  // Fixed monthly costs — direct inputs, edited on the Financial Summary
+  // page itself. Deliberately NOT derived from a planned-route snapshot, so
+  // the P&L stays correct even if no route has ever been planned/saved.
+  vanMonthlyCost: number;
+  driverMonthlyCost?: number;
+  electricityMonthlyCost?: number;
 }
 
 export interface Location {
