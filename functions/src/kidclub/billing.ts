@@ -81,7 +81,20 @@ function computeExclusionDeduction(
   transportConfig: any,
 ): number {
   if (type === "study") {
-    return excludedDates.length * studyPerDayRate(studyConfig);
+    const rate = studyPerDayRate(studyConfig);
+    const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
+    let deduction = 0;
+    for (const entry of excludedDates) {
+      const { isoDate } = parseExclusionEntry(entry);
+      const weekday = weekdayOfIsoDate(isoDate);
+      // Only deduct for dates that actually fall on one of the subscription's
+      // real schedule days — mirrors the transport branch below. Without this,
+      // a stale or bogus excludedDates entry (e.g. left over after a schedule
+      // change) can discount a day the child was never billed for in the
+      // first place.
+      if (scheduleDays.includes(weekday)) deduction += rate;
+    }
+    return deduction;
   }
   const rate = transportConfig?.flatRatePerTrip ?? 0;
   let deduction = 0;
@@ -1071,24 +1084,33 @@ export const setBillingLineItemExcludedDays = onCall(
     // subscriptionId from the client can never actually match one here.
     if (li.type !== "study" && li.type !== "transport") throw new HttpsError("failed-precondition", "This line item does not support day exclusions");
 
-    // Only dates within this record's own period are honoured — this is a
-    // per-record adjustment, not a general-purpose date list.
-    const periodStart: Date = billing.periodStart.toDate();
-    const periodEnd: Date = billing.periodEnd.toDate();
-    const validDates: string[] = excludedDates.filter((d: unknown) => {
-      if (typeof d !== "string") return false;
-      const { isoDate, direction } = parseExclusionEntry(d);
-      if (d.includes(":") && !direction) return false; // malformed suffix
-      const dt = new Date(`${isoDate}T12:00:00Z`);
-      return !isNaN(dt.getTime()) && dt >= periodStart && dt <= periodEnd;
-    });
-
     const colName = li.type === "study" ? "studyroom" : "transportationSubscriptions";
     const [subSnap, configs] = await Promise.all([
       appCol(colName).doc(subscriptionId).get(),
       loadBillingConfigs(),
     ]);
     const sub = subSnap.data() ?? {};
+
+    // Only dates within this record's own period, and that fall on one of the
+    // subscription's real schedule days, are honoured — a second line of
+    // defense (mirroring computeExclusionDeduction) so a bad date can't even
+    // be saved from the client, not just be ignored later when billed.
+    const periodStart: Date = billing.periodStart.toDate();
+    const periodEnd: Date = billing.periodEnd.toDate();
+    const studyScheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
+    const validDates: string[] = excludedDates.filter((d: unknown) => {
+      if (typeof d !== "string") return false;
+      const { isoDate, direction } = parseExclusionEntry(d);
+      if (d.includes(":") && !direction) return false; // malformed suffix
+      const dt = new Date(`${isoDate}T12:00:00Z`);
+      if (isNaN(dt.getTime()) || dt < periodStart || dt > periodEnd) return false;
+      const weekday = weekdayOfIsoDate(isoDate);
+      if (li.type === "study") return studyScheduleDays.includes(weekday);
+      const tripsThatDay = (sub.schedule ?? []).some((s: any) =>
+        s.dayOfWeek === weekday && (!direction || s.direction === direction || s.direction === "both")
+      );
+      return tripsThatDay;
+    });
 
     // Anchored to this line item's own stored gross/discounts, not a fresh
     // read of the subscription's current price — keeps the math consistent
