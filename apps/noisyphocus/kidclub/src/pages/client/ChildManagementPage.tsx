@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { Family, Child, StudyRoomEntry, TransportationSubscription } from '@shared/models';
 import { Link } from 'react-router-dom';
-import { updateDoc, getDoc, getDocs, addDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { updateDoc, getDoc, getDocs, addDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { callable } from '../../lib/callable';
 import { calculateAge } from '../../lib/utils';
 import { familyService } from '../../services/familyService';
 import PlacesInput from '../../components/PlacesInput';
@@ -56,7 +57,8 @@ interface UpcomingSession {
   dateStr: string;
   hour: string;
   transport: boolean;
-  cancellationId?: string;
+  reservationEventId?: string;
+  cancelled: boolean;
 }
 
 // ─── Detail panel ─────────────────────────────────────────────────────────────
@@ -97,29 +99,28 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
       setLoadingSessions(true);
       try {
         const sub = selected.sub as StudyRoomEntry;
-        const [calSnap, modsSnap] = await Promise.all([
+        const today = startOfToday();
+        const rangeEnd = addWeeks(today, 4);
+
+        const [calSnap] = await Promise.all([
           getDoc(docRef('config', 'schoolCalendar')),
-          getDocs(query(
-            col('eventModifications'),
-            where('subscriptionId', '==', id),
-            where('subscriptionType', '==', 'study'),
-            where('modificationType', '==', 'cancelled'),
-            where('status', '==', 'approved'),
-          )),
         ]);
 
         const schoolYearEnd: Date | null = calSnap.exists() && calSnap.data().yearEndDate
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`) : null;
-
-        const cancelledDates: Record<string, string> = {};
-        modsSnap.docs.forEach(d => {
-          const date = d.data().date?.toDate?.() ?? new Date(d.data().date);
-          cancelledDates[format(date, 'yyyy-MM-dd')] = d.id;
-        });
-
-        const today = startOfToday();
-        const rangeEnd = addWeeks(today, 4);
         const effectiveEnd = schoolYearEnd ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd) : rangeEnd;
+
+        const eventsSnap = await getDocs(query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ));
+        const eventByDate: Record<string, { id: string; status: string }> = {};
+        eventsSnap.docs.forEach(d => {
+          const data = d.data();
+          eventByDate[data.date] = { id: d.id, status: data.status };
+        });
 
         const upcoming: UpcomingSession[] = [];
         for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -127,7 +128,9 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
           for (const sel of sub.days ?? []) {
             if (sel.day !== dayName) continue;
             const dateStr = format(day, 'yyyy-MM-dd');
-            upcoming.push({ date: day, dateStr, hour: sel.hour, transport: (sel as any).transport, cancellationId: cancelledDates[dateStr] });
+            const ev = eventByDate[dateStr];
+            if (ev?.status === 'VOIDED') continue;
+            upcoming.push({ date: day, dateStr, hour: sel.hour, transport: (sel as any).transport, reservationEventId: ev?.id, cancelled: ev?.status === 'CANCELLED' });
           }
         }
         upcoming.sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -171,25 +174,13 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
   };
 
   const toggleDay = async (session: UpcomingSession) => {
+    if (!session.reservationEventId) return;
     setSessionAction(session.dateStr);
     try {
-      if (session.cancellationId) {
-        await deleteDoc(docRef('eventModifications', session.cancellationId));
-        setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancellationId: undefined } : s));
-      } else {
-        const ref = await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'study',
-          date: session.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancellationId: ref.id } : s));
-      }
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      const nextStatus = session.cancelled ? 'EXPECTED' : 'CANCELLED';
+      await fn({ eventId: session.reservationEventId, status: nextStatus });
+      setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancelled: nextStatus === 'CANCELLED' } : s));
     } catch (e) {
       console.error('Failed to toggle day:', e);
     } finally {
@@ -418,7 +409,7 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
             ) : (
               <div className="space-y-1 max-h-48 overflow-y-auto">
                 {sessions.map(session => {
-                  const cancelled = !!session.cancellationId;
+                  const cancelled = session.cancelled;
                   const inProgress = sessionAction === session.dateStr;
                   return (
                     <div key={session.dateStr} className={`flex items-center justify-between py-1.5 ${cancelled ? 'opacity-50' : ''}`}>

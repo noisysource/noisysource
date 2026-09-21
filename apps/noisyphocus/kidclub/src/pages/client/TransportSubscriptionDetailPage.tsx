@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
+import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { callable } from '../../lib/callable';
 import { TransportationSubscription } from '@shared/models';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { normalizeSubStatus } from '../../lib/utils';
@@ -17,13 +18,13 @@ const PT_DAY: Record<string, string> = {
 };
 
 interface UpcomingTrip {
-  eventId: string;
   date: Date;
   dateStr: string;
   pickupTime: string;
   pickupLocation: string;
   dropoffLocation: string;
-  cancellationId?: string;
+  reservationEventId?: string; // undefined if no ReservationEvent was generated for this exact date+leg
+  cancelled: boolean;
 }
 
 interface DayGroup {
@@ -93,22 +94,6 @@ export default function TransportSubscriptionDetailPage() {
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`)
           : null;
 
-      const modsSnap = await getDocs(
-        query(
-          col('eventModifications'),
-          where('subscriptionId', '==', id),
-          where('subscriptionType', '==', 'transport'),
-          where('modificationType', '==', 'cancelled'),
-          where('status', '==', 'approved'),
-        ),
-      );
-      // Key cancellations by eventId for per-trip precision
-      const cancelledByEventId: Record<string, string> = {};
-      modsSnap.docs.forEach(d => {
-        const eventId = d.data().eventId;
-        if (eventId) cancelledByEventId[eventId] = d.id;
-      });
-
       const today = startOfToday();
       const rangeEnd = addWeeks(today, 4);
       const effectiveEnd = schoolYearEnd
@@ -117,6 +102,22 @@ export default function TransportSubscriptionDetailPage() {
 
       const subStart = sub.startDate ? new Date(sub.startDate) : today;
       const subEnd = sub.endDate ? new Date(sub.endDate) : null;
+
+      // Keyed by "date_direction" — matches the same (date, direction) pair
+      // reservationEvents.ts generates each schedule entry's event under.
+      const eventsSnap = await getDocs(
+        query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ),
+      );
+      const eventByDateDirection: Record<string, { id: string; status: string }> = {};
+      eventsSnap.docs.forEach(d => {
+        const data = d.data();
+        eventByDateDirection[`${data.date}_${data.direction ?? 'both'}`] = { id: d.id, status: data.status };
+      });
 
       const groupMap = new Map<string, DayGroup>();
 
@@ -128,16 +129,17 @@ export default function TransportSubscriptionDetailPage() {
 
         for (const sched of sub.schedule ?? []) {
           if (sched.dayOfWeek !== dayName) continue;
-          // Match the same eventId format used in eventService.ts
-          const eventId = `transport_sub_${id}_${dateStr}_${sched.pickupTime.replace(':', '')}`;
+          const direction = sched.direction ?? 'both';
+          const ev = eventByDateDirection[`${dateStr}_${direction}`];
+          if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
           const trip: UpcomingTrip = {
-            eventId,
             date: day,
             dateStr,
             pickupTime: sched.pickupTime,
             pickupLocation: sched.pickupLocation,
             dropoffLocation: sched.dropoffLocation,
-            cancellationId: cancelledByEventId[eventId],
+            reservationEventId: ev?.id,
+            cancelled: ev?.status === 'CANCELLED',
           };
           if (!groupMap.has(dateStr)) {
             groupMap.set(dateStr, { dateStr, date: day, trips: [] });
@@ -157,25 +159,11 @@ export default function TransportSubscriptionDetailPage() {
   };
 
   const toggleTrip = async (trip: UpcomingTrip) => {
-    if (!user || !id) return;
-    setActionInProgress(trip.eventId);
+    if (!user || !id || !trip.reservationEventId) return;
+    setActionInProgress(trip.reservationEventId);
     try {
-      if (trip.cancellationId) {
-        await deleteDoc(docRef('eventModifications', trip.cancellationId));
-      } else {
-        await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'transport',
-          eventId: trip.eventId,
-          date: trip.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId: user.uid,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } finally {
       setActionInProgress(null);
@@ -441,11 +429,11 @@ export default function TransportSubscriptionDetailPage() {
                   {/* Trips for this day */}
                   <div className="space-y-2 pl-2">
                     {group.trips.map(trip => {
-                      const isCancelled = !!trip.cancellationId;
-                      const inProgress = actionInProgress === trip.eventId;
+                      const isCancelled = trip.cancelled;
+                      const inProgress = actionInProgress === trip.reservationEventId;
                       return (
                         <div
-                          key={trip.eventId}
+                          key={trip.reservationEventId ?? `${trip.dateStr}_${trip.pickupTime}`}
                           className={`flex items-center justify-between rounded-lg px-3 py-2 ${
                             isCancelled ? 'bg-gray-50' : 'bg-green-50'
                           }`}

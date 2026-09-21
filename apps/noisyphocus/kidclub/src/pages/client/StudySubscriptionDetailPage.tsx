@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
+import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { callable } from '../../lib/callable';
 import { StudyRoomEntry, normalizeStatus } from '@shared/models';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
@@ -26,7 +27,8 @@ interface UpcomingSession {
   dateStr: string;
   hour: string;
   transport: boolean;
-  cancellationId?: string;
+  reservationEventId?: string; // undefined if no ReservationEvent was ever generated for this date (e.g. subscription created after it, or before this system shipped)
+  cancelled: boolean;
 }
 
 export default function StudySubscriptionDetailPage() {
@@ -71,26 +73,25 @@ export default function StudySubscriptionDetailPage() {
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`)
           : null;
 
-      const modsSnap = await getDocs(
-        query(
-          col('eventModifications'),
-          where('subscriptionId', '==', id),
-          where('subscriptionType', '==', 'study'),
-          where('modificationType', '==', 'cancelled'),
-          where('status', '==', 'approved'),
-        ),
-      );
-      const cancelledDates: Record<string, string> = {};
-      modsSnap.docs.forEach(d => {
-        const date = d.data().date?.toDate?.() ?? new Date(d.data().date);
-        cancelledDates[format(date, 'yyyy-MM-dd')] = d.id;
-      });
-
       const today = startOfToday();
       const rangeEnd = addWeeks(today, 4);
       const effectiveEnd = schoolYearEnd
         ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd)
         : rangeEnd;
+
+      const eventsSnap = await getDocs(
+        query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ),
+      );
+      const eventByDate: Record<string, { id: string; status: string }> = {};
+      eventsSnap.docs.forEach(d => {
+        const data = d.data();
+        eventByDate[data.date] = { id: d.id, status: data.status };
+      });
 
       const upcoming: UpcomingSession[] = [];
       for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -98,12 +99,15 @@ export default function StudySubscriptionDetailPage() {
         for (const sel of sub.days ?? []) {
           if (sel.day !== dayName) continue;
           const dateStr = format(day, 'yyyy-MM-dd');
+          const ev = eventByDate[dateStr];
+          if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
           upcoming.push({
             date: day,
             dateStr,
             hour: sel.hour,
             transport: sel.transport,
-            cancellationId: cancelledDates[dateStr],
+            reservationEventId: ev?.id,
+            cancelled: ev?.status === 'CANCELLED',
           });
         }
       }
@@ -115,24 +119,11 @@ export default function StudySubscriptionDetailPage() {
   };
 
   const toggleDay = async (session: UpcomingSession) => {
-    if (!user || !id) return;
+    if (!user || !id || !session.reservationEventId) return;
     setActionInProgress(session.dateStr);
     try {
-      if (session.cancellationId) {
-        await deleteDoc(docRef('eventModifications', session.cancellationId));
-      } else {
-        await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'study',
-          date: session.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId: user.uid,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      await fn({ eventId: session.reservationEventId, status: session.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } finally {
       setActionInProgress(null);
@@ -394,7 +385,7 @@ export default function StudySubscriptionDetailPage() {
           ) : (
             <div className="divide-y divide-gray-50">
               {sessions.map(session => {
-                const isCancelled = !!session.cancellationId;
+                const isCancelled = session.cancelled;
                 const inProgress = actionInProgress === session.dateStr;
                 return (
                   <div
