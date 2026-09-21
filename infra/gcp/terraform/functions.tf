@@ -111,6 +111,9 @@ locals {
     "createPartyDeposit",
     "retryVendusInvoice",
     "easypayWebhook",
+    # KidClub — reservation events
+    "setReservationEventStatus",
+    "backfillReservationEvents",
     # KidClub — camps
     "createCampSubscription",
     "confirmCampSubscription",
