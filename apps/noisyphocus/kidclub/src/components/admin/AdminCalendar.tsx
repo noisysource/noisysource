@@ -128,10 +128,15 @@ export default function AdminCalendar() {
   const toggleType = (key: string) =>
     setSelectedTypes(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
 
-  const handleGenerateEvents = async () => {
+  // Writes this month's calendar occurrence records (study/transport/party —
+  // immutable, event-sourced, see eventService.ts). Also emits this month's
+  // financialEvents as a side effect of the same batch; Resumo Financeiro has
+  // its own "Gerar eventos financeiros" trigger for that half so it doesn't
+  // depend on someone finding this button here first.
+  const handleGenerateCalendarEvents = async () => {
     try {
       const n = await eventService.generateEvents(currentMonth);
-      setNotification({ message: `${n} eventos gerados.`, type: 'success' });
+      setNotification({ message: `${n} eventos de calendário gerados.`, type: 'success' });
       setRefreshEvents(p => !p);
     } catch (err) {
       setNotification({ message: `Erro: ${(err as Error).message}`, type: 'error' });
@@ -489,10 +494,11 @@ export default function AdminCalendar() {
             ))}
           </div>
           <button
-            onClick={handleGenerateEvents}
+            onClick={handleGenerateCalendarEvents}
             className="text-xs px-3 py-1.5 bg-gray-700 text-white rounded-lg hover:bg-gray-800"
+            title="Gera as ocorrências de calendário deste mês (sala de estudo, transporte, festas)"
           >
-            Gerar financeiro
+            Gerar eventos do mês
           </button>
         </div>
 

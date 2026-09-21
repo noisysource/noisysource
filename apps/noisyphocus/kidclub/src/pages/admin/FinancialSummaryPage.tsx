@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { getDocs, getDoc, setDoc, query, where, Timestamp } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { FinancialEvent, FinancialEventTier } from '@shared/models/FinancialEvent';
 import { financeCostSummaryService, CostSummary } from '../../services/financeCostSummaryService';
+import { eventService } from '../../services/eventService';
+import Notification from '../../components/Notification';
 
 // ── FinancialSummaryPage ────────────────────────────────────────────────────
 // Thin summary over `financialEvents` — the single source of truth for
@@ -125,46 +127,47 @@ export default function FinancialSummaryPage() {
   const [monthFilter, setMonthFilter] = useState<string>(currentMonthStr());
   const [serviceFilter, setServiceFilter] = useState<ServiceGroup>('all');
   const [detailOpen, setDetailOpen] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setCostSummaryLoaded(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setCostSummaryLoaded(false);
 
-      const eventsQuery = monthFilter === 'all'
-        ? col('financialEvents')
-        : (() => {
-            const { start, end } = monthRange(monthFilter);
-            return query(
-              col('financialEvents'),
-              where('date', '>=', Timestamp.fromDate(start)),
-              where('date', '<=', Timestamp.fromDate(end)),
-            );
-          })();
+    const eventsQuery = monthFilter === 'all'
+      ? col('financialEvents')
+      : (() => {
+          const { start, end } = monthRange(monthFilter);
+          return query(
+            col('financialEvents'),
+            where('date', '>=', Timestamp.fromDate(start)),
+            where('date', '<=', Timestamp.fromDate(end)),
+          );
+        })();
 
-      const [eventsSnap, tCfgSnap, summary] = await Promise.all([
-        getDocs(eventsQuery),
-        getDoc(docRef('config', 'transportation')),
-        financeCostSummaryService.get(monthFilter === 'all' ? currentMonthStr() : monthFilter),
-      ]);
+    const [eventsSnap, tCfgSnap, summary] = await Promise.all([
+      getDocs(eventsQuery),
+      getDoc(docRef('config', 'transportation')),
+      financeCostSummaryService.get(monthFilter === 'all' ? currentMonthStr() : monthFilter),
+    ]);
 
-      setEvents(eventsSnap.docs.map(d => d.data() as FinancialEvent));
+    setEvents(eventsSnap.docs.map(d => d.data() as FinancialEvent));
 
-      if (tCfgSnap.exists()) {
-        const cfg = tCfgSnap.data() as TransportationConfig;
-        setTConfig(cfg);
-        setCostInputs({
-          vanMonthlyCost: cfg.vanMonthlyCost != null ? String(cfg.vanMonthlyCost) : '',
-          electricityMonthlyCost: cfg.electricityMonthlyCost != null ? String(cfg.electricityMonthlyCost) : '',
-        });
-      }
+    if (tCfgSnap.exists()) {
+      const cfg = tCfgSnap.data() as TransportationConfig;
+      setTConfig(cfg);
+      setCostInputs({
+        vanMonthlyCost: cfg.vanMonthlyCost != null ? String(cfg.vanMonthlyCost) : '',
+        electricityMonthlyCost: cfg.electricityMonthlyCost != null ? String(cfg.electricityMonthlyCost) : '',
+      });
+    }
 
-      setCostSummary(summary);
-      setCostSummaryLoaded(true);
-      setLoading(false);
-    };
-    load();
+    setCostSummary(summary);
+    setCostSummaryLoaded(true);
+    setLoading(false);
   }, [monthFilter]);
+
+  useEffect(() => { load(); }, [load]);
 
   const filteredEvents = useMemo(() => {
     if (serviceFilter === 'all') return events;
@@ -213,6 +216,28 @@ export default function FinancialSummaryPage() {
     : new Date(Number(monthFilter.split('-')[0]), Number(monthFilter.split('-')[1]) - 1, 1)
         .toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
 
+  // Same underlying eventService.generateEvents() the admin Calendar page's
+  // "Gerar eventos do mês" button calls (it also writes calendar occurrence
+  // records as a side effect, which this page doesn't need but doesn't harm
+  // either — see the comment on that button). Kept here too, labeled for
+  // what THIS page cares about, so generating this month's financialEvents
+  // doesn't require knowing the Calendar page exists. Idempotent — safe to
+  // run from both places, or more than once for the same month.
+  async function handleGenerateFinancialEvents() {
+    if (monthFilter === 'all') return;
+    setGenerating(true);
+    try {
+      const [y, m] = monthFilter.split('-').map(Number);
+      const n = await eventService.generateEvents(new Date(y, m - 1, 1));
+      setNotification({ message: `${n} eventos gerados para ${periodLabel}.`, type: 'success' });
+      await load();
+    } catch (err) {
+      setNotification({ message: `Erro: ${(err as Error).message}`, type: 'error' });
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   async function saveCostField(key: 'vanMonthlyCost' | 'electricityMonthlyCost') {
     const raw = costInputs[key].trim();
     const value = raw === '' ? 0 : parseFloat(raw);
@@ -236,6 +261,14 @@ export default function FinancialSummaryPage() {
 
   return (
     <div className="space-y-6">
+      {notification && (
+        <Notification
+          message={notification.message}
+          type={notification.type}
+          onClose={() => setNotification(null)}
+        />
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Resumo Financeiro</h1>
@@ -243,6 +276,14 @@ export default function FinancialSummaryPage() {
             Baseado em <code className="text-xs">financialEvents</code> — fonte única de verdade para receita do KidClub.
           </p>
         </div>
+        <button
+          onClick={handleGenerateFinancialEvents}
+          disabled={monthFilter === 'all' || generating}
+          title={monthFilter === 'all' ? 'Escolha um mês específico no filtro de Período para gerar eventos' : undefined}
+          className="text-xs px-3 py-1.5 bg-gray-700 text-white rounded-lg hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+        >
+          {generating ? 'A gerar…' : `Gerar eventos financeiros${monthFilter !== 'all' ? ` — ${periodLabel}` : ''}`}
+        </button>
       </div>
 
       {/* Filter bar */}
