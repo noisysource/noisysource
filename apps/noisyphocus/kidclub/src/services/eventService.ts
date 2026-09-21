@@ -543,6 +543,9 @@ export const eventService = {
                 dropoffLocation: sched.dropoffLocation,
                 subscriptionId: sub.id,
                 subscriptionType: 'transport',
+                // Needed to resolve the matching ReservationEvent doc, whose id
+                // is keyed by (date, direction) — see reservationEvents.ts.
+                direction: sched.direction ?? 'both',
               },
             } as unknown as Event);
           }
