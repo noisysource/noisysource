@@ -60,27 +60,21 @@ kidclub app: zero new errors, same pre-existing baseline throughout):**
    separately instead of one opaque percentage. The old bulk-recompute button is
    relabeled "🛠️ Reparação manual — recalcular tudo" — a manual repair tool now that
    recomputation is automatic, not the primary action.
-6. **3 of 4 client-portal cancellation pages migrated**
+6. **All 4 of 4 client-portal cancellation pages migrated**
    (`StudySubscriptionDetailPage`, `TransportSubscriptionDetailPage`,
-   `ChildManagementPage`) — they now toggle real `ReservationEvent` docs instead of
-   writing `eventModifications`.
+   `ChildManagementPage`, `EventCalendarPage`) — they now toggle real `ReservationEvent`
+   docs via `setReservationEventStatus` instead of writing `eventModifications`.
+   `EventCalendarPage.tsx` (`/client/children/:childId/calendar`, linked from
+   `ChildDetailPage.tsx`) needed `eventService.ts`'s computed transport events to expose
+   each schedule row's `direction` — added that field to the booking object `getEvents()`
+   already builds (additive, doesn't touch generation or the admin calendar's own use of
+   the same function). **The deploy-blocking gap from earlier in this session is closed —
+   nothing left writes to `eventModifications` for anything billing reads.**
 
-**NOT done — blocking before this is safe to deploy:**
+**Still not done, not deploy-blocking:**
 
-- **`EventCalendarPage.tsx`** (`/client/children/:childId/calendar`, linked from
-  `ChildDetailPage.tsx` — real, reachable, not dead code) **still writes to the old
-  `eventModifications` collection, which billing no longer reads at all.** A parent
-  cancelling a day from this specific page would see it reflected in that page's own
-  view (it reads its own writes via `eventService.ts`) but it would **silently not count
-  toward billing or the absence threshold**. Deferred rather than rushed: its events come
-  from `eventService.ts`'s computed `Event` objects, which don't carry enough information
-  (specifically, which schedule row's `direction` a transport trip corresponds to) to
-  reliably resolve the matching `ReservationEvent` — and `eventService.ts` is also relied
-  on by the admin calendar (`AdminCalendar.tsx`), so it needs more care than remained in
-  this session to touch safely. **This is the single most important next step** — until
-  it's fixed, do not deploy this branch to prod (dev is fine for testing the other paths).
 - No dev/live testing at all yet of any of this — typechecks are the only verification
-  so far.
+  so far. **This is now the actual next step**, not further code.
 - The `agent/exclusion-audit-notes` handoff (docs-only, separate branch, already
   based on current `main`) flagged Mafalda Raposo Duarte's Sept 2026 record as still
   under-billed by €15.30 from the pre-fix deduction math, and a known race between the
@@ -89,15 +83,17 @@ kidclub app: zero new errors, same pre-existing baseline throughout):**
 - Logistics headcount (reading `reservationEvents` directly by date is now trivial — no
   new data model needed) and the multi-van vehicle model/transport planner refactor are
   still not started.
+- `eventModifications` itself is now dead for billing purposes but still exists as a
+  collection with historical data and is still what `AdminCalendar.tsx` reads for its own
+  cancelled/pending display — not removed, just no longer relevant to money. Worth a
+  cleanup pass later, not urgent.
 
-**Next steps in order:** (1) migrate `EventCalendarPage.tsx` (needs `eventService.ts`
-investigation first — check what data is available on a computed transport `Event` to
-resolve its direction, or extend `eventService.ts` to also expose it), (2) open PR into
-`staging`, (3) manually verify on `kidclub-dev`: create a subscription, confirm events
-generate; cancel days via each of the 4 (once fixed) client entry points and the admin
-day-picker, confirm they're all counted the same way; verify the discount pipeline
-against a family with a school discount + siblings + absences by hand; verify mid-month
-cancellation preserves already-elapsed charges, (4) only then `staging` → `main`.
+**Next steps in order:** (1) open PR into `staging`, (2) manually verify on
+`kidclub-dev`: create a subscription, confirm events generate; cancel days via each of
+the 4 client entry points and the admin day-picker, confirm they're all counted the same
+way and match what the family sees; verify the discount pipeline against a family with a
+school discount + siblings + absences by hand; verify mid-month cancellation preserves
+already-elapsed charges, (3) only then `staging` → `main`.
 
 ---
 
