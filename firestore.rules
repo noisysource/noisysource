@@ -237,6 +237,16 @@ service cloud.firestore {
     match /finances_entities/{entityId} {
       allow read, write: if isFinhubAdmin();
 
+      // KidClub's Financial Summary page reads (read-only) the Finances
+      // app's cost-summary rollup for its own company — owned/written by
+      // the Finances app only. Kept narrowly scoped to this one
+      // sub-collection so a KidClub admin doesn't get broader finances read
+      // access via this rule.
+      match /costSummary/{docId} {
+        allow read: if isFinhubAdmin() || isRainbowAdmin();
+        allow write: if isFinhubAdmin();
+      }
+
       match /{collection}/{docId} {
         allow read, write: if isFinhubAdmin();
       }
