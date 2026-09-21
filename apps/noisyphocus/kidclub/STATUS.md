@@ -257,6 +257,16 @@ classifier"), which is a harness-level gate, not something an in-chat "yes go ah
     same shifted-by-one-day corruption pattern (any family with excludedDates that don't land
     on a real schedule weekday is a symptom) — not started, flagged by Renato as a next step
     after the hotfix ships, not done in this session.
+11. **Address the shared-`kidclub-dev`-deploy collision problem** (see Backlog below) —
+    Renato explicitly wants this picked up next. Surfaced when `agent/study-exclusion-validation`'s
+    `staging` PR failed to deploy: `onBillingPaidEffectiveEvents`, manually deployed to
+    `kidclub-dev` from the unmerged, currently-paused `agent/financial-events-model` branch,
+    blocked every other branch's dev deploy because `firebase deploy` refuses to silently
+    delete a remote function missing from the deploying branch's source. Unblocked by deleting
+    that one function from `kidclub-dev` (`firebase functions:delete
+    onBillingPaidEffectiveEvents --region europe-west3 --project kidclub-dev` — safe, only
+    removes the deployed artifact, source is untouched on that branch and will redeploy fine
+    whenever that work resumes) — but the structural cause is unaddressed.
 
 ## Open questions for Renato
 - OK to run `backfillBillingSchedules` against **prod** to catch José Eduardo's and the Mogo
@@ -304,6 +314,22 @@ classifier"), which is a harness-level gate, not something an in-chat "yes go ah
   open — remove once their respective PRs are merged.
 
 ## Backlog — bigger features surfaced but not started
+- **`kidclub-dev` is a shared Firebase project that every branch's `staging` PR deploys a full
+  functions sync to** (surfaced 2026-09-21, Renato wants this picked up next). Any branch with
+  in-progress functions work that gets deployed to dev directly (not yet merged to `staging`)
+  leaves those functions live on the shared project. The next unrelated branch's CI deploy
+  then fails, because `firebase deploy` refuses non-interactively to delete a remote function
+  missing from the deploying branch's own source — exactly what happened with
+  `onBillingPaidEffectiveEvents` from the paused `agent/financial-events-model` branch
+  blocking `agent/study-exclusion-validation`'s unrelated deploy. This will keep recurring
+  with several branches/worktrees active in parallel (see `git worktree list` — a dozen-plus
+  open at once is normal here). Needs a real fix, not a repeated one-off
+  `functions:delete` — options roughly: (a) give each in-progress branch its own preview
+  Firebase project/channel instead of sharing `kidclub-dev` wholesale, (b) scope CI's deploy
+  to `--only functions:<changed-ones>` instead of a full sync so it never considers deleting
+  functions it doesn't know about, (c) some convention/discipline around manually-deployed
+  test functions being cleaned up before pausing a branch. Not scoped further — flagging as
+  the next thing to design, per Renato's explicit instruction.
 - **Billing records don't react to a subscription changing mid-cycle** (surfaced 2026-09-21,
   Renato's explicit instruction: "that reveals a problem we haven't addressed — update the
   notes so we can deal with it"). A billing record (`billing/{familyId}_{yyyy-mm}`) is a
