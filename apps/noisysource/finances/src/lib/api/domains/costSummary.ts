@@ -8,8 +8,6 @@
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../firebase";
 import type { EmploymentContractDoc } from "@shared/models/Employment";
-import type { EcContractDoc } from "@shared/models/EcContract";
-import { estimatedMonthlyInvoiceCents } from "@shared/models/EcContract";
 import type { RecurringEntryDoc } from "@shared/models/RecurringEntry";
 import type { CostSummaryBreakdownLine, CostSummaryDoc } from "@shared/models/CostSummary";
 import { buildPayrollPreview } from "@shared/lib/payroll";
@@ -19,8 +17,13 @@ const NOISYPHOCUS_ENTITY = "noisyphocus";
 
 export interface ComputeCostSummaryInput {
   yearMonth: string; // "YYYY-MM"
+  // Both salaried (contractType: 'employee'/undefined) and freelance
+  // (contractType: 'green_receipt') NoisyPhocus workers live here — see
+  // packages/shared/models/Employment.ts. There is no separate EC-contracts
+  // input: EcContractDoc models a client paying US (income direction), the
+  // wrong shape for what NoisyPhocus pays a freelancer, and using it here
+  // was a design mistake corrected in this pass — see STATUS.md.
   contracts: EmploymentContractDoc[];
-  ecContracts: EcContractDoc[];
   recurring: RecurringEntryDoc[];
   /** KidClub processed-billing volume for this month, in cents — see api.kidclub.monthlyProcessedVolumeCents(). */
   kidclubVolumeCentsForMonth?: number;
@@ -37,7 +40,11 @@ export function computeNoisyphocusCostSummary(input: ComputeCostSummaryInput): C
   const month1to12 = Number(monthStr);
   const breakdown: CostSummaryBreakdownLine[] = [];
 
-  // ── Payroll: active employment contracts + active EC/freelance contracts ──
+  // ── Payroll: active employment contracts, both salaried and green-receipt ──
+  // buildPayrollPreview doesn't need to branch on contractType at all — a
+  // green-receipt contract has ssErPct/benefits forced to 0 at save time
+  // (EmploymentContractsPage.tsx), so costToEmployerCents = gross + 0 + 0,
+  // which is exactly the freelancer's real cost to NoisyPhocus.
   let payrollCostCents = 0;
 
   const activeContracts = input.contracts.filter(c => c.active !== false);
@@ -46,18 +53,12 @@ export function computeNoisyphocusCostSummary(input: ComputeCostSummaryInput): C
     for (const row of rows) {
       payrollCostCents += row.totals.costToEmployerCents;
       const personLabel = input.peopleById?.[row.personId] ?? row.personId;
-      breakdown.push({
-        label: `Contrato — ${personLabel}`,
-        amountCents: row.totals.costToEmployerCents,
-      });
+      const contract = activeContracts.find(c => c.id === row.contractId);
+      const label = contract?.contractType === "green_receipt"
+        ? `Recibo Verde — ${personLabel}`
+        : `Contrato — ${personLabel}`;
+      breakdown.push({ label, amountCents: row.totals.costToEmployerCents });
     }
-  }
-
-  for (const c of input.ecContracts) {
-    if (!c.active) continue;
-    const amountCents = estimatedMonthlyInvoiceCents(c);
-    payrollCostCents += amountCents;
-    breakdown.push({ label: `Recibo verde — ${c.clientName}`, amountCents });
   }
 
   // ── Software/tooling: active expense recurring entries for this entity ──

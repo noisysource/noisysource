@@ -20,6 +20,15 @@ export interface EmploymentContractDoc {
   companyId: string;
   personId: string;
   active: boolean;
+  // 'green_receipt' (recibo verde / freelance): no employer/employee social
+  // security contribution — ssEmpPct/ssErPct should be 0, and `benefits`
+  // (subsídios) don't apply. Undefined/'employee' is a regular salaried
+  // contract — the default for backward-compat with contracts saved before
+  // this field existed. `buildPayrollPreview` (packages/shared/lib/payroll.ts)
+  // doesn't need to know about this at all: costToEmployerCents = gross +
+  // ssEr + benefits already comes out correct for a green-receipt contract
+  // as long as ssErPct/benefits are 0 — this field only drives the UI.
+  contractType?: 'employee' | 'green_receipt';
   paymentType?: 'salary' | 'hourly';
   grossMonthlyCents?: number | null;
   hourlyRateCents?: number | null;

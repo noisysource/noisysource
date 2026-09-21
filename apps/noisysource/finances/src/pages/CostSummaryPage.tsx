@@ -58,9 +58,11 @@ export default function CostSummaryPage() {
       setMsg(null);
       try {
         api.setEntity("noisyphocus");
-        const [contracts, ecContracts, recurring, people, volumeCents] = await Promise.all([
+        // Both salaried and green-receipt/freelance NoisyPhocus workers come
+        // from api.contracts (employmentContracts) — see costSummary.ts for
+        // why EC-contracts (a different, income-direction model) isn't used.
+        const [contracts, recurring, people, volumeCents] = await Promise.all([
           api.contracts.list(),
-          api.ecContracts.list(),
           api.recurring.list(),
           api.people.list(),
           api.kidclub.monthlyProcessedVolumeCents(yearMonth),
@@ -72,7 +74,6 @@ export default function CostSummaryPage() {
         const computed = await api.costSummary.computeAndSave({
           yearMonth,
           contracts,
-          ecContracts,
           recurring,
           kidclubVolumeCentsForMonth: volumeCents,
           peopleById,
