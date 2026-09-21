@@ -4,23 +4,15 @@ import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
+import { reconcileService, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
-// functions/ deploys as an isolated directory — Cloud Build's remote install
-// only sees functions/package.json, with no monorepo/pnpm-workspace context,
-// so a real "@shared" dependency can't be added here (confirmed the hard
-// way: Cloud Build's npm rejects "@shared" outright as an invalid package
-// name, since it's a scope prefix with no name after it — breaks EVERY
-// function in the deploy, not just ones that import it). Duplicated from
-// packages/shared/models/discountLogic.ts's applyDiscounts() instead of
-// importing it; keep the two in sync if that one ever changes.
+// Kept only for BillingLineItem.appliedDiscounts' type and the enrollment-fee
+// line items — actual discount math for study/transport now lives in
+// reconciliation.ts's reconcileService(), not here.
 interface AppliedDiscount { ruleId: string; name: string; percentage: number; appliedAt: Date; appliedBy: "auto" | "admin" }
-function applyDiscounts(gross: number, discounts: AppliedDiscount[]): number {
-  const totalPct = Math.min(discounts.reduce((s, d) => s + d.percentage, 0), 1);
-  return Math.round(gross * (1 - totalPct) * 100) / 100;
-}
 
 const COMPANY_NAME = "Arco-Íris da Pequenada";
 
@@ -43,92 +35,6 @@ function periodForDate(date: Date) {
 function dayLabel(day: string): string {
   const map: Record<string, string> = { monday:"2ª", tuesday:"3ª", wednesday:"4ª", thursday:"5ª", friday:"6ª" };
   return map[day] ?? day;
-}
-
-const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-const weekdayOfIsoDate = (isoDate: string): string => WEEKDAY_NAMES[new Date(`${isoDate}T12:00:00Z`).getUTCDay()];
-
-// Same per-occurrence rate used to price the subscription in the first place
-// (StudyCenterConfig.pricePerDayPerWeek / TransportationConfig.flatRatePerTrip)
-// — reused here rather than back-deriving a rate from the monthly total, so
-// "one excluded day" always means the same euro amount everywhere in the app.
-function studyPerDayRate(cfg: any): number {
-  if (cfg?.pricePerDayPerWeek != null) return cfg.pricePerDayPerWeek;
-  if (cfg?.monthlyPricePerWeekday != null) return cfg.monthlyPricePerWeekday / (cfg?.weeksPerMonth ?? 4);
-  return 0;
-}
-
-// Transport excluded-date entries can target a single trip instead of the
-// whole day — "2026-09-08" (bare) excludes every trip that day, while
-// "2026-09-08:pickup" / "2026-09-08:dropoff" excludes only that direction.
-// This is what lets an admin mark "skipped the morning ride but still came
-// to study room, and still took the ride home" as two independent facts.
-function parseExclusionEntry(entry: string): { isoDate: string; direction?: "pickup" | "dropoff" } {
-  const [isoDate, direction] = entry.split(":");
-  return direction === "pickup" || direction === "dropoff" ? { isoDate, direction } : { isoDate };
-}
-
-// Gross (pre-discount) amount to remove for a set of excluded calendar dates.
-// Discount is reapplied afterwards via applyDiscounts(), the same function
-// that already computes every other discounted price in the app — so a
-// subscription's discount rate is preserved on the days it IS billed for,
-// instead of being partly eaten by the excluded days.
-function computeExclusionDeduction(
-  type: "study" | "transport",
-  excludedDates: string[],
-  sub: any,
-  studyConfig: any,
-  transportConfig: any,
-): number {
-  if (type === "study") {
-    const rate = studyPerDayRate(studyConfig);
-    const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
-    let deduction = 0;
-    for (const entry of excludedDates) {
-      const { isoDate } = parseExclusionEntry(entry);
-      const weekday = weekdayOfIsoDate(isoDate);
-      // Only deduct for dates that actually fall on one of the subscription's
-      // real schedule days — mirrors the transport branch below. Without this,
-      // a stale or bogus excludedDates entry (e.g. left over after a schedule
-      // change) can discount a day the child was never billed for in the
-      // first place.
-      if (scheduleDays.includes(weekday)) deduction += rate;
-    }
-    return deduction;
-  }
-  const rate = transportConfig?.flatRatePerTrip ?? 0;
-  let deduction = 0;
-  for (const entry of excludedDates) {
-    const { isoDate, direction } = parseExclusionEntry(entry);
-    const weekday = weekdayOfIsoDate(isoDate);
-    // A schedule entry with direction "both" is priced (and can only be
-    // excluded) as a single indivisible trip — it matches a direction-scoped
-    // exclusion too, since there's no separate leg to leave billed.
-    const tripsThatDay = (sub.schedule ?? []).filter((s: any) =>
-      s.dayOfWeek === weekday && (!direction || s.direction === direction || s.direction === "both")
-    ).length;
-    deduction += tripsThatDay * rate;
-  }
-  return deduction;
-}
-
-// Same weeks-per-month convention discountRecalc.ts uses to price a transport
-// subscription in the first place — kept in sync with that file's own copy.
-function activeWeeksInPattern(pattern: string): 2 | 4 {
-  return pattern === "all" ? 4 : 2;
-}
-
-// True gross (pre-discount) transport fee, derived the same way discountRecalc.ts
-// derives it — from schedule × rate × weeks — rather than trusted off
-// sub.originalFee/sub.monthlyFee. Subscriptions created through the client
-// self-enroll flow never get an originalFee written, and once any discount
-// fires, discountRecalc.ts overwrites monthlyFee with the DISCOUNTED price;
-// treating that as gross here would apply appliedDiscounts a second time.
-function transportGrossAmount(sub: any, transportConfig: any): number {
-  const scheduleLen: number = sub.schedule?.length ?? 0;
-  const flatRatePerTrip: number = transportConfig?.flatRatePerTrip ?? 0;
-  const grossFromSchedule = scheduleLen * flatRatePerTrip * activeWeeksInPattern(sub.weekPattern ?? "all");
-  return grossFromSchedule > 0 ? grossFromSchedule : (sub.originalFee ?? sub.monthlyFee ?? 0);
 }
 
 // Returns all months from fromDate through August of the following year
@@ -165,89 +71,88 @@ function chunk<T>(arr: T[], size = 30): T[][] {
   return out;
 }
 
-// Approved cancellations (parent self-service via the client portal, or
-// admin-entered) — the same `eventModifications` collection the client
-// calendar and admin calendar already read/write. This is the single
-// source of truth for "did this occurrence actually happen," distinct from
-// (and, per computeLineItems, deliberately kept separate from) the
-// admin-only `excludedDates` field on the billing record itself, which is a
-// manual per-invoice adjustment unrelated to attendance.
-async function fetchApprovedCancellations(
+// Every occurrence actually scheduled this period, for a set of
+// subscriptions, read from the materialized ReservationEvents collection —
+// this is the single source of truth for both gross (EXPECTED + CANCELLED)
+// and the absence count (CANCELLED only), replacing the old split between a
+// schedule-derived formula for gross and eventModifications for absences.
+async function fetchReservationEventsForPeriod(
   studyIds: string[],
   transportIds: string[],
-): Promise<Map<string, { date: Date }[]>> {
-  const bySub = new Map<string, { date: Date }[]>();
-  if (studyIds.length === 0 && transportIds.length === 0) return bySub;
+  period: ReturnType<typeof periodForDate>,
+): Promise<Map<string, ReservationEventLite[]>> {
+  const bySub = new Map<string, ReservationEventLite[]>();
+  const allIds = [...studyIds, ...transportIds];
+  if (allIds.length === 0) return bySub;
 
-  const queries: Promise<FirebaseFirestore.QuerySnapshot>[] = [];
-  for (const ids of chunk(studyIds)) {
-    queries.push(appCol("eventModifications")
-      .where("subscriptionType", "==", "study")
-      .where("modificationType", "==", "cancelled")
-      .where("status", "==", "approved")
-      .where("subscriptionId", "in", ids)
-      .get());
-  }
-  for (const ids of chunk(transportIds)) {
-    queries.push(appCol("eventModifications")
-      .where("subscriptionType", "==", "transport")
-      .where("modificationType", "==", "cancelled")
-      .where("status", "==", "approved")
-      .where("subscriptionId", "in", ids)
-      .get());
-  }
+  const startIso = period.isoDate;
+  const endIso = `${period.end.getFullYear()}-${String(period.end.getMonth() + 1).padStart(2, "0")}-${String(period.end.getDate()).padStart(2, "0")}`;
 
-  const snaps = await Promise.all(queries);
+  const snaps = await Promise.all(
+    chunk(allIds).map(ids => appCol("reservationEvents")
+      .where("subscriptionId", "in", ids)
+      .where("date", ">=", startIso)
+      .where("date", "<=", endIso)
+      .get())
+  );
   for (const snap of snaps) {
     for (const doc of snap.docs) {
       const data = doc.data();
-      const date: Date = data.date?.toDate?.() ?? new Date(data.date);
       const list = bySub.get(data.subscriptionId) ?? [];
-      list.push({ date });
+      list.push({ date: data.date, basePriceCents: data.basePriceCents, status: data.status });
       bySub.set(data.subscriptionId, list);
     }
   }
   return bySub;
 }
 
-// The agreed absence policy (Renato, 2026-09-21): under 3 approved
-// cancellations in a period, the family pays full price — no partial
-// pro-ration for 1 or 2 missed occurrences. At 3 or more, exactly 3 days'
-// worth is credited (not all of them, and not scaled beyond 3). Study and
-// transport are tracked as two entirely separate thresholds — a child can
-// miss transport three times and still owe full price for study room, and
-// vice versa. A cancellation counts here regardless of who initiated it
-// (parent self-service, or a call-in handled by staff) and regardless of
-// whether it was cancelled in advance or logged as a no-show after the
-// fact — both are the same `eventModifications` fact, visible to both the
-// family (client calendar) and staff (admin calendar).
-const ABSENCE_THRESHOLD = 3;
+// Children's birthdates, for the sibling-discount ordering tie-break
+// (older child -> position 1 / full price, once value and enrollment date
+// are both tied).
+async function fetchChildrenBirthDates(childIds: string[]): Promise<Map<string, Date>> {
+  const out = new Map<string, Date>();
+  const ids = [...new Set(childIds)].filter(Boolean);
+  if (!ids.length) return out;
+  const snaps = await Promise.all(chunk(ids).map(batch =>
+    appCol("children").where(admin.firestore.FieldPath.documentId(), "in", batch).get()
+  ));
+  for (const snap of snaps) {
+    for (const doc of snap.docs) {
+      const dob = doc.data()?.dateOfBirth;
+      if (dob) out.set(doc.id, dob.toDate ? dob.toDate() : new Date(dob));
+    }
+  }
+  return out;
+}
 
-function computeAbsenceThresholdCredit(
+// Maps the config/discounts rules doc + service config into the flat shape
+// reconcileService() expects. Manual (admin-applied) discounts already
+// stored on the subscription are folded into the institutional tier, same
+// tier as school/returning-student — they're all "a percentage on the
+// post-sibling subtotal," just from different sources.
+function buildReconciliationConfig(
   type: "study" | "transport",
-  cancellations: { date: Date }[],
-  period: ReturnType<typeof periodForDate>,
-  manualExcludedDates: string[],
-  studyConfig: any,
-  transportConfig: any,
-): { deduction: number; creditDates: string[] } {
-  // A date already accounted for via the manual excludedDates admin
-  // override must not ALSO generate a threshold credit for the same date —
-  // that would double-deduct the same absence through two paths, the exact
-  // class of bug just fixed in this file for discounts.
-  const alreadyManuallyExcluded = new Set(manualExcludedDates.map(e => e.split(":")[0]));
+  rules: any[],
+  serviceConfig: any,
+): ReconciliationConfig {
+  const multiTripRule = rules.find(r => r.active && r.trigger === "auto_multitrip" && r.appliesTo?.includes(type));
+  const siblingRule = rules.find(r => r.active && r.trigger === "auto_sibling" && r.appliesTo?.includes(type));
+  const schoolRules = rules.filter(r => r.active && r.trigger === "auto_school" && r.appliesTo?.includes(type) && r.schoolName);
+  return {
+    multiTripDiscountPct: multiTripRule?.percentage ?? 0,
+    minTripsPerDay: multiTripRule?.minTripsPerDay ?? 2,
+    siblingDiscountPct: siblingRule?.percentage ?? 0,
+    schoolDiscounts: schoolRules.map(r => ({ schoolName: r.schoolName, discountPercentage: r.percentage })),
+    returningStudentDiscountPct: serviceConfig?.returningStudentDiscountPercentage ?? 0,
+  };
+}
 
-  const inPeriod = cancellations
-    .filter(c => c.date >= period.start && c.date <= period.end)
-    .filter(c => !alreadyManuallyExcluded.has(`${c.date.getFullYear()}-${String(c.date.getMonth() + 1).padStart(2, "0")}-${String(c.date.getDate()).padStart(2, "0")}`))
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-  if (inPeriod.length < ABSENCE_THRESHOLD) return { deduction: 0, creditDates: [] };
-
-  const credited = inPeriod.slice(0, ABSENCE_THRESHOLD);
-  const creditDates = credited.map(c => `${c.date.getFullYear()}-${String(c.date.getMonth() + 1).padStart(2, "0")}-${String(c.date.getDate()).padStart(2, "0")}`);
-  const perDayRate = type === "study" ? studyPerDayRate(studyConfig) : (transportConfig?.flatRatePerTrip ?? 0);
-  return { deduction: ABSENCE_THRESHOLD * perDayRate, creditDates };
+function manualDiscountPctFor(sub: any, rules: any[]): number {
+  const manual: { percentage: number }[] = (sub.appliedDiscounts ?? []).filter((ad: any) => {
+    const rule = rules.find(r => r.id === ad.ruleId);
+    return rule?.trigger === "manual" || ad.appliedBy === "admin";
+  });
+  return manual.reduce((s, d) => s + d.percentage, 0);
 }
 
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
@@ -347,56 +252,45 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
 
 export interface BillingLineItem {
   title: string;
-  amount: number;               // net, after discounts AND excluded days
-  grossAmount: number;          // before discounts and exclusions
+  amount: number;               // net, after discounts AND absence credit
+  grossAmount: number;          // before discounts — sum of this period's EXPECTED+CANCELLED ReservationEvents
   subscriptionId: string;
   type: "study" | "transport" | "enrollment";
-  appliedDiscounts: AppliedDiscount[];
-  excludedDates?: string[];     // ISO yyyy-mm-dd (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
-  scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI only offer real service days
-  tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday, so the UI can offer per-trip exclusion when a day has more than one
-  absenceCreditDates?: string[]; // ISO yyyy-mm-dd — the 3 approved cancellations (eventModifications) credited once the absence threshold was reached this period
-  frozenMidPeriodCancellation?: boolean; // true if this line item's subscription is no longer active but was carried forward unchanged because it was still active for PART of the in-progress period — see computeLineItems
+  appliedDiscounts: AppliedDiscount[]; // kept for type compatibility; study/transport line items no longer populate this — see multiTripDiscountAmount etc. below
+  scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI show real service days
+  tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday
+  multiTripDiscountAmount?: number;    // marginal — only trip #2+ on a multi-trip day
+  siblingDiscountAmount?: number;      // marginal — only applies if this isn't the family's highest-value subscription for this service
+  institutionalDiscountAmount?: number; // school + returning-student + manual, summed, on the post-sibling subtotal
+  institutionalDiscountPct?: number;
+  absenceCount?: number;         // CANCELLED ReservationEvents this period, this subscription
+  absenceCreditAmount?: number;
+  absenceCreditDates?: string[]; // ISO yyyy-mm-dd — every CANCELLED date credited once the 3-absence threshold was reached (uncapped, not just the first 3)
 }
 
-interface BillingConfigs { studyConfig: any; transportConfig: any }
+interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules: any[] }
 
 // existingLineItems (previous version of this specific billing record, if any)
-// carries forward each subscription's excludedDates — admin's per-month
-// adjustment must survive a recompute triggered by an unrelated subscription
-// edit, not just get silently overwritten with the fresh gross amount.
-function computeLineItems(
+// carries forward each subscription's registration/insurance enrollment fee
+// line items — those are billed once per child, not re-derived every call.
+// Everything else is now recomputed fresh every time from ReservationEvents,
+// which already carry their own frozen price and VOIDED/CANCELLED status —
+// there's nothing left to "carry forward" for the study/transport lines
+// themselves (the old frozenMidPeriodCancellation patch is no longer
+// needed: a mid-month cancellation voids future events, not past ones, so
+// this period's already-elapsed events are billed correctly without any
+// special-casing here).
+async function computeLineItems(
   group: { study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
   configs: BillingConfigs,
   existingLineItems: BillingLineItem[] = [],
-  cancellationsBySub: Map<string, { date: Date }[]> = new Map(),
-  isCurrentPeriod: boolean = false,
-): { lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } {
+): Promise<{ lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] }> {
   const lineItems: BillingLineItem[] = [];
   let total = 0;
   const newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] = [];
   const billedThisCall = new Set<string>();
   const priorFor = (subId: string) => existingLineItems.find(li => li.subscriptionId === subId);
-
-  // A subscription that was active for PART of the in-progress period and
-  // then cancelled (or otherwise stopped being "active") mid-month must not
-  // have its already-earned charge for this period erased just because a
-  // later recompute — triggered by that very cancellation — no longer sees
-  // it in the active-subs query. Freeze it: carry the prior line item for
-  // this period forward completely unchanged. Only applies to the CURRENT
-  // in-progress period — a genuinely future period for an already-cancelled
-  // subscription should (and does) simply have no line item, since no
-  // service will be rendered then. Past periods are never touched by the
-  // caller's period loop at all, so they're safe regardless.
-  const activeSubIds = new Set([...group.study, ...group.transport].map(s => s.id));
-  const frozenOrphans: BillingLineItem[] = isCurrentPeriod
-    ? existingLineItems.filter(li => (li.type === "study" || li.type === "transport") && li.subscriptionId && !activeSubIds.has(li.subscriptionId))
-    : [];
-  for (const orphan of frozenOrphans) {
-    lineItems.push({ ...orphan, frozenMidPeriodCancellation: true });
-    total += orphan.amount;
-  }
 
   // "Already billed" is read straight off the currently active subscription
   // docs themselves — sub.enrollmentFeeBilled — rather than a persistent
@@ -475,50 +369,79 @@ function computeLineItems(
     for (const s of group.transport) if (s.childId === sub.childId) newlyBilledEnrollmentFeeSubs.push({ collection: "transportationSubscriptions", id: s.id });
   };
 
-  for (const sub of group.study) {
-    const gross = sub.basePrice ?? sub.monthlyPrice ?? 0;
-    const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
-    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
-    const manualDeduction = computeExclusionDeduction("study", excludedDates, sub, configs.studyConfig, configs.transportConfig);
-    const { deduction: absenceDeduction, creditDates: absenceCreditDates } = computeAbsenceThresholdCredit(
-      "study", cancellationsBySub.get(sub.id) ?? [], period, excludedDates, configs.studyConfig, configs.transportConfig,
-    );
-    const amount = Math.round(applyDiscounts(Math.max(0, gross - manualDeduction - absenceDeduction), appliedDiscounts) * 100) / 100;
-    const scheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
-    const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
-    lineItems.push({
-      title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
-      amount, grossAmount: gross, subscriptionId: sub.id, type: "study", appliedDiscounts, scheduleDays,
-      ...(excludedDates.length ? { excludedDates } : {}),
-      ...(absenceCreditDates.length ? { absenceCreditDates } : {}),
-    });
-    total += amount;
-    maybeAddEnrollmentFee(sub);
-  }
-  for (const sub of group.transport) {
-    const gross = transportGrossAmount(sub, configs.transportConfig);
-    const appliedDiscounts: AppliedDiscount[] = sub.appliedDiscounts ?? [];
-    const excludedDates = priorFor(sub.id)?.excludedDates ?? [];
-    const manualDeduction = computeExclusionDeduction("transport", excludedDates, sub, configs.studyConfig, configs.transportConfig);
-    const { deduction: absenceDeduction, creditDates: absenceCreditDates } = computeAbsenceThresholdCredit(
-      "transport", cancellationsBySub.get(sub.id) ?? [], period, excludedDates, configs.studyConfig, configs.transportConfig,
-    );
-    const amount = Math.round(applyDiscounts(Math.max(0, gross - manualDeduction - absenceDeduction), appliedDiscounts) * 100) / 100;
-    const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
-    const tripsByDay: Record<string, ("pickup" | "dropoff" | "both")[]> = {};
-    for (const s of sub.schedule ?? []) {
-      (tripsByDay[s.dayOfWeek] ??= []).push(s.direction ?? "both");
+  const studyIds = group.study.map(s => s.id);
+  const transportIds = group.transport.map(s => s.id);
+  const [eventsBySub, childBirthDates] = await Promise.all([
+    fetchReservationEventsForPeriod(studyIds, transportIds, period),
+    fetchChildrenBirthDates([...group.study, ...group.transport].map(s => s.childId)),
+  ]);
+
+  const enrollmentDateOf = (sub: any): Date => {
+    const raw = sub.createdAt ?? sub.startDate;
+    if (raw?.toDate) return raw.toDate();
+    return raw ? new Date(raw) : new Date(0);
+  };
+
+  if (group.study.length) {
+    const cfg = buildReconciliationConfig("study", configs.discountRules, configs.studyConfig);
+    const subsForRecon: SubscriptionForReconciliation[] = group.study.map(sub => ({
+      id: sub.id, childId: sub.childId, schoolName: sub.schoolName, returningStudent: sub.returningStudent,
+      manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
+      enrollmentDate: enrollmentDateOf(sub),
+      childBirthDate: childBirthDates.get(sub.childId),
+    }));
+    for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
+      const sub = group.study.find(s => s.id === r.subscriptionId)!;
+      const scheduleDays: string[] = [...new Set((sub.days ?? []).map((d: any) => d.day))] as string[];
+      const daysStr = (sub.days ?? []).map((d: any) => dayLabel(d.day)).join(", ");
+      const amount = Math.round(r.finalCents) / 100;
+      lineItems.push({
+        title: `Sala de Estudo — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
+        amount, grossAmount: r.grossCents / 100, subscriptionId: sub.id, type: "study", appliedDiscounts: [], scheduleDays,
+        multiTripDiscountAmount: r.multiTripDiscountCents / 100,
+        siblingDiscountAmount: r.siblingDiscountCents / 100,
+        institutionalDiscountAmount: r.institutionalDiscountCents / 100,
+        institutionalDiscountPct: r.institutionalDiscountPct,
+        absenceCount: r.absenceCount,
+        absenceCreditAmount: r.absenceCreditCents / 100,
+        ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
+      });
+      total += amount;
+      maybeAddEnrollmentFee(sub);
     }
-    const daysStr = (sub.schedule ?? []).map((s: any) => dayLabel(s.dayOfWeek)).join(", ");
-    lineItems.push({
-      title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
-      amount, grossAmount: gross, subscriptionId: sub.id, type: "transport", appliedDiscounts, scheduleDays, tripsByDay,
-      ...(excludedDates.length ? { excludedDates } : {}),
-      ...(absenceCreditDates.length ? { absenceCreditDates } : {}),
-    });
-    total += amount;
-    maybeAddEnrollmentFee(sub);
   }
+
+  if (group.transport.length) {
+    const cfg = buildReconciliationConfig("transport", configs.discountRules, configs.transportConfig);
+    const subsForRecon: SubscriptionForReconciliation[] = group.transport.map(sub => ({
+      id: sub.id, childId: sub.childId, schoolName: sub.schoolName, returningStudent: sub.returningStudent,
+      manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
+      enrollmentDate: enrollmentDateOf(sub),
+      childBirthDate: childBirthDates.get(sub.childId),
+    }));
+    for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
+      const sub = group.transport.find(s => s.id === r.subscriptionId)!;
+      const scheduleDays: string[] = [...new Set((sub.schedule ?? []).map((s: any) => s.dayOfWeek))] as string[];
+      const tripsByDay: Record<string, ("pickup" | "dropoff" | "both")[]> = {};
+      for (const s of sub.schedule ?? []) (tripsByDay[s.dayOfWeek] ??= []).push(s.direction ?? "both");
+      const daysStr = (sub.schedule ?? []).map((s: any) => dayLabel(s.dayOfWeek)).join(", ");
+      const amount = Math.round(r.finalCents) / 100;
+      lineItems.push({
+        title: `Transporte Escolar — ${sub.childName}${daysStr ? ` (${daysStr})` : ""} — ${period.label}`,
+        amount, grossAmount: r.grossCents / 100, subscriptionId: sub.id, type: "transport", appliedDiscounts: [], scheduleDays, tripsByDay,
+        multiTripDiscountAmount: r.multiTripDiscountCents / 100,
+        siblingDiscountAmount: r.siblingDiscountCents / 100,
+        institutionalDiscountAmount: r.institutionalDiscountCents / 100,
+        institutionalDiscountPct: r.institutionalDiscountPct,
+        absenceCount: r.absenceCount,
+        absenceCreditAmount: r.absenceCreditCents / 100,
+        ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
+      });
+      total += amount;
+      maybeAddEnrollmentFee(sub);
+    }
+  }
+
   return { lineItems, total: Math.round(total * 100) / 100, newlyBilledEnrollmentFeeSubs };
 }
 
@@ -533,11 +456,16 @@ async function markEnrollmentFeeBilled(subs: { collection: "studyroom" | "transp
 }
 
 async function loadBillingConfigs(): Promise<BillingConfigs> {
-  const [studySnap, transportSnap] = await Promise.all([
+  const [studySnap, transportSnap, discountsSnap] = await Promise.all([
     appCol("config").doc("studyCenter").get(),
     appCol("config").doc("transportation").get(),
+    appCol("config").doc("discounts").get(),
   ]);
-  return { studyConfig: studySnap.data() ?? {}, transportConfig: transportSnap.data() ?? {} };
+  return {
+    studyConfig: studySnap.data() ?? {},
+    transportConfig: transportSnap.data() ?? {},
+    discountRules: discountsSnap.data()?.rules ?? [],
+  };
 }
 
 // ── Send billing notices for a period ────────────────────────────────────────
@@ -560,8 +488,7 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
 
-  const cancellationsBySub = await fetchApprovedCancellations(study.map(s => s.id), transport.map(s => s.id));
-  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems({ study, transport }, period, configs, [], cancellationsBySub);
+  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems({ study, transport }, period, configs, []);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -1041,7 +968,6 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     transport: transportSnap.docs.map(d => ({ id: d.id, ...d.data() })),
   };
 
-  const cancellationsBySub = await fetchApprovedCancellations(group.study.map(s => s.id), group.transport.map(s => s.id));
   const periods = periodsUntilSchoolYearEnd(new Date());
   let created = 0, updated = 0, cancelled = 0;
 
@@ -1055,13 +981,11 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
   };
 
-  const currentPeriodKey = periods[0]?.isoDate.slice(0, 7);
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
     const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-    const isCurrentPeriod = period.isoDate.slice(0, 7) === currentPeriodKey;
-    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub, isCurrentPeriod);
+    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
       if (isRecomputable(existing.data())) {
@@ -1117,13 +1041,11 @@ export const backfillBillingSchedules = onCall(
     // subscriptions — but ONLY for periods strictly after the current month.
     // A family that cancels its only subscription mid-month was still
     // active for part of THIS month (and every prior month), so those
-    // records represent real, already-earned charges — wiping them just
-    // because the family has zero active subs as of right now is the same
-    // "mid-month cancellation erases what's already billed" bug the
-    // frozenMidPeriodCancellation carry-forward in computeLineItems exists
-    // to prevent, and this loop bypasses computeLineItems entirely, so that
-    // guard can't help here. Only a period that hasn't started yet can
-    // safely be assumed to have zero billable service.
+    // records represent real, already-earned charges. This loop bypasses
+    // computeLineItems entirely, so it can't rely on ReservationEvents'
+    // EXPECTED/CANCELLED/VOIDED split (which now handles the mid-month case
+    // correctly on its own) — only a period that hasn't started yet can
+    // safely be assumed here to have zero billable service.
     const startOfCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const orphanSnap = await appCol("billing").where("status", "==", "pending").get();
     for (const doc of orphanSnap.docs) {
@@ -1145,15 +1067,12 @@ export const backfillBillingSchedules = onCall(
           for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
         };
 
-        const cancellationsBySub = await fetchApprovedCancellations(group.study.map(s => s.id), group.transport.map(s => s.id));
         const periods = periodsUntilSchoolYearEnd(new Date());
-        const currentPeriodKey = periods[0]?.isoDate.slice(0, 7);
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-          const isCurrentPeriod = period.isoDate.slice(0, 7) === currentPeriodKey;
-          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub, isCurrentPeriod);
+          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
             if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
@@ -1192,92 +1111,11 @@ export const backfillBillingSchedules = onCall(
   }
 );
 
-// ── Admin: exclude specific days from one billing record's line item ─────────
-// For marking vacation/no-show days out of a single month's invoice, without
-// touching the subscription itself (which keeps its normal recurring
-// schedule for every other month). Only allowed while the record is still
-// "pending" — same protection every other write in this file already has for
-// paid/processing/invoiced/failed/cancelled records.
-
-export const setBillingLineItemExcludedDays = onCall(
-  { region: "europe-west3", invoker: "public" },
-  async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
-    const userDoc = await db.collection("users").doc(uid).get();
-    const roles = userDoc.data()?.roles ?? {};
-    if (!roles.owner && !roles.rainbowAdmin) throw new HttpsError("permission-denied", "Unauthorized");
-
-    const { billingId, subscriptionId, excludedDates } = request.data ?? {};
-    if (!billingId || !subscriptionId || !Array.isArray(excludedDates)) {
-      throw new HttpsError("invalid-argument", "billingId, subscriptionId, excludedDates[] required");
-    }
-
-    const billingRef = appCol("billing").doc(billingId);
-    const billingSnap = await billingRef.get();
-    const billing = billingSnap.data();
-    if (!billing) throw new HttpsError("not-found", "Billing record not found");
-    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Cannot edit a "${billing.status}" record`);
-
-    const lineItems: BillingLineItem[] = billing.lineItems ?? [];
-    const idx = lineItems.findIndex((li) => li.subscriptionId === subscriptionId);
-    if (idx === -1) throw new HttpsError("not-found", "Line item not found on this billing record");
-    const li = lineItems[idx];
-    // Enrollment fees are a flat one-time charge, not a per-day service — and
-    // their subscriptionId is always suffixed (":enrollment"), so a real
-    // subscriptionId from the client can never actually match one here.
-    if (li.type !== "study" && li.type !== "transport") throw new HttpsError("failed-precondition", "This line item does not support day exclusions");
-
-    const colName = li.type === "study" ? "studyroom" : "transportationSubscriptions";
-    const [subSnap, configs] = await Promise.all([
-      appCol(colName).doc(subscriptionId).get(),
-      loadBillingConfigs(),
-    ]);
-    const sub = subSnap.data() ?? {};
-
-    // Only dates within this record's own period, and that fall on one of the
-    // subscription's real schedule days, are honoured — a second line of
-    // defense (mirroring computeExclusionDeduction) so a bad date can't even
-    // be saved from the client, not just be ignored later when billed.
-    const periodStart: Date = billing.periodStart.toDate();
-    const periodEnd: Date = billing.periodEnd.toDate();
-    const studyScheduleDays: string[] = (sub.days ?? []).map((d: any) => d.day);
-    const validDates: string[] = excludedDates.filter((d: unknown) => {
-      if (typeof d !== "string") return false;
-      const { isoDate, direction } = parseExclusionEntry(d);
-      if (d.includes(":") && !direction) return false; // malformed suffix
-      const dt = new Date(`${isoDate}T12:00:00Z`);
-      if (isNaN(dt.getTime()) || dt < periodStart || dt > periodEnd) return false;
-      const weekday = weekdayOfIsoDate(isoDate);
-      if (li.type === "study") return studyScheduleDays.includes(weekday);
-      const tripsThatDay = (sub.schedule ?? []).some((s: any) =>
-        s.dayOfWeek === weekday && (!direction || s.direction === direction || s.direction === "both")
-      );
-      return tripsThatDay;
-    });
-
-    // Anchored to this line item's own stored gross/discounts, not a fresh
-    // read of the subscription's current price — keeps the math consistent
-    // with the total already shown on this specific invoice.
-    const gross = li.grossAmount ?? 0;
-    const appliedDiscounts = li.appliedDiscounts ?? [];
-    const deduction = computeExclusionDeduction(li.type, validDates, sub, configs.studyConfig, configs.transportConfig);
-    const newAmount = Math.round(applyDiscounts(Math.max(0, gross - deduction), appliedDiscounts) * 100) / 100;
-
-    const newLineItems = [...lineItems];
-    newLineItems[idx] = { ...li, amount: newAmount, ...(validDates.length ? { excludedDates: validDates } : {}) };
-    if (!validDates.length) delete (newLineItems[idx] as any).excludedDates;
-    const newTotal = Math.round(newLineItems.reduce((s, x) => s + (x.amount ?? 0), 0) * 100) / 100;
-
-    await billingRef.update({
-      lineItems: newLineItems,
-      total: newTotal,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return { amount: newAmount, total: newTotal };
-  }
-);
+// setBillingLineItemExcludedDays (the "Dias sem serviço" admin day-picker)
+// was removed here — marking a day absent now goes through
+// setReservationEventStatus in reservationEvents.ts, the same path parents
+// use, so it's counted by the absence threshold and visible on both sides
+// instead of being a disconnected, admin-only adjustment.
 
 // Re-runs the full billing recompute for the family on every create/update of
 // a linked subscription — not just status transitions. Covers cases the old
@@ -1309,28 +1147,29 @@ export const onTransportBillingSync = onDocumentWritten(
   }
 );
 
-// Absences (approved cancellations) are billing-relevant facts, exactly like
-// a subscription edit — the manual "gerar calendário de cobranças" backfill
-// button existed largely to cover this gap by brute-forcing a recompute for
-// everyone. This closes it properly: any write to an `eventModifications`
-// doc of the type billing actually consumes (`cancelled`) recomputes just
-// that one family, the same way the two triggers above already do for
-// subscription writes. Fires on the doc reaching OR leaving the
-// "cancelled + approved" state that fetchApprovedCancellations() counts —
-// a new approval, an edit to which date it covers, a rejection, or a
-// parent "restoring" a day (delete) — so the absence-threshold credit stays
-// in sync with reality either direction, not just when one gets added.
-export const onEventModificationBillingSync = onDocumentWritten(
-  { document: "_apps/arcoiris/eventModifications/{modId}", region: "europe-west3" },
+// Absences are billing-relevant facts, exactly like a subscription edit —
+// the manual "gerar calendário de cobranças" backfill button existed
+// largely to cover this gap by brute-forcing a recompute for everyone. This
+// closes it properly: a status change on a ReservationEvent (EXPECTED <->
+// CANCELLED via setReservationEventStatus, or -> VOIDED from the
+// subscription triggers) recomputes just that one family. Deliberately
+// scoped to STATUS CHANGES only (before.status !== after.status), not every
+// write — the initial bulk generation of a subscription's full school-year
+// event set (up to ~150 docs) would otherwise fire this once per document.
+// familyId comes straight off the event doc itself, which the generator in
+// reservationEvents.ts always sets correctly — unlike the old
+// eventModifications collection, whose four separate client write sites
+// didn't all populate familyId consistently.
+export const onReservationEventBillingSync = onDocumentWritten(
+  { document: "_apps/arcoiris/reservationEvents/{eventId}", region: "europe-west3" },
   async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-    const relevant = (d: any) => d?.modificationType === "cancelled";
-    if (!relevant(before) && !relevant(after)) return;
-
-    const familyId: string = after?.familyId ?? before?.familyId;
+    if (!after || !before) return; // creation and deletion aren't status transitions
+    if (before.status === after.status) return;
+    const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after?.requestedBy ?? before?.requestedBy ?? "");
+    await autoCreateBillingSchedule(familyId, after.changedBy ?? "");
   }
 );
 
