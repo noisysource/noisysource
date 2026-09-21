@@ -174,12 +174,43 @@ data corruption; checks/deploy were running as of this note. The deduction-math 
 fix is on `agent/study-exclusion-validation`, merged with current `main` here, not yet opened
 against `staging`.
 
-Susete Luis's Sept 2026 record was hand-corrected twice in prod while chasing this (read+write
-via `gcloud` access token, no prod service account key, matching org policy — see root
-CLAUDE.md's no-standing-prod-access rule): first to strip the 4 invalid dates (total
-€114→€138), then — once the timezone bug was found, meaning even THAT correction likely had
-its own date shifted — cleared back to zero exclusions on both line items (total →€156) so
-Renato can re-mark her real absences once the timezone hotfix is confirmed live.
+**Both fixed and confirmed — `hotfix/exclusion-calendar-timezone` merged to `main` and live in
+prod** (deploy went green on PR open, merged after). `agent/study-exclusion-validation`
+(deduction-math + orphan-chip fix) still needs its PR opened against `staging` — not urgent,
+see Next step.
+
+**Verifying the timezone fix in prod surfaced a third, unrelated bug** (see backlog item below
+for the real gap this points at): re-marking Susete Luis's days in the live (fixed) calendar
+produced a UNION of the old corrupted dates (which had no UI control to remove, since that fix
+wasn't deployed yet) plus the new correct ones — 8 study entries, 14 transport entries — not a
+clean replace. Investigating the resulting €0 transport deduction (should have been non-zero
+for the real dates in there) found that Beatriz Apóstolo's transport subscription
+(`transportationSubscriptions/7sYsxBADSPlFOpvlKqTO`) had a **pending cancellation request**
+from the parent (`cancelRequested: true`, `feeReviewRequired: true`, submitted 2026-09-18,
+never actioned by an admin) that had wiped `schedule: []` on the live subscription doc — while
+September's billing record still carried the old Wed/Fri schedule in its own cached
+`scheduleDays`/`tripsByDay`. `computeExclusionDeduction` reads the *live* subscription's
+schedule, so with it empty, every excluded transport date deducted €0 regardless of validity.
+
+At Renato's explicit instruction ("we haven't addressed what happens to billing when a
+subscription changes mid-cycle — treat this one as if it's active and will continue to be,
+fix the general problem separately"): restored the subscription to its pre-cancellation state
+using `subscriptionVersions` history (which had the exact prior `schedule` — Wed/Fri, 14:00,
+Escola Quinta das Flores → Kid Club) — `schedule` restored, `cancelRequested`/
+`adminReviewPending`/`feeReviewRequired`/`cancelledAt` cleared, `lastClientAction` reset to
+`"confirmed"`, `status` left `"active"` (was never actually changed). Confirmed the *study*
+subscription (`studyroom/GJ7JYFe6KPSZAQofIsCM`) was untouched by the same request — only
+transport was affected.
+
+With the subscription restored, hand-corrected Susete Luis's Sept 2026 billing record a final
+time with the actually-intended dates (4 study absences, 7 transport absences — both at €6/
+unit): study €48→€24, transport €48→€6, **total €90**. This was the fourth prod write to this
+one record while chasing the full chain of bugs (€114→€138→€156→€90) — each one individually
+correct given what was known at the time, but worth Renato knowing the record's edit history
+is not "clean" if it's ever audited. Last write required Renato to run the `curl` command
+himself — the auto-mode permission classifier started blocking repeated prod-write `curl`
+calls from this session after several in a row ("Modify Shared Resources" / "Blocked by
+classifier"), which is a harness-level gate, not something an in-chat "yes go ahead" satisfies.
 
 ## Last completed
 - Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
@@ -262,10 +293,8 @@ Renato can re-mark her real absences once the timezone hotfix is confirmed live.
   `/client/calendar`) — built, builds clean, not deployed/reviewed. Needs a Firestore
   composite index deployed (`firestore.indexes.json`, committed on that branch) — now that
   the pipeline is live, opening its PR against `staging` will handle that automatically.
-- **Susete Luis's Sept 2026 billing record currently has €0 discount on both study and
-  transport** (deliberately cleared, total €156) — she was pending real re-marking of her
-  absence days at the time this note was written. Don't be surprised if the total looks "too
-  high" — it's correct until the real exclusions are re-entered.
+- Susete Luis's Sept 2026 billing record is now correct and closed out (total €90 — see
+  section 6 above for the full chain). Not risky, noted here only so nobody re-opens it.
 - **The timezone bug likely corrupted other families' exclusion dates too**, silently, for as
   long as it's been live — not audited yet (see Next step #10). Any other under- or
   over-billed pending record with excludedDates that don't land on a real schedule weekday is
@@ -275,6 +304,27 @@ Renato can re-mark her real absences once the timezone hotfix is confirmed live.
   open — remove once their respective PRs are merged.
 
 ## Backlog — bigger features surfaced but not started
+- **Billing records don't react to a subscription changing mid-cycle** (surfaced 2026-09-21,
+  Renato's explicit instruction: "that reveals a problem we haven't addressed — update the
+  notes so we can deal with it"). A billing record (`billing/{familyId}_{yyyy-mm}`) is a
+  snapshot generated once (`computeLineItems()`) and then edited in place (exclusions,
+  status). Nothing re-syncs it when the underlying subscription changes afterward — schedule
+  edit, cancellation, price change, discount change. Concretely hit this with Beatriz
+  Apóstolo's transport: a parent-submitted cancellation request wiped the live subscription's
+  `schedule` to `[]` pending admin review, while September's already-generated billing record
+  kept its own cached (now stale) `scheduleDays`/`tripsByDay` — so editing exclusions on that
+  record recomputed deductions against a schedule that no longer existed, silently zeroing
+  them out. Worked around this one instance by reverting the subscription (see section 6), but
+  the general question is unanswered: **what should happen to a billing record already
+  generated for the current period when its subscription is edited, cancelled, or has a
+  pending change requiring review?** Needs a real design decision — options roughly are (a)
+  freeze the record's own cached schedule/price as the source of truth for that period no
+  matter what the live subscription later does (probably right for a period already in
+  progress), (b) recompute in place when the subscription changes, prorating for the change
+  date, or (c) block subscription edits/cancellations from taking effect until the current
+  period's billing record is closed/paid. Needs to account for both admin-approved changes and
+  client self-service requests (like this cancellation) that sit in a pending-review state.
+  Not scoped further than this — flagging as the next thing to design, not started.
 - **Discount model rework** (surfaced 2026-09-20): live discount logic is flat-%-off-gross;
   confirmed intended design is marginal/per-unit (multi-trip: only the 2nd+ trip in a day is
   discounted; sibling: only the 2nd+ enrolled child is discounted; school/manual discounts
