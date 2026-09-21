@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   Banknote, ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store, Handshake, Receipt as ReceiptVat, Shield,
+  Wrench, FileText, Calculator, TrendingUp, RefreshCw, BarChart2, Waves, Receipt, LayoutDashboard, Briefcase, CreditCard, KeyRound, Store, Handshake, Receipt as ReceiptVat, Shield, PiggyBank,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
@@ -124,6 +124,7 @@ export default function DashboardLayout() {
               <NavLink to="/noisyphocus/revenue"  icon={<Store size={16} />}      label="KidClub"  active={isActive('/noisyphocus/revenue')} />
               <NavLink to="/noisyphocus/vat"      icon={<ReceiptVat size={16} />} label="IVA"      active={isActive('/noisyphocus/vat')} />
               <NavLink to="/noisyphocus/payroll"    icon={<Calculator size={16} />} label="Payroll"  active={isActive('/noisyphocus/payroll')} />
+              <NavLink to="/noisyphocus/costs"      icon={<PiggyBank size={16} />}  label="Custos"   active={isActive('/noisyphocus/costs')} />
               <NavLink to="/noisyphocus/insurances" icon={<Shield size={16} />}   label="Seguros"  active={isActive('/noisyphocus/insurances')} />
             </Section>
 
