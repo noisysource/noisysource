@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { google } from "googleapis";
+import { assertExternalCallsAllowed } from "./externalGuard";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -97,6 +98,8 @@ export const sendEmailFromOutbox = onDocumentCreated(
     }
 
     try {
+      assertExternalCallsAllowed("Gmail send");
+
       // Optional kill switch
       const globalsDoc = await db.doc("_apps/arcoiris/settings/globals").get();
       const globals = globalsDoc.data() ?? {};

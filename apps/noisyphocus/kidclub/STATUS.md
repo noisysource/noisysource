@@ -304,6 +304,33 @@ section once shipped, per that section's own convention.
 
 ## Currently working on
 
+### Dev/prod external-system isolation (2026-09-21) — stopgap fix, real fix still needed
+Checked whether `kidclub-dev` can actually reach real external systems, prompted by all the
+IAM work this week. Found: **`kidclub-dev`'s Vendus and EasyPay secrets hold the exact same
+live credentials as prod** (byte-identical, confirmed by comparing — never printed the actual
+values). `EASYPAY_SANDBOX` exists as a code path in `easypay.ts` but is never set anywhere in
+the repo, so it always falls through to the live EasyPay API regardless of environment.
+`vendus.ts` has no sandbox/test-mode branching at all. This directly contradicts CLAUDE.md's
+sandbox-first-billing rule and meant any billing/payment/email action triggered from dev hit
+the real Vendus account, real EasyPay account, and real Gmail send-as identity.
+
+**Renato's call: block it hard for now, even if it breaks dev functionality**, rather than
+wait for real sandbox credentials. Added `functions/src/externalGuard.ts` —
+`assertExternalCallsAllowed(system)` throws immediately unless
+`GCLOUD_PROJECT === "rainbow-prod-2454b"`. Wired into the three actual external-call choke
+points (confirmed these are the only files touching vendus.pt/easypay.pt or sending real
+email): `vendus.ts`'s `request()`, `easypay.ts`'s `post()`, `SendEmailFromOutbox.ts` (start
+of the try block, before the existing Firestore-based kill switch even runs). Any code path
+that hits Vendus, EasyPay, or Gmail-send from `kidclub-dev` now throws immediately instead of
+making a real external call — matching billing/discount/camp/enrollment flows that depend on
+these will error out in dev until this is properly fixed.
+
+**Not done — real fix, tracked as follow-up**: get actual Vendus and EasyPay sandbox
+credentials, store them in `kidclub-dev`'s own copies of these secrets (currently just
+mirrors prod's), and set `EASYPAY_SANDBOX=true` for dev's function deploy. Once that's done,
+this guard can be relaxed to allow dev through to the real sandbox endpoints instead of
+blocking outright.
+
 ### 1. Billing double-discount bug — FIXED, deployed to prod, partially backfilled
 Investigated "igbpinto@gmail.com's billing looks wrong". Root cause: `computeLineItems()` in
 `functions/src/kidclub/billing.ts` read `sub.originalFee ?? sub.monthlyFee` as the *gross*
