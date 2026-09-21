@@ -25,8 +25,16 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
+      # build:staging loads .env.staging (VITE_FIREBASE_PROJECT_ID=kidclub-dev).
+      # Plain `build` defaults to Vite's "production" mode (.env.production,
+      # rainbow-prod-2454b) — deploying that bundle here would bake prod's
+      # Firebase config into the dev site, and prod's API key's HTTP-referrer
+      # restriction doesn't allow kidclub-dev-finhub.web.app, so every
+      # Firebase SDK call (installations/analytics/auth) 403s at runtime.
+      # Mirrors the same build:staging-vs-build distinction KidClub's own
+      # deploy already gets right — see root CLAUDE.md.
       - name: Build Finances app
-        run: pnpm --filter finances build
+        run: pnpm --filter finances build:staging
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
