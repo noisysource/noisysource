@@ -6,6 +6,88 @@
 
 ## Currently working on
 
+### 0. `financialEvents` consolidation — KidClub side done, PR open against `staging`
+Consolidating KidClub's three disconnected money-calculation paths
+(`financialEvents`, `billing`, and `FinancialSummaryPage.tsx`'s independent
+raw-subscription math) onto `financialEvents` as the single source of truth
+for KidClub's own revenue, readable cross-app by the Finances app. This
+session was the KidClub-side half only (branch `agent/financial-events-model`,
+based on `staging`, PR opened with `--base staging`).
+
+Built:
+- `packages/shared/models/FinancialEvent.ts`: added `sourceCollection`,
+  `sourceId` (formalizing the deterministic-ID pattern already used ad hoc),
+  and `tier: 'committed' | 'pipeline'` (orthogonal to the existing
+  `eventKind: 'planned' | 'effective'` — tier = is the underlying
+  subscription/booking real yet, eventKind = has the money actually landed).
+  Fields are optional for backward-compat with legacy events (e.g. the
+  driver/teacher wage forecasts), but every new event-generating code path
+  sets them.
+- `eventService.ts`: `studyRoomIncomeMapper`, `transportSubIncomeMapper`,
+  `partyBookingIncomeMapper` now also generate `pipeline`-tier events for
+  `pending` subs/entries/bookings (previously pending was silently excluded
+  entirely). Added `campBookingIncomeMapper` (new — camps had no income
+  mapper at all before), reading `campSubscriptions` + `camps` (for the
+  date range, since a subscription has no date of its own). Added van +
+  electricity fixed-cost `expense` events (`tier: 'committed'`) sourced from
+  `config/transportation`'s `vanMonthlyCost`/`electricityMonthlyCost` —
+  deliberately NOT driver/teacher payroll, which is moving to the Finances
+  app's own cost tracking instead.
+- `functions/src/kidclub/billing.ts`: new `onBillingPaidEffectiveEvents`
+  Firestore trigger (`onDocumentWritten` on `billing/{billingId}`) — when a
+  billing record first transitions to `paid`/`invoiced`, emits a new
+  immutable `effective` `financialEvents` doc with the same deterministic
+  `sourceId` as the original planned/committed event (matched by
+  reconstructing the mapper's own ID pattern from the billing record's
+  period + subscriptionId). Never mutates the original planned event — pure
+  event sourcing, new doc every time. Enrollment-fee line items have no
+  planned-event equivalent yet, so they're skipped (flagged in code comment,
+  not silently wrong).
+- `apps/noisyphocus/kidclub/src/services/financeCostSummaryService.ts`
+  (new): read-only client for the Finances app's
+  `finances_entities/noisyphocus/costSummary/{yyyy-mm}` doc. Treats a
+  missing doc as "not yet configured", never as €0.
+- `firestore.rules`: added a narrowly-scoped read rule so `rainbowAdmin`
+  (KidClub admin) can read `finances_entities/noisyphocus/costSummary/*`
+  specifically, without broader `finances_entities` access.
+- `FinancialSummaryPage.tsx`: rewritten as a thin summary over
+  `financialEvents` — sums by `type`/`tier`/`eventKind` for the selected
+  period instead of computing revenue/cost independently from raw
+  subscription docs. Shows Effective revenue, Committed revenue (incl.
+  already-effective), Pipeline revenue (called out separately, never summed
+  into the totals above), Committed cost (van + electricity from
+  `financialEvents` + the Finances app's `costSummary` total), and two
+  profit/margin figures (Effective vs. committed cost, Committed vs.
+  committed cost). Kept the van/electricity cost editor (writes
+  `config/transportation`, which `generateEvents()` reads next run) but
+  dropped the driver/teacher/rent editors entirely — those costs now live
+  only in the Finances app.
+
+**Typecheck and `build:staging` both pass** (pre-existing baseline errors in
+`eventService.ts`/other files re: `StudyRoomEntry.transportFee` and
+`DaySelection.transport` are unrelated pre-existing type mismatches, verified
+via `git stash` against the branch tip before this session's changes — not
+introduced by this work).
+
+**Known gap, expected not a bug**: the Finances app's `costSummary` doc
+(`finances_entities/noisyphocus/costSummary/{yyyy-mm}`) doesn't exist yet —
+it's written by a **parallel, separate Finances-app task** that hadn't
+shipped as of this session. Until that ships and Renato enters real payroll
+numbers, `FinancialSummaryPage.tsx` will show "ainda não configurado na app
+Finanças" for staff/software/VAT cost. This is the intended fallback
+behavior (see the service's doc comment), not broken.
+
+**Not done / explicitly out of scope this session**:
+- The `billing` collection's schema was not touched (per the task).
+- No deploy was performed — dev/prod both untouched by this session.
+- Enrollment fee (registration/insurance) line items don't get an
+  `effective` event yet — no planned equivalent exists for them in
+  `eventService.ts`. Low priority (one-time small fees), flagged for later.
+- The Finances-app side of `costSummary` (writing it) is someone else's
+  task, not started here.
+
+## Currently working on (prior threads, still open)
+
 ### 1. Billing double-discount bug — FIXED, deployed to prod, partially backfilled
 Investigated "igbpinto@gmail.com's billing looks wrong". Root cause: `computeLineItems()` in
 `functions/src/kidclub/billing.ts` read `sub.originalFee ?? sub.monthlyFee` as the *gross*
