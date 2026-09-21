@@ -27,7 +27,16 @@ function fmtDateTime(ts?: Timestamp) {
   if (!ts) return '—';
   return ts.toDate().toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' });
 }
-function toIsoDate(d: Date) { return d.toISOString().split('T')[0]; }
+// Local calendar date, not toISOString()'s UTC one — a Date built from local
+// year/month/day (as every call site here does) shifts to the previous day
+// under toISOString() whenever the browser's timezone is ahead of UTC (e.g.
+// Portugal in WEST/UTC+1), silently saving the wrong exclusion date.
+function toIsoDate(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 function monthGroupKey(r: BillingRecord): string {
   return r.periodStart ? toIsoDate(r.periodStart.toDate()).slice(0, 7) : r.periodLabel;
