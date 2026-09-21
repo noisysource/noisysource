@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { RecurringEntryDoc, RecurringType, RecurringFrequency } from "@shared/models/RecurringEntry";
+import type { RecurringEntryDoc, RecurringType, RecurringFrequency, RecurringCostModel } from "@shared/models/RecurringEntry";
 import { formatEUR } from "@shared/lib/money";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -64,6 +64,8 @@ type Form = {
   reimbursable: boolean;
   paidByAccountId: string;
   ivaRatePct: string; // '' | '0' | '6' | '13' | '23'
+  costModel: RecurringCostModel;
+  commissionPct: string;
 };
 const emptyForm = (): Form => ({
   type: 'expense', description: '', amountEUR: '',
@@ -71,6 +73,7 @@ const emptyForm = (): Form => ({
   dayOfMonth: '1', monthOfYear: '1', startYearMonth: '',
   endYearMonth: '', onceYearMonth: '', active: true,
   reimbursable: false, paidByAccountId: '', ivaRatePct: '',
+  costModel: 'fixed', commissionPct: '',
 });
 function fromDoc(d: RecurringEntryDoc): Form {
   return {
@@ -84,6 +87,8 @@ function fromDoc(d: RecurringEntryDoc): Form {
     reimbursable: d.reimbursable ?? false,
     paidByAccountId: d.paidByAccountId ?? '',
     ivaRatePct: d.ivaRatePct != null ? String(d.ivaRatePct) : '',
+    costModel: d.costModel === 'commission' ? 'commission' : 'fixed',
+    commissionPct: d.commissionPct != null ? String(d.commissionPct) : '',
   };
 }
 
@@ -154,11 +159,44 @@ function RecurringFormModal({
               value={form.description} onChange={e => set('description', e.target.value)} required autoFocus />
           </div>
 
+          {form.type === 'expense' && (
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">Modelo de custo</div>
+              <div className="grid grid-cols-2 gap-1">
+                {(['fixed', 'commission'] as RecurringCostModel[]).map(m => (
+                  <button key={m} type="button" onClick={() => set('costModel', m)}
+                    className={`py-1.5 rounded text-xs font-medium border transition-colors ${
+                      form.costModel === m
+                        ? 'border-blue-500 bg-blue-900/50 text-blue-200'
+                        : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                    }`}>
+                    {m === 'fixed' ? 'Fixo' : 'Comissão'}
+                  </button>
+                ))}
+              </div>
+              {form.costModel === 'commission' && (
+                <div className="text-[11px] text-zinc-500 mt-1">
+                  Ex.: EasyPay — percentagem sobre o volume processado pelo KidClub nesse mês.
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
-            <div className="text-xs text-zinc-400 mb-1">Valor (€)</div>
+            <div className="text-xs text-zinc-400 mb-1">
+              {form.costModel === 'commission' ? 'Valor estimado (€) — usado se o volume ainda não estiver disponível' : 'Valor (€)'}
+            </div>
             <Input type="number" step="0.01" placeholder="0.00"
               value={form.amountEUR} onChange={e => set('amountEUR', e.target.value)} required />
           </div>
+
+          {form.type === 'expense' && form.costModel === 'commission' && (
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">Comissão (%)</div>
+              <Input type="number" step="0.01" min="0" max="100" placeholder="ex: 1.5"
+                value={form.commissionPct} onChange={e => set('commissionPct', e.target.value)} />
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -378,6 +416,10 @@ export default function RecurringPage() {
       ivaRatePct: (form.type !== 'transfer' && form.ivaRatePct !== '')
         ? parseInt(form.ivaRatePct, 10)
         : undefined,
+      costModel: (form.type === 'expense' && form.costModel === 'commission') ? 'commission' : undefined,
+      commissionPct: (form.type === 'expense' && form.costModel === 'commission' && form.commissionPct !== '')
+        ? parseFloat(form.commissionPct)
+        : undefined,
     });
     await reload();
     setMsg('Guardado ✔');
@@ -515,6 +557,11 @@ export default function RecurringPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium truncate">{r.description}</span>
+                      {r.costModel === 'commission' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 border border-blue-800/60 shrink-0">
+                          comissão {r.commissionPct ?? 0}%
+                        </span>
+                      )}
                       {r.reimbursable && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/60 shrink-0">
                           reembolso pendente
@@ -539,6 +586,7 @@ export default function RecurringPage() {
                   <div className="flex items-center gap-3 shrink-0">
                     <span className={`text-sm font-semibold tabular-nums ${color}`}>
                       {type !== 'transfer' ? sign : ''}{formatEUR(r.amountCents)}
+                      {r.costModel === 'commission' && <span className="text-[10px] text-zinc-500 font-normal ml-1">(estimado)</span>}
                     </span>
                     <div className="flex gap-2 text-xs">
                       <button className="text-blue-400 hover:underline" onClick={() => openEdit(r)}>Editar</button>
