@@ -71,10 +71,31 @@ kidclub app: zero new errors, same pre-existing baseline throughout):**
    the same function). **The deploy-blocking gap from earlier in this session is closed —
    nothing left writes to `eventModifications` for anything billing reads.**
 
+**Testing (2026-09-21, same branch):** added `vitest` to `functions/` — the first test
+infrastructure anywhere in this monorepo. 42 unit tests, all passing, covering the two
+pure modules where this session's business-rule iteration actually lived:
+`reconciliation.test.ts` (29 tests — gross/VOIDED handling, the corrected uncapped
+absence threshold, marginal multi-trip, marginal sibling ranking + tie-breaks, summed-
+not-compounded institutional discount, ordering) and `reservationEvents.test.ts` (13
+tests — odd/even biweekly pattern including the 5th-occurrence edge case, per-leg
+transport direction tagging, deterministic event IDs). Run with `pnpm --filter functions
+test` (or `cd functions && npx vitest run`).
+
 **Still not done, not deploy-blocking:**
 
-- No dev/live testing at all yet of any of this — typechecks are the only verification
-  so far. **This is now the actual next step**, not further code.
+- **No emulator-based integration tests yet** — the triggers
+  (`onStudyroomReservationEventsSync`, `onReservationEventBillingSync`, etc.),
+  `setReservationEventStatus`'s auth/permission branches, and `billing.ts`'s Firestore
+  fetch/assembly code around `computeLineItems` are untested beyond typechecking. Needs
+  the Firebase emulator + `firebase-functions-test`, a real setup investment (nothing
+  like it exists in this repo yet) — scoped as the next phase, not done here.
+- No dev/live testing at all yet either — a simulation against real `kidclub-dev`
+  subscription/config data (fetched read-only via `gcloud`, run through a standalone
+  script replicating `reconcileService()`) suggests the new pipeline's totals are in the
+  same ballpark as the old one (~€220/month lower on current subscriptions, not a
+  dramatic swing) — see chat history 2026-09-21 for the full breakdown. That's a sanity
+  check, not a deployment verification; actually deploying to dev and exercising the real
+  triggers/callables is still the next real step.
 - The `agent/exclusion-audit-notes` handoff (docs-only, separate branch, already
   based on current `main`) flagged Mafalda Raposo Duarte's Sept 2026 record as still
   under-billed by €15.30 from the pre-fix deduction math, and a known race between the
