@@ -111,6 +111,40 @@ for cases unrelated to attendance? Not blocking — both mechanisms coexist safe
 (the double-count guard prevents overlap), this is just a "do we still need two knobs" cleanup
 question for later.
 
+### Follow-up (same branch/PR, 2026-09-21) — auto-trigger on absences + mid-month cancellation fix
+
+Renato's push-back on the manual-recompute flow above ("any change in the sub, or in the
+status should automatically trigger... i want to get rid of it") led to two more changes,
+same commit range:
+
+- **New `onEventModificationBillingSync` trigger**, mirroring the two existing subscription
+  triggers: any write to an `eventModifications` doc of type `cancelled` now auto-recomputes
+  that family's billing, in either direction (new approval, edit, rejection, or a parent
+  restoring a day). Absences are now exactly as "live" as subscription edits — no more relying
+  on someone incidentally touching the subscription doc, or clicking the manual button, for a
+  billing recompute to pick up a new absence.
+- **Real bug this surfaced, now fixed**: Renato caught that cancelling a subscription
+  mid-month was wiping that month's ALREADY-EARNED charge on the next recompute —
+  `computeLineItems` only ever asked "is this subscription active right now," with no notion
+  of "was it active for part of this period." Fixed with a `frozenMidPeriodCancellation`
+  carry-forward: when a subscription drops out of the active set during the still-in-progress
+  period, its existing line item for THAT period is kept unchanged rather than dropped; a
+  genuinely future period for an already-cancelled subscription still correctly shows nothing,
+  and past periods were never touched by this code path to begin with.
+- **Same bug, blunter form, in the manual `backfillBillingSchedules` path**: it force-cancelled
+  every *pending* billing record — including past and current ones — for any family with zero
+  currently-active subscriptions, bypassing `computeLineItems` entirely. Fixed to only
+  auto-cancel records for periods strictly after the current month.
+- **Manual backfill button relabeled** in `BillingAdminPage.tsx` from "Gerar calendário" (implied
+  primary action) to "🛠️ Reparação manual — recalcular tudo," with copy explaining routine
+  recomputation is now automatic and this is for one-off corrections only (e.g. a retroactive
+  pricing/config fix). Not deleted — still useful as an escape hatch, e.g. for the Mafalda
+  Raposo Duarte backfill noted above once this ships.
+- `frozenMidPeriodCancellation` shown in `BillingAdminPage.tsx` as an orange notice on the
+  affected line item, same transparency principle as the absence-credit badge.
+- Typechecks clean (functions + kidclub app, no new errors in touched files). **Still not
+  tested against live/dev data, not deployed anywhere.**
+
 ### Phase 2 (not started) — logistics headcount
 Read query over the same `events`/computed-occurrence data `eventService.getEvents()` already
 produces (it already computes daily study/transport occurrences, minus cancellations) — count
