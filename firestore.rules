@@ -242,6 +242,15 @@ service cloud.firestore {
       }
     }
 
+    // KidClub's admin needs read access to NoisyPhocus's computed monthly cost
+    // total (payroll + software + VAT) for its "Resumo Financeiro" page — see
+    // root CLAUDE.md "Cross-App Data Contracts". Read-only, this one path
+    // only; combines via OR with the generic finances_entities rule above
+    // (which still governs writes and every other entity/collection).
+    match /finances_entities/noisyphocus/costSummary/{yearMonth} {
+      allow read: if isRainbowAdmin();
+    }
+
     // Cross-entity event stream (finances_events root collection)
     match /finances_events/{eventId} {
       allow read, write: if isFinhubAdmin();
