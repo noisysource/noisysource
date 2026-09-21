@@ -6,13 +6,31 @@
 
 ## Currently working on
 
-### 0. `financialEvents` consolidation — KidClub side done, PR open against `staging`
+### 0. `financialEvents` consolidation + NoisyPhocus cost model — both halves merged, PAUSED mid-testing 2026-09-21
+**Status: paused at Renato's request** — a bigger prod issue came up needing
+this same dev environment, so live testing of this branch stopped mid-way.
+Pick this back up by re-reading this section + the matching one in
+`apps/noisysource/finances/STATUS.md` (same branch, other app) before
+touching anything — there's an unresolved mystery below that needs solving
+before testing can continue.
+
 Consolidating KidClub's three disconnected money-calculation paths
 (`financialEvents`, `billing`, and `FinancialSummaryPage.tsx`'s independent
 raw-subscription math) onto `financialEvents` as the single source of truth
-for KidClub's own revenue, readable cross-app by the Finances app. This
-session was the KidClub-side half only (branch `agent/financial-events-model`,
-based on `staging`, PR opened with `--base staging`).
+for KidClub's own revenue, readable cross-app by the Finances app.
+
+**Branch: `agent/financial-events-model` (based on `staging`), PR not yet
+opened** — pushed to `origin`, `gh` CLI unavailable in every environment
+used so far (confirmed genuinely not installed on this machine, not a
+sandbox restriction). Open manually: `--base staging`,
+https://github.com/noisysource/noisysource/pull/new/agent/financial-events-model.
+This branch now also contains the entire parallel Finances-app task
+(`agent/noisyphocus-cost-model` was merged into it, not kept separate — see
+finances STATUS.md for why) plus several fixes found while testing, listed
+below.
+
+This started as the KidClub-side half only, then absorbed the Finances-app
+half and a round of bug fixes once testing began. What's built, in order:
 
 Built:
 - `packages/shared/models/FinancialEvent.ts`: added `sourceCollection`,
@@ -69,22 +87,55 @@ Built:
 via `git stash` against the branch tip before this session's changes — not
 introduced by this work).
 
-**Known gap, expected not a bug**: the Finances app's `costSummary` doc
-(`finances_entities/noisyphocus/costSummary/{yyyy-mm}`) doesn't exist yet —
-it's written by a **parallel, separate Finances-app task** that hadn't
-shipped as of this session. Until that ships and Renato enters real payroll
-numbers, `FinancialSummaryPage.tsx` will show "ainda não configurado na app
-Finanças" for staff/software/VAT cost. This is the intended fallback
-behavior (see the service's doc comment), not broken.
+**Since merged in — also built (see finances STATUS.md for full detail):**
+- `finances_entities/noisyphocus/costSummary/{yyyy-mm}` now IS written by
+  the Finances app's `/noisyphocus/costs` page (`computeAndSave`, recomputed
+  on every open, not a manual publish step). `FinancialSummaryPage.tsx`'s
+  fallback-to-"not configured" behavior only matters until Renato enters
+  real contracts/recurring entries there — see finances STATUS.md's
+  "Next step" for the exact prerequisite data entry.
+- A missing `bookings` composite index (`status` ASC + `date` ASC) that
+  broke `generateEvents()`'s party-booking mapper — added to
+  `firestore.indexes.json` so it's in code, not just clicked into existence
+  once via the console error's link.
+- Moved/renamed the only UI trigger for `eventService.generateEvents()`:
+  it lived solely on the admin Calendar page ("Gerar financeiro", now
+  "Gerar eventos do mês" since it always generated calendar occurrences
+  too, not just financial events) with no link from Resumo Financeiro.
+  Added a second, correctly-labeled "Gerar eventos financeiros — [mês]"
+  trigger directly on `FinancialSummaryPage.tsx`, scoped to the month
+  filter. Same idempotent call underneath, safe from either place.
+  **This manual-button approach is a stopgap** — a Firestore trigger
+  (subscription/booking write → auto-generate its event) is the real fix,
+  not started.
+- Backlog entry added (see bottom of this file): a billing record can get
+  stuck at `status: "paid"` with an unresolved `invoiceError` (Vendus
+  invoice creation failed) with no admin-visible flag — a real
+  fiscal-compliance gap, unrelated to and not blocking this work.
 
-**Not done / explicitly out of scope this session**:
-- The `billing` collection's schema was not touched (per the task).
-- No deploy was performed — dev/prod both untouched by this session.
+**Deploy state:** every push to this branch auto-deploys to `kidclub-dev`
+via `deploy-dev.yml` (PR-against-`staging` triggers it) — confirmed this
+covers terraform apply, Firestore rules, indexes, Cloud Functions, and
+KidClub hosting, all together, on every push. **This is NOT how the
+Finances app deploys** — it has its own `deploy-finances.yml`,
+`workflow_dispatch`-only, and (see finances STATUS.md) had its own separate
+bugs blocking it. As of this session, KidClub's revenue-tier behavior
+(committed/pipeline split, effective events on payment) was confirmed
+working live on `kidclub-dev-arcoiris.web.app` by Renato. The cost side
+(staff/software/VAT from Finances' `costSummary`) was NOT yet confirmed
+end-to-end before the pause — that's the actual next step.
+
+**Not done / explicitly out of scope**:
+- The `billing` collection's schema was not touched.
 - Enrollment fee (registration/insurance) line items don't get an
   `effective` event yet — no planned equivalent exists for them in
   `eventService.ts`. Low priority (one-time small fees), flagged for later.
-- The Finances-app side of `costSummary` (writing it) is someone else's
-  task, not started here.
+- Tier/eventKind badge redesign (collapsing the confusing two-column
+  Tier+Estado display into one three-state badge: Pipeline / Confirmado a
+  cobrar / Recebido) and a preset revenue-scenario filter (bring back
+  something like the old "Apenas ativos / Ativos + pendentes / Tudo"
+  toggle, adapted to tier vocabulary) — **agreed with Renato, not yet
+  built**. Do this next once the cost-side mystery below is resolved.
 
 ## Currently working on (prior threads, still open)
 
