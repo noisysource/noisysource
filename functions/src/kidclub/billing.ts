@@ -1121,6 +1121,93 @@ export const setBillingLineItemExcludedDays = onCall(
 // autoCreateBillingSchedule() re-queries current subscription state itself,
 // so it's naturally idempotent here — a create, an unrelated field edit, and
 // a status change all converge on the same recomputed result.
+// ── Effective FinancialEvents on payment ──────────────────────────────────────
+// Event Sourcing: `effective` events are immutable and NEVER mutate the
+// original `planned`/committed event — a new event is created instead, with
+// the same deterministic `sourceId` as the planned event it corresponds to,
+// so the two can be joined later (e.g. by the Financial Summary page).
+// `functions/` can't import "@shared" (see the applyDiscounts() comment
+// above) — this mirrors packages/shared/models/FinancialEvent.ts's shape by
+// hand; keep the two in sync if that model ever changes.
+function planMatchingSourceId(lineItem: BillingLineItem, periodStart: Date): string | null {
+  // Enrollment fees (registration/insurance) have no planned income-event
+  // equivalent yet (eventService.ts never generates one for them) — skip.
+  if (lineItem.type === "study") return `studyroom-${lineItem.subscriptionId}-${periodStart.getFullYear()}-${periodStart.getMonth()}`;
+  if (lineItem.type === "transport") return `transport_sub-${lineItem.subscriptionId}-${periodStart.getFullYear()}-${periodStart.getMonth()}`;
+  return null;
+}
+
+async function emitEffectiveEventsForBilling(billingId: string, billing: any): Promise<void> {
+  const batch = db.batch();
+  let count = 0;
+
+  const pushEvent = (sourceId: string | null, amount: number, label: string) => {
+    if (!sourceId || !amount) return;
+    // Deterministic + idempotent: re-running this for the same billing record
+    // (e.g. webhook retries, or a later "paid" → "invoiced" transition)
+    // always resolves to the same doc, so it's safe to call more than once.
+    const effectiveId = `effective_${billingId}_${sourceId}`;
+    const ref = appCol("financialEvents").doc(effectiveId);
+    batch.set(ref, {
+      id: effectiveId,
+      label,
+      amount,
+      type: "income",
+      currency: "EUR",
+      accountId: "billing",
+      createdBy: "system",
+      effective: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      date: admin.firestore.FieldValue.serverTimestamp(),
+      eventKind: "effective",
+      // Effective money can only ever come from something that was already
+      // committed (active/confirmed) — pipeline (pending) money isn't real
+      // yet, so it's never billed/paid in the first place.
+      tier: "committed",
+      sourceCollection: "billing",
+      sourceId,
+      billingId,
+    }, { merge: true });
+    count++;
+  };
+
+  if (billing.type === "party_deposit" && billing.bookingId) {
+    pushEvent(`booking-${billing.bookingId}`, billing.total, `Sinal Festa (pago) — ${billing.billingName ?? ""}`);
+  } else if ((billing.type === "camp_deposit" || billing.type === "camp_balance") && billing.campSubscriptionId) {
+    pushEvent(`camp_${billing.campSubscriptionId}`, billing.total, `Campo (pago) — ${billing.billingName ?? ""}`);
+  } else {
+    const periodStart: Date | undefined = billing.periodStart?.toDate?.();
+    if (periodStart) {
+      for (const li of (billing.lineItems ?? []) as BillingLineItem[]) {
+        pushEvent(planMatchingSourceId(li, periodStart), li.amount, `${li.title} (pago)`);
+      }
+    }
+  }
+
+  if (count > 0) {
+    await batch.commit();
+    console.log(`[FinancialEvents] emitted ${count} effective event(s) for billing ${billingId}`);
+  }
+}
+
+// Fires once a billing record first transitions into "paid" or "invoiced" —
+// covers both the normal EasyPay-webhook path (→ paid → Vendus invoice) and
+// any record that goes straight to invoiced without going through this
+// trigger's "before" state (e.g. a manual/legacy path), since the guard is
+// "wasn't already paid/invoiced", not "was previously pending".
+export const onBillingPaidEffectiveEvents = onDocumentWritten(
+  { document: "_apps/arcoiris/billing/{billingId}", region: "europe-west3" },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    if (!after) return; // deleted
+    const wasAlreadyEffective = ["paid", "invoiced"].includes(before?.status ?? "");
+    const isNowEffective = ["paid", "invoiced"].includes(after.status);
+    if (wasAlreadyEffective || !isNowEffective) return;
+    await emitEffectiveEventsForBilling(event.params.billingId, after);
+  }
+);
+
 export const onStudyroomBillingSync = onDocumentWritten(
   { document: "_apps/arcoiris/studyroom/{entryId}", region: "europe-west3" },
   async (event) => {
