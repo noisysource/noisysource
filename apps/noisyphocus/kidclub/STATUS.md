@@ -140,6 +140,78 @@ stays off for prod (`run_terraform: false` in `deploy-prod.yml`) until that's de
 reconciled as its own task. Not urgent; app/rules/indexes/functions/hosting all deploy fine
 without it.
 
+### 6. Study-room exclusion calendar — two real bugs found via a live prod case, both fixed
+Renato reported Susete Luis's billing looked wrong: the "Dias sem serviço" admin calendar
+showed 3 marked study-room days but the billing row's pills showed 7, and the 4 extra ones
+couldn't be unmarked. Two distinct bugs, found by reading actual prod data
+(`_apps/arcoiris/billing/A7OXOljX1W9xrEn5mhP8_2026-09`, read-only via `gcloud` access token
+against the Firestore REST API):
+
+- **Deduction math bug** (`computeExclusionDeduction()` in `functions/src/kidclub/billing.ts`):
+  the `"study"` branch deducted for every entry in `excludedDates` with no check that the date
+  actually fell on a real schedule day — `"transport"` right below it already did this
+  correctly. A stale/bogus date could silently discount a day the child was never billed for.
+  Fixed to mirror the transport branch (checks `weekdayOfIsoDate(entry)` against `sub.days`).
+  Same schedule-day check also added to `setBillingLineItemExcludedDays` as a second line of
+  defense on save.
+- **UI bug** (`ServiceCalendar` in `BillingAdminPage.tsx`): the calendar only renders a
+  clickable cell for actual schedule days, so once a non-schedule-day entry exists in
+  `excludedDates` there was literally no control to remove it — clicking "Guardar" always
+  resent the untouched orphan. Fixed by listing any orphaned entries as removable chips below
+  the calendar (same styling as the pills already shown elsewhere on the row).
+- **Root cause of the orphaned entries, found investigating further**: `toIsoDate()` in
+  `BillingAdminPage.tsx` built the ISO date string via `.toISOString()`, which converts to
+  UTC. Every calendar cell's `Date` is constructed from local year/month/day, so in any
+  timezone ahead of UTC (Portugal is UTC+1/WEST right now) that conversion silently rolls the
+  date back by one day before saving — **every click on this calendar was saving the day
+  before the one actually clicked.** This is the real, still-live source of the orphaned
+  dates (not a stale schedule-change carry-forward, which was the original working theory).
+  Fixed by computing the ISO string from local date components instead of `toISOString()`.
+
+Shipped as **`hotfix/exclusion-calendar-timezone`** (PR opened directly against `main` per the
+new hotfix path — deploys to prod immediately on PR open, ahead of merge) since it was active
+data corruption; checks/deploy were running as of this note. The deduction-math + orphan-chip
+fix is on `agent/study-exclusion-validation`, merged with current `main` here, not yet opened
+against `staging`.
+
+**Both fixed and confirmed — `hotfix/exclusion-calendar-timezone` merged to `main` and live in
+prod** (deploy went green on PR open, merged after). `agent/study-exclusion-validation`
+(deduction-math + orphan-chip fix) still needs its PR opened against `staging` — not urgent,
+see Next step.
+
+**Verifying the timezone fix in prod surfaced a third, unrelated bug** (see backlog item below
+for the real gap this points at): re-marking Susete Luis's days in the live (fixed) calendar
+produced a UNION of the old corrupted dates (which had no UI control to remove, since that fix
+wasn't deployed yet) plus the new correct ones — 8 study entries, 14 transport entries — not a
+clean replace. Investigating the resulting €0 transport deduction (should have been non-zero
+for the real dates in there) found that Beatriz Apóstolo's transport subscription
+(`transportationSubscriptions/7sYsxBADSPlFOpvlKqTO`) had a **pending cancellation request**
+from the parent (`cancelRequested: true`, `feeReviewRequired: true`, submitted 2026-09-18,
+never actioned by an admin) that had wiped `schedule: []` on the live subscription doc — while
+September's billing record still carried the old Wed/Fri schedule in its own cached
+`scheduleDays`/`tripsByDay`. `computeExclusionDeduction` reads the *live* subscription's
+schedule, so with it empty, every excluded transport date deducted €0 regardless of validity.
+
+At Renato's explicit instruction ("we haven't addressed what happens to billing when a
+subscription changes mid-cycle — treat this one as if it's active and will continue to be,
+fix the general problem separately"): restored the subscription to its pre-cancellation state
+using `subscriptionVersions` history (which had the exact prior `schedule` — Wed/Fri, 14:00,
+Escola Quinta das Flores → Kid Club) — `schedule` restored, `cancelRequested`/
+`adminReviewPending`/`feeReviewRequired`/`cancelledAt` cleared, `lastClientAction` reset to
+`"confirmed"`, `status` left `"active"` (was never actually changed). Confirmed the *study*
+subscription (`studyroom/GJ7JYFe6KPSZAQofIsCM`) was untouched by the same request — only
+transport was affected.
+
+With the subscription restored, hand-corrected Susete Luis's Sept 2026 billing record a final
+time with the actually-intended dates (4 study absences, 7 transport absences — both at €6/
+unit): study €48→€24, transport €48→€6, **total €90**. This was the fourth prod write to this
+one record while chasing the full chain of bugs (€114→€138→€156→€90) — each one individually
+correct given what was known at the time, but worth Renato knowing the record's edit history
+is not "clean" if it's ever audited. Last write required Renato to run the `curl` command
+himself — the auto-mode permission classifier started blocking repeated prod-write `curl`
+calls from this session after several in a row ("Modify Shared Resources" / "Blocked by
+classifier"), which is a harness-level gate, not something an in-chat "yes go ahead" satisfies.
+
 ## Last completed
 - Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
   Almeida. José Eduardo + Mogo siblings still need backfill.
@@ -152,6 +224,11 @@ without it.
 - `agent/impersonation-billing-fix` (from the 2026-09-18 session) — confirmed merged into
   `main` (PR #11) a while back; the "prod ahead of main" risk from that session is resolved,
   no longer worth tracking.
+- Study-room exclusion calendar: found + fixed both the deduction-math bug and the timezone
+  off-by-one that was silently corrupting every saved exclusion date. Timezone fix shipped as
+  a hotfix PR straight to `main` (checks running as of this note); the deduction-math + orphan
+  cleanup UI fix is merged with current `main` on `agent/study-exclusion-validation`, PR not
+  yet opened against `staging`.
 
 ## Next step
 1. **Finish merging `main` into `agent/financial-costs-decouple`**, push, then open the PR.
@@ -170,6 +247,26 @@ without it.
 6. Decide whether to bring `deploy-finances.yml` onto the same staging/main pipeline model.
 7. See **Backlog** below for the two bigger features surfaced this week (discount model
    rework, route planner rework) — neither started, both need their own scoping pass.
+8. **Confirm the `hotfix/exclusion-calendar-timezone` deploy went green and merge it**, then
+   open `agent/study-exclusion-validation` against `staging` (deduction-math + orphan-chip
+   fix — not urgent, but should still land).
+9. **Once the timezone hotfix is confirmed live, re-mark Susete Luis's real absence days**
+   (her Sept 2026 record was cleared to zero exclusions, both line items back to full gross,
+   total €156 — see item 6 above) — Renato was about to do this himself.
+10. Worth a deliberate look once things settle: audit other pending billing records for the
+    same shifted-by-one-day corruption pattern (any family with excludedDates that don't land
+    on a real schedule weekday is a symptom) — not started, flagged by Renato as a next step
+    after the hotfix ships, not done in this session.
+11. **Address the shared-`kidclub-dev`-deploy collision problem** (see Backlog below) —
+    Renato explicitly wants this picked up next. Surfaced when `agent/study-exclusion-validation`'s
+    `staging` PR failed to deploy: `onBillingPaidEffectiveEvents`, manually deployed to
+    `kidclub-dev` from the unmerged, currently-paused `agent/financial-events-model` branch,
+    blocked every other branch's dev deploy because `firebase deploy` refuses to silently
+    delete a remote function missing from the deploying branch's source. Unblocked by deleting
+    that one function from `kidclub-dev` (`firebase functions:delete
+    onBillingPaidEffectiveEvents --region europe-west3 --project kidclub-dev` — safe, only
+    removes the deployed artifact, source is untouched on that branch and will redeploy fine
+    whenever that work resumes) — but the structural cause is unaddressed.
 
 ## Open questions for Renato
 - OK to run `backfillBillingSchedules` against **prod** to catch José Eduardo's and the Mogo
@@ -181,6 +278,9 @@ without it.
   `roles/billing.admin` on prod for dev's CI service account (granted earlier this week, for
   the cross-project Terraform resources) the long-term shape you want, or should it get
   narrowed to a custom role later?
+- None new for the exclusion-calendar bug itself — Renato already confirmed the fix approach
+  and the decision to correct Susete Luis's billing amount upward (€114→€138, then cleared to
+  €156 pending re-marking) rather than absorb it as goodwill.
 
 ## Anything risky in flight
 - **José Eduardo and the two Mogo siblings (Diogo, Bernardo) are still under-billed in prod**
@@ -203,8 +303,54 @@ without it.
   `/client/calendar`) — built, builds clean, not deployed/reviewed. Needs a Firestore
   composite index deployed (`firestore.indexes.json`, committed on that branch) — now that
   the pipeline is live, opening its PR against `staging` will handle that automatically.
+- Susete Luis's Sept 2026 billing record is now correct and closed out (total €90 — see
+  section 6 above for the full chain). Not risky, noted here only so nobody re-opens it.
+- **The timezone bug likely corrupted other families' exclusion dates too**, silently, for as
+  long as it's been live — not audited yet (see Next step #10). Any other under- or
+  over-billed pending record with excludedDates that don't land on a real schedule weekday is
+  a symptom of the same root cause.
+- Worktree `.claude/worktrees/exclusion-calendar-timezone-hotfix` (the timezone hotfix) and
+  `.claude/worktrees/study-exclusion-validation` (deduction-math + orphan-chip fix) both still
+  open — remove once their respective PRs are merged.
 
 ## Backlog — bigger features surfaced but not started
+- **`kidclub-dev` is a shared Firebase project that every branch's `staging` PR deploys a full
+  functions sync to** (surfaced 2026-09-21, Renato wants this picked up next). Any branch with
+  in-progress functions work that gets deployed to dev directly (not yet merged to `staging`)
+  leaves those functions live on the shared project. The next unrelated branch's CI deploy
+  then fails, because `firebase deploy` refuses non-interactively to delete a remote function
+  missing from the deploying branch's own source — exactly what happened with
+  `onBillingPaidEffectiveEvents` from the paused `agent/financial-events-model` branch
+  blocking `agent/study-exclusion-validation`'s unrelated deploy. This will keep recurring
+  with several branches/worktrees active in parallel (see `git worktree list` — a dozen-plus
+  open at once is normal here). Needs a real fix, not a repeated one-off
+  `functions:delete` — options roughly: (a) give each in-progress branch its own preview
+  Firebase project/channel instead of sharing `kidclub-dev` wholesale, (b) scope CI's deploy
+  to `--only functions:<changed-ones>` instead of a full sync so it never considers deleting
+  functions it doesn't know about, (c) some convention/discipline around manually-deployed
+  test functions being cleaned up before pausing a branch. Not scoped further — flagging as
+  the next thing to design, per Renato's explicit instruction.
+- **Billing records don't react to a subscription changing mid-cycle** (surfaced 2026-09-21,
+  Renato's explicit instruction: "that reveals a problem we haven't addressed — update the
+  notes so we can deal with it"). A billing record (`billing/{familyId}_{yyyy-mm}`) is a
+  snapshot generated once (`computeLineItems()`) and then edited in place (exclusions,
+  status). Nothing re-syncs it when the underlying subscription changes afterward — schedule
+  edit, cancellation, price change, discount change. Concretely hit this with Beatriz
+  Apóstolo's transport: a parent-submitted cancellation request wiped the live subscription's
+  `schedule` to `[]` pending admin review, while September's already-generated billing record
+  kept its own cached (now stale) `scheduleDays`/`tripsByDay` — so editing exclusions on that
+  record recomputed deductions against a schedule that no longer existed, silently zeroing
+  them out. Worked around this one instance by reverting the subscription (see section 6), but
+  the general question is unanswered: **what should happen to a billing record already
+  generated for the current period when its subscription is edited, cancelled, or has a
+  pending change requiring review?** Needs a real design decision — options roughly are (a)
+  freeze the record's own cached schedule/price as the source of truth for that period no
+  matter what the live subscription later does (probably right for a period already in
+  progress), (b) recompute in place when the subscription changes, prorating for the change
+  date, or (c) block subscription edits/cancellations from taking effect until the current
+  period's billing record is closed/paid. Needs to account for both admin-approved changes and
+  client self-service requests (like this cancellation) that sit in a pending-review state.
+  Not scoped further than this — flagging as the next thing to design, not started.
 - **Discount model rework** (surfaced 2026-09-20): live discount logic is flat-%-off-gross;
   confirmed intended design is marginal/per-unit (multi-trip: only the 2nd+ trip in a day is
   discounted; sibling: only the 2nd+ enrolled child is discounted; school/manual discounts
