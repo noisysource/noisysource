@@ -4,6 +4,136 @@
 
 **Last updated:** 2026-09-21
 
+## Design/implementation thread: subscriptions are a blueprint, absences weren't tracked as facts
+
+Discussed with Renato 2026-09-21. Framing: a KidClub subscription (`schedule[]` +
+`weekPattern`) is a recurring *template*, re-derived every month by billing. "Days kids
+weren't here" needs to (a) drive a real billing policy, (b) roll up into financial records,
+and (c) answer daily headcount for logistics (study room + transport, including future
+multi-van dispatch). Investigated the existing code before proposing anything — found more
+already built than expected:
+
+- **`events` / `eventModifications` is already a working event-sourcing layer**
+  (`functions/src/kidclub/../eventService.ts` in the app, i.e.
+  `apps/noisyphocus/kidclub/src/services/eventService.ts`): daily study/transport occurrences
+  are computed live from subscriptions, and `eventModifications` (`modificationType:
+  'cancelled'`, `status: 'approved'`) is the append-only, parent-and-admin-visible record of
+  what actually didn't happen — already wired into the client calendar
+  (`StudySubscriptionDetailPage.tsx`, `TransportSubscriptionDetailPage.tsx`,
+  `ChildManagementPage.tsx`) and the admin calendar (`EventCalendarPage.tsx`).
+- **But billing never read it.** `functions/src/kidclub/billing.ts` computed absence
+  deductions from a completely separate `excludedDates` field — a string array typed in
+  manually by an admin directly on the billing record (`BillingAdminPage.tsx`'s "Dias"
+  editor), with zero connection to `eventModifications`. Two parallel, disconnected systems
+  for the same real-world fact — this is the actual flaw Renato flagged.
+- **No absence-threshold rule existed anywhere**, no logistics/headcount query exists, and no
+  automatic KidClub → Finances income sync exists (see [[project_kidclub_finance_split]] for
+  the intended shape). `weekPattern` (`all`/`odd`/`even`, biweekly) was already correctly
+  modeled for pricing — not a gap.
+- ⚠️ **`agent/family-calendar` (worktree `.claude/worktrees/family-calendar`, still open) is
+  now STALE relative to main** — it branched before the double-discount fix (PR #13) and its
+  `billing.ts` diff reverts `transportGrossAmount()` back to the buggy `sub.originalFee ??
+  sub.monthlyFee` gross calc. **Do not merge that branch as-is** — it would reintroduce the
+  double-discount bug fixed in this same file. Its `FamilyCalendarPage.tsx` UI (unifying
+  study+transport cancellation into one client-facing calendar view, reusing
+  `eventModifications` — same underlying model as the fix below) is still worth salvaging,
+  just needs rebasing onto current `main` and re-verifying the billing.ts hunk is dropped.
+
+**Renato's policy decisions (2026-09-21):**
+- Absence threshold: under 3 approved cancellations in a month → full price. At 3 or more →
+  credit exactly 3 days (flat, not scaled with further absences).
+- Study and transport are two **entirely separate** thresholds — a child can miss 3 transport
+  trips and still owe full price for study room, and vice versa.
+- A cancellation counts the same regardless of who initiated it (parent self-cancel, or a
+  phone call handled by staff) and regardless of timing (planned ahead vs. logged as a
+  no-show after the fact) — all the same `eventModifications` fact, visible to both sides.
+- Transport today: one van, one child, one pickup, one destination. Siblings may ride in
+  different directions/vans — that's the driver's call at dispatch time, not something set on
+  the subscription. **More vans/drivers are expected soon** — design for that now, don't
+  hardcode single-van.
+- Subscriptions run for the full school year (through July); parents can drop early. The
+  transport planner needs a real refactor (multi-van ready); the study room planner is fine
+  as-is.
+
+### Phase 1 — DONE, rebased onto current main, PR not yet opened
+`agent/absence-threshold-billing` (this session). **Important process finding while rebasing
+this branch (2026-09-21): the local checkout's `main` was 42 commits behind `origin/main`**
+when this branch was originally cut — missing PR #14 through #24, including the CI/CD pipeline
+rebuild (see root `CLAUDE.md`'s new "Branch → environment pipeline" section) and the
+study-exclusion-validation fix (PR #23) that also touched `computeExclusionDeduction` in this
+same file. Rebased onto current `main` after fast-forwarding the main checkout; no code
+conflicts (different functions), only this STATUS.md needed manual merging. Re-typechecked
+clean after rebase.
+
+**Target `staging`, not `main`, when opening the PR** — per the now-automatic pipeline, a PR
+against `main` deploys straight to **prod** the moment it's opened, before any review. Normal
+flow: PR into `staging` (auto-deploys to `kidclub-dev`) → verify there → PR from `staging` into
+`main` (auto-deploys to prod) → merge. Compare view:
+https://github.com/noisysource/noisysource/compare/staging...agent/absence-threshold-billing
+(no `gh` CLI in this session, PR not yet opened).
+
+Wires `computeLineItems()` in `functions/src/kidclub/billing.ts` to
+`eventModifications` instead of (in addition to) the manual `excludedDates` field:
+- New `fetchApprovedCancellations()` batches `eventModifications` queries (chunked by 30 for
+  Firestore's `in` limit) per family's active study/transport subscription ids.
+- New `computeAbsenceThresholdCredit()` implements the exact policy above: <3 cancellations
+  this period → 0 deduction; ≥3 → credit the 3 chronologically-earliest at the per-occurrence
+  rate (`studyPerDayRate` / `transportConfig.flatRatePerTrip`). Dates already covered by the
+  manual `excludedDates` override are excluded from the count, specifically to avoid
+  double-crediting the same absence through both paths (the same bug class as the
+  double-discount fix).
+- New `absenceCreditDates` field on `BillingLineItem` (both the functions copy and
+  `packages/shared/models/Billing.ts`'s frontend copy), surfaced in `BillingAdminPage.tsx` so
+  the credit is visible, not just applied silently.
+- Typechecks clean (`functions`: `npx tsc --noEmit` and a full `tsc -p .` compile; kidclub
+  app: pre-existing unrelated type errors only, none in touched files). **Not tested against
+  live/dev data, not deployed anywhere.**
+
+**Next step:** open the PR into `staging` (link above), let the pipeline deploy it to
+`kidclub-dev`, then verify against a test family there: create a subscription, log 3 approved
+cancellations via the client calendar or admin calendar, confirm the next billing recompute
+credits exactly 3 days and shows the credit badge in `BillingAdminPage.tsx`. Only then open the
+`staging` → `main` PR (auto-deploys to prod).
+
+**Also relevant from the `agent/exclusion-audit-notes` handoff (2026-09-21 audit, see that
+section below)**: `onTransportBillingSync`/`onStudyroomBillingSync` fire on every subscription
+write with no debounce or ordering guarantee against a concurrent manual billing edit — a
+known race that already corrupted one prod record mid-fix. This Phase 1 change doesn't cause
+that race, but doesn't fix it either — worth considering as part of whatever eventually
+consumes this trigger (Phase 2/3). Also: **Mafalda Raposo Duarte's Sept 2026 record is still
+under-billed by €15.30** (pre-fix deduction math, not yet backfilled) — good candidate to
+correct in the same `backfillBillingSchedules` run that eventually applies this Phase 1 change
+retroactively, rather than another one-off hand patch.
+
+**Open question for Renato:** should the manual `excludedDates` admin override be retired now
+that `eventModifications`-driven counting exists, or kept as a separate goodwill-credit tool
+for cases unrelated to attendance? Not blocking — both mechanisms coexist safely as shipped
+(the double-count guard prevents overlap), this is just a "do we still need two knobs" cleanup
+question for later.
+
+### Phase 2 (not started) — logistics headcount
+Read query over the same `events`/computed-occurrence data `eventService.getEvents()` already
+produces (it already computes daily study/transport occurrences, minus cancellations) — count
+by date/service. No new data model needed for a basic version. Needs a decision on where it
+lives (new admin page vs. wired into an existing planner).
+
+### Phase 3 (not started) — multi-van model + transport planner refactor
+Current `TransportationConfig` bakes in a single van (`vanCapacity`, `vanMonthlyCost`,
+`driverRatePerHour` are singular fields, `functions`/frontend both assume one vehicle).
+Renato wants this refactored to support multiple vans/drivers soon, with van/driver
+*assignment* happening at dispatch time (driver's call which sibling rides which van), not
+baked into the subscription blueprint. Proposal: new `vehicles` collection
+(id/name/capacity/monthlyCost/driverId/active), assignment recorded per occurrence (not per
+subscription). `TransportPlannerPage.tsx` — confirmed by Renato as needing a full refactor —
+is the natural place to build the multi-van dispatch UI. Study room planner does NOT need
+this work, per Renato.
+
+### Phase 4 (not started) — Finance income sync
+On billing finalize/payment, write an income record to
+`finances_entities/{entityId}/incomes`. Log in root `CLAUDE.md`'s "Cross-App Data Contracts"
+section once shipped, per that section's own convention.
+>>>>>>> 85fb667 (docs(kidclub): record absence-threshold billing design + Phase 1 status)
+
 ## Currently working on
 
 ### 1. Billing double-discount bug — FIXED, deployed to prod, partially backfilled
