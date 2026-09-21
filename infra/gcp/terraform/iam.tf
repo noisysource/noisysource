@@ -25,7 +25,20 @@ resource "google_project_iam_member" "gmail_sender_firebase_roles" {
   member  = google_service_account.gmail_sender.member
 }
 
-
+# roles/editor above does NOT cover this, on kidclub-dev or anywhere else:
+# GCP's predefined Editor role deliberately excludes setIamPolicy permissions
+# across almost every resource type, specifically to prevent privilege
+# escalation via Editor. secrets.tf's gmail_sender_secret_viewer/
+# gmail_sender_secret_accessor resources need
+# secretmanager.secrets.setIamPolicy to grant those roles on each secret -
+# only in roles/secretmanager.admin (or owner). Hit this as a real CI
+# failure on a `staging` PR (the first one to actually apply these secret
+# grants for real) despite gmail_sender already having roles/editor.
+resource "google_project_iam_member" "gmail_sender_secretmanager_admin" {
+  project = var.gcp_project_id
+  role    = "roles/secretmanager.admin"
+  member  = google_service_account.gmail_sender.member
+}
 
 # Grant the default Compute SA Firebase/Firestore access so callable functions can
 # reach Firestore via the Admin SDK even before Terraform has set gmail_sender as SA.
