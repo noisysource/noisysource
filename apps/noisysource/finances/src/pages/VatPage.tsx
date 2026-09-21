@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { formatEUR } from '@shared/lib/money';
 import { Card } from '../components/ui/card';
 import type { RecurringEntryDoc } from '@shared/models/RecurringEntry';
+import { recurringIvaInQuarter } from '../lib/recurringSchedule';
 
 // ── Quarter helpers ────────────────────────────────────────────────────────────
 
@@ -38,46 +39,6 @@ function lastQuarters(n = 5): { year: number; q: number }[] {
     if (q < 1) { q = 4; year--; }
   }
   return out;
-}
-
-// ── IVA calculation helpers ────────────────────────────────────────────────────
-
-function recurringIvaInQuarter(
-  entries: RecurringEntryDoc[],
-  months: string[],
-  type: 'income' | 'expense',
-): { description: string; baseCents: number; ivaCents: number }[] {
-  const result: { description: string; baseCents: number; ivaCents: number }[] = [];
-  for (const e of entries) {
-    if (e.type !== type) continue;
-    if (!e.active) continue;
-    const rate = e.ivaRatePct;
-    if (!rate) continue;
-
-    let baseCents = 0;
-    for (const ym of months) {
-      if (e.startYearMonth && ym < e.startYearMonth) continue;
-      if (e.endYearMonth   && ym > e.endYearMonth)   continue;
-      if (e.frequency === 'monthly')  { baseCents += e.amountCents; continue; }
-      if (e.frequency === 'once' && e.onceYearMonth === ym) { baseCents += e.amountCents; continue; }
-      if (e.frequency === 'quarterly') {
-        const [, m] = ym.split('-').map(Number);
-        if ((m - 1) % 3 === 0) baseCents += e.amountCents;
-        continue;
-      }
-      if (e.frequency === 'annual' && e.monthOfYear) {
-        const [, m] = ym.split('-').map(Number);
-        if (m === e.monthOfYear) baseCents += e.amountCents;
-      }
-    }
-    if (!baseCents) continue;
-    result.push({
-      description: e.description,
-      baseCents,
-      ivaCents: Math.round(baseCents * rate / 100),
-    });
-  }
-  return result;
 }
 
 // ── Vendus VAT summary types ───────────────────────────────────────────────────
@@ -145,6 +106,9 @@ export default function VatPage() {
   const [kidclubLoading, setKidclubLoading] = useState(false);
   const [kidclubError, setKidclubError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Per-month KidClub processed-billing volume, only fetched for noisyphocus
+  // when a commission-model recurring entry (e.g. EasyPay) actually needs it.
+  const [volumeCentsByMonth, setVolumeCentsByMonth] = useState<Record<string, number>>({});
 
   const quarters = useMemo(() => lastQuarters(5), []);
   const [selQ, setSelQ] = useState<{ year: number; q: number }>(quarters[0]);
@@ -173,9 +137,26 @@ export default function VatPage() {
 
   const months = useMemo(() => quarterMonths(selQ.year, selQ.q), [selQ]);
 
+  // Fetch KidClub processed-billing volume for each month of the quarter,
+  // only when noisyphocus has at least one commission-model recurring entry
+  // (avoids an unnecessary cross-app read otherwise).
+  useEffect(() => {
+    if (entityId !== 'noisyphocus') { setVolumeCentsByMonth({}); return; }
+    const needsVolume = recurring.some(e => e.costModel === 'commission');
+    if (!needsVolume) { setVolumeCentsByMonth({}); return; }
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        months.map(async ym => [ym, await api.kidclub.monthlyProcessedVolumeCents(ym)] as const),
+      );
+      if (!cancelled) setVolumeCentsByMonth(Object.fromEntries(entries));
+    })();
+    return () => { cancelled = true; };
+  }, [entityId, recurring, months]);
+
   // IVA liquidado rows
   const collectedRows = useMemo(() => {
-    const rows = recurringIvaInQuarter(recurring, months, 'income');
+    const rows = recurringIvaInQuarter(recurring, months, 'income', volumeCentsByMonth);
 
     // NoisyPhocus: add KidClub rows from Vendus (one row per VAT rate)
     if (entityId === 'noisyphocus' && kidclubVat) {
@@ -195,8 +176,8 @@ export default function VatPage() {
   }, [recurring, months, entityId, kidclubVat]);
 
   const deductibleRows = useMemo(() =>
-    recurringIvaInQuarter(recurring, months, 'expense'),
-    [recurring, months]
+    recurringIvaInQuarter(recurring, months, 'expense', volumeCentsByMonth),
+    [recurring, months, volumeCentsByMonth]
   );
 
   const totalCollected  = collectedRows.reduce((s, r)  => s + r.ivaCents, 0);
