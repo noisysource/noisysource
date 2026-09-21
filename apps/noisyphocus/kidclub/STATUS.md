@@ -5,172 +5,291 @@
 **Last updated:** 2026-09-21
 
 ## Currently working on
-Fixed a second real billing bug found in prod (separate from the double-discount bug below,
-which is already merged — PR #13, `1a4aaec`): `computeExclusionDeduction()` for `type === "study"`
-in `functions/src/kidclub/billing.ts` counted every entry in a line item's `excludedDates`
-with no check that the date actually fell on one of the subscription's real schedule days
-(`sub.days`). The `transport` branch right below it already did this correctly. Found via a
-prod family with 7 study `excludedDates` but only 3 real Wed/Fri schedule days — the other 4
-(Tue/Thu) still fully counted as deductions, undercharging by 4 days. Renato hand-corrected
-that one prod record (`_apps/arcoiris/billing/A7OXOljX1W9xrEn5mhP8_2026-09`) directly; this
-session was the code fix so it can't recur.
 
-**Fixes made** (branch `agent/study-exclusion-validation`, commit `188d117`, not yet PR'd/merged):
-1. `computeExclusionDeduction("study", ...)` now mirrors the transport branch — only deducts
-   for excluded dates whose weekday is in `sub.days.map(d => d.day)`.
-2. `setBillingLineItemExcludedDays` (the callable behind the "Dias" modal) now applies the same
-   schedule-day check when validating dates to save, not just period-range — so a bad date can't
-   be saved from the client either.
-3. UI symptom fix: `ServiceCalendar` in `BillingAdminPage.tsx` only rendered a clickable toggle
-   for schedulable days, so an orphaned `excludedDates` entry (date not on a current schedule
-   day — however it got there) had no UI control to remove it. Added a small removable-chip list
-   below each calendar for exactly these orphaned entries, so an admin can clean them up.
-4. **Deliberately not changed**: `computeLineItems()`'s carry-forward of `excludedDates` from the
-   prior billing record still copies entries verbatim, even ones that no longer match the
-   subscription's *current* schedule (e.g. after a schedule change). This is the likely root
-   cause of how the prod orphan appeared in the first place. Left alone because (a) the
-   deduction fix above already makes a stale entry harmless financially, and (b) auto-dropping
-   it here would hide the entry from the new orphan-cleanup chips in fix #3 — an admin couldn't
-   see/confirm it was there. Worth a follow-up decision: silently drop on carry-forward, or keep
-   surfacing it for admin review as done here.
+### 1. Billing double-discount bug — FIXED, deployed to prod, partially backfilled
+Investigated "igbpinto@gmail.com's billing looks wrong". Root cause: `computeLineItems()` in
+`functions/src/kidclub/billing.ts` read `sub.originalFee ?? sub.monthlyFee` as the *gross*
+transport fee, but `discountRecalc.ts` overwrites `monthlyFee` with the already-discounted
+price once any discount fires, and subscriptions from the client self-enroll flow never get
+`originalFee` set — so billing silently re-applied `appliedDiscounts` a second time. This
+under-billed customers (never overcharged). 8 of 23 active transport subs were affected.
 
-Typechecked clean: `pnpm --filter functions exec tsc --noEmit` and
-`pnpm --filter kidclub exec tsc --noEmit` (kidclub has several pre-existing unrelated errors,
-same set present on `main` before this change — confirmed by diffing). Not deployed anywhere
-yet; PR not opened yet.
+Fixed on branch `agent/billing-double-discount-fix` (PR #13, merged to `main`): gross is now
+derived from schedule length × `flatRatePerTrip` × weeks-in-pattern, same formula
+`discountRecalc.ts` already uses, instead of trusting a field that can silently already be net.
+**Deployed to prod** (`onStudyroomBillingSync`, `onTransportBillingSync`,
+`backfillBillingSchedules`, `setBillingLineItemExcludedDays` — the 4 functions that actually
+use the fixed logic). Verified live: Carolina Almeida's October billing line item now shows
+the correct **€168** (was €117.60).
 
----
+**Still under-billed, not yet backfilled**: José Eduardo (Miguel Melo) and Diogo+Bernardo Mogo
+(Sandra Abreu) — only Carolina Almeida's family has actually been recomputed so far (via a
+verification touch). Either trigger a no-op write on those subscriptions or run
+`backfillBillingSchedules` (recomputes everyone, not just these — confirm on dev first, and
+see the open question below on running it against prod).
 
-Previous session (2026-09-19, PR #13, already merged into `main` as of `1a4aaec`) —
-investigated "igbpinto@gmail.com's billing looks wrong" (Renato's ask: monthly amount
-should be base price − multi-trip discount − school discount). Confirmed in **prod** (read-only,
-via `gcloud auth print-access-token` + Firestore REST — no prod service account key exists,
-per org policy): her transport subscription (Carolina Almeida, `XiblZZlEVZHsSLFdN5z5`) has
-gross €240/month (10 trips × €6 × 4 weeks), 20% school + 10% multi-trip discount → correct
-billed amount is **€168**, but her billing page showed **€117.60** — the 30% discount was
-being applied twice.
+Study room subs are NOT currently affected by this exact bug (0 of 14 missing `basePrice`),
+but `discountRecalc.ts`'s study-side gross calc (`x.basePrice ?? x.monthlyPrice`) has the same
+latent shape — not fixed, no live instance found, flagging only.
 
-Root cause: `computeLineItems()` in `functions/src/kidclub/billing.ts` read
-`sub.originalFee ?? sub.monthlyFee` as the *gross* transport fee. But
-`discountRecalc.ts` overwrites `monthlyFee` with the already-discounted price whenever a
-discount fires, and subscriptions created via the client self-enroll (offer/accept) flow never
-get `originalFee` set at all — so billing silently re-applied `appliedDiscounts` on top of an
-already-net price. This under-bills, it doesn't overcharge.
+### 2. Discount *model* itself — confirmed wrong, NOT yet implemented
+Separately from the bug above: Renato confirmed the discount model that's actually live (flat
+% off the whole gross once a threshold is met — e.g. multi-trip discount applies to ALL trips
+that day, sibling discount applies to a sibling's ENTIRE fee) is **not** the intended design.
+Intended model is **marginal/per-unit**:
+- Multi-trip: within a day, the first (chronologically earliest) trip is full price; every
+  trip after it that same day gets the multi-trip discount.
+- Sibling: order children family-wide by earliest subscription/enrollment date; the
+  first-enrolled child's subscriptions stay full price; every subsequent child's subscriptions
+  get the sibling discount.
+- School discount (and flat manual discounts like "Aluno do ano anterior") still apply last,
+  as a flat % on the resulting sum — no natural per-unit basis for those.
 
-**Scope check (prod, read-only): 8 of 23 active transport subscriptions** are missing
-`originalFee` while carrying discounts — same bug, same under-billing, affecting: José Eduardo,
-Vasco Moura, Maria Manon, Diogo Mogo, Carolina Almeida (Inês Pinto), Bernardo Mogo, Gil
-Figueiredo, Leonardo Marques. Study room subs are NOT currently affected (0 of 14 missing
-`basePrice`), but `discountRecalc.ts`'s study-side gross calc (`x.basePrice ?? x.monthlyPrice`)
-has the same latent shape of bug — not fixed here, no live instance found, flagging only.
+Comparison table run against 5 real prod subscriptions showed real, not-cosmetic differences
+(e.g. Carolina Almeida: €168 flat vs **€182.40** marginal; José Eduardo: €151.20 vs
+**€165.12**; Diogo Mogo loses his sibling discount entirely once his sibling-enrollment-order
+is accounted for, since he was enrolled before his brother). **This needs its own implementation
+pass** — touches `discountRecalc.ts`, `billing.ts`, and the `AppliedDiscount` display model
+(admin discount badges, client "was €X now €Y" comparisons currently assume one flat % per
+discount, which doesn't hold once multi-trip/sibling are marginal). Not started. See Backlog
+section below.
 
-**Fix applied:** `functions/src/kidclub/billing.ts` now derives transport gross from
-schedule length × `flatRatePerTrip` × weeks-in-pattern (mirrors `discountRecalc.ts`'s own
-formula) instead of trusting `originalFee`/`monthlyFee`. Committed on branch
-`agent/billing-double-discount-fix`, pushed, **PR not opened** (no `gh` CLI in this session) —
-open from https://github.com/noisysource/noisysource/pull/new/agent/billing-double-discount-fix.
-Typecheck passes; **not deployed anywhere yet**.
+### 3. Financial Summary — decoupled from Route Planner, deployed to dev only
+`FinancialSummaryPage.tsx` was silently showing driver/electricity cost as €0 because it
+derived them from the latest saved snapshot in `transportRoutes`, which was **empty in prod**
+(nobody had ever run/saved a route plan) — meaning the page's "profit" figure was fake. Real
+driver wage is **€1,400/month**; plugging that in flips prod from an apparent +€1,271.60/month
+"profit" to roughly **−€440/month** loss once corrected for other data-quality issues found
+along the way (an orphaned, never-actually-billed subscription for Leonardo Marques inflating
+revenue by €240/mo, and 3 subs with stale `monthlyFee` fields inflating it by €72/mo more).
 
-**NOT done — needs a decision + prod write access (deliberately not done in this session,
-per CLAUDE.md's no-standing-prod-write-access rule):**
-1. Deploy this fix to dev, verify a transport billing line item matches the sub's `monthlyFee`.
-2. Deploy to prod (`deploy-functions.yml` is manual `workflow_dispatch` — stays that way).
-3. **Backfill the 8 affected families' pending billing records** — their Sept 2026–Aug 2027
-   `billing/{familyId}_{yyyy-mm}` docs currently have the double-discounted (too-low) `total`
-   and need recomputing once the fix is live. `backfillBillingSchedules` (already exists,
-   owner/rainbowAdmin-gated callable) should do this correctly once deployed, but confirm on
-   dev first — running it recomputes ALL families' billing, not just these 8.
-4. Decide whether to also proactively backfill `originalFee` onto existing subscription docs
-   so this can't recur even if the schedule/config-derived fallback ever goes stale.
+Refactored (branch `agent/financial-costs-decouple`, currently mid-merge-conflict-resolution
+with `main` — see Next step #1):
+- Removed the `transportRoutes`-snapshot dependency and the override/fallback chain entirely.
+- Added `driverMonthlyCost` / `electricityMonthlyCost` as direct fields on
+  `TransportationConfig` (alongside existing `vanMonthlyCost`), with a new **"Custos Fixos"**
+  panel on the page itself — Van/Motorista/Eletricidade/Professora/Renda all inline-editable,
+  saving straight to `config/transportation`/`config/studyCenter`.
+- `TransportPlannerPage.tsx` is untouched — it keeps planning routes and saving its own
+  `transportRoutes` version snapshots; Financial Summary just no longer reads them.
+- Fixed one cosmetic bug post-deploy: the "Custos Fixos" KPI subtitle said "van + motorista +
+  professora + renda", missing "eletricidade" even though it was already correctly included
+  in the total — fixed and redeployed.
 
----
+Typecheck + build both pass. **Deployed to dev only** (`kidclub-dev-arcoiris.web.app`), smoke-
+tested manually by Renato (entered €1400/€300 into the new panel, numbers computed correctly:
+€3787 revenue − €3750 costs = +€37, 1% margin — dev's own subscription data, not prod's).
+**Not merged to main / not deployed to prod yet.**
 
-Previous session (2026-09-18) — fixed a real bug found while investigating "Marisa Pratas can't see her billing records":
-impersonating a family in the admin panel and then visiting the client billing pages showed
-nothing, regardless of what records actually existed for that family.
+### 4. Prod → dev data sync — done
+At Renato's request, did a full (non-anonymized) copy of KidClub's real data from
+`rainbow-prod-2454b` into `kidclub-dev`, to give dev realistic subscription/family data for
+testing (e.g. the Financial Summary work above). Method: `gcloud firestore export` (scoped to
+`billing, children, config, eventModifications, families, financialEvents, invoices, settings,
+studyroom, subscriptionVersions, transportationSubscriptions, users` — deliberately excluding
+`emailOutbox`/`emailCampaigns` so nothing risks re-queuing real emails) → copied the export
+between each project's own `*-exports` GCS bucket → `gcloud firestore import` into
+`kidclub-dev`. Verified Inês Pinto's family record landed correctly. Temporary export files
+deleted from both buckets afterward.
 
-Root cause: `PaymentsPage.tsx` and `InvoiceListPage.tsx` query Firestore directly by
-`user.uid` (the real logged-in admin's own uid) instead of going through `familyService.ts`,
-which is the thing that actually knows how to resolve the impersonated family. Every other
-client page (dashboard, children, subscriptions) already switches to querying by `familyId`
-while impersonating — these two just never got that treatment.
+**Side effect (expected, flagged beforehand):** the import overwrote dev's `config/transportation`
+doc wholesale, clearing the `driverMonthlyCost: 1400` / `electricityMonthlyCost: 300` Renato had
+just entered for testing (prod's doc doesn't have those fields set) — needs re-entering in dev
+if still wanted there (see Next step #4).
 
-Fixed both to query `familyId` when `impersonation` is active, same pattern as
-`familyService.ts` (`apps/noisyphocus/kidclub/src/services/familyService.ts:72-73`). No
-Firestore rules change needed — admins already have blanket read on `billing`/`invoices`.
+**Caveat:** Firebase Auth UIDs are per-project — copied `users/{uid}` docs and every
+subscription's `userId` field still reference prod UIDs, which don't correspond to real dev
+Auth accounts. Fine for admin-side testing (Financial Summary, billing admin), but per-family
+client-login testing against this data won't work without also creating matching dev Auth
+accounts.
 
-**Renato is already aware of the invoices/payments split** — noted here as a feature to
-implement, not a new finding: `InvoiceListPage.tsx` ("As minhas faturas" nav item) reads from
-an `invoices` Firestore collection that **nothing in the codebase writes to** — no Cloud
-Function, no admin page. It's empty for every family, not just Marisa. The billing system
-that's actually alive is `PaymentsPage.tsx` ("Pagamentos"), backed by the `billing`
-collection and `autoCreateBillingSchedule()` in `functions/src/kidclub/billing.ts`.
+### 5. CI/CD pipeline — rebuilt, now fully live (separate, now-closed thread of work)
+Rebuilt the whole deploy pipeline this week (see root `CLAUDE.md`'s "Branch → environment
+pipeline" for the full model). Now **fully merged and operational**, not in-progress:
+- PR into `staging` → auto-deploys app/rules/indexes/functions/terraform to `kidclub-dev`.
+- PR into `main` → auto-deploys app/rules/indexes/functions to prod immediately (before
+  merge) — **`terraform apply` stays disabled for prod specifically**, see below.
+- Merge to `main` → re-deploys + `sync-staging` fast-forwards `staging` to match.
+- **GitHub branch protection is now configured on `main`**: the `deploy` check must pass
+  before merge is even clickable. This was the missing piece that made the whole thing
+  trustworthy — closed out this session.
 
-**TODO / feature to implement:** wire "As minhas faturas" up to real invoice data (or decide
-to retire it and redirect to Pagamentos instead) — needs a decision on which, then either a
-Cloud Function that populates `invoices` (e.g. from Vendus documents) or removing the page.
-Not done in this session — separate scope from the impersonation fix below.
+Getting the first real prod deploy green took a long chain of IAM fixes, all against prod's
+CI identity `github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com` (a
+completely different identity from dev's `gmail-sender-kidclub-dev`, which is why none of
+dev's earlier fixes carried over automatically). It now has, granted by hand and documented
+in `infra/gcp/terraform/iam.tf`/`secrets.tf`/`billing-cutoff.tf` (not yet applied via
+Terraform, since terraform apply is off for prod):
+`datastore.indexAdmin`, `secretmanager.secretAccessor` + `secretmanager.viewer` (on all 7
+secrets — accessor alone isn't enough, viewer is what `firebase deploy`'s validation step
+actually needs), `serviceusage.serviceUsageAdmin`, `iam.serviceAccountUser` (project-wide,
+for functions' actAs), `cloudscheduler.admin`, `pubsub.editor`.
+
+**`billingCutoff` no longer deploys to prod at all** — it's the "combined dev+prod billing
+circuit breaker" singleton agent, and GCP's `iam.disableCrossProjectServiceAccountUsage` org
+policy (confirmed enforced on `rainbow-prod-2454b`) categorically blocks prod's CI identity
+from acting as its dev-project service account, no IAM grant can override that. Traced
+further and found the prod copy would've been permanently untriggered anyway (its Pub/Sub
+topic and the budget that publishes to it only exist in dev's Terraform state) — so rather
+than build a redundant prod-native agent, `functions/src/billingCutoff.ts`'s export is now
+conditional on `GCLOUD_PROJECT === "kidclub-dev"`.
+
+**Prod's Terraform state is still essentially empty** (81 resources pending creation, real
+infra was never imported — found via `terraform plan -var-file=env/prod.tfvars`) — `apply`
+stays off for prod (`run_terraform: false` in `deploy-prod.yml`) until that's deliberately
+reconciled as its own task. Not urgent; app/rules/indexes/functions/hosting all deploy fine
+without it.
+
+### 6. Study-room exclusion calendar — two real bugs found via a live prod case, both fixed
+Renato reported Susete Luis's billing looked wrong: the "Dias sem serviço" admin calendar
+showed 3 marked study-room days but the billing row's pills showed 7, and the 4 extra ones
+couldn't be unmarked. Two distinct bugs, found by reading actual prod data
+(`_apps/arcoiris/billing/A7OXOljX1W9xrEn5mhP8_2026-09`, read-only via `gcloud` access token
+against the Firestore REST API):
+
+- **Deduction math bug** (`computeExclusionDeduction()` in `functions/src/kidclub/billing.ts`):
+  the `"study"` branch deducted for every entry in `excludedDates` with no check that the date
+  actually fell on a real schedule day — `"transport"` right below it already did this
+  correctly. A stale/bogus date could silently discount a day the child was never billed for.
+  Fixed to mirror the transport branch (checks `weekdayOfIsoDate(entry)` against `sub.days`).
+  Same schedule-day check also added to `setBillingLineItemExcludedDays` as a second line of
+  defense on save.
+- **UI bug** (`ServiceCalendar` in `BillingAdminPage.tsx`): the calendar only renders a
+  clickable cell for actual schedule days, so once a non-schedule-day entry exists in
+  `excludedDates` there was literally no control to remove it — clicking "Guardar" always
+  resent the untouched orphan. Fixed by listing any orphaned entries as removable chips below
+  the calendar (same styling as the pills already shown elsewhere on the row).
+- **Root cause of the orphaned entries, found investigating further**: `toIsoDate()` in
+  `BillingAdminPage.tsx` built the ISO date string via `.toISOString()`, which converts to
+  UTC. Every calendar cell's `Date` is constructed from local year/month/day, so in any
+  timezone ahead of UTC (Portugal is UTC+1/WEST right now) that conversion silently rolls the
+  date back by one day before saving — **every click on this calendar was saving the day
+  before the one actually clicked.** This is the real, still-live source of the orphaned
+  dates (not a stale schedule-change carry-forward, which was the original working theory).
+  Fixed by computing the ISO string from local date components instead of `toISOString()`.
+
+Shipped as **`hotfix/exclusion-calendar-timezone`** (PR opened directly against `main` per the
+new hotfix path — deploys to prod immediately on PR open, ahead of merge) since it was active
+data corruption; checks/deploy were running as of this note. The deduction-math + orphan-chip
+fix is on `agent/study-exclusion-validation`, merged with current `main` here, not yet opened
+against `staging`.
+
+Susete Luis's Sept 2026 record was hand-corrected twice in prod while chasing this (read+write
+via `gcloud` access token, no prod service account key, matching org policy — see root
+CLAUDE.md's no-standing-prod-access rule): first to strip the 4 invalid dates (total
+€114→€138), then — once the timezone bug was found, meaning even THAT correction likely had
+its own date shifted — cleared back to zero exclusions on both line items (total →€156) so
+Renato can re-mark her real absences once the timezone hotfix is confirmed live.
 
 ## Last completed
-- Branch `agent/impersonation-billing-fix` pushed, PR not yet opened (no `gh` CLI in this
-  session — compare link: https://github.com/noisysource/noisysource/pull/new/agent/impersonation-billing-fix).
-- `pnpm --filter kidclub build` and `build:staging` both succeed, no new type errors.
-- Deployed to **kidclub-dev** (build:staging) — https://kidclub-dev-arcoiris.web.app, 200 OK.
-  NOT smoke-tested behind login in that environment.
-- **Deployed straight to prod hosting** (`pnpm --filter kidclub build` — plain, not
-  build:staging — + `firebase deploy --only hosting:kidclub --project=rainbow-prod-2454b`),
-  at Renato's explicit request, bypassing the usual PR-merge-triggers-deploy flow. Confirmed
-  both https://kidclub.pt and https://rainbow-prod-2454b-arcoiris.web.app respond 200.
-  NOT smoke-tested behind login on prod either.
+- Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
+  Almeida. José Eduardo + Mogo siblings still need backfill.
+- Financial Summary refactor: on `agent/financial-costs-decouple`, deployed to dev only,
+  smoke-tested manually by Renato. Currently resolving a merge conflict against `main` (this
+  branch was opened before the CI/CD pipeline work landed, so it was ~23 commits behind).
+- Prod → dev data sync: done, verified, temp export files cleaned up from both buckets.
+- CI/CD pipeline: fully merged to `main`, branch protection configured, first real prod
+  deploy went green.
+- `agent/impersonation-billing-fix` (from the 2026-09-18 session) — confirmed merged into
+  `main` (PR #11) a while back; the "prod ahead of main" risk from that session is resolved,
+  no longer worth tracking.
+- Study-room exclusion calendar: found + fixed both the deduction-math bug and the timezone
+  off-by-one that was silently corrupting every saved exclusion date. Timezone fix shipped as
+  a hotfix PR straight to `main` (checks running as of this note); the deduction-math + orphan
+  cleanup UI fix is merged with current `main` on `agent/study-exclusion-validation`, PR not
+  yet opened against `staging`.
 
 ## Next step
-0. **New (this session): open the PR for `agent/study-exclusion-validation`** (study exclusion
-   schedule-day validation fix, commit `188d117`), get it reviewed/merged, deploy functions to
-   dev then prod. Low urgency financially (the bug under-charges, doesn't over-charge) but it's
-   confirmed live in prod until this deploys. No backfill needed — the fix only changes how
-   *future* recomputes treat `excludedDates`; the one known-bad prod record was already
-   hand-corrected by Renato directly.
-1. ~~Open + merge the billing double-discount PR~~ — **done**, PR #13 merged (`1a4aaec`). Confirm
-   it's actually deployed to prod functions (not just merged to `main`) before considering this
-   fully closed — deploy is still manual `workflow_dispatch`.
-2. If not already done, run/trigger `backfillBillingSchedules` (owner/rainbowAdmin
-   callable) to recompute the 8 affected families' pending billing totals — check the result
-   counts against the 8 names listed above before trusting it's fully caught.
-3. **`main` on GitHub does NOT have the impersonation-billing-fix commit yet** — prod hosting
-   was pushed straight from that branch, so the deployed bundle and `main` are still out of
-   sync. Open the PR and merge it, so the next push-to-main deploy doesn't revert it
-   (`build-and-deploy-kidclub.yml` deploys hosting on every push to `main`).
-4. Smoke test impersonation-billing-fix on prod: impersonate a family with real `billing`
-   records, open `/client/payments`, confirm records show up.
-5. Separately, decide on the "As minhas faturas" feature work (see above) and scope it as
-   its own task when ready.
+1. **Finish merging `main` into `agent/financial-costs-decouple`**, push, then open the PR.
+   Because branch protection is now live, opening/updating this PR will trigger a real prod
+   deploy check (`deploy-prod.yml` on `pull_request`) — this is actually a good thing: it's
+   the first real validation this branch has had against the new pipeline. Watch it go green
+   before merging.
+2. **Backfill José Eduardo's and the Mogo siblings' billing** — same double-discount bug,
+   code fix is live, their existing records just haven't been recomputed yet. See open
+   question below on running `backfillBillingSchedules` against prod.
+3. Re-enter `driverMonthlyCost: 1400` (and whatever electricity figure) into dev's Custos
+   Fixos panel — cleared by the prod→dev import.
+4. Decide on the "As minhas faturas" feature work (dead `invoices` collection, flagged in an
+   earlier session) — separate, not urgent.
+5. Prod Terraform state reconciliation (see item 5 above) — separate, not urgent, real effort.
+6. Decide whether to bring `deploy-finances.yml` onto the same staging/main pipeline model.
+7. See **Backlog** below for the two bigger features surfaced this week (discount model
+   rework, route planner rework) — neither started, both need their own scoping pass.
+8. **Confirm the `hotfix/exclusion-calendar-timezone` deploy went green and merge it**, then
+   open `agent/study-exclusion-validation` against `staging` (deduction-math + orphan-chip
+   fix — not urgent, but should still land).
+9. **Once the timezone hotfix is confirmed live, re-mark Susete Luis's real absence days**
+   (her Sept 2026 record was cleared to zero exclusions, both line items back to full gross,
+   total €156 — see item 6 above) — Renato was about to do this himself.
+10. Worth a deliberate look once things settle: audit other pending billing records for the
+    same shifted-by-one-day corruption pattern (any family with excludedDates that don't land
+    on a real schedule weekday is a symptom) — not started, flagged by Renato as a next step
+    after the hotfix ships, not done in this session.
 
 ## Open questions for Renato
-- Billing fix: OK to run `backfillBillingSchedules` against **prod** once the fix is deployed?
-  It recomputes every family's billing, not just the 8 affected ones — low risk (it's the same
-  logic already running on every subscription write) but it is a prod write, flagging per the
-  no-standing-write-access rule.
-- Otherwise: just the `main` merge for the impersonation fix (to resync source with what's
-  live) and a prod smoke test.
+- OK to run `backfillBillingSchedules` against **prod** to catch José Eduardo's and the Mogo
+  siblings' still-under-billed records? Recomputes every family, not just these — low risk,
+  but flagging per the no-standing-write-access rule.
+- Discount model rework (marginal/per-unit, see above) — confirmed as the intended design,
+  but not scoped/scheduled yet. When should this happen relative to other work?
+- Worth a deliberate look, not urgent: is `roles/resourcemanager.projectIamAdmin` +
+  `roles/billing.admin` on prod for dev's CI service account (granted earlier this week, for
+  the cross-project Terraform resources) the long-term shape you want, or should it get
+  narrowed to a custom role later?
+- None new for the exclusion-calendar bug itself — Renato already confirmed the fix approach
+  and the decision to correct Susete Luis's billing amount upward (€114→€138, then cleared to
+  €156 pending re-marking) rather than absorb it as goodwill.
 
 ## Anything risky in flight
-- **8 active prod transport subscriptions are currently under-billed** (double-discounted,
-  see above) until the `agent/billing-double-discount-fix` PR merges, deploys, and a backfill
-  runs. No prod data was changed investigating this — reads only, via `gcloud` access token
-  against the Firestore REST API (no prod service account key exists on this machine, matches
-  org policy). Worktree `.claude/worktrees/billing-double-discount-fix` still exists — remove
-  it once the PR is merged.
-- **Prod hosting was deployed ahead of `main`** — `agent/impersonation-billing-fix` is live
-  on kidclub.pt but not merged. Until merged, `main` doesn't reflect what's actually running
-  in prod, and the next push-to-main deploy will silently revert this fix unless that push
-  also contains it. Merge the PR (link above) to close this gap.
-- Unrelated, still open from a prior session: `git worktree list` shows several stale
-  worktrees not cleaned up (`claim-studyroom-fix`, `deploy-functions-workflow-fix`,
-  `kidclub-cicd-automation`, plus some pre-convention ones outside `.claude/worktrees/`).
-  Worth Renato clearing out whichever are merged/abandoned.
-- Also unrelated, paused mid-session on 2026-09-18: a unified client calendar
-  (`agent/family-calendar` branch, `/client/calendar`) for cancelling study/transport days
-  in one place instead of per-subscription. Built, builds clean, not deployed/reviewed yet.
-  Needs a Firestore composite index deployed (`firestore.indexes.json`, committed on that
-  branch) before it's usable — see that branch's own state for details, picking back up was
-  put on hold to investigate the Marisa billing issue.
+- **José Eduardo and the two Mogo siblings (Diogo, Bernardo) are still under-billed in prod**
+  — the code fix is live, but their existing pending billing records haven't been recomputed
+  yet (only Carolina Almeida's has).
+- **Financial Summary refactor is only on dev** — `agent/financial-costs-decouple` not merged,
+  prod's Financial Summary page still has the old planner-snapshot dependency (shows €0
+  driver/electricity cost, fake profit) until this ships.
+- **Prod's CI service account has accumulated a lot of IAM roles this week**, granted
+  reactively as each deploy step hit a new gap (see item 5 above for the full list) — not
+  wrong, but worth knowing the shape of it if you're ever auditing prod IAM.
+- Worktrees now open: `.claude/worktrees/financial-costs-decouple` (this one, mid-merge, keep
+  until PR opens and merges). `.claude/worktrees/billing-double-discount-fix` — PR merged,
+  safe to remove. Several CI/CD-related worktrees from this week
+  (`cicd-prod-prep`, `cicd-prod-index-fix`, `cicd-prod-pr-gate`) are also fully merged now —
+  safe to remove. Plus pre-existing stale ones from prior sessions (`claim-studyroom-fix`,
+  `deploy-functions-workflow-fix`, `kidclub-cicd-automation`, and some pre-convention ones) —
+  worth Renato doing a general `git worktree list` sweep and clearing out whatever's merged.
+- Unrelated, still paused: a unified client calendar (`agent/family-calendar` branch,
+  `/client/calendar`) — built, builds clean, not deployed/reviewed. Needs a Firestore
+  composite index deployed (`firestore.indexes.json`, committed on that branch) — now that
+  the pipeline is live, opening its PR against `staging` will handle that automatically.
+- **Susete Luis's Sept 2026 billing record currently has €0 discount on both study and
+  transport** (deliberately cleared, total €156) — she was pending real re-marking of her
+  absence days at the time this note was written. Don't be surprised if the total looks "too
+  high" — it's correct until the real exclusions are re-entered.
+- **The timezone bug likely corrupted other families' exclusion dates too**, silently, for as
+  long as it's been live — not audited yet (see Next step #10). Any other under- or
+  over-billed pending record with excludedDates that don't land on a real schedule weekday is
+  a symptom of the same root cause.
+- Worktree `.claude/worktrees/exclusion-calendar-timezone-hotfix` (the timezone hotfix) and
+  `.claude/worktrees/study-exclusion-validation` (deduction-math + orphan-chip fix) both still
+  open — remove once their respective PRs are merged.
+
+## Backlog — bigger features surfaced but not started
+- **Discount model rework** (surfaced 2026-09-20): live discount logic is flat-%-off-gross;
+  confirmed intended design is marginal/per-unit (multi-trip: only the 2nd+ trip in a day is
+  discounted; sibling: only the 2nd+ enrolled child is discounted; school/manual discounts
+  stay flat on the resulting sum). Touches `discountRecalc.ts`, `billing.ts`, and the
+  `AppliedDiscount` display model across several admin/client pages. Needs its own scoping
+  pass before implementation — see "Currently working on" #2 above for the full spec and
+  worked examples.
+- **Transport Route Planner rework** (surfaced 2026-09-20, no prior note found anywhere in
+  this repo's docs or memory before now): `TransportPlannerPage.tsx` currently owns route
+  planning AND used to be the only source of driver/electricity cost for the Financial
+  Summary page (now decoupled, see above). The planner itself hasn't been touched — it's a
+  large (2300+ line) page that still needs a proper look: `transportRoutes` was completely
+  empty in prod (nobody had ever saved a route plan), which is how the driver-cost blind spot
+  happened in the first place. Worth a dedicated pass to figure out why it's never been used,
+  whether it should feed anything else now that Financial Summary doesn't depend on it, and
+  whether its own cost-estimate model (`driverRatePerHour`, `consumptionPer100km`,
+  `electricityPricePerKwh`) is still the right shape for actual route planning. Not scoped
+  further than this — flagging as a known future feature, not a plan.

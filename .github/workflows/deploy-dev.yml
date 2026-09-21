@@ -1,0 +1,26 @@
+name: Deploy to Dev
+
+# Any PR targeting staging (open/update) deploys a live preview to
+# kidclub-dev, so Renato can review real behavior before promoting.
+# Also re-runs on push to staging (i.e. right after a PR merges), since a
+# merge commit is a separate event from the PR's own commits.
+on:
+  pull_request:
+    branches: [staging]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [staging]
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-kidclub-env.yml
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    secrets: inherit
+    with:
+      environment: kidclub-dev
+      firebase_project: kidclub-dev
+      service_account: gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com
+      build_command: pnpm --filter kidclub build:staging
+      tf_var_file: env/kidclub-dev.tfvars

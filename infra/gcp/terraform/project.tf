@@ -15,6 +15,11 @@ resource "google_project_service" "apis" {
     # without also adding its quota override + key restriction in the same
     # change (see infra/gcp/terraform/quotas.tf notes once that exists).
     "places.googleapis.com",
+    # Needed for google_billing_account_iam_member (iam.tf) - managing IAM
+    # on a billing account itself requires the caller project to have this
+    # API enabled, separate from any project-level or billing-account-level
+    # role grant.
+    "cloudbilling.googleapis.com",
   ])
   service                    = each.key
   disable_on_destroy         = false

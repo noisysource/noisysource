@@ -21,6 +21,7 @@ yarn-error.log*
 .terraform/
 *.tfstate
 *.tfstate.*
+tfplan
 .firebase/logs/vsce-debug.log
 
 # General logs
