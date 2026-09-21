@@ -15,11 +15,11 @@ const REGION = "europe-west3";
 
 type WeekPattern = "all" | "odd" | "even";
 
-function weekOfMonthOccurrence(date: Date): number {
+export function weekOfMonthOccurrence(date: Date): number {
   return Math.ceil(date.getDate() / 7);
 }
 
-function isActiveThisWeek(date: Date, pattern: WeekPattern): boolean {
+export function isActiveThisWeek(date: Date, pattern: WeekPattern): boolean {
   if (pattern === "all") return true;
   const occ = weekOfMonthOccurrence(date);
   if (occ === 5) return false;
@@ -65,11 +65,11 @@ interface NewEvent {
 // same occurrence — a rerun just overwrites (merge:false is fine, EXPECTED
 // events are never hand-edited before their status is changed via the
 // callable below).
-function eventDocId(subscriptionId: string, date: string, direction?: string): string {
+export function eventDocId(subscriptionId: string, date: string, direction?: string): string {
   return direction ? `${subscriptionId}_${date}_${direction}` : `${subscriptionId}_${date}`;
 }
 
-function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
+export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
   const days: { day: string; hour: string }[] = sub.days ?? [];
   if (!days.length || ratePerDay <= 0) return out;
@@ -92,7 +92,7 @@ function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: 
   return out;
 }
 
-function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
+export function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
   const schedule: { dayOfWeek: string; direction?: string }[] = sub.schedule ?? [];
   if (!schedule.length || ratePerTrip <= 0) return out;
