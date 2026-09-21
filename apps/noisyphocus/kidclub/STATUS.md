@@ -132,7 +132,6 @@ this work, per Renato.
 On billing finalize/payment, write an income record to
 `finances_entities/{entityId}/incomes`. Log in root `CLAUDE.md`'s "Cross-App Data Contracts"
 section once shipped, per that section's own convention.
->>>>>>> 85fb667 (docs(kidclub): record absence-threshold billing design + Phase 1 status)
 
 ## Currently working on
 
