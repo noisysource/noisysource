@@ -356,6 +356,7 @@ export interface BillingLineItem {
   scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI only offer real service days
   tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday, so the UI can offer per-trip exclusion when a day has more than one
   absenceCreditDates?: string[]; // ISO yyyy-mm-dd — the 3 approved cancellations (eventModifications) credited once the absence threshold was reached this period
+  frozenMidPeriodCancellation?: boolean; // true if this line item's subscription is no longer active but was carried forward unchanged because it was still active for PART of the in-progress period — see computeLineItems
 }
 
 interface BillingConfigs { studyConfig: any; transportConfig: any }
@@ -370,12 +371,32 @@ function computeLineItems(
   configs: BillingConfigs,
   existingLineItems: BillingLineItem[] = [],
   cancellationsBySub: Map<string, { date: Date }[]> = new Map(),
+  isCurrentPeriod: boolean = false,
 ): { lineItems: BillingLineItem[]; total: number; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } {
   const lineItems: BillingLineItem[] = [];
   let total = 0;
   const newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] = [];
   const billedThisCall = new Set<string>();
   const priorFor = (subId: string) => existingLineItems.find(li => li.subscriptionId === subId);
+
+  // A subscription that was active for PART of the in-progress period and
+  // then cancelled (or otherwise stopped being "active") mid-month must not
+  // have its already-earned charge for this period erased just because a
+  // later recompute — triggered by that very cancellation — no longer sees
+  // it in the active-subs query. Freeze it: carry the prior line item for
+  // this period forward completely unchanged. Only applies to the CURRENT
+  // in-progress period — a genuinely future period for an already-cancelled
+  // subscription should (and does) simply have no line item, since no
+  // service will be rendered then. Past periods are never touched by the
+  // caller's period loop at all, so they're safe regardless.
+  const activeSubIds = new Set([...group.study, ...group.transport].map(s => s.id));
+  const frozenOrphans: BillingLineItem[] = isCurrentPeriod
+    ? existingLineItems.filter(li => (li.type === "study" || li.type === "transport") && li.subscriptionId && !activeSubIds.has(li.subscriptionId))
+    : [];
+  for (const orphan of frozenOrphans) {
+    lineItems.push({ ...orphan, frozenMidPeriodCancellation: true });
+    total += orphan.amount;
+  }
 
   // "Already billed" is read straight off the currently active subscription
   // docs themselves — sub.enrollmentFeeBilled — rather than a persistent
@@ -1034,11 +1055,13 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
     for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
   };
 
+  const currentPeriodKey = periods[0]?.isoDate.slice(0, 7);
   for (const period of periods) {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
     const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub);
+    const isCurrentPeriod = period.isoDate.slice(0, 7) === currentPeriodKey;
+    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub, isCurrentPeriod);
 
     if (existing.exists) {
       if (isRecomputable(existing.data())) {
@@ -1090,12 +1113,26 @@ export const backfillBillingSchedules = onCall(
     let created = 0, updated = 0, skipped = 0, cancelled = 0, failed = 0;
     const familiesWithActiveSubs = new Set(groups.map(g => g.familyId));
 
-    // Cancel pending records for families that no longer have any active subscriptions
+    // Cancel pending records for families that no longer have any active
+    // subscriptions — but ONLY for periods strictly after the current month.
+    // A family that cancels its only subscription mid-month was still
+    // active for part of THIS month (and every prior month), so those
+    // records represent real, already-earned charges — wiping them just
+    // because the family has zero active subs as of right now is the same
+    // "mid-month cancellation erases what's already billed" bug the
+    // frozenMidPeriodCancellation carry-forward in computeLineItems exists
+    // to prevent, and this loop bypasses computeLineItems entirely, so that
+    // guard can't help here. Only a period that hasn't started yet can
+    // safely be assumed to have zero billable service.
+    const startOfCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const orphanSnap = await appCol("billing").where("status", "==", "pending").get();
     for (const doc of orphanSnap.docs) {
-      const familyId = doc.data().familyId;
-      if (!familiesWithActiveSubs.has(familyId)) {
-        await doc.ref.update({ status: "cancelled", updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      const data = doc.data();
+      const familyId = data.familyId;
+      const periodStart: Date | undefined = data.periodStart?.toDate?.();
+      const isFuturePeriod = !!periodStart && periodStart > startOfCurrentMonth;
+      if (!familiesWithActiveSubs.has(familyId) && isFuturePeriod) {
+        await doc.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         cancelled++;
       }
     }
@@ -1110,11 +1147,13 @@ export const backfillBillingSchedules = onCall(
 
         const cancellationsBySub = await fetchApprovedCancellations(group.study.map(s => s.id), group.transport.map(s => s.id));
         const periods = periodsUntilSchoolYearEnd(new Date());
+        const currentPeriodKey = periods[0]?.isoDate.slice(0, 7);
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub);
+          const isCurrentPeriod = period.isoDate.slice(0, 7) === currentPeriodKey;
+          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = computeLineItems(group, period, configs, existingLineItems, cancellationsBySub, isCurrentPeriod);
           if (existing.exists) {
             if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
@@ -1267,6 +1306,31 @@ export const onTransportBillingSync = onDocumentWritten(
     const familyId: string = after.familyId;
     if (!familyId) return;
     await autoCreateBillingSchedule(familyId, after.userId ?? "");
+  }
+);
+
+// Absences (approved cancellations) are billing-relevant facts, exactly like
+// a subscription edit — the manual "gerar calendário de cobranças" backfill
+// button existed largely to cover this gap by brute-forcing a recompute for
+// everyone. This closes it properly: any write to an `eventModifications`
+// doc of the type billing actually consumes (`cancelled`) recomputes just
+// that one family, the same way the two triggers above already do for
+// subscription writes. Fires on the doc reaching OR leaving the
+// "cancelled + approved" state that fetchApprovedCancellations() counts —
+// a new approval, an edit to which date it covers, a rejection, or a
+// parent "restoring" a day (delete) — so the absence-threshold credit stays
+// in sync with reality either direction, not just when one gets added.
+export const onEventModificationBillingSync = onDocumentWritten(
+  { document: "_apps/arcoiris/eventModifications/{modId}", region: "europe-west3" },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    const relevant = (d: any) => d?.modificationType === "cancelled";
+    if (!relevant(before) && !relevant(after)) return;
+
+    const familyId: string = after?.familyId ?? before?.familyId;
+    if (!familyId) return;
+    await autoCreateBillingSchedule(familyId, after?.requestedBy ?? before?.requestedBy ?? "");
   }
 );
 

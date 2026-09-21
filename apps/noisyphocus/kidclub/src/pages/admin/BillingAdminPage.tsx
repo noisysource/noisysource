@@ -104,6 +104,12 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           </div>
         </div>
       )}
+      {lineItem.frozenMidPeriodCancellation && (
+        <p className="text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1 mt-1">
+          ⚠️ Subscrição já não está ativa — valor mantido sem alteração porque esteve ativa
+          durante parte deste mês.
+        </p>
+      )}
     </div>
   );
 }
@@ -496,7 +502,7 @@ export default function BillingAdminPage() {
   useEffect(() => { fetchRecords(); }, []);
 
   const handleBackfill = async () => {
-    if (!confirm('Gerar calendário de cobranças para todas as famílias com inscrições ativas?')) return;
+    if (!confirm('Forçar recálculo de faturação para TODAS as famílias com inscrições ativas? Normalmente não é necessário — use apenas para uma correção geral.')) return;
     setBackfilling(true);
     setBackfillResult(null);
     try {
@@ -610,15 +616,24 @@ export default function BillingAdminPage() {
         </div>
       </div>
 
-      {/* Backfill */}
+      {/* Backfill — manual repair tool, not the normal flow. Subscription and
+          absence changes already recompute billing automatically on their
+          own (onStudyroomBillingSync / onTransportBillingSync /
+          onEventModificationBillingSync); this exists for forcing a full
+          recompute of every family at once when something needs a one-off
+          correction (e.g. a config/pricing fix applied retroactively). */}
       <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center gap-4 flex-wrap">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-700">Calendário de cobranças</p>
-          <p className="text-xs text-gray-400">Gera automaticamente todos os registos de pagamento do ano letivo para inscrições ativas.</p>
+          <p className="text-sm font-semibold text-gray-700">🛠️ Reparação manual — recalcular tudo</p>
+          <p className="text-xs text-gray-400">
+            Normalmente não é preciso: alterações a inscrições ou faltas já recalculam a
+            faturação automaticamente. Use isto só para forçar um recálculo geral (ex.: depois
+            de corrigir um preço/config com efeito retroativo).
+          </p>
         </div>
         <button onClick={handleBackfill} disabled={backfilling}
-          className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-50 shrink-0">
-          {backfilling ? 'A gerar...' : '📅 Gerar calendário'}
+          className="px-4 py-2 bg-gray-600 text-white text-sm font-medium rounded hover:bg-gray-700 disabled:opacity-50 shrink-0">
+          {backfilling ? 'A recalcular...' : '🛠️ Recalcular tudo'}
         </button>
         {backfillResult && <span className="text-sm text-gray-700 w-full">{backfillResult}</span>}
       </div>

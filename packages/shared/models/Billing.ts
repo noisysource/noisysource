@@ -25,6 +25,7 @@ export interface BillingLineItem {
   scheduleDays?: string[];            // weekday names (english, lowercase) this line item is actually billed for
   tripsByDay?: Record<string, ('pickup' | 'dropoff' | 'both')[]>; // transport only — trip(s) scheduled per weekday
   absenceCreditDates?: string[];      // "yyyy-mm-dd" — the 3 approved eventModifications cancellations credited once the per-service absence threshold (3/month) was reached
+  frozenMidPeriodCancellation?: boolean; // subscription no longer active, but was active for part of this in-progress period — line item carried forward unchanged rather than dropped
 }
 
 export interface BillingRecord {
