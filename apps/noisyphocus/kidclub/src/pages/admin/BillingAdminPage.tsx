@@ -217,20 +217,28 @@ function DayExclusionModal({ record, onClose, onRefreshNeeded }: {
     const subIds = editableItems.map(({ li }) => li.subscriptionId!);
     if (!subIds.length) { setEventsBySub(new Map()); return; }
     (async () => {
-      const snap = await getDocs(query(
-        col('reservationEvents'),
-        where('subscriptionId', 'in', subIds.slice(0, 30)),
-        where('date', '>=', periodStart),
-        where('date', '<=', periodEnd),
-      ));
-      const map = new Map<string, ReservationEventDoc[]>();
-      snap.docs.forEach(d => {
-        const data = d.data();
-        const list = map.get(data.subscriptionId) ?? [];
-        list.push({ id: d.id, date: data.date, direction: data.direction, status: data.status });
-        map.set(data.subscriptionId, list);
-      });
-      setEventsBySub(map);
+      try {
+        const snap = await getDocs(query(
+          col('reservationEvents'),
+          where('subscriptionId', 'in', subIds.slice(0, 30)),
+          where('date', '>=', periodStart),
+          where('date', '<=', periodEnd),
+        ));
+        const map = new Map<string, ReservationEventDoc[]>();
+        snap.docs.forEach(d => {
+          const data = d.data();
+          const list = map.get(data.subscriptionId) ?? [];
+          list.push({ id: d.id, date: data.date, direction: data.direction, status: data.status });
+          map.set(data.subscriptionId, list);
+        });
+        setEventsBySub(map);
+      } catch (err: any) {
+        // Without this the modal sat on "A carregar…" forever and said
+        // nothing — a failed query looked identical to a slow one.
+        console.error('[DayExclusionModal] failed to load reservationEvents', err);
+        setError(`Não foi possível carregar as ocorrências: ${err?.message ?? err}`);
+        setEventsBySub(new Map());
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record.id]);
@@ -278,7 +286,17 @@ function DayExclusionModal({ record, onClose, onRefreshNeeded }: {
 
         <div className="px-5 py-4 space-y-4">
           {editableItems.length === 0 && (
-            <p className="text-sm text-gray-400">Este registo não tem parcelas editáveis.</p>
+            <p className="text-sm text-gray-400">
+              Este registo não tem parcelas de sala de estudo nem de transporte — só taxas
+              (inscrição/seguro), que não têm dias para marcar.
+            </p>
+          )}
+          {eventsBySub !== null && editableItems.length > 0 && (
+            <p className="text-[11px] text-gray-400">
+              {editableItems.map(({ li }) =>
+                `${li.type === 'study' ? 'Estudo' : 'Transporte'}: ${(eventsBySub.get(li.subscriptionId!) ?? []).length} ocorrência(s)`
+              ).join(' · ')}
+            </p>
           )}
           {eventsBySub === null ? (
             <p className="text-sm text-gray-400">A carregar…</p>
