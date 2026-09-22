@@ -93,7 +93,38 @@ agent branches merged cleanly, **84 tests passing, typecheck clean**.
   family (Leonor Lago — her family DOES exist, via `primaryContact.email`), 3 children with
   no `children` record at all.
 
+- `agent/boundary-month-prorating` — decision 8 implemented and merged into the integration
+  branch. **104 tests passing, typecheck clean, none of the 84 existing tests needed editing.**
+  Worked examples (October 2026, Mon-Fri study, EUR 6/occurrence, no discounts; 22 real
+  occurrences, 20 notional): start Oct 15 -> 10 system absences -> credit EUR 60 -> **pays
+  EUR 60.00**, half the month. `endDate` Oct 15 -> 11 system absences -> **EUR 54.00**.
+  Status flipped to `cancelled` on Oct 15 -> 12 -> **EUR 48.00** (the 1-day difference is
+  deliberate: an explicit `endDate` means "last served day", a cancellation means "not served
+  from today"). November onward stays `VOIDED` -> EUR 0. Degenerate start on Oct 30 floors at
+  EUR 0, never negative.
+- **It also fixed the regeneration-wipes-absences bug** (slightly beyond the brief, flagged by
+  the agent): `regenerateFutureEvents` now uses `splitRegenerationWrites()`, so a
+  `parent`/`staff`-recorded absence still present in the new pattern survives regeneration
+  untouched; only human-recorded events the new schedule no longer contains are voided.
+  Cleanly separable if it should land on its own reviewed branch — it is
+  `splitRegenerationWrites` plus ~12 lines, in commit `dbbc907`.
+
 **Known issues surfaced, not yet addressed:**
+- **`backfillReservationEvents` is additive only.** `ensureEventsExist` creates missing
+  occurrences and never rewrites an existing one, so pre-start `EXPECTED` events already
+  written by an earlier run will NOT be flipped to system-CANCELLED by a backfill click. The
+  Phase 2 migration script must repair those explicitly.
+- **Boundary pro-rating is stepped, not continuous** — the >=3-absence gate means 1-2
+  out-of-contract days credit nothing. For a late *cancellation* that is correct (the month
+  was used); for a late *start* the floor at EUR 0 covers it. Recorded so it is not mistaken
+  for a bug.
+- **Crediting at the notional rate makes the split slightly family-favourable**: starting on
+  the 15th pays 50% while receiving 12/22 ~ 55% of the days. Inherent to decision 3, not
+  fixable without touching gross.
+- **UI renders a system boundary day as an ordinary cancelled day** — functionally honest, but
+  unlabelled. One for the Phase 0b UI session, styled off `reason`.
+- `resolveGenerationStart` is now dead except in its own tests (superseded by
+  `resolveGenerationWindowStart`); left exported with a pointer comment, worth deleting later.
 - Prices are no longer frozen at generation time: gross reads the live config rate, while
   `ReservationEvent.basePriceCents` is frozen at creation. A mid-year rate change would
   reprice old unpaid periods. Phase 3's report must compare against `basePriceCents` so a
