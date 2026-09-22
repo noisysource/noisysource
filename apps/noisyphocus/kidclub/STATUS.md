@@ -459,14 +459,18 @@ actually converges the stored drift, rather than only hiding it: editing one chi
 both of their documents. `ChildDetailsForm` shows a warning when the school field changes,
 because the fee can move with it.
 
-**Not verified in a browser.** `pnpm --filter kidclub build` passes; `tsc --noEmit` is at
-13 errors vs the 16 on `origin/staging` — zero new, and three pre-existing ones went away
-(two in `SubscriptionsAdminPage`, one `zod` resolution fixed by `pnpm install`). Nothing
-was clicked through on dev. **The admin subscriptions page is the single highest-traffic
-admin screen and its render tree was substantially rewritten — this needs a real
-click-through on dev before it goes anywhere near a `main` PR**, particularly: a family
-with two children, a child with both a transport and a study subscription, an unlinked
-(unclaimed) subscription with no `childId`, and the 🔗 Vincular flow.
+**Tested on dev and passed (2026-09-22).** PR #31 → `staging`, both `kidclub-dev` deploys
+green, clicked through by Renato against the prod data copy (which still carries the
+drifted `schoolName` values, so the fix was exercised on the real shape of the bug). Build
+passes; `tsc --noEmit` is at 13 errors vs the 16 on `origin/staging` — zero new, three
+pre-existing ones resolved (two in `SubscriptionsAdminPage`, one `zod` resolution fixed by
+`pnpm install`). Merged to `staging`.
+
+**One deliberate behaviour worth revisiting if it proves noisy:** saving a child's details
+sets `clientReviewPending` on *every* subscription that child holds, not just one — so the
+parent is asked to confirm once per subscription. That is intentional (the change really
+does affect all of them) but it is more nagging than the old per-subscription edit.
+Renato saw it during testing and did not object; flagging it as a tuning knob, not a bug.
 
 ### Prod data pass — still the other open thread
 Renato has a plan for it and wants it started in a **fresh session**, as a read-only
