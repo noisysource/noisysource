@@ -10,7 +10,7 @@ The event-sourcing rewrite is merged to `staging` and validated on dev. This sec
 the plan for getting **real prod data** onto it. It was produced from a read-only analysis
 of live prod (21 active transport subs, 13 active study subs, 228 billing records, 0
 `reservationEvents`, 13 `eventModifications`) plus an offline simulation of the new
-pipeline against that data. Eleven decisions were taken with Renato on 2026-09-22 and are
+pipeline against that data. Fifteen decisions were taken with Renato on 2026-09-22 and are
 recorded below — **do not re-litigate them, they are settled.**
 
 ### ⚠️ Branch off `staging`, NOT `main`
@@ -387,11 +387,45 @@ as "the button did nothing" on a money screen.
 
 Kidclub app typecheck: **13 errors before and after — the pre-existing baseline, zero new.**
 
-### August remainders — handled by hand (2026-09-22)
+### Decisions 12-15 — Phase 2 sequencing (settled 2026-09-22)
 
-Renato: "let's cancel the remainders by hand." The 6 active subscriptions carrying
-`endDate: 2027-07-30` (which under decision 10 bill EUR 0 in August) are **not** being
-repaired by script. No migration step covers them; report flag (a) lists them each run.
+| # | Decision | Consequence |
+|---|---|---|
+| 12 | **Prod is NOT repaired first.** Snapshot prod as-is into dev; `identity.mjs --apply` runs against **dev only**. | Prod stays untouched until Phase 5. Dev first tests the unrepaired shape — 11 subs with no `familyId` generate **no events at all**, so that is the first thing the migration has to fix. The same 25 writes are rehearsed in dev and redone in prod later; accepted. |
+| 13 | **Historical absences ARE written for the invoiced September periods**, while the billing records stay frozen. | The event log is complete and matches reality; the 5 fiscal documents are never recomputed. Flag (c) keeps reporting the difference, per decision 5. |
+| 14 | **Phase 2 clears the 6 `endDate: 2027-07-30` values** so all 22 subscriptions bill August 2027. | Cancellation becomes purely manual, consistent with decision 10. ⚠️ Writing `endDate` triggers `regenerateFutureEvents`, so this MUST happen in the date-repair step **before** event generation — see the Phase 2 sequencing rule. |
+| 15 | **The next agent writes the Phase 2 script only.** No dev wipe, no import, no deploy. | Renato reviews the dry run before anything executes. The wipe runbook is written down, not run. |
+
+### ⚠️ The dev wipe must target KidClub ONLY — `users` is shared (verified 2026-09-22)
+
+Renato's explicit instruction: the wipe targets KidClub, never Finances or any other app.
+
+- **Scope the delete to `_apps/arcoiris/**`.** Never `firestore:delete --all-collections` —
+  KidClub and FinHub share the single `(default)` database, so that destroys
+  `finances_entities/**` (FinHub dev) too.
+- **The STATUS open question about the top-level `users` collection is now answered: it IS
+  shared, so do NOT wipe it.** Every one of the 46 prod docs carries a `roles` map holding
+  both `rainbowAdmin` and `finhubAdmin`, and `functions/src/userManagement.ts` — shared, not
+  KidClub-scoped — gates on `roles.finhubAdmin`. Wiping `users` would strip FinHub's admin
+  access in dev. Fix the two accounts that need fixing individually instead.
+
+### August remainders
+
+Superseded by decision 14 — Phase 2 now clears the 6 `endDate: 2027-07-30` values, rather
+than Renato clearing them by hand. Report flag (a) lists them until it does.
+
+### Known `identity.mjs` gap
+
+It still flags the **Mafalda** pair as needing a human decision even though that merge was
+completed on 2026-09-22 — it does not filter out children with `status: "merged"`. Harmless
+in a dry run, but it will keep re-proposing a done merge. Fix before running `--apply`.
+
+### Billing horizon — bounded, not infinite (verified 2026-09-22)
+
+`periodsUntilSchoolYearEnd()` generates records from the current month through **August of
+the following year**, so an open-ended subscription (18 of 34 active subs have no `endDate`)
+does not bill forever — it bills to August and stops until someone generates again. This is
+what makes decision 10's "cancel manually" workable.
 
 **Re-measured 2026-09-22** (moving targets): **4** active transport subs still have no
 `childId` — unchanged. **0 of 21** change their Bissaya match when sourced from the child
