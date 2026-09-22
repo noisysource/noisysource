@@ -14,7 +14,7 @@ import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../componen
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import { DiscountRule, AppliedDiscount, DiscountScope } from '@shared/models/Discount';
 import { getDiscountRules, applyDiscounts, resolveAutoDiscounts, grossFromAppliedDiscounts, DayLike } from '../../services/discountService';
-import { calculateAge, SubStatus, normalizeSubStatus } from '../../lib/utils';
+import { calculateAge, normalizeName, SubStatus, normalizeSubStatus } from '../../lib/utils';
 
 type TypeFilter = 'all' | 'transport' | 'study' | 'unlinked';
 
@@ -168,10 +168,329 @@ function DiscountPicker({ rules, scope, selected, onToggle, gross }: {
   );
 }
 
+// ─── Grouping model ───────────────────────────────────────────────────────────
+// The list is family → child → subscriptions. Personal data belongs to the
+// first two levels and is edited there, exactly once; a subscription row below
+// carries only what is genuinely per-subscription. Before this, every
+// subscription card repeated (and separately edited) the child's name, school
+// and guardian contact — which is how one child's transport and study
+// documents ended up naming two different schools.
+interface ChildGroup {
+  key: string;
+  childId?: string;
+  familyId?: string;
+  childName: string;
+  schoolName?: string;
+  schoolYear?: string;
+  items: SubItem[];
+}
+
+interface FamilyGroup {
+  key: string;
+  label: string | null;
+  familyId?: string;
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  children: ChildGroup[];
+  count: number;
+}
+
+// ─── Child details form ───────────────────────────────────────────────────────
+// Writes the canonical children/{childId} record, then mirrors the handful of
+// fields functions/src/kidclub still reads off the subscription onto EVERY one
+// of this child's subscriptions at once — which is the point: one edit, one
+// value, no way for two subscriptions of the same child to disagree.
+function ChildDetailsForm({ group, onSaved, onCancel }: {
+  group: ChildGroup;
+  onSaved: (patch: Partial<SubItem>, newChildId?: string) => void;
+  onCancel: () => void;
+}) {
+  const [details, setDetails] = useState<EnrollmentDetailsValue>(() => {
+    const parts = group.childName.trim().split(' ');
+    return {
+      ...EMPTY_ENROLLMENT_DETAILS,
+      firstName: parts[0] ?? '', lastName: parts.slice(1).join(' '),
+      schoolName: group.schoolName ?? '', schoolYear: group.schoolYear ?? '',
+    };
+  });
+  const [errors, setErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
+  const [loading, setLoading] = useState(!!group.childId);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const originalSchool = group.schoolName ?? '';
+
+  // dateOfBirth and homeAddress only exist on the children doc.
+  useEffect(() => {
+    if (!group.childId) return;
+    familyService.getChild(group.childId).then(c => {
+      if (!c) { setLoadFailed(true); return; }
+      setDetails(prev => ({
+        ...prev,
+        firstName: c.firstName ?? prev.firstName,
+        lastName: c.lastName ?? prev.lastName,
+        dateOfBirth: c.dateOfBirth && !isNaN(c.dateOfBirth.getTime()) ? c.dateOfBirth.toISOString().split('T')[0] : '',
+        schoolName: c.schoolName ?? prev.schoolName,
+        schoolYear: c.schoolYear ?? prev.schoolYear,
+        homeAddress: c.homeAddress
+          ? { street: c.homeAddress.street ?? '', city: c.homeAddress.city ?? '', postalCode: c.homeAddress.postalCode ?? '', country: c.homeAddress.country ?? '' }
+          : EMPTY_ENROLLMENT_ADDRESS,
+      }));
+    }).catch(() => setLoadFailed(true)).finally(() => setLoading(false));
+  }, [group.childId]);
+
+  const submit = async () => {
+    const errs = validateEnrollmentDetails(details);
+    // Guardian contact is edited at the family level, not here.
+    delete errs.contactEmail;
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const fullName = `${details.firstName.trim()} ${details.lastName.trim()}`;
+      const dob = new Date(details.dateOfBirth + 'T12:00:00');
+      const childDoc = {
+        firstName: details.firstName.trim(), lastName: details.lastName.trim(),
+        dateOfBirth: dob, age: calculateAge(dob),
+        schoolName: details.schoolName.trim() || null,
+        schoolYear: details.schoolYear.trim() || null,
+        homeAddress: {
+          street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
+          postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
+        },
+        updatedAt: new Date(),
+      };
+
+      let childId = group.childId;
+      if (childId) {
+        await updateDoc(docRef('children', childId), childDoc);
+      } else {
+        // Legacy gap: a subscription predating automatic child creation. Same
+        // familyId: '' placeholder ManualEnrollForm uses for an admin-created
+        // child awaiting claim — the claim flow links to it rather than
+        // duplicating it (see PendingChild.existingChild).
+        const ref = await addDoc(col('children'), {
+          ...childDoc, familyId: group.familyId ?? '', status: 'active', createdAt: new Date(),
+        });
+        childId = ref.id;
+      }
+
+      // Mirror onto every subscription this child holds. These copies are not
+      // read by any page any more, but functions/src/kidclub still reads them:
+      // sub.childName (billing line-item titles, notification emails) and
+      // sub.schoolName (discountRecalc's auto_school rule — the 20% Colégio
+      // Bissaya Barreto transport discount).
+      const failures: string[] = [];
+      for (const item of group.items) {
+        const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+        const patch: Record<string, any> = {
+          childName: fullName,
+          schoolName: details.schoolName.trim() || null,
+          updatedAt: new Date(),
+        };
+        if (item._type === 'study') patch.schoolYear = details.schoolYear.trim() || null;
+        if (!item.childId && childId) patch.childId = childId;
+        // The parent should see a change the team made to their child's record.
+        if (item.familyId) patch.clientReviewPending = true;
+        try {
+          await updateDoc(docRef(colName, item.id), patch);
+        } catch (err: any) {
+          console.error(`Failed to mirror child details onto ${colName}/${item.id}:`, err);
+          failures.push(item.id);
+        }
+      }
+      if (failures.length) {
+        setSaveError(`Dados da criança guardados, mas ${failures.length} inscrição(ões) não ficaram sincronizadas. Recarregue e tente novamente.`);
+        return;
+      }
+
+      onSaved({
+        childName: fullName,
+        schoolName: details.schoolName.trim() || undefined,
+        schoolYear: details.schoolYear.trim() || undefined,
+      }, group.childId ? undefined : childId);
+    } catch (err: any) {
+      console.error('Failed to save child details:', err);
+      setSaveError(`Falha ao guardar os dados da criança: ${err?.message ?? 'erro desconhecido'}`);
+    } finally { setSaving(false); }
+  };
+
+  const schoolChanged = details.schoolName.trim() !== originalSchool.trim();
+
+  return (
+    <div className="bg-white rounded-lg border border-blue-200 p-4 mb-2 space-y-3">
+      <p className="text-sm font-semibold text-gray-700">Dados da criança</p>
+      <p className="text-xs text-gray-400">
+        Aplica-se a todas as inscrições desta criança ({group.items.length}).
+      </p>
+      {!group.childId && (
+        <p className="text-xs text-amber-600">
+          Esta criança ainda não tem registo próprio — ao guardar, cria-se um e as inscrições ficam associadas a ele.
+        </p>
+      )}
+      {loadFailed && (
+        <p className="text-xs text-amber-600">Não foi possível carregar o registo da criança — data de nascimento e morada podem estar em branco.</p>
+      )}
+      {loading ? (
+        <p className="text-xs text-gray-400">A carregar dados da criança…</p>
+      ) : (
+        <EnrollmentDetailsForm value={details} onChange={setDetails} showContactFields={false} errors={errors} />
+      )}
+      {schoolChanged && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+          Mudar a escola pode alterar a mensalidade de transporte — o desconto de escola é
+          resolvido a partir deste campo.
+        </p>
+      )}
+      {saveError && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">{saveError}</p>
+      )}
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={saving || loading}
+          className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
+          {saving ? 'A guardar…' : 'Guardar'}
+        </button>
+        <button onClick={onCancel} className="text-sm px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200">Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Family contact form ──────────────────────────────────────────────────────
+// Guardian details, edited once for the whole family. Writes
+// families/{id}.primaryContact (the canonical record every page now reads),
+// then mirrors onto the family's children and subscriptions — the children
+// copy because the Firestore rules let a parent claim an admin-created child
+// by matching children/{id}.contactEmail against their auth token, the
+// subscription copy because notifications.ts sends to sub.contactEmail.
+function FamilyContactForm({ group, onSaved, onCancel }: {
+  group: FamilyGroup;
+  onSaved: (patch: Partial<SubItem>) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(group.contactName ?? '');
+  const [email, setEmail] = useState(group.contactEmail ?? '');
+  const [phone, setPhone] = useState(group.contactPhone ?? '');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!email.trim()) { setSaveError('Email do encarregado é obrigatório.'); return; }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      if (group.familyId) {
+        const famSnap = await getDoc(docRef('families', group.familyId));
+        const prev = famSnap.exists() ? (famSnap.data().primaryContact ?? {}) : {};
+        await updateDoc(docRef('families', group.familyId), {
+          // Merge: blanking an optional field here must not wipe what the
+          // family already has.
+          primaryContact: {
+            ...prev,
+            ...(name.trim() ? { name: name.trim() } : {}),
+            email: email.trim(),
+            ...(phone.trim() ? { phone: phone.trim() } : {}),
+          },
+          updatedAt: new Date(),
+        });
+      }
+
+      const childIds = new Set(group.children.map(c => c.childId).filter(Boolean) as string[]);
+      for (const childId of childIds) {
+        try {
+          await updateDoc(docRef('children', childId), {
+            contactEmail: email.trim(),
+            ...(phone.trim() ? { contactPhone: phone.trim() } : {}),
+            updatedAt: new Date(),
+          });
+        } catch (err) {
+          console.error(`Failed to mirror contact onto children/${childId}:`, err);
+        }
+      }
+
+      const failures: string[] = [];
+      for (const item of group.children.flatMap(c => c.items)) {
+        const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+        const patch: Record<string, any> = {
+          contactName: name.trim() || null,
+          contactEmail: email.trim(),
+          updatedAt: new Date(),
+        };
+        // transport spells it contactMobile, study spells it contactPhone
+        if (item._type === 'transport') patch.contactMobile = phone.trim() || null;
+        else patch.contactPhone = phone.trim() || null;
+        try {
+          await updateDoc(docRef(colName, item.id), patch);
+        } catch (err: any) {
+          console.error(`Failed to mirror contact onto ${colName}/${item.id}:`, err);
+          failures.push(item.id);
+        }
+      }
+      if (failures.length) {
+        setSaveError(`Contactos guardados, mas ${failures.length} inscrição(ões) não ficaram sincronizadas. Recarregue e tente novamente.`);
+        return;
+      }
+
+      onSaved({
+        contactName: name.trim() || undefined,
+        contactEmail: email.trim(),
+        contactPhone: phone.trim() || undefined,
+      });
+    } catch (err: any) {
+      console.error('Failed to save family contact:', err);
+      setSaveError(`Falha ao guardar os contactos: ${err?.message ?? 'erro desconhecido'}`);
+    } finally { setSaving(false); }
+  };
+
+  const fieldCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300';
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-300 p-4 mb-2 space-y-3">
+      <p className="text-sm font-semibold text-gray-700">Contactos do encarregado</p>
+      <p className="text-xs text-gray-400">
+        Aplica-se a toda a família ({group.count} inscrição{group.count !== 1 ? 'ões' : ''}).
+      </p>
+      {!group.familyId && (
+        <p className="text-xs text-amber-600">
+          Sem conta vinculada — os contactos ficam guardados nas próprias inscrições até o encarregado reclamar a conta.
+        </p>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Nome do encarregado</label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} className={fieldCls} />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Email do encarregado *</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} className={fieldCls} />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-xs text-gray-500 mb-1">Telefone</label>
+          <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} className={fieldCls} />
+        </div>
+      </div>
+      {saveError && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">{saveError}</p>
+      )}
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={saving}
+          className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
+          {saving ? 'A guardar…' : 'Guardar'}
+        </button>
+        <button onClick={onCancel} className="text-sm px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200">Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Edit Form ────────────────────────────────────────────────────────────────
-// Same shared EnrollmentDetailsForm + validation ManualEnrollForm and the
-// parent flows use — child/contact fields are one implementation, not a
-// second one that can drift out of sync again.
+// Subscription-specific fields ONLY: schedule, week pattern, discounts, fee,
+// internal note. Who the child is, which school they attend and how to reach
+// their guardian are edited once per child / once per family, in
+// ChildDetailsForm and FamilyContactForm above — not here, and not once per
+// subscription. Repeating that block on every subscription is what let a
+// child's two subscriptions end up claiming two different schools.
 function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, onCancel }: {
   item: SubItem;
   transportConfig: TransportationConfig | null;
@@ -180,16 +499,6 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
   onSave: (updated: Partial<SubItem>) => void;
   onCancel: () => void;
 }) {
-  const [details, setDetails] = useState<EnrollmentDetailsValue>(() => {
-    const parts = item.childName.trim().split(' ');
-    return {
-      ...EMPTY_ENROLLMENT_DETAILS,
-      firstName: parts[0] ?? '', lastName: parts.slice(1).join(' '),
-      schoolName: item.schoolName ?? '', schoolYear: item.schoolYear ?? '',
-      contactName: item.contactName ?? '', contactEmail: item.contactEmail ?? '', contactPhone: item.contactPhone ?? '',
-    };
-  });
-  const [detailErrors, setDetailErrors] = useState<Partial<Record<keyof EnrollmentDetailsValue, string>>>({});
   const [note, setNote] = useState(item.note ?? '');
 
   // Same WeekSchedulePicker ManualEnrollForm (and the client's own enroll/edit
@@ -220,31 +529,9 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [existingChild, setExistingChild] = useState<Child | null>(null);
-  const [loadingChild, setLoadingChild] = useState(!!item.childId);
   // Other children in this family with an active subscription — same
   // auto-discount preview basis ManualEnrollForm uses when creating.
   const [siblingCount, setSiblingCount] = useState(0);
-
-  // dateOfBirth/homeAddress live on the children doc, not the subscription —
-  // fetch it once so the shared form can be pre-filled with what the admin
-  // already entered at creation time, same as ManualEnrollForm's match flow.
-  useEffect(() => {
-    if (!item.childId) return;
-    familyService.getChild(item.childId).then(c => {
-      if (!c) return;
-      setExistingChild(c);
-      setDetails(prev => ({
-        ...prev,
-        firstName: c.firstName ?? prev.firstName,
-        lastName: c.lastName ?? prev.lastName,
-        dateOfBirth: c.dateOfBirth && !isNaN(c.dateOfBirth.getTime()) ? c.dateOfBirth.toISOString().split('T')[0] : '',
-        homeAddress: c.homeAddress
-          ? { street: c.homeAddress.street ?? '', city: c.homeAddress.city ?? '', postalCode: c.homeAddress.postalCode ?? '', country: c.homeAddress.country ?? '' }
-          : EMPTY_ENROLLMENT_ADDRESS,
-      }));
-    }).finally(() => setLoadingChild(false));
-  }, [item.childId]);
 
   useEffect(() => {
     if (!item.familyId) return;
@@ -302,47 +589,27 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
   const netFee = Math.round(applyDiscounts(gross, selectedDiscounts) * 100) / 100;
 
   const submit = async () => {
-    const errs = validateEnrollmentDetails(details);
-    if (Object.keys(errs).length) { setDetailErrors(errs); return; }
     if (item._type === 'transport' && totalTrips === 0) { setSaveError('Adicione pelo menos uma viagem.'); return; }
     if (item._type === 'study' && studyDaysCount === 0) { setSaveError('Selecione pelo menos um dia.'); return; }
     setSaving(true);
     setSaveError(null);
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
-      const fullName = `${details.firstName.trim()} ${details.lastName.trim()}`;
-      // The personal fields below (childName/contactName/contactEmail/
-      // contactMobile/contactPhone/schoolName/schoolYear) are written to the
-      // subscription as a MIRROR of the canonical children/families records
-      // updated further down — never as an independent per-subscription edit.
-      // They are still written because functions/src/kidclub reads them:
-      // billing line-item titles and notification emails use sub.childName,
-      // notifications sends to sub.contactEmail, and discountRecalc resolves
-      // the auto_school rule (the 20% Colégio Bissaya Barreto transport
-      // discount) from sub.schoolName. Pages no longer read any of them —
-      // see lib/personalData.ts.
       const patch: Record<string, any> = {
-        childName: fullName, contactName: details.contactName.trim() || null,
-        contactEmail: details.contactEmail.trim() || null,
         note: note.trim() || null, updatedAt: new Date(),
         appliedDiscounts: selectedDiscounts,
         weekPattern: schedule.weekPattern,
       };
       if (linkedToFamily) patch.clientReviewPending = true;
       if (item._type === 'transport') {
-        patch.contactMobile = details.contactPhone.trim() || null;
         patch.schedule = schedule.days.flatMap(d =>
           (d.services.transportTrips ?? []).map(t => ({
             dayOfWeek: d.weekday, pickupTime: t.time, pickupLocation: t.pickupAddress, dropoffLocation: t.dropoffAddress,
           }))
         );
-        patch.schoolName = details.schoolName.trim() || null;
         patch.monthlyFee = netFee;
         patch.originalFee = gross;
       } else {
-        patch.contactPhone = details.contactPhone.trim() || null;
-        patch.schoolName = details.schoolName.trim() || null;
-        patch.schoolYear = details.schoolYear.trim() || null;
         patch.days = schedule.days.filter(d => d.services.study).map(d => ({ day: d.weekday, hour: d.hour }));
         patch.monthlyPrice = netFee;
         patch.basePrice = gross;
@@ -353,114 +620,20 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
       } catch (err: any) {
         console.error(`Failed to save ${colName}/${item.id}:`, err);
         setSaveError(`Falha ao guardar a inscrição: ${err?.message ?? 'erro desconhecido'}`);
-        return; // subscription write failed — nothing below is safe to run
-      }
-
-      // Guardian contact details live canonically on the family's primary
-      // contact, which is what the client and admin pages now read — so an
-      // admin editing them here has to land there, not only on the
-      // subscription's mirror copy. Best-effort: a subscription with no
-      // family linked yet has nowhere canonical to put them, and keeps them
-      // on its own document until the parent claims it.
-      if (item.familyId) {
-        try {
-          const famSnap = await getDoc(docRef('families', item.familyId));
-          const prev = famSnap.exists() ? (famSnap.data().primaryContact ?? {}) : {};
-          await updateDoc(docRef('families', item.familyId), {
-            primaryContact: {
-              ...prev,
-              // Only overwrite what the admin actually filled in — blanking a
-              // field here must not wipe the family's real contact details.
-              ...(details.contactName.trim() ? { name: details.contactName.trim() } : {}),
-              ...(details.contactEmail.trim() ? { email: details.contactEmail.trim() } : {}),
-              ...(details.contactPhone.trim() ? { phone: details.contactPhone.trim() } : {}),
-            },
-            updatedAt: new Date(),
-          });
-        } catch (err: any) {
-          console.error(`Failed to save families/${item.familyId}:`, err);
-          setSaveError(`Inscrição guardada, mas os contactos do encarregado falharam ao guardar: ${err?.message ?? 'erro desconhecido'}`);
-        }
-      }
-
-      // Child-level fields (dateOfBirth/homeAddress/schoolName/schoolYear/name)
-      // live on the children doc, not the subscription.
-      const dob = new Date(details.dateOfBirth + 'T12:00:00');
-      let newChildId: string | undefined;
-      if (item.childId) {
-        try {
-          await updateDoc(docRef('children', item.childId), {
-            firstName: details.firstName.trim(), lastName: details.lastName.trim(),
-            dateOfBirth: dob, age: calculateAge(dob),
-            schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
-            // Kept in step with the family's primary contact above. The child's
-            // own copy isn't merely cosmetic: the Firestore rules let a parent
-            // read and claim an admin-created child by matching
-            // children/{id}.contactEmail against their auth token, so it must
-            // not be dropped — only ever updated alongside the family's.
-            ...(details.contactEmail.trim() ? { contactEmail: details.contactEmail.trim() } : {}),
-            ...(details.contactPhone.trim() ? { contactPhone: details.contactPhone.trim() } : {}),
-            homeAddress: {
-              street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
-              postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
-            },
-            updatedAt: new Date(),
-          });
-        } catch (err: any) {
-          console.error(`Failed to save children/${item.childId}:`, err);
-          setSaveError(`Inscrição guardada, mas os dados da criança (nome, data de nascimento, escola, morada) falharam ao guardar: ${err?.message ?? 'erro desconhecido'}`);
-          // Subscription patch already succeeded — still reflect it below.
-        }
-      } else {
-        // No child linked yet — legacy gap from before enrollment always
-        // created one (ManualEnrollForm/client enroll pages both guarantee
-        // it now). A subscription still missing familyId self-heals when the
-        // parent claims it (ClaimSubscriptionsPage creates/links a child as
-        // part of claiming) — but one already linked to a family never will,
-        // since the claim flow only looks at unclaimed subs. Either way,
-        // create the child now from what was just typed in and link it,
-        // same familyId: '' placeholder pattern ManualEnrollForm already
-        // uses for a brand-new admin-created child pending claim — the claim
-        // flow already knows to link to an existing childId rather than
-        // duplicate it (see PendingChild.existingChild).
-        try {
-          const childRef = await addDoc(col('children'), {
-            familyId: item.familyId ?? '',
-            firstName: details.firstName.trim(), lastName: details.lastName.trim(),
-            dateOfBirth: dob, age: calculateAge(dob),
-            schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
-            // Same claim-flow reason as the update branch above.
-            ...(details.contactEmail.trim() ? { contactEmail: details.contactEmail.trim() } : {}),
-            ...(details.contactPhone.trim() ? { contactPhone: details.contactPhone.trim() } : {}),
-            homeAddress: {
-              street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
-              postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
-            },
-            status: 'active',
-            createdAt: new Date(), updatedAt: new Date(),
-          });
-          await updateDoc(docRef(colName, item.id), { childId: childRef.id, updatedAt: new Date() });
-          newChildId = childRef.id;
-        } catch (err: any) {
-          console.error(`Failed to create child for ${colName}/${item.id}:`, err);
-          setSaveError(`Inscrição guardada, mas não foi possível criar o registo da criança: ${err?.message ?? 'erro desconhecido'}`);
-        }
+        return;
       }
 
       onSave({
-        childName: fullName, contactName: details.contactName.trim() || undefined,
-        contactEmail: details.contactEmail.trim() || undefined,
-        contactPhone: details.contactPhone.trim() || undefined, note: note.trim() || undefined,
+        note: note.trim() || undefined,
         schedule: item._type === 'transport' ? patch.schedule : item.schedule,
         monthlyFee: item._type === 'transport' ? netFee : item.monthlyFee,
+        originalFee: item._type === 'transport' ? gross : item.originalFee,
         monthlyPrice: item._type === 'study' ? netFee : item.monthlyPrice,
         basePrice: item._type === 'study' ? gross : item.basePrice,
-        schoolName: details.schoolName.trim() || undefined, schoolYear: details.schoolYear.trim() || undefined,
         days: item._type === 'study' ? patch.days : item.days,
         weekPattern: schedule.weekPattern,
         appliedDiscounts: selectedDiscounts,
         clientReviewPending: linkedToFamily || item.clientReviewPending,
-        ...(newChildId ? { childId: newChildId } : {}),
       });
     } finally { setSaving(false); }
   };
@@ -475,17 +648,10 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
           Esta inscrição já está associada a uma família — a alteração ficará marcada para revisão do encarregado.
         </p>
       )}
-      {loadingChild ? (
-        <p className="text-xs text-gray-400">A carregar dados da criança…</p>
-      ) : (
-        <EnrollmentDetailsForm value={details} onChange={setDetails} errors={detailErrors} />
-      )}
-      {!item.childId && (
-        <p className="text-xs text-amber-600">Esta inscrição não está associada a nenhuma criança (provavelmente anterior à associação automática) — ao guardar, cria-se automaticamente um registo de criança com os dados abaixo e a inscrição fica associada a ele.</p>
-      )}
-      {!existingChild && item.childId && !loadingChild && (
-        <p className="text-xs text-amber-600">Não foi possível carregar a criança associada — a alterar apenas os dados da inscrição.</p>
-      )}
+      <p className="text-xs text-gray-400">
+        Nome, escola, ano letivo e contactos editam-se uma vez, em “Editar dados” na linha
+        da criança (ou do encarregado) acima — não aqui.
+      </p>
 
       <WeekSchedulePicker
         value={schedule}
@@ -494,7 +660,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         transportConfig={transportConfig}
         studyCenterConfig={studyConfig}
         discountRules={discountRules}
-        schoolName={details.schoolName || undefined}
+        schoolName={item.schoolName || undefined}
         activeSiblingCount={siblingCount}
       />
 
@@ -995,6 +1161,10 @@ export default function SubscriptionsAdminPage() {
   const [onlyClientReview, setOnlyClientReview] = useState(false);
   const [processing, setProcessing] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
+  // Which child row / family row has its details form open. Personal data is
+  // edited at those two levels, never per subscription — see ChildGroup.
+  const [editChildKey, setEditChildKey] = useState<string | null>(null);
+  const [editContactKey, setEditContactKey] = useState<string | null>(null);
   const [showManualForm, setShowManualForm] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [transportConfig, setTransportConfig] = useState<TransportationConfig | null>(null);
@@ -1309,16 +1479,49 @@ export default function SubscriptionsAdminPage() {
       );
     });
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, { key: string; label: string | null; items: SubItem[] }>();
+  const grouped = useMemo<FamilyGroup[]>(() => {
+    const map = new Map<string, FamilyGroup>();
     for (const item of filtered) {
       const key = item.familyId || item.contactEmail || item.id;
-      const contact = [item.contactEmail, item.contactPhone].filter(Boolean).join(' · ');
-      const label = item.contactName
-        ? `${item.contactName}${contact ? ` · ${contact}` : ''}`
-        : contact || null;
-      if (!map.has(key)) map.set(key, { key, label, items: [] });
-      map.get(key)!.items.push(item);
+      let fam = map.get(key);
+      if (!fam) {
+        const contact = [item.contactEmail, item.contactPhone].filter(Boolean).join(' · ');
+        fam = {
+          key,
+          label: item.contactName
+            ? `${item.contactName}${contact ? ` · ${contact}` : ''}`
+            : contact || null,
+          familyId: item.familyId,
+          contactName: item.contactName,
+          contactEmail: item.contactEmail,
+          contactPhone: item.contactPhone,
+          children: [],
+          count: 0,
+        };
+        map.set(key, fam);
+      }
+      // childId is the real identity. A subscription with none yet falls back
+      // to the normalized name, so an unlinked transport + study pair for the
+      // same kid still collapses into one row rather than appearing twice.
+      const childKey = item.childId || `name:${normalizeName(item.childName)}` || item.id;
+      let kid = fam.children.find(c => c.key === childKey);
+      if (!kid) {
+        kid = {
+          key: childKey, childId: item.childId, familyId: item.familyId,
+          childName: item.childName, schoolName: item.schoolName, schoolYear: item.schoolYear,
+          items: [],
+        };
+        fam.children.push(kid);
+      }
+      // Both subscriptions resolve school from the same child document now, so
+      // these agree — ?? only covers a child record that has no value at all.
+      kid.schoolName ??= item.schoolName;
+      kid.schoolYear ??= item.schoolYear;
+      kid.items.push(item);
+      fam.count++;
+    }
+    for (const fam of map.values()) {
+      fam.children.sort((a, b) => a.childName.localeCompare(b.childName, 'pt'));
     }
     return Array.from(map.values());
   }, [filtered]);
@@ -1441,231 +1644,281 @@ export default function SubscriptionsAdminPage() {
         <div className="space-y-6">
           {grouped.map(group => (
             <div key={group.key}>
-              {/* Family header — always shown, always collapsible */}
+              {/* Family header — always shown, always collapsible. Guardian
+                  contact is edited here, once for the whole family. */}
+              <div className="flex items-center mb-2">
               <button
                 onClick={() => setCollapsed(prev => {
                   const next = new Set(prev);
                   next.has(group.key) ? next.delete(group.key) : next.add(group.key);
                   return next;
                 })}
-                className="w-full flex items-center gap-2 mb-2 px-0.5 text-left group"
+                className="flex-1 flex items-center gap-2 px-0.5 text-left group"
               >
                 <span className="text-sm">👨‍👩‍👧</span>
                 <span className="text-xs font-medium text-gray-500 flex-1">
                   {group.label ?? 'Sem conta vinculada'}
                 </span>
-                <span className="text-xs text-gray-300 mr-1">{group.items.length} inscrição{group.items.length !== 1 ? 'ões' : ''}</span>
+                <span className="text-xs text-gray-300 mr-1">{group.count} inscrição{group.count !== 1 ? 'ões' : ''}</span>
                 <span className="text-gray-400 text-xs">{collapsed.has(group.key) ? '▶' : '▼'}</span>
               </button>
-              {!collapsed.has(group.key) && <div className="space-y-2">
-                {group.items.map(item => (
-                  <div
-                    key={`${item._type}-${item.id}`}
-                    ref={item.id === highlightId ? highlightRef : null}
-                    className={`bg-white rounded-lg border p-4 transition-colors ${item.id === highlightId ? 'border-blue-400 ring-2 ring-blue-200' : 'border-gray-200'}`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex gap-3 flex-1 min-w-0">
-                        <div className="text-2xl mt-0.5 shrink-0">{item._type === 'study' ? '📚' : '🚌'}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-gray-900">{item.childName}</span>
-                            <StatusBadge status={item.status} cancelRequested={item.cancelRequested} />
-                            <span className="text-xs text-gray-400">{item._type === 'study' ? 'Sala de Estudo' : 'Transporte'}</span>
+                <button
+                  onClick={() => setEditContactKey(editContactKey === group.key ? null : group.key)}
+                  className="text-gray-300 hover:text-blue-600 text-xs px-2 py-1 shrink-0"
+                  title="Editar contactos do encarregado (aplica-se a toda a família)">✏️</button>
+              </div>
+              {editContactKey === group.key && (
+                <FamilyContactForm
+                  group={group}
+                  onSaved={patch => {
+                    const ids = new Set(group.children.flatMap(c => c.items).map(i => i.id));
+                    setItems(prev => prev.map(i => ids.has(i.id) ? { ...i, ...patch } : i));
+                    setEditContactKey(null);
+                  }}
+                  onCancel={() => setEditContactKey(null)}
+                />
+              )}
+              {!collapsed.has(group.key) && <div className="space-y-4">
+                {group.children.map(kid => (
+                  <div key={kid.key} className="space-y-2">
+                    {/* Child header — the child's details, shown once for all
+                        of their subscriptions rather than repeated on each. */}
+                    <div className="flex items-baseline gap-2 pl-1">
+                      <span className="text-sm font-semibold text-gray-900">{kid.childName}</span>
+                      {(kid.schoolName || kid.schoolYear) && (
+                        <span className="text-xs text-gray-500">
+                          {[kid.schoolName, kid.schoolYear].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setEditChildKey(editChildKey === kid.key ? null : kid.key)}
+                        className="text-gray-300 hover:text-blue-600 text-xs px-1.5 py-0.5"
+                        title="Editar dados da criança (aplica-se a todas as suas inscrições)">✏️</button>
+                      <span className="ml-auto text-xs text-gray-300">
+                        {kid.items.length} inscrição{kid.items.length !== 1 ? 'ões' : ''}
+                      </span>
+                    </div>
+                    {editChildKey === kid.key && (
+                      <ChildDetailsForm
+                        group={kid}
+                        onSaved={(patch, newChildId) => {
+                          const ids = new Set(kid.items.map(i => i.id));
+                          setItems(prev => prev.map(i => ids.has(i.id)
+                            ? { ...i, ...patch, ...(newChildId ? { childId: newChildId } : {}) }
+                            : i));
+                          setEditChildKey(null);
+                        }}
+                        onCancel={() => setEditChildKey(null)}
+                      />
+                    )}
+                    {kid.items.map(item => (
+                      <div
+                        key={`${item._type}-${item.id}`}
+                        ref={item.id === highlightId ? highlightRef : null}
+                        className={`bg-white rounded-lg border p-4 transition-colors ${item.id === highlightId ? 'border-blue-400 ring-2 ring-blue-200' : 'border-gray-200'}`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex gap-3 flex-1 min-w-0">
+                            <div className="text-2xl mt-0.5 shrink-0">{item._type === 'study' ? '📚' : '🚌'}</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {/* No child name here — it's on the child header
+                                    above, once for all of their subscriptions. */}
+                                <span className="text-sm font-medium text-gray-700">{item._type === 'study' ? 'Sala de Estudo' : 'Transporte'}</span>
+                                <StatusBadge status={item.status} cancelRequested={item.cancelRequested} />
+                                {isUnlinked(item) && (
+                                  <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">não vinculado</span>
+                                )}
+                                {item.feeReviewRequired && (
+                                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">⚠ rever mensalidade</span>
+                                )}
+                                {item.adminReviewPending && (
+                                  <button onClick={() => resolveClientAction(item)} disabled={processing === item.id}
+                                    className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].cls : 'bg-pink-100 text-pink-800 hover:bg-pink-200'}`}
+                                    title={item.lastClientAction === 'confirmed' ? 'Clique para ativar a inscrição' : 'Clique para marcar como revisto'}>
+                                    {item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].label : '🔔 alteração do cliente'}
+                                  </button>
+                                )}
+                                {item.clientReviewPending && (
+                                  <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-medium"
+                                    title="O encarregado ainda não viu/confirmou esta alteração">
+                                    ⏳ aguarda confirmação do encarregado
+                                  </span>
+                                )}
+                                {item._type === 'transport' && item.status !== 'cancelled' && (
+                                  <button onClick={() => toggleRouteAssigned(item)} disabled={processing === item.id}
+                                    className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.routeAssigned ? 'bg-teal-100 text-teal-800 hover:bg-teal-50' : 'bg-gray-50 text-gray-400 border border-gray-200 hover:border-gray-400'}`}
+                                    title="Rota atribuída (apenas controlo operacional interno)">
+                                    {item.routeAssigned ? '🗺 rota atribuída' : '🗺 sem rota'}
+                                  </button>
+                                )}
+                              </div>
+
+                              <MiniWeekCalendar item={item} />
+
+                              {(() => {
+                                const fee = item._type === 'transport' ? (item.monthlyFee ?? 0) : (item.monthlyPrice ?? 0);
+                                const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+                                const applied = item.appliedDiscounts ?? [];
+                                const autoApplied = applied.filter(d => d.appliedBy === 'auto');
+                                const adminApplied = applied.filter(d => d.appliedBy === 'admin');
+
+                                // Any active rule for this scope not yet applied — not just
+                                // trigger:'manual' ones, so an auto rule that didn't
+                                // auto-match can still be turned on by hand from the row.
+                                const availableRules = discountRules.filter(r =>
+                                  r.active &&
+                                  r.appliesTo.includes(item._type) &&
+                                  !applied.some(d => d.ruleId === r.id)
+                                );
+
+                                if (fee === 0 && applied.length === 0 && availableRules.length === 0) return null;
+
+                                const gross = item._type === 'study'
+                                  ? (item.basePrice != null && item.basePrice > fee + 0.01 ? item.basePrice : null)
+                                  : grossFromAppliedDiscounts(fee, applied);
+                                const hasDiscount = gross != null && gross > fee + 0.01;
+
+                                return (
+                                  <div className="mt-1.5 space-y-1.5">
+                                    <div className="flex items-baseline gap-1.5">
+                                      {hasDiscount && <span className="text-xs text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
+                                      <span className={`text-xs font-semibold ${hasDiscount ? 'text-green-700' : 'text-gray-800'}`}>€{fee.toFixed(2)}/mês</span>
+                                    </div>
+
+                                    {/* Applied auto discounts — clickable to override off */}
+                                    {autoApplied.length > 0 && (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Auto</span>
+                                        {autoApplied.map(d => {
+                                          const rule = discountRules.find(r => r.id === d.ruleId);
+                                          if (!rule) return (
+                                            <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium">
+                                              {d.name} -{pct(d.percentage)}
+                                            </span>
+                                          );
+                                          return (
+                                            <button key={d.ruleId}
+                                              onClick={() => toggleManualDiscount(item, rule)}
+                                              disabled={processing === item.id}
+                                              className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 disabled:opacity-50"
+                                              title="Clique para desativar (substitui a deteção automática)">
+                                              {d.name} -{pct(d.percentage)}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    {/* Applied admin discounts — clickable to remove */}
+                                    {adminApplied.length > 0 && (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Manual</span>
+                                        {adminApplied.map(d => {
+                                          const rule = discountRules.find(r => r.id === d.ruleId);
+                                          if (!rule) return (
+                                            <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-800 font-medium">
+                                              {d.name} -{pct(d.percentage)}
+                                            </span>
+                                          );
+                                          return (
+                                            <button key={d.ruleId}
+                                              onClick={() => toggleManualDiscount(item, rule)}
+                                              disabled={processing === item.id}
+                                              className="text-xs px-2 py-0.5 rounded-full border border-amber-300 bg-amber-100 text-amber-800 font-medium hover:bg-amber-50 disabled:opacity-50"
+                                              title="Clique para remover">
+                                              ★ {d.name} -{pct(d.percentage)}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    {/* Any other active rule for this scope — click to apply */}
+                                    {item.status !== 'cancelled' && availableRules.length > 0 && (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Adicionar</span>
+                                        {availableRules.map(r => (
+                                          <button key={r.id}
+                                            onClick={() => toggleManualDiscount(item, r)}
+                                            disabled={processing === item.id}
+                                            className="text-xs px-2 py-0.5 rounded-full border border-gray-200 bg-white text-gray-400 font-medium hover:border-gray-400 hover:text-gray-600 disabled:opacity-50"
+                                            title="Clique para aplicar">
+                                            ☆ {r.name} -{pct(r.percentage)}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                              {item.note && <p className="text-xs text-gray-500 mt-1 italic">"{item.note}"</p>}
+                              {item.statusReason && item.status === 'cancelled' && <p className="text-xs text-red-600 mt-1">Motivo: {item.statusReason}</p>}
+                              <p className="text-xs text-gray-400 mt-1.5">{item.createdAt.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col gap-1.5 shrink-0">
+                            {/* Direct status control — no approve/offer/reject/revert gating, admin
+                                can move freely in any direction. */}
+                            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                              {([
+                                { key: 'pending' as const, label: 'Pendente' },
+                                { key: 'active' as const, label: 'Ativo' },
+                                { key: 'cancelled' as const, label: 'Cancelado' },
+                              ]).map(({ key, label }, idx) => (
+                                <button key={key} onClick={() => setStatus(item, key)} disabled={processing === item.id}
+                                  className={`px-2.5 py-1.5 whitespace-nowrap disabled:opacity-60 ${idx > 0 ? 'border-l border-gray-200' : ''} ${item.status === key
+                                    ? (key === 'active' ? 'bg-green-600 text-white' : key === 'cancelled' ? 'bg-gray-600 text-white' : 'bg-yellow-500 text-white')
+                                    : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
                             {isUnlinked(item) && (
-                              <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">não vinculado</span>
+                              <>
+                                <button onClick={() => linkToFamily(item)} disabled={processing === item.id}
+                                  className="bg-orange-50 text-orange-700 border border-orange-200 text-sm px-3 py-1.5 rounded-lg hover:bg-orange-100 disabled:opacity-60 whitespace-nowrap"
+                                  title={item.familyId ? 'Vincular criança pelo nome' : `Vincular família pelo email ${item.contactEmail}`}>
+                                  {processing === item.id ? '…' : '🔗 Vincular'}
+                                </button>
+                                <button onClick={() => hardDelete(item)} disabled={processing === item.id}
+                                  className="text-red-400 hover:text-red-600 text-sm px-2 py-1 disabled:opacity-60"
+                                  title="Eliminar">🗑</button>
+                              </>
                             )}
+                            {item.status !== 'cancelled' && (
+                              <button onClick={() => setEditId(editId === item.id ? null : item.id)}
+                                className="text-gray-400 hover:text-blue-600 text-sm px-2 py-1"
+                                title="Editar">✏️</button>
+                            )}
+                            <button onClick={() => setHistoryItem(item)}
+                              className="text-gray-400 hover:text-indigo-600 text-sm px-2 py-1"
+                              title="Histórico de alterações">🕐</button>
                             {item.feeReviewRequired && (
-                              <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">⚠ rever mensalidade</span>
-                            )}
-                            {item.adminReviewPending && (
-                              <button onClick={() => resolveClientAction(item)} disabled={processing === item.id}
-                                className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].cls : 'bg-pink-100 text-pink-800 hover:bg-pink-200'}`}
-                                title={item.lastClientAction === 'confirmed' ? 'Clique para ativar a inscrição' : 'Clique para marcar como revisto'}>
-                                {item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].label : '🔔 alteração do cliente'}
-                              </button>
-                            )}
-                            {item.clientReviewPending && (
-                              <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-medium"
-                                title="O encarregado ainda não viu/confirmou esta alteração">
-                                ⏳ aguarda confirmação do encarregado
-                              </span>
-                            )}
-                            {item._type === 'transport' && item.status !== 'cancelled' && (
-                              <button onClick={() => toggleRouteAssigned(item)} disabled={processing === item.id}
-                                className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.routeAssigned ? 'bg-teal-100 text-teal-800 hover:bg-teal-50' : 'bg-gray-50 text-gray-400 border border-gray-200 hover:border-gray-400'}`}
-                                title="Rota atribuída (apenas controlo operacional interno)">
-                                {item.routeAssigned ? '🗺 rota atribuída' : '🗺 sem rota'}
+                              <button onClick={() => clearFeeReview(item)} disabled={processing === item.id}
+                                className="bg-amber-50 text-amber-800 border border-amber-300 text-xs px-2.5 py-1.5 rounded-lg hover:bg-amber-100 disabled:opacity-60 whitespace-nowrap font-medium">
+                                {processing === item.id ? '…' : '✓ Mensalidade revista'}
                               </button>
                             )}
                           </div>
-
-                          <MiniWeekCalendar item={item} />
-
-                          {(item.schoolName || item.schoolYear) && (
-                            <p className="text-xs text-gray-500 mt-1.5">{[item.schoolName, item.schoolYear].filter(Boolean).join(' · ')}</p>
-                          )}
-                          {(() => {
-                            const fee = item._type === 'transport' ? (item.monthlyFee ?? 0) : (item.monthlyPrice ?? 0);
-                            const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
-                            const applied = item.appliedDiscounts ?? [];
-                            const autoApplied = applied.filter(d => d.appliedBy === 'auto');
-                            const adminApplied = applied.filter(d => d.appliedBy === 'admin');
-
-                            // Any active rule for this scope not yet applied — not just
-                            // trigger:'manual' ones, so an auto rule that didn't
-                            // auto-match can still be turned on by hand from the row.
-                            const availableRules = discountRules.filter(r =>
-                              r.active &&
-                              r.appliesTo.includes(item._type) &&
-                              !applied.some(d => d.ruleId === r.id)
-                            );
-
-                            if (fee === 0 && applied.length === 0 && availableRules.length === 0) return null;
-
-                            const gross = item._type === 'study'
-                              ? (item.basePrice != null && item.basePrice > fee + 0.01 ? item.basePrice : null)
-                              : grossFromAppliedDiscounts(fee, applied);
-                            const hasDiscount = gross != null && gross > fee + 0.01;
-
-                            return (
-                              <div className="mt-1.5 space-y-1.5">
-                                <div className="flex items-baseline gap-1.5">
-                                  {hasDiscount && <span className="text-xs text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
-                                  <span className={`text-xs font-semibold ${hasDiscount ? 'text-green-700' : 'text-gray-800'}`}>€{fee.toFixed(2)}/mês</span>
-                                </div>
-
-                                {/* Applied auto discounts — clickable to override off */}
-                                {autoApplied.length > 0 && (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Auto</span>
-                                    {autoApplied.map(d => {
-                                      const rule = discountRules.find(r => r.id === d.ruleId);
-                                      if (!rule) return (
-                                        <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium">
-                                          {d.name} -{pct(d.percentage)}
-                                        </span>
-                                      );
-                                      return (
-                                        <button key={d.ruleId}
-                                          onClick={() => toggleManualDiscount(item, rule)}
-                                          disabled={processing === item.id}
-                                          className="text-xs px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 disabled:opacity-50"
-                                          title="Clique para desativar (substitui a deteção automática)">
-                                          {d.name} -{pct(d.percentage)}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-
-                                {/* Applied admin discounts — clickable to remove */}
-                                {adminApplied.length > 0 && (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Manual</span>
-                                    {adminApplied.map(d => {
-                                      const rule = discountRules.find(r => r.id === d.ruleId);
-                                      if (!rule) return (
-                                        <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-800 font-medium">
-                                          {d.name} -{pct(d.percentage)}
-                                        </span>
-                                      );
-                                      return (
-                                        <button key={d.ruleId}
-                                          onClick={() => toggleManualDiscount(item, rule)}
-                                          disabled={processing === item.id}
-                                          className="text-xs px-2 py-0.5 rounded-full border border-amber-300 bg-amber-100 text-amber-800 font-medium hover:bg-amber-50 disabled:opacity-50"
-                                          title="Clique para remover">
-                                          ★ {d.name} -{pct(d.percentage)}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-
-                                {/* Any other active rule for this scope — click to apply */}
-                                {item.status !== 'cancelled' && availableRules.length > 0 && (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Adicionar</span>
-                                    {availableRules.map(r => (
-                                      <button key={r.id}
-                                        onClick={() => toggleManualDiscount(item, r)}
-                                        disabled={processing === item.id}
-                                        className="text-xs px-2 py-0.5 rounded-full border border-gray-200 bg-white text-gray-400 font-medium hover:border-gray-400 hover:text-gray-600 disabled:opacity-50"
-                                        title="Clique para aplicar">
-                                        ☆ {r.name} -{pct(r.percentage)}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
-                          {item.note && <p className="text-xs text-gray-500 mt-1 italic">"{item.note}"</p>}
-                          {item.statusReason && item.status === 'cancelled' && <p className="text-xs text-red-600 mt-1">Motivo: {item.statusReason}</p>}
-                          <p className="text-xs text-gray-400 mt-1.5">{item.createdAt.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
                         </div>
-                      </div>
 
-                      <div className="flex flex-col gap-1.5 shrink-0">
-                        {/* Direct status control — no approve/offer/reject/revert gating, admin
-                            can move freely in any direction. */}
-                        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
-                          {([
-                            { key: 'pending' as const, label: 'Pendente' },
-                            { key: 'active' as const, label: 'Ativo' },
-                            { key: 'cancelled' as const, label: 'Cancelado' },
-                          ]).map(({ key, label }, idx) => (
-                            <button key={key} onClick={() => setStatus(item, key)} disabled={processing === item.id}
-                              className={`px-2.5 py-1.5 whitespace-nowrap disabled:opacity-60 ${idx > 0 ? 'border-l border-gray-200' : ''} ${item.status === key
-                                ? (key === 'active' ? 'bg-green-600 text-white' : key === 'cancelled' ? 'bg-gray-600 text-white' : 'bg-yellow-500 text-white')
-                                : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                        {isUnlinked(item) && (
-                          <>
-                            <button onClick={() => linkToFamily(item)} disabled={processing === item.id}
-                              className="bg-orange-50 text-orange-700 border border-orange-200 text-sm px-3 py-1.5 rounded-lg hover:bg-orange-100 disabled:opacity-60 whitespace-nowrap"
-                              title={item.familyId ? 'Vincular criança pelo nome' : `Vincular família pelo email ${item.contactEmail}`}>
-                              {processing === item.id ? '…' : '🔗 Vincular'}
-                            </button>
-                            <button onClick={() => hardDelete(item)} disabled={processing === item.id}
-                              className="text-red-400 hover:text-red-600 text-sm px-2 py-1 disabled:opacity-60"
-                              title="Eliminar">🗑</button>
-                          </>
-                        )}
-                        {item.status !== 'cancelled' && (
-                          <button onClick={() => setEditId(editId === item.id ? null : item.id)}
-                            className="text-gray-400 hover:text-blue-600 text-sm px-2 py-1"
-                            title="Editar">✏️</button>
-                        )}
-                        <button onClick={() => setHistoryItem(item)}
-                          className="text-gray-400 hover:text-indigo-600 text-sm px-2 py-1"
-                          title="Histórico de alterações">🕐</button>
-                        {item.feeReviewRequired && (
-                          <button onClick={() => clearFeeReview(item)} disabled={processing === item.id}
-                            className="bg-amber-50 text-amber-800 border border-amber-300 text-xs px-2.5 py-1.5 rounded-lg hover:bg-amber-100 disabled:opacity-60 whitespace-nowrap font-medium">
-                            {processing === item.id ? '…' : '✓ Mensalidade revista'}
-                          </button>
+                        {editId === item.id && (
+                          <EditForm
+                            item={item}
+                            transportConfig={transportConfig}
+                            studyConfig={studyConfig}
+                            discountRules={discountRules}
+                            onSave={updated => {
+                              setItems(prev => prev.map(i => i.id === item.id ? { ...i, ...updated } : i));
+                              setEditId(null);
+                            }}
+                            onCancel={() => setEditId(null)}
+                          />
                         )}
                       </div>
-                    </div>
-
-                    {editId === item.id && (
-                      <EditForm
-                        item={item}
-                        transportConfig={transportConfig}
-                        studyConfig={studyConfig}
-                        discountRules={discountRules}
-                        onSave={updated => {
-                          setItems(prev => prev.map(i => i.id === item.id ? { ...i, ...updated } : i));
-                          setEditId(null);
-                        }}
-                        onCancel={() => setEditId(null)}
-                      />
-                    )}
+                    ))}
                   </div>
                 ))}
               </div>}
