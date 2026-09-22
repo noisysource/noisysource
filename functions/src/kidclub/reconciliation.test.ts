@@ -388,6 +388,44 @@ describe("institutional discount (school + returning-student/manual, SUMMED not 
   });
 });
 
+// ── Returning-student vs manual discount: mutually exclusive ─────────────────
+
+describe("returning-student and manual discount are the same concession, applied once", () => {
+  const cfg: ReconciliationConfig = { ...NO_DISCOUNTS, returningStudentDiscountPct: 0.15 };
+
+  it("the prod scenario: the 'Aluno do ano anterior' manual 15% plus the returningStudent flag gives 15%, not 30%", () => {
+    const s = sub({ id: "s1", returningStudent: true, manualDiscountPct: 0.15 });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.15, 5);
+    expect(r.institutionalDiscountCents).toBe(1800); // NOT 3600
+  });
+
+  it("the more generous of the two wins when they differ (flag larger)", () => {
+    const s = sub({ id: "s1", returningStudent: true, manualDiscountPct: 0.05 });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.15, 5);
+  });
+
+  it("the more generous of the two wins when they differ (manual larger)", () => {
+    const s = sub({ id: "s1", returningStudent: true, manualDiscountPct: 0.25 });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.25, 5);
+  });
+
+  it("today's prod data is unaffected: manual 15% with the flag unset still yields exactly 15%", () => {
+    const s = sub({ id: "s1", returningStudent: false, manualDiscountPct: 0.15 });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.15, 5);
+  });
+
+  it("the school discount is a separate concession and still stacks on top", () => {
+    const withSchool: ReconciliationConfig = { ...cfg, schoolDiscounts: [{ schoolName: "Bissaya", discountPercentage: 0.2 }] };
+    const s = sub({ id: "s1", schoolName: "Bissaya Barreto", returningStudent: true, manualDiscountPct: 0.15 });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), withSchool);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.35, 5);
+  });
+});
+
 // ── Reference families: real prod shapes, October 2026 ──────────────────────
 // These four are the agreed acceptance figures for the migration (STATUS.md,
 // 2026-09-22). Transport only, €6/trip, 10% multi-trip, 10% sibling,

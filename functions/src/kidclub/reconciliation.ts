@@ -18,9 +18,9 @@
 //          by value (highest = "child #1", full price; tie-break: earlier
 //          enrollment, then older child), every subscription below #1 gets
 //          the discount on its own post-multi-trip subtotal.
-//     -> 3. Institutional discount: school-match + returning-student +
-//          manual admin overrides, SUMMED (not compounded) into one
-//          percentage, applied to the post-sibling subtotal.
+//     -> 3. Institutional discount: school-match + returning-student/manual
+//          overrides, SUMMED (not compounded) into one percentage, applied
+//          to the post-sibling subtotal.
 //     -> net.
 //     -> 4. Absence credit: under 3 CANCELLED events this period, no
 //          credit. At 3 or more, credit = count x the NOTIONAL rate
@@ -185,7 +185,20 @@ export function reconcileService(
   const step3 = step2.map(item => {
     const schoolPct = cfg.schoolDiscounts.find(sd => matchesSchool(item.sub.schoolName, sd.schoolName))?.discountPercentage ?? 0;
     const returningPct = item.sub.returningStudent ? cfg.returningStudentDiscountPct : 0;
-    const institutionalDiscountPct = Math.min(schoolPct + returningPct + item.sub.manualDiscountPct, 1);
+
+    // The returning-student flag and an admin-applied ("manual") discount are
+    // two encodings of the SAME real-world concession, not two concessions.
+    // In prod the flag is set on zero subscriptions while 7 carry a manual
+    // "Aluno do ano anterior" discount at 15% — and the transport config's
+    // returningStudentDiscountPercentage is also 0.15. Summing them meant
+    // that the first time anyone ticked that flag on one of those 7, the
+    // family would silently receive 30%. They are therefore mutually
+    // exclusive: whichever is more generous applies, once. Only the school
+    // discount — a genuinely separate, differently-sourced concession — is
+    // added on top.
+    const concessionPct = Math.max(returningPct, item.sub.manualDiscountPct);
+
+    const institutionalDiscountPct = Math.min(schoolPct + concessionPct, 1);
     const institutionalDiscountCents = Math.round(item.subtotal * institutionalDiscountPct);
     return { ...item, institutionalDiscountPct, institutionalDiscountCents, netBeforeAbsence: item.subtotal - institutionalDiscountCents };
   });
