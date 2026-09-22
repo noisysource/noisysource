@@ -90,8 +90,9 @@ describe("eventDocId", () => {
     expect(eventDocId("sub1", "2026-09-08")).toBe("sub1_2026-09-08");
   });
 
-  it("includes the direction suffix when given (transport)", () => {
-    expect(eventDocId("sub1", "2026-09-08", "pickup")).toBe("sub1_2026-09-08_pickup");
+  it("includes the leg index when given (transport)", () => {
+    expect(eventDocId("sub1", "2026-09-08", 0)).toBe("sub1_2026-09-08_0");
+    expect(eventDocId("sub1", "2026-09-08", 1)).toBe("sub1_2026-09-08_1");
   });
 });
 
@@ -126,6 +127,26 @@ describe("generateStudyEvents", () => {
 });
 
 describe("generateTransportEvents", () => {
+  it("gives two legs on the same day DISTINCT ids even when neither has a direction", () => {
+    // The real-data case: 0 of 109 schedule entries carry a `direction`, so
+    // keying ids by direction collapsed both legs onto one doc. batch.set()
+    // then overwrote one with the other, so a two-leg day had a single
+    // occurrence -- cancelling one leg cancelled both, gross billed half the
+    // trips, and the multi-trip discount never fired.
+    const sub = {
+      familyId: "f1", childId: "c1", weekPattern: "all",
+      schedule: [
+        { dayOfWeek: "monday", pickupTime: "08:00" }, // Casa -> Colegio
+        { dayOfWeek: "monday", pickupTime: "08:00" }, // Colegio -> KidClub
+      ],
+    };
+    const events = generateTransportEvents(sub, "sub1", 6, new Date(2026, 8, 7), new Date(2026, 8, 7));
+    expect(events).toHaveLength(2);
+    expect(new Set(events.map(e => e.id)).size).toBe(2);
+    expect(events.map(e => e.id).sort()).toEqual(["sub1_2026-09-07_0", "sub1_2026-09-07_1"]);
+    expect(events.map(e => e.data.legIndex).sort()).toEqual([0, 1]);
+  });
+
   it("generates one event per schedule entry per matching date, tagged with direction", () => {
     const sub = {
       familyId: "fam1", childId: "child1", weekPattern: "all",
@@ -139,8 +160,8 @@ describe("generateTransportEvents", () => {
     expect(events).toHaveLength(2);
     const directions = events.map(e => e.data.direction).sort();
     expect(directions).toEqual(["dropoff", "pickup"]);
-    expect(events.find(e => e.data.direction === "pickup")!.id).toBe("sub1_2026-09-07_pickup");
-    expect(events.find(e => e.data.direction === "dropoff")!.id).toBe("sub1_2026-09-07_dropoff");
+    expect(events.find(e => e.data.direction === "pickup")!.id).toBe("sub1_2026-09-07_0");
+    expect(events.find(e => e.data.direction === "dropoff")!.id).toBe("sub1_2026-09-07_1");
   });
 
   it("defaults to direction 'both' for a schedule entry with no explicit direction (single indivisible trip)", () => {
@@ -148,7 +169,7 @@ describe("generateTransportEvents", () => {
     const events = generateTransportEvents(sub, "sub1", 6, new Date(2026, 8, 1), new Date(2026, 8, 7));
     expect(events).toHaveLength(1);
     expect(events[0].data.direction).toBe("both");
-    expect(events[0].id).toBe("sub1_2026-09-07_both");
+    expect(events[0].id).toBe("sub1_2026-09-07_0");
   });
 
   it("respects the biweekly weekPattern the same way study does", () => {

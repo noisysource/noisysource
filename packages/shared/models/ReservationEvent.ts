@@ -26,6 +26,13 @@ export interface ReservationEvent {
   date: string;
   /** Transport only — study has one occurrence per scheduled day */
   direction?: 'pickup' | 'dropoff' | 'both';
+  /**
+   * Transport only — this leg's index in the subscription's `schedule` array.
+   * It, not `direction`, is what makes the doc id unique: no real schedule
+   * entry carries a `direction`, so two legs on the same weekday would
+   * otherwise collide onto one id and overwrite each other.
+   */
+  legIndex?: number;
   /** Frozen at generation time from the blueprint's rate × schedule — never recomputed after creation */
   basePriceCents: number;
   status: 'EXPECTED' | 'CANCELLED' | 'VOIDED';

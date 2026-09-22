@@ -522,7 +522,7 @@ export const eventService = {
             : (rawSubEnd ?? schoolYearEnd);
           if (day < subStart || (subEnd && day > subEnd)) continue;
 
-          for (const sched of sub.schedule || []) {
+          for (const [legIndex, sched] of (sub.schedule || []).entries()) {
             if (sched.dayOfWeek !== dayName) continue;
             const eventId = `transport_sub_${sub.id}_${dateStr}_${sched.pickupTime.replace(':', '')}`;
             const isCancelled = shouldSkipEvent(eventId, sub.id, 'transport', day, cancellations);
@@ -544,8 +544,9 @@ export const eventService = {
                 subscriptionId: sub.id,
                 subscriptionType: 'transport',
                 // Needed to resolve the matching ReservationEvent doc, whose id
-                // is keyed by (date, direction) — see reservationEvents.ts.
+                // is keyed by (date, legIndex) — see reservationEvents.ts.
                 direction: sched.direction ?? 'both',
+                legIndex,
               },
             } as unknown as Event);
           }

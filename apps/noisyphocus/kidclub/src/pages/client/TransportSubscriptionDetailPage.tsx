@@ -104,8 +104,10 @@ export default function TransportSubscriptionDetailPage() {
       const subStart = sub.startDate ? new Date(sub.startDate) : today;
       const subEnd = sub.endDate ? new Date(sub.endDate) : null;
 
-      // Keyed by "date_direction" — matches the same (date, direction) pair
-      // reservationEvents.ts generates each schedule entry's event under.
+      // Keyed by "date_legIndex" — matching how reservationEvents.ts ids each
+      // leg. Keying by direction collided: no schedule entry carries one, so
+      // both legs of a day resolved to the same occurrence and cancelling one
+      // cancelled both.
       const eventsSnap = await getDocs(
         query(
           col('reservationEvents'),
@@ -114,10 +116,10 @@ export default function TransportSubscriptionDetailPage() {
           where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
         ),
       );
-      const eventByDateDirection: Record<string, { id: string; status: string }> = {};
+      const eventByDateLeg: Record<string, { id: string; status: string }> = {};
       eventsSnap.docs.forEach(d => {
         const data = d.data();
-        eventByDateDirection[`${data.date}_${data.direction ?? 'both'}`] = { id: d.id, status: data.status };
+        eventByDateLeg[`${data.date}_${data.legIndex ?? 0}`] = { id: d.id, status: data.status };
       });
       const hasAnyEvents = eventsSnap.docs.length > 0;
 
@@ -129,10 +131,9 @@ export default function TransportSubscriptionDetailPage() {
         const dayName = DAY_NAMES[day.getDay()];
         const dateStr = format(day, 'yyyy-MM-dd');
 
-        for (const sched of sub.schedule ?? []) {
+        for (const [legIndex, sched] of (sub.schedule ?? []).entries()) {
           if (sched.dayOfWeek !== dayName) continue;
-          const direction = sched.direction ?? 'both';
-          const ev = eventByDateDirection[`${dateStr}_${direction}`];
+          const ev = eventByDateLeg[`${dateStr}_${legIndex}`];
           if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
           // No occurrence for a scheduled weekday means this date isn't a
           // service day — normal for a biweekly (odd/even) subscription,

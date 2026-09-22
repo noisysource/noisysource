@@ -83,7 +83,7 @@ export default function EventCalendarPage() {
       reservationEventsSnap?.docs.forEach(d => {
         const data = d.data();
         const key = data.subscriptionType === 'transport'
-          ? `${data.subscriptionId}_${data.date}_${data.direction ?? 'both'}`
+          ? `${data.subscriptionId}_${data.date}_${data.legIndex ?? 0}`
           : `${data.subscriptionId}_${data.date}`;
         reservationEventByKey.set(key, { id: d.id, status: data.status });
       });
@@ -91,7 +91,7 @@ export default function EventCalendarPage() {
       const resolvedEvents: CalendarEvent[] = childEvents.flatMap((event): CalendarEvent[] => {
         const dateStr = format((event.start as Timestamp).toDate(), 'yyyy-MM-dd');
         const key = event.type === 'transport'
-          ? `${event.bookingId}_${dateStr}_${(event as any).booking?.direction ?? 'both'}`
+          ? `${event.bookingId}_${dateStr}_${(event as any).booking?.legIndex ?? 0}`
           : `${event.bookingId}_${dateStr}`;
         const match = reservationEventByKey.get(key);
         if (match?.status === 'VOIDED') return []; // subscription no longer covers this date

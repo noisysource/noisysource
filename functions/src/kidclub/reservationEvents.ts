@@ -88,6 +88,7 @@ interface NewEvent {
   childId: string;
   date: string;
   direction?: "pickup" | "dropoff" | "both";
+  legIndex?: number;
   basePriceCents: number;
   status: "EXPECTED";
   createdAt: admin.firestore.FieldValue;
@@ -97,8 +98,16 @@ interface NewEvent {
 // same occurrence — a rerun just overwrites (merge:false is fine, EXPECTED
 // events are never hand-edited before their status is changed via the
 // callable below).
-export function eventDocId(subscriptionId: string, date: string, direction?: string): string {
-  return direction ? `${subscriptionId}_${date}_${direction}` : `${subscriptionId}_${date}`;
+// Transport ids are keyed by the schedule entry's INDEX, not its direction.
+// No schedule entry in real data actually carries a `direction` field (0 of
+// 109 on dev), so every leg falls back to "both" — and two legs on the same
+// weekday then produce an identical id, where batch.set() silently overwrites
+// one with the other. That left a two-leg day with a single occurrence:
+// cancelling one leg cancelled both, and gross billed at half the trips with
+// the multi-trip discount never firing. The index is stable because any
+// schedule change regenerates all future events anyway.
+export function eventDocId(subscriptionId: string, date: string, legIndex?: number): string {
+  return legIndex === undefined ? `${subscriptionId}_${date}` : `${subscriptionId}_${date}_${legIndex}`;
 }
 
 export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
@@ -128,19 +137,23 @@ export function generateTransportEvents(sub: any, subId: string, ratePerTrip: nu
   const out: { id: string; data: NewEvent }[] = [];
   const schedule: { dayOfWeek: string; direction?: string }[] = sub.schedule ?? [];
   if (!schedule.length || ratePerTrip <= 0) return out;
+  // Keep each entry's position in the original schedule array — it's what
+  // makes two same-day legs distinguishable (see eventDocId).
+  const indexed = schedule.map((s, legIndex) => ({ ...s, legIndex }));
   const cursor = new Date(from);
   while (cursor <= to) {
     const weekday = NUM_TO_WEEKDAY[cursor.getDay()];
-    const matches = schedule.filter(s => s.dayOfWeek === weekday);
+    const matches = indexed.filter(s => s.dayOfWeek === weekday);
     if (matches.length && isActiveThisWeek(cursor, sub.weekPattern ?? "all")) {
       const date = isoDate(cursor);
       for (const m of matches) {
         const direction = (m.direction ?? "both") as "pickup" | "dropoff" | "both";
         out.push({
-          id: eventDocId(subId, date, direction),
+          id: eventDocId(subId, date, m.legIndex),
           data: {
             subscriptionId: subId, subscriptionType: "transport", familyId: sub.familyId, childId: sub.childId,
-            date, direction, basePriceCents: Math.round(ratePerTrip * 100), status: "EXPECTED",
+            date, direction, legIndex: m.legIndex,
+            basePriceCents: Math.round(ratePerTrip * 100), status: "EXPECTED",
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           },
         });
