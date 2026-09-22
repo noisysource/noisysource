@@ -396,12 +396,136 @@ Kidclub app typecheck: **13 errors before and after — the pre-existing baselin
 | 14 | **Phase 2 clears the 6 `endDate: 2027-07-30` values** so all 22 subscriptions bill August 2027. | Cancellation becomes purely manual, consistent with decision 10. ⚠️ Writing `endDate` triggers `regenerateFutureEvents`, so this MUST happen in the date-repair step **before** event generation — see the Phase 2 sequencing rule. |
 | 15 | **The next agent writes the Phase 2 script only.** No dev wipe, no import, no deploy. | Renato reviews the dry run before anything executes. The wipe runbook is written down, not run. |
 
+### Phase 2 — SCRIPT WRITTEN, dry run needs sign-off, NOTHING APPLIED (2026-09-22)
+
+Branch `agent/phase2-migration`, off `agent/eventsourcing-integration`. **PR #33 → `staging`.**
+Nothing has been written to any project — every figure below is a dry run.
+
+Deliverable: **`scripts/kidclub-migration/migrate.mjs`**. Dry run by default; `--apply` against
+prod is **refused outright, with no override flag** (decision 12 — unlike `identity.mjs`, whose
+25 identity writes do eventually have to be redone in prod by hand, this script writes thousands
+of event documents and does not get an escape hatch). It compiles `reconciliation.ts` and
+`reservationEvents.ts` out of `functions/src` and calls the real generators, the same way
+`reconcile-report.mjs` does — no second copy of the money math.
+
+Four steps, in the only safe order (`--only <step>` isolates one):
+
+1. **date repairs** — clear the July-2027 `endDate` cliff (decision 14). Fires
+   `regenerateFutureEvents` deliberately, then waits `--settle-seconds` (default 90) for the
+   triggers to drain before generating.
+2. **event generation** — `reservationEvents` for every active sub (study `active`/`confirmed`,
+   transport `active`). Window opens at the **earliest billing period**, not the current month,
+   so the historical absences have occurrences to land on. Also performs the **pre-start
+   repair**: `ensureEventsExist` is additive-only, so an `EXPECTED` event an earlier backfill
+   already wrote is never flipped to system-`CANCELLED` by a backfill click — the script rewrites
+   those explicitly. Human-recorded events are never touched.
+3. **historical absences** — `excludedDates` + `eventModifications` → `CANCELLED`, including in
+   the invoiced September periods (decision 13). `eventModifications.date` is converted in
+   **Europe/Lisbon**, not by slicing the ISO string.
+4. **billing status** — auto-cancelled records → `pending` (decision 6), `autoCancelled` removed
+   rather than set false, matching `autoCreateBillingSchedule`.
+
+**Guards:** a hard refusal on any write to a `billing` record with `status: "invoiced"` (decision
+5) — it throws rather than skipping, because a step that reaches it has a bug in its filter. And
+the script **refuses to `--apply` while any active subscription has no `familyId`**, since
+generation freezes `familyId` into every event it writes.
+
+**Prod dry run reproduces the recorded figures**: 11 orphan subs, 75 `excludedDates` + 13
+`eventModifications`, 35 auto-cancelled records, 5 invoiced frozen, 4,683 events to create,
+4,780 writes total.
+
+#### 🔴 Two findings — decision 14's number is wrong, and it is wrong for the timezone reason
+
+- **The cliff is 7 subscriptions, not 6, and it cannot be matched as the string `"2027-07-30"`.**
+  The collections store `endDate` in different shapes (`coerceDate`'s own comment says so):
+  transport is the plain string `"2027-07-30"`, study is a **timestamp** storing
+  `2027-07-30T23:00:00Z` — which in Europe/Lisbon (WEST, UTC+1) is **2027-07-31**. An exact
+  string match finds the 3 transport subs and **silently misses all 4 study ones**, in the one
+  step whose whole purpose is removing that cliff. Same class as the `eventModifications`
+  off-by-one and as commit `eb905ed`. Now matched by calendar **month**, which catches both
+  shapes. The full set in prod: study `G8BpDUdRKlaePJQs2doT` (Sofia), `GJ7JYFe6KPSZAQofIsCM`
+  (Beatriz), `Y0E8cYlZ3P0y1csUphCP` (Maria Clara), `bX7Mn5EQIe18eq94048D` (Edson); transport
+  `E3m788wTJzzECALna9Wn` (Duarte Gomes), `SN5NrqAz82At9A3HqnAe` (Diogo Mogo),
+  `Wr0HmgGPSL38m4Q3a0cH` (Sofia). The script reports the 6-vs-7 difference rather than asserting
+  either number — **Renato confirms the list before `--apply`.**
+- **`config/schoolCalendar.yearEndDate` is `2027-07-15` in prod**, not August. Event generation
+  stops there, while `periodsUntilSchoolYearEnd()` bills through August 2027 regardless. So the
+  second half of July and all of August 2027 bill a full flat month holding **zero events**.
+  That is decision 10 working as designed ("a billable period is decided by the contract, not by
+  the event count"), and it is what decision 14's "all 22 bill August 2027" actually rests on —
+  but it is surfaced in preflight because it is not obvious, and a wrong `yearEndDate` is
+  indistinguishable from it. **Not changed — flagging only.**
+
+#### Absences that match no occurrence are classified, not just counted
+
+31 of the 88 historical absences in prod name a day with no occurrence, and the script says which
+kind, because the two mean opposite things:
+
+- **subscription is `cancelled`/`pending`** — expected, nothing to do (e.g. all 11
+  `eventModifications` for `IyJoNIyxvwhMxMpId7XO`, Duarte Gomes' cancelled study sub; and the 7
+  `excludedDates` on Beatriz Apóstolo's cancelled transport sub `7sYsxBADSPlFOpvlKqTO`).
+- **the date is a weekend or an unserved weekday** — the signature of the pre-`eb905ed`
+  `toIsoDate()` bug, which stored the day *before* every click. Several `2026-09-06` entries are
+  Sundays.
+
+**Neither is migrated by shifting the date.** The correct day is a guess, and guessing on a money
+path is how the original bug survived as long as it did.
+
+#### `identity.mjs` — gap fixed, and `--apply` now actually exists
+
+Two things were wrong with the plan's step 1 as written:
+
+- It re-proposed the **Mafalda** merge completed on 2026-09-22 — it did not filter children with
+  `status: "merged"`. Fixed (and `--approve-merge` now skips an already-merged loser too).
+- **`--apply` was not implemented.** It printed the plan and exited `2` with "Full APPLY mode is
+  not implemented yet" for everything except an explicitly named `--approve-merge` pair. The
+  sequencing rule depends on running it, so it is implemented now: exact-name merges (salvage →
+  repoint → retire, in that order, so a failure leaves the loser live), family creation from
+  `contactEmail` with `profileComplete: false` and an empty `primaryContact.userId` (decision 7 —
+  the account link arrives on first login), and `familyId` links on subs and children. Every
+  write is identity-only; none of them touch
+  `schedule`/`days`/`weekPattern`/`startDate`/`endDate`/`status`, which is what keeps it inert as
+  far as `regenerateFutureEvents` is concerned. **Keep it that way.**
+
+A child named on a subscription with no `children` record at all (3 in prod) is **not** created —
+reported for a human. It does not block Phase 2: the generators need `familyId`, not `childId`.
+
+#### Dev wipe — `scripts/kidclub-migration/DEV-WIPE-RUNBOOK.md`, written, NOT run
+
+Per decision 15. Scoped to `_apps/arcoiris/**`; never `firestore:delete --all-collections` (the
+shared `(default)` database holds `finances_entities/**`), never the shared top-level `users`
+collection. Includes the dev backup first, the prod export excluding `reservationEvents` and
+`users`, the post-import fixes (dev transport costs, one family pointed at a real dev Auth UID,
+and why `renato343@gmail.com` cannot validate the parent path), and the ordered run sequence.
+
+#### Next step
+
+1. Renato reviews the dry run above and **confirms the 7-subscription cliff list**.
+2. Renato runs the wipe runbook (his call, decision 15), then `identity.mjs --apply`, then
+   `migrate.mjs --apply`, then `reconcile-report.mjs` — all against `kidclub-dev`.
+3. Verify: Carolina €182.40, José Eduardo €165.12, Maria Manon €130.56, Mogo €210.00,
+   +€53.28/month, August 2027 €2,134.56. A disagreement is a finding, not a report bug.
+
+⚠️ **Nothing risky is in flight.** No writes were made to dev or prod; prod was read-only, via
+`gcloud auth print-access-token` against the Firestore REST API, with no standing access added
+and nothing to revoke. Both PRs target `staging`.
+
 ### Branch state (2026-09-22)
 
-`agent/eventsourcing-integration` is **pushed to origin** (head `e86af02`, 27 commits ahead of
+`agent/eventsourcing-integration` is **pushed to origin** (head `9b083ae`, 27 commits ahead of
 `staging`). It carries Phases 0, 1 and 3 plus decisions 9-11. Phase 2 branches from it, not
 from `main` or `staging` — neither has `reservationEvents.ts`, `reconciliation.ts` or the
 decision 9-11 money changes.
+
+**Both PRs are open against `staging`, in this order:**
+- **PR #32** — `agent/eventsourcing-integration` → `staging`. Phases 0/1/3 + decisions 8-11.
+  This is the one that gets the rewrite onto `kidclub-dev` and unblocks testing.
+- **PR #33** — `agent/phase2-migration` → `staging`. The migration script above.
+
+Note also (root `CLAUDE.md`, updated since this section was first written): the prod deploy job
+is now guarded by `github.head_ref == 'staging'`, so only a `staging` → `main` PR deploys to
+prod pre-merge. An `agent/*` → `main` PR is inert — but it is still the wrong target, and the
+staging → main promotion remains Renato's call after dev validation.
 
 **Route to dev: PR into `staging`, never into `main`.** Opening a PR against `main` deploys
 to **prod immediately, before merge** (`deploy-prod.yml`). A PR against `staging` deploys to
