@@ -503,6 +503,11 @@ and why `renato343@gmail.com` cannot validate the parent path), and the ordered 
 1. Renato reviews the dry run above and **confirms the 7-subscription cliff list**.
 2. Renato runs the wipe runbook (his call, decision 15), then `identity.mjs --apply`, then
    `migrate.mjs --apply`, then `reconcile-report.mjs` — all against `kidclub-dev`.
+   ⚠️ **The REST write payloads have never been executed** — a dry run cannot exercise them.
+   `--dump <file>` writes the exact payloads out without sending them (reviewed: field masks
+   correct, `endDate`/`autoCancelled` cleared by mask-without-field as intended). Still, run
+   `migrate.mjs --apply --only dates` first — 7 writes — and check one subscription document
+   before letting the full 4,700-write generation go.
 3. Verify: Carolina €182.40, José Eduardo €165.12, Maria Manon €130.56, Mogo €210.00,
    +€53.28/month, August 2027 €2,134.56. A disagreement is a finding, not a report bug.
 

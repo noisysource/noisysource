@@ -69,6 +69,10 @@ const APPLY = flag("--apply");
 const VERBOSE = flag("--verbose");
 const JSON_OUT = opt("--json", null);
 const SETTLE_SECONDS = Number(opt("--settle-seconds", "90"));
+// Writes the exact REST payloads this run would send, to a file, without
+// sending them. The write path cannot be exercised by a dry run, so this is
+// how it gets reviewed before the first --apply rather than after.
+const DUMP = opt("--dump", null);
 const STEPS = ["dates", "events", "absences", "billing-status"];
 const ONLY = opt("--only", null);
 
@@ -212,8 +216,10 @@ async function getDoc(path) {
  * commitInChunks() in reservationEvents.ts.
  */
 let WRITE_COUNT = 0;
+const DUMPED = [];
 async function commit(writes) {
   WRITE_COUNT += writes.length;
+  if (DUMP) DUMPED.push(...writes);
   if (!APPLY || !writes.length) return;
   const CHUNK = 400;
   for (let i = 0; i < writes.length; i += CHUNK) {
@@ -701,11 +707,15 @@ async function stepBillingStatus(data, report, guard) {
     invoicedFrozen: guard.invoicedIds.size,
   };
 
-  console.log(`  ${targets.length} auto-cancelled record(s) → pending`);
   console.log(`  ${manual.length} hand-cancelled record(s) left alone (no autoCancelled flag — that was a decision)`);
-  console.log(`  ${guard.invoicedIds.size} invoiced record(s) frozen and never touched by any step (decision 5)`);
+  console.log(`  ${guard.invoicedIds.size} invoiced record(s) frozen, never touched by any step (decision 5):`);
+  for (const id of guard.invoicedIds) console.log(`      FROZEN  ${id}`);
+  // Printed under its own heading. With the list sitting directly beneath the
+  // "invoiced frozen" line it read as though these WERE the invoiced records,
+  // which is the opposite of what the step does.
+  console.log(`\n  ${targets.length} auto-cancelled record(s) → pending:`);
   for (const b of targets.slice(0, VERBOSE ? targets.length : 10)) {
-    console.log(`    ${b.id}  ${String(b.billingName ?? b.familyId).slice(0, 28).padEnd(30)} EUR ${(b.total ?? 0).toFixed(2)}`);
+    console.log(`    ${APPLY ? "PENDING" : "would set"}  ${b.id}  ${String(b.billingName ?? b.familyId).slice(0, 28).padEnd(30)} EUR ${(b.total ?? 0).toFixed(2)}`);
   }
   if (!VERBOSE && targets.length > 10) console.log(`    … and ${targets.length - 10} more (--verbose for all)`);
 
@@ -817,6 +827,11 @@ async function main() {
   console.log(`Mogo 210.00, +53.28/month, and August 2027 at 2134.56 once the endDates are cleared.`);
   console.log(`A disagreement is a finding — investigate it before assuming the report is right.`);
   console.log("=".repeat(78) + "\n");
+
+  if (DUMP) {
+    writeFileSync(DUMP, JSON.stringify(DUMPED, null, 2));
+    console.log(`${DUMPED.length} REST write payload(s) dumped to ${DUMP} — not sent.`);
+  }
 
   if (JSON_OUT) {
     writeFileSync(JSON_OUT, JSON.stringify({ project: PROJECT, apply: APPLY, writes: WRITE_COUNT, ...report }, null, 2));
