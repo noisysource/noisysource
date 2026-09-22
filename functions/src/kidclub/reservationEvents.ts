@@ -93,6 +93,12 @@ export function coerceStartDate(raw: any): Date | null {
 // month before the child ever attends. 19 of 21 active transport subs in prod
 // carry no startDate at all — those must keep behaving exactly as before, i.e.
 // fall back to the requested `from`.
+//
+// NOTE: generation itself no longer calls this — it calls
+// resolveGenerationWindowStart, which opens the window on the 1st of the
+// starting month so the pre-start days can be written as system absences (see
+// the boundary-month note below). This remains the plain "first served day"
+// clamp and the definition the boundary logic is measured against.
 export function resolveGenerationStart(sub: any, from: Date): Date {
   const subStart = coerceStartDate(sub?.startDate);
   return subStart && subStart > from ? subStart : from;
