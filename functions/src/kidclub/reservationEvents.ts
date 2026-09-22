@@ -50,7 +50,11 @@ function studyPerDayRate(cfg: any): number {
 // yields Invalid Date, every `cursor <= to` comparison against it is false,
 // and generation returns zero events without throwing — which is exactly
 // what shipped and left every study subscription with no occurrences.
-export function coerceEndDate(raw: any): Date | null {
+// `startDate` has exactly the same three-way inconsistency, so both go through
+// one coercer. The only difference is what a date-only "YYYY-MM-DD" string
+// means: end-of-day for an end date (last day inclusive), start-of-day for a
+// start date (first day inclusive).
+export function coerceDate(raw: any, dateOnlyTime: "start" | "end"): Date | null {
   if (!raw) return null;
   // Firestore Timestamp (Admin SDK or client), duck-typed to avoid importing it
   if (typeof raw?.toDate === "function") {
@@ -59,8 +63,8 @@ export function coerceEndDate(raw: any): Date | null {
   }
   if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw;
   if (typeof raw === "string") {
-    // Date-only strings are end-of-day so the final day is inclusive
-    const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T23:59:59`) : new Date(raw);
+    const suffix = dateOnlyTime === "end" ? "T23:59:59" : "T00:00:00";
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}${suffix}`) : new Date(raw);
     return isNaN(d.getTime()) ? null : d;
   }
   if (typeof raw === "number") {
@@ -73,6 +77,25 @@ export function coerceEndDate(raw: any): Date | null {
     return isNaN(d.getTime()) ? null : d;
   }
   return null;
+}
+
+export function coerceEndDate(raw: any): Date | null {
+  return coerceDate(raw, "end");
+}
+
+export function coerceStartDate(raw: any): Date | null {
+  return coerceDate(raw, "start");
+}
+
+// Generation must never begin before the subscription itself starts. Without
+// this, a study subscription starting 2026-10-01 picked up September
+// occurrences (backfill starts at the current month's 1st) and was billed a
+// month before the child ever attends. 19 of 21 active transport subs in prod
+// carry no startDate at all — those must keep behaving exactly as before, i.e.
+// fall back to the requested `from`.
+export function resolveGenerationStart(sub: any, from: Date): Date {
+  const subStart = coerceStartDate(sub?.startDate);
+  return subStart && subStart > from ? subStart : from;
 }
 
 async function getSchoolYearEnd(): Promise<Date | null> {
@@ -110,8 +133,26 @@ export function eventDocId(subscriptionId: string, date: string, legIndex?: numb
   return legIndex === undefined ? `${subscriptionId}_${date}` : `${subscriptionId}_${date}_${legIndex}`;
 }
 
+// Every generated event copies `familyId` off the subscription, and
+// onReservationEventBillingSync silently skips any event whose familyId is
+// falsy. 6 active transport + 5 active study subscriptions in prod have no
+// familyId at all, so they would have written a full school year of events
+// that never bill and never surface anywhere. Refuse loudly instead — those
+// subscriptions are being repaired separately.
+function hasFamilyId(sub: any, subId: string, type: "study" | "transport"): boolean {
+  if (sub?.familyId) return true;
+  console.error(
+    `[reservationEvents] ${type} subscription ${subId} has no familyId `
+    + `(familyId=${JSON.stringify(sub?.familyId)}) — no events generated. `
+    + `Events without a familyId are silently skipped by billing sync. `
+    + `Link this subscription to a family.`
+  );
+  return false;
+}
+
 export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
+  if (!hasFamilyId(sub, subId, "study")) return out;
   const days: { day: string; hour: string }[] = sub.days ?? [];
   if (!days.length || ratePerDay <= 0) return out;
   const cursor = new Date(from);
@@ -135,6 +176,7 @@ export function generateStudyEvents(sub: any, subId: string, ratePerDay: number,
 
 export function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
+  if (!hasFamilyId(sub, subId, "transport")) return out;
   const schedule: { dayOfWeek: string; direction?: string }[] = sub.schedule ?? [];
   if (!schedule.length || ratePerTrip <= 0) return out;
   // Keep each entry's position in the original schedule array — it's what
@@ -218,8 +260,9 @@ async function resolveGenerationEnd(sub: any, subId: string, type: string): Prom
 // day back to EXPECTED and wipe real absences.
 async function ensureEventsExist(
   sub: any, subId: string, type: "study" | "transport",
-  configs: { studyConfig: any; transportConfig: any }, from: Date,
+  configs: { studyConfig: any; transportConfig: any }, requestedFrom: Date,
 ): Promise<number> {
+  const from = resolveGenerationStart(sub, requestedFrom);
   const to = await resolveGenerationEnd(sub, subId, type);
   if (!to || to < from) return 0;
 
@@ -244,14 +287,18 @@ async function regenerateFutureEvents(
 ): Promise<void> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const from = resolveGenerationStart(sub, today);
   const to = await resolveGenerationEnd(sub, subId, type);
-  if (!to || to < today) return;
+  if (!to || to < from) return;
 
+  // Voiding still starts at today, not at `from`: anything already written
+  // between today and a later startDate is exactly the bad data this fix
+  // prevents, and it should be cleared rather than left behind.
   await voidFutureEvents(subId, isoDate(today));
 
   const events = type === "study"
-    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), today, to)
-    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, today, to);
+    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to)
+    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to);
   if (events.length) await commitInChunks(events, "create");
 }
 
@@ -339,8 +386,16 @@ export const setReservationEventStatus = onCall(
     const roles = userDoc.data()?.roles ?? {};
     const isStaff = !!(roles.owner || roles.rainbowAdmin);
     if (!isStaff) {
-      const famSnap = await appCol("families").doc(data.familyId).get();
-      if (!famSnap.exists || famSnap.data()?.userId !== uid) {
+      // The login link lives at `primaryContact.userId` — verified against prod,
+      // where all 36 family documents carry it and ZERO carry a top-level
+      // `userId`. Reading only the top-level field meant every parent got
+      // permission-denied and only staff could mark an absence, which defeats
+      // the point of this shared write path. Top-level is still accepted as a
+      // fallback because dev/test fixtures carry either shape.
+      const famSnap = data.familyId ? await appCol("families").doc(data.familyId).get() : null;
+      const fam = famSnap?.exists ? famSnap.data() : null;
+      const familyUserId = fam?.primaryContact?.userId ?? fam?.userId;
+      if (!familyUserId || familyUserId !== uid) {
         throw new HttpsError("permission-denied", "This occurrence does not belong to your family");
       }
     }

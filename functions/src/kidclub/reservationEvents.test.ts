@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate } from "./reservationEvents";
+import { describe, it, expect, vi } from "vitest";
+import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart } from "./reservationEvents";
 
 // Regression: StudyRoomEntry.endDate is a Firestore Timestamp while
 // TransportationSubscription.endDate is a "YYYY-MM-DD" string. Passing a
@@ -177,5 +177,123 @@ describe("generateTransportEvents", () => {
     const events = generateTransportEvents(sub, "sub1", 6, new Date(2026, 8, 1), new Date(2026, 8, 30));
     // Mondays: 7(1st,no) 14(2nd,yes) 21(3rd,no) 28(4th,yes) => 2 events
     expect(events).toHaveLength(2);
+  });
+});
+
+// Regression: neither ensureEventsExist (starts at the current month's 1st)
+// nor regenerateFutureEvents (starts at today) clamped to the subscription's
+// own startDate. A study subscription starting 2026-10-01 therefore got
+// September occurrences generated and billed a month before the child
+// attends. startDate carries the same three-way shape inconsistency as
+// endDate: Timestamp on studyroom, "YYYY-MM-DD" on transport, often absent.
+describe("resolveGenerationStart (startDate clamp)", () => {
+  const requested = new Date(2026, 8, 1); // Sept 1 — the backfill's month start
+
+  it("clamps to a date-only startDate string, at start-of-day so day one is inclusive", () => {
+    const start = resolveGenerationStart({ startDate: "2026-10-01" }, requested);
+    expect(start.getFullYear()).toBe(2026);
+    expect(start.getMonth()).toBe(9);
+    expect(start.getDate()).toBe(1);
+    expect(start.getHours()).toBe(0);
+    expect(start.getMinutes()).toBe(0);
+  });
+
+  it("clamps to a Firestore Timestamp startDate (the studyroom shape)", () => {
+    const real = new Date(2026, 9, 1);
+    const start = resolveGenerationStart({ startDate: { toDate: () => real } }, requested);
+    expect(start.getTime()).toBe(real.getTime());
+  });
+
+  it("clamps to the raw REST/JSON timestamp shape too", () => {
+    const real = new Date(2026, 9, 1);
+    const secs = Math.floor(real.getTime() / 1000);
+    const start = resolveGenerationStart({ startDate: { _seconds: secs, _nanoseconds: 0 } }, requested);
+    expect(start.getTime()).toBe(secs * 1000);
+  });
+
+  // 19 of 21 active transport subs in prod have no startDate — this path must
+  // behave exactly as it did before the clamp existed.
+  it("falls back to the requested from when startDate is absent", () => {
+    expect(resolveGenerationStart({}, requested).getTime()).toBe(requested.getTime());
+    expect(resolveGenerationStart({ startDate: null }, requested).getTime()).toBe(requested.getTime());
+    expect(resolveGenerationStart({ startDate: "not a date" }, requested).getTime()).toBe(requested.getTime());
+    expect(resolveGenerationStart(undefined, requested).getTime()).toBe(requested.getTime());
+  });
+
+  it("never moves the window EARLIER — a past startDate leaves `from` alone", () => {
+    expect(resolveGenerationStart({ startDate: "2025-09-01" }, requested).getTime()).toBe(requested.getTime());
+  });
+
+  it("generates no September occurrences for an October-starting subscription", () => {
+    const sub = { familyId: "f1", childId: "c1", startDate: "2026-10-01", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
+    const from = resolveGenerationStart(sub, new Date(2026, 8, 1));
+    const events = generateStudyEvents(sub, "sub1", 6, from, new Date(2026, 9, 31));
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every(e => e.data.date >= "2026-10-01")).toBe(true);
+    // Before the fix these four September Mondays were generated and billed.
+    expect(events.some(e => e.data.date.startsWith("2026-09"))).toBe(false);
+  });
+
+  it("includes the very first day when startDate is a date-only string", () => {
+    // 2026-10-05 is a Monday, and also the startDate — it must be generated.
+    const sub = { familyId: "f1", childId: "c1", startDate: "2026-10-05", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
+    const from = resolveGenerationStart(sub, new Date(2026, 8, 1));
+    const events = generateStudyEvents(sub, "sub1", 6, from, new Date(2026, 9, 31));
+    expect(events[0].data.date).toBe("2026-10-05");
+  });
+});
+
+// Regression: 6 active transport + 5 active study subscriptions in prod have
+// no familyId. Events copy familyId off the subscription, and
+// onReservationEventBillingSync silently skips events with no familyId — so
+// these would have written a school year of invisible, never-billed events.
+describe("missing familyId guard", () => {
+  const spy = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("generates nothing for a study subscription with no familyId", () => {
+    const err = spy();
+    const sub = { childId: "c1", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
+    expect(generateStudyEvents(sub, "orphanStudy", 6, new Date(2026, 8, 1), new Date(2026, 8, 30))).toHaveLength(0);
+    expect(err).toHaveBeenCalledOnce();
+    expect(err.mock.calls[0][0]).toContain("orphanStudy");
+    expect(err.mock.calls[0][0]).toContain("study");
+    err.mockRestore();
+  });
+
+  it("generates nothing for a transport subscription with no familyId", () => {
+    const err = spy();
+    const sub = { childId: "c1", weekPattern: "all", schedule: [{ dayOfWeek: "monday" }] };
+    expect(generateTransportEvents(sub, "orphanTransport", 6, new Date(2026, 8, 1), new Date(2026, 8, 30))).toHaveLength(0);
+    expect(err).toHaveBeenCalledOnce();
+    expect(err.mock.calls[0][0]).toContain("orphanTransport");
+    expect(err.mock.calls[0][0]).toContain("transport");
+    err.mockRestore();
+  });
+
+  it("treats an empty-string familyId as missing (the ManualEnrollForm shape)", () => {
+    const err = spy();
+    const sub = { familyId: "", childId: "c1", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
+    expect(generateStudyEvents(sub, "sub1", 6, new Date(2026, 8, 1), new Date(2026, 8, 30))).toHaveLength(0);
+    err.mockRestore();
+  });
+
+  it("still generates normally when familyId is present", () => {
+    const sub = { familyId: "fam1", childId: "c1", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
+    expect(generateStudyEvents(sub, "sub1", 6, new Date(2026, 8, 1), new Date(2026, 8, 30))).toHaveLength(4);
+  });
+});
+
+describe("coerceDate (shared start/end coercer)", () => {
+  it("differs only in what a date-only string means", () => {
+    expect(coerceDate("2026-10-01", "start")!.getHours()).toBe(0);
+    expect(coerceDate("2026-10-01", "end")!.getHours()).toBe(23);
+    expect(coerceStartDate("2026-10-01")!.getTime()).toBe(coerceDate("2026-10-01", "start")!.getTime());
+    expect(coerceEndDate("2026-10-01")!.getTime()).toBe(coerceDate("2026-10-01", "end")!.getTime());
+  });
+
+  it("is identical for every non-date-only shape", () => {
+    const d = new Date(2026, 9, 1, 14, 30);
+    expect(coerceDate(d, "start")!.getTime()).toBe(coerceDate(d, "end")!.getTime());
+    expect(coerceStartDate(null)).toBeNull();
   });
 });
