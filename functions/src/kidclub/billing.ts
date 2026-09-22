@@ -402,6 +402,7 @@ async function computeLineItems(
       scheduleWeekdays: (sub.days ?? []).map((d: any) => d.day),
       weekPattern: sub.weekPattern,
       ratePerOccurrenceCents: Math.round(studyRate * 100),
+      discountOverrides: sub.discountOverrides,
       coversPeriod: coversPeriodOf(sub),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
@@ -438,6 +439,7 @@ async function computeLineItems(
       scheduleWeekdays: (sub.schedule ?? []).map((sl: any) => sl.dayOfWeek),
       weekPattern: sub.weekPattern,
       ratePerOccurrenceCents: Math.round(tripRate * 100),
+      discountOverrides: sub.discountOverrides,
       coversPeriod: coversPeriodOf(sub),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {

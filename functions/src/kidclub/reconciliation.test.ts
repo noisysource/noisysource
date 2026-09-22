@@ -609,3 +609,92 @@ describe("an automatic discount an admin has toggled is never applied twice", ()
     expect(r.finalCents).toBe(15960);
   });
 });
+
+// ── Admin overrides of the automatic discounts ──────────────────────────────
+//
+// An admin toggle overrules the automatic result in both directions: off means
+// not applied even when the rule matches, on means applied even when it does
+// not. An overridden rule is applied as a FLAT percentage and its structural
+// calculation is suppressed, so it can never land twice.
+
+describe("admin overrides beat the automatic discount", () => {
+  const MULTI = "rule-multi", SIB = "rule-sib", SCHOOL = "rule-school";
+  const cfg: ReconciliationConfig = {
+    multiTripDiscountPct: 0.1, minTripsPerDay: 2, siblingDiscountPct: 0.1,
+    schoolDiscounts: [{ schoolName: "Bissaya", discountPercentage: 0.2, ruleId: SCHOOL }],
+    returningStudentDiscountPct: 0, multiTripRuleId: MULTI, siblingRuleId: SIB,
+  };
+  // Two legs on each of five weekdays: 10 slots, 5 of them multi-trip eligible.
+  const TEN_LEGS = ["monday", "monday", "tuesday", "tuesday", "wednesday",
+    "wednesday", "thursday", "thursday", "friday", "friday"];
+  const one = (overrides?: Record<string, boolean>) =>
+    sub({ id: "s1", scheduleWeekdays: TEN_LEGS, discountOverrides: overrides });
+  const run = (s: SubscriptionForReconciliation[]) =>
+    reconcileService(s, new Map(s.map(x => [x.id, occurrences(20)])), cfg);
+
+  it("without an override, multi-trip is marginal: 5 eligible slots, EUR 12.00", () => {
+    const [r] = run([one()]);
+    expect(r.grossCents).toBe(24000);
+    expect(r.multiTripDiscountCents).toBe(1200);
+    expect(r.finalCents).toBe(22800);
+  });
+
+  it("forced OFF, multi-trip is not applied at all", () => {
+    const [r] = run([one({ [MULTI]: false })]);
+    expect(r.multiTripDiscountCents).toBe(0);
+    expect(r.institutionalDiscountPct).toBe(0);
+    expect(r.finalCents).toBe(24000);
+  });
+
+  it("forced ON, multi-trip becomes a flat 10% and the marginal one is suppressed", () => {
+    const [r] = run([one({ [MULTI]: true })]);
+    expect(r.multiTripDiscountCents).toBe(0);      // never both
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.1);
+    expect(r.finalCents).toBe(21600);              // 240.00 - 10%
+  });
+
+  it("forced OFF suppresses the school discount even when the name matches", () => {
+    const s = sub({ id: "s1", schoolName: "Bissaya", discountOverrides: { [SCHOOL]: false } });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBe(0);
+  });
+
+  it("forced ON applies the school discount with no name match at all", () => {
+    const s = sub({ id: "s1", discountOverrides: { [SCHOOL]: true } });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.2);
+  });
+
+  it("forced OFF removes the sibling discount but keeps the subscription in the ranking", () => {
+    const big = sub({ id: "big", scheduleWeekdays: TEN_LEGS });
+    const small = sub({ id: "small", discountOverrides: { [SIB]: false } });
+    const [rBig, rSmall] = reconcileService(
+      [big, small], new Map([["big", occurrences(20)], ["small", occurrences(20)]]), cfg);
+    expect(rBig.siblingDiscountCents).toBe(0);   // still child #1 by value
+    expect(rSmall.siblingDiscountCents).toBe(0); // overridden off, not ranked away
+    expect(rSmall.institutionalDiscountPct).toBe(0);
+  });
+
+  it("forced ON gives child #1 a flat sibling discount it would never earn", () => {
+    const big = sub({ id: "big", scheduleWeekdays: TEN_LEGS, discountOverrides: { [SIB]: true } });
+    const small = sub({ id: "small" });
+    const [rBig] = reconcileService(
+      [big, small], new Map([["big", occurrences(20)], ["small", occurrences(20)]]), cfg);
+    expect(rBig.siblingDiscountCents).toBe(0);
+    expect(rBig.institutionalDiscountPct).toBeCloseTo(0.1);
+  });
+
+  it("an override for an unrelated rule id changes nothing", () => {
+    const [r] = run([one({ "some-other-rule": false })]);
+    expect(r.multiTripDiscountCents).toBe(1200);
+    expect(r.finalCents).toBe(22800);
+  });
+
+  it("overrides stack with the school discount rather than replacing it", () => {
+    const s = sub({ id: "s1", scheduleWeekdays: TEN_LEGS, schoolName: "Bissaya",
+      discountOverrides: { [MULTI]: true } });
+    const [r] = reconcileService([s], new Map([["s1", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.3); // school 20% + forced multi-trip 10%
+    expect(r.finalCents).toBe(16800);
+  });
+});

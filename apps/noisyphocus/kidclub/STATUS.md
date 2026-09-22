@@ -10,7 +10,7 @@ The event-sourcing rewrite is merged to `staging` and validated on dev. This sec
 the plan for getting **real prod data** onto it. It was produced from a read-only analysis
 of live prod (21 active transport subs, 13 active study subs, 228 billing records, 0
 `reservationEvents`, 13 `eventModifications`) plus an offline simulation of the new
-pipeline against that data. Ten decisions were taken with Renato on 2026-09-22 and are
+pipeline against that data. Eleven decisions were taken with Renato on 2026-09-22 and are
 recorded below — **do not re-litigate them, they are settled.**
 
 ### ⚠️ Branch off `staging`, NOT `main`
@@ -32,6 +32,7 @@ and is wrong for this effort specifically.
 | 6 | **All 35 auto-cancelled billing records → `pending`.** Default to `pending` wherever ambiguous. | Renato cancels individually in the app afterwards. Restores billing for José Miguel Duarte (~€113/mo) and Edson (~€72/mo), whose subs are active but records cancelled. |
 | 7 | **Orphan subscriptions get real family records.** | A parent never logging in does not mean no family. Minimal `families/{id}` created from `contactEmail`; the *account* link (`primaryContact.userId`) arrives on first login. |
 | 9 | **An automatic discount an admin has toggled is applied once, never twice.** `manualDiscountPctFor` keys on the rule's `trigger`, not on the `appliedBy` label. | Admins can freely toggle auto discounts; the label records who touched the row, not a second concession. |
+| 11 | **An admin toggle overrules the automatic discount**, in both directions, as a flat percentage. | New `discountOverrides` field; the structural calculation is suppressed for an overridden rule. |
 | 10 | **A billable period is decided by the contract, not by the event count.** August bills the flat price despite having no occurrences; subscriptions are cancelled manually. | `endDate` becomes a money field — see the Phase 3 section for the inconsistent prod values. |
 | 8 | **No pro-rating. Boundary months adjust via the absence credit.** (settled 2026-09-22, after flat pricing exposed the gap) | A subscription starting or ending mid-month bills the full month; the days not served are written as system `CANCELLED` events so the existing >=3-absence credit pro-rates it. No new pricing concept. See "Boundary months" below. |
 
@@ -342,12 +343,46 @@ and says so rather than reporting a false "none"; **(c)** 4 invoiced periods tha
 reported and never recomputed, per decision 5; **(d)** 11 active subs with no `familyId`;
 **(e)** the 2 mislabelled auto discounts.
 
-**Still open, NOT fixed:** an admin *un-ticking* an automatic discount has no effect. The new
-pipeline computes multi-trip/sibling/school structurally and never consults
-`appliedDiscounts` for them, and `discountRecalc` rewrites `appliedDiscounts` from the rules
-on every trigger-field change anyway — so "off" is not durably representable in either
-pipeline. Pre-existing, not introduced here, but it is the other half of "admins can toggle
-automatic discounts on and off".
+### Decision 11 — an admin toggle overrules the automatic discount (settled 2026-09-22)
+
+Renato: "if the admin triggers it off then it is not supposed to be applied; if he puts it
+back on the discount is applied, overruling the automatic." Implemented, 9 new tests.
+
+**New field `discountOverrides: Record<ruleId, boolean>`** on both subscription models —
+`true` force on, `false` force off, absent = no opinion. It has to be separate from
+`appliedDiscounts`, because the absence of an entry there is ambiguous ("the rule did not
+match" vs "an admin turned it off") and `discountRecalc` rewrites that array from the rules
+on every schedule change, so an admin's "off" could not have survived.
+
+**An overridden rule is applied as a FLAT percentage and its structural calculation is
+suppressed — in both directions.** Renato chose this over "pretend the rule matched": it is
+uniform across all three auto rules, and it is what the old system did, so it matches what
+the admin already sees. The marginal multi-trip and ranked sibling calculations have no
+meaning once an admin has overruled them, and applying both would be the same double-count
+decision 9 just removed.
+
+- multi-trip forced on -> flat 10% in the institutional tier, marginal calculation skipped
+- sibling forced on -> flat 10%, even for the child ranked #1; forced off -> no sibling
+  discount, but the subscription still takes part in the ranking (removing it would change
+  which sibling counts as child #1)
+- school forced on -> 20% with no name match; forced off -> 0 even when the name matches
+- overrides stack with the school discount rather than replacing it
+
+Wired through `discountRecalc` (which now preserves overrides instead of clobbering them,
+and retriggers on an override change) and through `SubscriptionsAdminPage` — both the
+row-level toggle, which already read as an override in the UI copy ("substitui a deteção
+automática"), and the create form's discount picker, whose `Map<ruleId, boolean>` was already
+exactly this shape and simply was not being saved. **Zero prod subscriptions carry overrides
+today**, so this changes nobody's bill until an admin uses it; the Oct baseline is unmoved at
++EUR 53.28/month.
+
+Kidclub app typecheck: **13 errors before and after — the pre-existing baseline, zero new.**
+
+### August remainders — handled by hand (2026-09-22)
+
+Renato: "let's cancel the remainders by hand." The 6 active subscriptions carrying
+`endDate: 2027-07-30` (which under decision 10 bill EUR 0 in August) are **not** being
+repaired by script. No migration step covers them; report flag (a) lists them each run.
 
 **Re-measured 2026-09-22** (moving targets): **4** active transport subs still have no
 `childId` — unchanged. **0 of 21** change their Bissaya match when sourced from the child

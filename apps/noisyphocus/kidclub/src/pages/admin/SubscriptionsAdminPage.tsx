@@ -46,6 +46,8 @@ interface SubItem {
   basePrice?: number;      // study: fee before discount
   // Central discount system
   appliedDiscounts?: AppliedDiscount[];
+  /** Admin overrides of the automatic discounts, by rule id. See DiscountOverrides. */
+  discountOverrides?: Record<string, boolean>;
   weekPattern?: 'all' | 'odd' | 'even';
   // Common
   status: SubStatus;
@@ -857,6 +859,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           schoolName: details.schoolName.trim() || null,
           status: 'pending', source: 'manual', monthlyFee, originalFee: transportGross,
           appliedDiscounts: transportSelected,
+          discountOverrides: Object.fromEntries(transportOverrides),
           weekPattern: schedule.weekPattern,
           schedule: fsSchedule, note: note.trim() || null,
           createdAt: now, updatedAt: now,
@@ -868,6 +871,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           contactPhone: details.contactPhone.trim() || undefined,
           schoolName: details.schoolName.trim() || undefined,
           source: 'manual', schedule: fsSchedule, monthlyFee, appliedDiscounts: transportSelected,
+          discountOverrides: Object.fromEntries(transportOverrides),
           status: 'pending', note: note.trim() || undefined, createdAt: now,
         });
       }
@@ -885,6 +889,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           days, weekPattern: schedule.weekPattern,
           monthlyPrice, basePrice: studyGross,
           appliedDiscounts: studySelected,
+          discountOverrides: Object.fromEntries(studyOverrides),
           note: note.trim() || null,
           status: 'pending', source: 'manual',
           startDate: now, endDate,
@@ -899,6 +904,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           schoolName: details.schoolName.trim() || undefined,
           schoolYear: details.schoolYear.trim() || undefined,
           days, monthlyPrice, basePrice: studyGross, appliedDiscounts: studySelected,
+          discountOverrides: Object.fromEntries(studyOverrides),
           source: 'manual', status: 'pending',
           note: note.trim() || undefined, createdAt: now,
         });
@@ -1403,12 +1409,22 @@ export default function SubscriptionsAdminPage() {
         ? current.filter(d => d.ruleId !== rule.id)
         : [...current, { ruleId: rule.id, name: rule.name, percentage: rule.percentage, appliedAt: new Date(), appliedBy: 'admin' as const }];
 
+      // An admin's click on an AUTOMATIC rule is an override, and has to be
+      // recorded as one: appliedDiscounts is rewritten from the rules by
+      // discountRecalc on every schedule change, so an "off" stored only there
+      // is silently undone the next time anyone edits the schedule. Manual
+      // rules need no override — they are only ever applied by hand.
+      const newOverrides = rule.trigger === 'manual'
+        ? item.discountOverrides
+        : { ...(item.discountOverrides ?? {}), [rule.id]: !isApplied };
+
       const gross = computeGross(item);
       const newFee = Math.round(applyDiscounts(gross, newDiscounts) * 100) / 100;
       const feeField = item._type === 'transport' ? 'monthlyFee' : 'monthlyPrice';
 
       await updateDoc(docRef(colName, item.id), {
         appliedDiscounts: newDiscounts, [feeField]: newFee, updatedAt: new Date(),
+        ...(newOverrides ? { discountOverrides: newOverrides } : {}),
       });
       setItems(prev => prev.map(i => i.id === item.id
         ? { ...i, appliedDiscounts: newDiscounts, ...(i._type === 'transport' ? { monthlyFee: newFee } : { monthlyPrice: newFee }) }

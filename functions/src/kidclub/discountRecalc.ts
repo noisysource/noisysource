@@ -32,6 +32,32 @@ interface DayLike {
 
 // ── Pure discount logic (mirrors packages/shared/models/discountLogic.ts) ──
 
+/**
+ * Applies the admin's per-rule overrides on top of the automatic result.
+ *
+ * An override is a durable statement of intent that has to survive this
+ * function: `appliedDiscounts` is rewritten from the rules on every
+ * schedule change, so without a separate record an admin's "off" would be
+ * silently restored the next time anyone edited the schedule.
+ */
+function applyOverrides(
+  rules: DiscountRule[],
+  scope: DiscountScope,
+  auto: AppliedDiscount[],
+  overrides: Record<string, boolean> | undefined,
+): AppliedDiscount[] {
+  if (!overrides) return auto;
+  const now = new Date();
+  const kept = auto.filter(a => overrides[a.ruleId] !== false);
+  const forcedOn = rules
+    .filter(r => r.active && r.appliesTo.includes(scope) && r.trigger !== "manual")
+    .filter(r => overrides[r.id] === true && !kept.some(a => a.ruleId === r.id))
+    .map((r): AppliedDiscount => ({
+      ruleId: r.id, name: r.name, percentage: r.percentage, appliedAt: now, appliedBy: "admin",
+    }));
+  return [...kept, ...forcedOn];
+}
+
 function resolveAutoDiscounts(
   rules: DiscountRule[],
   scope: DiscountScope,
@@ -94,6 +120,7 @@ function triggerFieldsChanged(before: any, after: any): boolean {
     before.status !== after.status ||
     before.childId !== after.childId ||
     before.schoolName !== after.schoolName ||
+    JSON.stringify(before.discountOverrides) !== JSON.stringify(after.discountOverrides) ||
     before.weekPattern !== after.weekPattern ||
     JSON.stringify(before.schedule) !== JSON.stringify(after.schedule) ||
     JSON.stringify(before.days) !== JSON.stringify(after.days)
@@ -185,7 +212,9 @@ async function recalcForFamily(familyId: string): Promise<void> {
     });
 
     const schoolName = resolveSchoolName(childSchoolById.get(x.childId), x.schoolName);
-    const autoDiscounts = resolveAutoDiscounts(rules, "transport", fakeDays, schoolName, siblingCount);
+    const autoDiscounts = applyOverrides(rules, "transport",
+      resolveAutoDiscounts(rules, "transport", fakeDays, schoolName, siblingCount),
+      x.discountOverrides);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
     const scheduleLen: number = x.schedule?.length ?? 0;
@@ -218,7 +247,9 @@ async function recalcForFamily(familyId: string): Promise<void> {
     });
 
     const schoolName = resolveSchoolName(childSchoolById.get(x.childId), x.schoolName);
-    const autoDiscounts = resolveAutoDiscounts(rules, "study", [], schoolName, siblingCount);
+    const autoDiscounts = applyOverrides(rules, "study",
+      resolveAutoDiscounts(rules, "study", [], schoolName, siblingCount),
+      x.discountOverrides);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
     const grossFee: number = x.basePrice ?? x.monthlyPrice ?? 0;

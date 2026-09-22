@@ -60,6 +60,13 @@ export interface SubscriptionForReconciliation {
   /** Per-occurrence rate in cents: transportConfig.flatRatePerTrip / studyPerDayRate(studyConfig), x100. */
   ratePerOccurrenceCents: number;
   /**
+   * Admin overrides of the automatic discounts, by rule id: true = force on,
+   * false = force off, absent = let the automatic result stand. An overridden
+   * rule's structural calculation is suppressed and, when forced on, its
+   * percentage is applied flat in the institutional tier instead.
+   */
+  discountOverrides?: Record<string, boolean>;
+  /**
    * Whether the subscription's contract covers this billing period at all —
    * computed by the caller with contractCoversPeriod() below.
    *
@@ -73,8 +80,11 @@ export interface ReconciliationConfig {
   multiTripDiscountPct: number; // e.g. 0.10
   minTripsPerDay: number;       // e.g. 2 — the 1st trip that day is always full price
   siblingDiscountPct: number;   // e.g. 0.10
-  schoolDiscounts: { schoolName: string; discountPercentage: number }[];
+  schoolDiscounts: { schoolName: string; discountPercentage: number; ruleId?: string }[];
   returningStudentDiscountPct: number;
+  /** Rule ids, so a per-rule admin override can be matched to the step that implements it. */
+  multiTripRuleId?: string;
+  siblingRuleId?: string;
 }
 
 export interface ReconciledLineItem {
@@ -171,6 +181,19 @@ export function contractCoversPeriod(
   return true;
 }
 
+/**
+ * An admin's override for one rule, or undefined when they have no opinion.
+ *
+ * Kept as a named lookup rather than inlined because "undefined means no
+ * opinion" and "false means explicitly off" are different states, and reading
+ * the map directly invites collapsing them into one falsy check.
+ */
+function overrideFor(sub: SubscriptionForReconciliation, ruleId: string | undefined): boolean | undefined {
+  if (!ruleId) return undefined;
+  const v = sub.discountOverrides?.[ruleId];
+  return typeof v === "boolean" ? v : undefined;
+}
+
 export function reconcileService(
   subs: SubscriptionForReconciliation[],
   eventsBySub: Map<string, ReservationEventLite[]>,
@@ -235,7 +258,14 @@ export function reconcileService(
     for (const count of slotsByWeekday.values()) {
       if (count >= minTrips) eligibleSlots += count - (minTrips - 1);
     }
-    const discountEligibleCents = runsThisPeriod ? eligibleSlots * weeks * sub.ratePerOccurrenceCents : 0;
+    // An admin override replaces the marginal calculation with a flat
+    // percentage in the institutional tier (see overridePctFor), so the
+    // structural discount is suppressed in BOTH directions — forced off and
+    // forced on. Applying both would be the same double-count that the
+    // appliedBy label already caused once.
+    const multiTripOverridden = overrideFor(sub, cfg.multiTripRuleId) !== undefined;
+    const discountEligibleCents = runsThisPeriod && !multiTripOverridden
+      ? eligibleSlots * weeks * sub.ratePerOccurrenceCents : 0;
     const multiTripDiscountCents = Math.round(discountEligibleCents * cfg.multiTripDiscountPct);
 
     return {
@@ -255,13 +285,34 @@ export function reconcileService(
   });
 
   const step2 = ranked.map((item, idx) => {
-    const siblingDiscountCents = idx === 0 ? 0 : Math.round(item.subtotal * cfg.siblingDiscountPct);
+    // Same as multi-trip: an overridden sibling discount is applied flat
+    // below, never here. The subscription still takes part in the ranking —
+    // it is still one of the family's subscriptions, and removing it would
+    // change which sibling counts as child #1.
+    const siblingOverridden = overrideFor(item.sub, cfg.siblingRuleId) !== undefined;
+    const siblingDiscountCents = (idx === 0 || siblingOverridden)
+      ? 0 : Math.round(item.subtotal * cfg.siblingDiscountPct);
     return { ...item, siblingDiscountCents, subtotal: item.subtotal - siblingDiscountCents };
   });
 
   // ── Step 3: institutional discount (school + returning/manual), summed ──
   const step3 = step2.map(item => {
-    const schoolPct = cfg.schoolDiscounts.find(sd => matchesSchool(item.sub.schoolName, sd.schoolName))?.discountPercentage ?? 0;
+    // School is already a flat percentage, so an override only decides whether
+    // it applies at all — forced on, it applies without a name match.
+    const schoolRule = cfg.schoolDiscounts.find(sd => matchesSchool(item.sub.schoolName, sd.schoolName));
+    const schoolOverrides = cfg.schoolDiscounts
+      .map(sd => ({ sd, ov: overrideFor(item.sub, sd.ruleId) }))
+      .filter(x => x.ov !== undefined);
+    const schoolPct = schoolOverrides.length
+      ? schoolOverrides.reduce((n, x) => n + (x.ov ? x.sd.discountPercentage : 0), 0)
+      : (schoolRule?.discountPercentage ?? 0);
+
+    // Multi-trip and sibling, when an admin has overruled them: flat
+    // percentages here instead of their structural calculations above.
+    const overridePct =
+      (overrideFor(item.sub, cfg.multiTripRuleId) ? cfg.multiTripDiscountPct : 0)
+      + (overrideFor(item.sub, cfg.siblingRuleId) ? cfg.siblingDiscountPct : 0);
+
     const returningPct = item.sub.returningStudent ? cfg.returningStudentDiscountPct : 0;
 
     // The returning-student flag and an admin-applied ("manual") discount are
@@ -276,7 +327,7 @@ export function reconcileService(
     // added on top.
     const concessionPct = Math.max(returningPct, item.sub.manualDiscountPct);
 
-    const institutionalDiscountPct = Math.min(schoolPct + concessionPct, 1);
+    const institutionalDiscountPct = Math.min(schoolPct + concessionPct + overridePct, 1);
     const institutionalDiscountCents = Math.round(item.subtotal * institutionalDiscountPct);
     return { ...item, institutionalDiscountPct, institutionalDiscountCents, netBeforeAbsence: item.subtotal - institutionalDiscountCents };
   });
@@ -335,8 +386,10 @@ export function buildReconciliationConfig(
     multiTripDiscountPct: multiTripRule?.percentage ?? 0,
     minTripsPerDay: multiTripRule?.minTripsPerDay ?? 2,
     siblingDiscountPct: siblingRule?.percentage ?? 0,
-    schoolDiscounts: schoolRules.map(r => ({ schoolName: r.schoolName, discountPercentage: r.percentage })),
+    schoolDiscounts: schoolRules.map(r => ({ schoolName: r.schoolName, discountPercentage: r.percentage, ruleId: r.id })),
     returningStudentDiscountPct: serviceConfig?.returningStudentDiscountPercentage ?? 0,
+    multiTripRuleId: multiTripRule?.id,
+    siblingRuleId: siblingRule?.id,
   };
 }
 

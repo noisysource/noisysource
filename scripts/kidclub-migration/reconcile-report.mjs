@@ -276,6 +276,7 @@ const subForRecon = (sub, type, childRec, rate, rules, period) => ({
     : (sub.schedule ?? []).map(s => s.dayOfWeek),
   weekPattern: sub.weekPattern,
   ratePerOccurrenceCents: Math.round(rate * 100),
+  discountOverrides: sub.discountOverrides,
   coversPeriod: contractCoversPeriod(asDate(sub.startDate), asDate(sub.endDate), period.start, period.end),
 });
 
