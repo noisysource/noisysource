@@ -4,7 +4,7 @@ import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
-import { reconcileService, studyPerDayRate, resolveSchoolName, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
+import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -149,36 +149,6 @@ async function fetchChildRecords(childIds: string[]): Promise<Map<string, ChildR
     }
   }
   return out;
-}
-
-// Maps the config/discounts rules doc + service config into the flat shape
-// reconcileService() expects. Manual (admin-applied) discounts already
-// stored on the subscription are folded into the institutional tier, same
-// tier as school/returning-student — they're all "a percentage on the
-// post-sibling subtotal," just from different sources.
-function buildReconciliationConfig(
-  type: "study" | "transport",
-  rules: any[],
-  serviceConfig: any,
-): ReconciliationConfig {
-  const multiTripRule = rules.find(r => r.active && r.trigger === "auto_multitrip" && r.appliesTo?.includes(type));
-  const siblingRule = rules.find(r => r.active && r.trigger === "auto_sibling" && r.appliesTo?.includes(type));
-  const schoolRules = rules.filter(r => r.active && r.trigger === "auto_school" && r.appliesTo?.includes(type) && r.schoolName);
-  return {
-    multiTripDiscountPct: multiTripRule?.percentage ?? 0,
-    minTripsPerDay: multiTripRule?.minTripsPerDay ?? 2,
-    siblingDiscountPct: siblingRule?.percentage ?? 0,
-    schoolDiscounts: schoolRules.map(r => ({ schoolName: r.schoolName, discountPercentage: r.percentage })),
-    returningStudentDiscountPct: serviceConfig?.returningStudentDiscountPercentage ?? 0,
-  };
-}
-
-function manualDiscountPctFor(sub: any, rules: any[]): number {
-  const manual: { percentage: number }[] = (sub.appliedDiscounts ?? []).filter((ad: any) => {
-    const rule = rules.find(r => r.id === ad.ruleId);
-    return rule?.trigger === "manual" || ad.appliedBy === "admin";
-  });
-  return manual.reduce((s, d) => s + d.percentage, 0);
 }
 
 // ── Build Vendus invoice for a billing record ─────────────────────────────────
@@ -408,6 +378,17 @@ async function computeLineItems(
     return raw ? new Date(raw) : new Date(0);
   };
 
+  const asDate = (raw: any): Date | null => {
+    if (!raw) return null;
+    const d = raw.toDate ? raw.toDate() : new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  };
+  // Whether the flat monthly price applies at all this period. Contract dates
+  // only — a month outside the school year is still a month of the 12-month
+  // spread. See contractCoversPeriod.
+  const coversPeriodOf = (sub: any): boolean =>
+    contractCoversPeriod(asDate(sub.startDate), asDate(sub.endDate), period.start, period.end);
+
   if (group.study.length) {
     const cfg = buildReconciliationConfig("study", configs.discountRules, configs.studyConfig);
     const studyRate = studyPerDayRate(configs.studyConfig);
@@ -421,6 +402,7 @@ async function computeLineItems(
       scheduleWeekdays: (sub.days ?? []).map((d: any) => d.day),
       weekPattern: sub.weekPattern,
       ratePerOccurrenceCents: Math.round(studyRate * 100),
+      coversPeriod: coversPeriodOf(sub),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
       const sub = group.study.find(s => s.id === r.subscriptionId)!;
@@ -456,6 +438,7 @@ async function computeLineItems(
       scheduleWeekdays: (sub.schedule ?? []).map((sl: any) => sl.dayOfWeek),
       weekPattern: sub.weekPattern,
       ratePerOccurrenceCents: Math.round(tripRate * 100),
+      coversPeriod: coversPeriodOf(sub),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
       const sub = group.transport.find(s => s.id === r.subscriptionId)!;

@@ -346,6 +346,9 @@ describe("boundary month — subscription STARTS mid-month", () => {
       [{
         id: "s1", childId: "c1", manualDiscountPct: 0, enrollmentDate: new Date("2026-09-01"),
         scheduleWeekdays: MON_FRI.map(d => d.day), weekPattern: "all", ratePerOccurrenceCents: 600,
+        // The boundary month itself: the contract covers it, and the days
+        // outside the contract are what the absence credit pro-rates.
+        coversPeriod: true,
       }],
       new Map([["s1", events.map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status }))]]),
       { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
@@ -402,6 +405,9 @@ describe("boundary month — subscription ENDS mid-month", () => {
       [{
         id: "s1", childId: "c1", manualDiscountPct: 0, enrollmentDate: new Date("2026-09-01"),
         scheduleWeekdays: MON_FRI.map(d => d.day), weekPattern: "all", ratePerOccurrenceCents: 600,
+        // The boundary month itself: the contract covers it, and the days
+        // outside the contract are what the absence credit pro-rates.
+        coversPeriod: true,
       }],
       new Map([["s1", events.map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status }))]]),
       { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
@@ -419,6 +425,9 @@ describe("boundary month — subscription ENDS mid-month", () => {
       [{
         id: "s1", childId: "c1", manualDiscountPct: 0, enrollmentDate: new Date("2026-09-01"),
         scheduleWeekdays: MON_FRI.map(d => d.day), weekPattern: "all", ratePerOccurrenceCents: 600,
+        // The boundary month itself: the contract covers it, and the days
+        // outside the contract are what the absence credit pro-rates.
+        coversPeriod: true,
       }],
       new Map([["s1", events.map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status }))]]),
       { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },

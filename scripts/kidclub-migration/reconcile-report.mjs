@@ -118,7 +118,8 @@ function loadProductionModules() {
 }
 
 const { recon, events: ev } = loadProductionModules();
-const { reconcileService, studyPerDayRate, resolveSchoolName } = recon;
+const { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod,
+        buildReconciliationConfig, manualDiscountPctFor } = recon;
 const {
   generateStudyEvents, generateTransportEvents,
   resolveGenerationWindowStart, resolveGenerationWindowEnd,
@@ -260,7 +261,9 @@ function eventsForPeriod(sub, type, rate, period, ctx) {
 
 // ── Building one family-period comparison ───────────────────────────────────
 
-const subForRecon = (sub, type, childRec, rate, rules) => ({
+const asDate = (raw) => { if (!raw) return null; const d = new Date(raw); return Number.isNaN(d.getTime()) ? null : d; };
+
+const subForRecon = (sub, type, childRec, rate, rules, period) => ({
   id: sub.id,
   childId: sub.childId,
   schoolName: resolveSchoolName(childRec?.schoolName, sub.schoolName),
@@ -273,30 +276,17 @@ const subForRecon = (sub, type, childRec, rate, rules) => ({
     : (sub.schedule ?? []).map(s => s.dayOfWeek),
   weekPattern: sub.weekPattern,
   ratePerOccurrenceCents: Math.round(rate * 100),
+  coversPeriod: contractCoversPeriod(asDate(sub.startDate), asDate(sub.endDate), period.start, period.end),
 });
 
-// Both mirror billing.ts exactly.
-function manualDiscountPctFor(sub, rules) {
-  return (sub.appliedDiscounts ?? [])
-    .filter(ad => { const r = rules.find(r => r.id === ad.ruleId); return r?.trigger === "manual" || ad.appliedBy === "admin"; })
-    .reduce((s, d) => s + d.percentage, 0);
-}
+// enrollmentDateOf mirrors billing.ts. manualDiscountPctFor and
+// buildReconciliationConfig are imported from reconciliation.ts rather than
+// copied — an earlier copy of manualDiscountPctFor here silently kept the
+// appliedBy double-count alive after billing.ts had been fixed.
 function enrollmentDateOf(sub) {
   const raw = sub.createdAt ?? sub.startDate;
   const d = raw ? new Date(raw) : new Date(0);
   return Number.isNaN(d.getTime()) ? new Date(0) : d;
-}
-function buildReconciliationConfig(type, rules, serviceConfig) {
-  const multi = rules.find(r => r.active && r.trigger === "auto_multitrip" && r.appliesTo?.includes(type));
-  const sib = rules.find(r => r.active && r.trigger === "auto_sibling" && r.appliesTo?.includes(type));
-  const schools = rules.filter(r => r.active && r.trigger === "auto_school" && r.appliesTo?.includes(type) && r.schoolName);
-  return {
-    multiTripDiscountPct: multi?.percentage ?? 0,
-    minTripsPerDay: multi?.minTripsPerDay ?? 2,
-    siblingDiscountPct: sib?.percentage ?? 0,
-    schoolDiscounts: schools.map(r => ({ schoolName: r.schoolName, discountPercentage: r.percentage })),
-    returningStudentDiscountPct: serviceConfig?.returningStudentDiscountPercentage ?? 0,
-  };
 }
 
 /** Why a subscription's amount moved, in the pipeline's own terms. */
@@ -411,10 +401,12 @@ async function main() {
           // is a divergence worth reporting whatever the cause. Suppressing
           // every out-of-contract EUR 0 would hide the August 2027 cliff,
           // which is a real one (see below) rather than a quiet non-event.
-          if (!list.length && (record || !outOfContract)) {
-            const why = noEndDate ? "no endDate and no config/schoolCalendar.yearEndDate"
-              : outOfContract ? `period lies outside the generation window (school year ends ${ctx.schoolYearEnd ? isoOf(ctx.schoolYearEnd) : "?"})`
-              : "schedule produced no occurrences";
+          // A period with no events that nonetheless bills the flat price is
+          // now the correct August case, not a warning. Only a subscription
+          // whose contract does NOT cover the period is silently EUR 0.
+          const covers = contractCoversPeriod(asDate(sub.startDate), asDate(sub.endDate), period.start, period.end);
+          if (!list.length && !covers && record) {
+            const why = "a billing record exists but the subscription's contract does not cover this period";
             warnZeroEvents.push({ periodKey, familyId, subId: sub.id, type, childName: sub.childName,
               hasRecord: !!record, why });
           }
@@ -430,16 +422,13 @@ async function main() {
             }
           }
         }
-        // FLAG (e): an AUTO rule stamped appliedBy "admin" is counted twice.
-        // manualDiscountPctFor() treats `appliedBy === "admin"` as a manual
-        // concession regardless of the rule's trigger, while reconcileService
-        // independently recomputes the auto discount from the schedule. So the
-        // same rule lands once structurally and once as a flat percentage.
-        //
-        // This is reachable through ordinary admin use, not a data accident:
-        // SubscriptionsAdminPage's resolveSelected() stamps appliedBy "admin"
-        // on any rule the admin has TOGGLED, even an auto one toggled back to
-        // the state it already had.
+        // FLAG (e): an AUTO rule stored with appliedBy "admin". Harmless now
+        // that manualDiscountPctFor() keys on the rule's trigger — the
+        // discount is applied once, by the pipeline step that owns it — but
+        // still reported, because the label is wrong in the data and it is
+        // what caused the double-count this report originally found. If the
+        // percentage ever goes back to being read off appliedBy, these are the
+        // subscriptions that would silently double-discount again.
         for (const sub of group) {
           for (const ad of sub.appliedDiscounts ?? []) {
             const rule = rules.find(r => r.id === ad.ruleId);
@@ -451,7 +440,7 @@ async function main() {
         }
 
         const cfg = buildReconciliationConfig(type, rules, serviceCfg);
-        const forRecon = group.map(sub => subForRecon(sub, type, childById.get(sub.childId), rate, rules));
+        const forRecon = group.map(sub => subForRecon(sub, type, childById.get(sub.childId), rate, rules, period));
         for (const r of reconcileService(forRecon, eventsBySub, cfg)) {
           const sub = group.find(s => s.id === r.subscriptionId);
           newLines.push({
@@ -575,8 +564,8 @@ function report({ rows, warnZeroEvents, warnReprice, warnInvoiced, warnNoFamily,
 
   const dcSeen = new Set();
   const dcUnique = warnDoubleCount.filter(w => { const k = `${w.subId}|${w.ruleId}`; if (dcSeen.has(k)) return false; dcSeen.add(k); return true; });
-  line(`\n(e) AUTO rule stamped appliedBy "admin" — counted BOTH structurally and as a manual concession (${dcUnique.length} subscription/rule pairs)`);
-  for (const w of dcUnique) line(`    ${w.type.padEnd(9)} ${w.subId}  ${w.childName ?? "?"} — "${w.ruleName}" (${w.trigger}, ${(w.pct * 100).toFixed(0)}%) double-counted`);
+  line(`\n(e) AUTO rule stored with appliedBy "admin" — applied once (label is wrong, arithmetic is not) (${dcUnique.length} subscription/rule pairs)`);
+  for (const w of dcUnique) line(`    ${w.type.padEnd(9)} ${w.subId}  ${w.childName ?? "?"} — "${w.ruleName}" (${w.trigger}, ${(w.pct * 100).toFixed(0)}%)`);
   if (!dcUnique.length) line("    none.");
 
   line(`\n(d) Active subscriptions with no familyId — generate no events at all (${warnNoFamily.length})`);

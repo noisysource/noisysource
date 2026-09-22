@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcileService, resolveSchoolName, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
+import { reconcileService, resolveSchoolName, contractCoversPeriod, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -17,6 +17,7 @@ function sub(overrides: Partial<SubscriptionForReconciliation> & { id: string })
     scheduleWeekdays: WEEKDAYS,
     weekPattern: "all",
     ratePerOccurrenceCents: 600,
+    coversPeriod: true,
     ...overrides,
   };
 }
@@ -125,9 +126,29 @@ describe("VOIDED occurrences (flat pricing makes this a per-period on/off switch
     expect(r.finalCents).toBe(0);
   });
 
-  it("a subscription with no events at all produces a zero-value line item, not an error", () => {
+  // This is the August case. Event generation stops at the school year end, so
+  // August produces no occurrences for anyone; under the old "no events -> EUR
+  // 0" rule every active subscription silently billed nothing. The annual fee
+  // is spread over 12 months, so a month with no school days still bills.
+  it("no events at all still bills the flat price when the contract covers the period (August)", () => {
     const s = sub({ id: "s1" });
     const [r] = reconcileService([s], new Map<string, ReservationEventLite[]>(), NO_DISCOUNTS);
+    expect(r.grossCents).toBe(12000);
+    expect(r.finalCents).toBe(12000);
+    expect(r.absenceCount).toBe(0);
+  });
+
+  it("no events and the contract does not cover the period produces a zero-value line item, not an error", () => {
+    const s = sub({ id: "s1", coversPeriod: false });
+    const [r] = reconcileService([s], new Map<string, ReservationEventLite[]>(), NO_DISCOUNTS);
+    expect(r.grossCents).toBe(0);
+    expect(r.finalCents).toBe(0);
+  });
+
+  it("an all-VOIDED period still bills EUR 0 even though the contract covers it", () => {
+    const s = sub({ id: "s1" });
+    const events = new Map([["s1", [ev("2026-10-05", 600, "VOIDED"), ev("2026-10-06", 600, "VOIDED")]]]);
+    const [r] = reconcileService([s], events, NO_DISCOUNTS);
     expect(r.grossCents).toBe(0);
     expect(r.finalCents).toBe(0);
   });
@@ -526,5 +547,65 @@ describe("resolveSchoolName", () => {
     });
     expect(r.institutionalDiscountPct).toBe(0.2);
     expect(r.institutionalDiscountCents).toBe(2400); // 20% of EUR 120 flat gross
+  });
+});
+
+// ── Contract window vs school year ──────────────────────────────────────────
+
+describe("contractCoversPeriod", () => {
+  const aug = [new Date(2027, 7, 1), new Date(2027, 7, 31)] as const;
+
+  it("covers a month past the school year end when the contract is open-ended", () => {
+    expect(contractCoversPeriod(null, null, ...aug)).toBe(true);
+  });
+
+  it("covers August for a subscription that started during the year", () => {
+    expect(contractCoversPeriod(new Date(2026, 8, 1), null, ...aug)).toBe(true);
+  });
+
+  it("excludes a period entirely before the subscription starts", () => {
+    expect(contractCoversPeriod(new Date(2027, 9, 1), null, ...aug)).toBe(false);
+  });
+
+  it("excludes a period entirely after the subscription ended", () => {
+    expect(contractCoversPeriod(null, new Date(2027, 5, 30), ...aug)).toBe(false);
+  });
+
+  it("includes the boundary months at both ends", () => {
+    expect(contractCoversPeriod(new Date(2027, 7, 31), null, ...aug)).toBe(true);
+    expect(contractCoversPeriod(null, new Date(2027, 7, 1), ...aug)).toBe(true);
+  });
+});
+
+// ── An admin-toggled AUTO discount is applied once, not twice ───────────────
+
+describe("an automatic discount an admin has toggled is never applied twice", () => {
+  // Carolina Almeida's real shape: 10 legs a week, Bissaya Barreto, and the
+  // Multi-viagem rule stored with appliedBy "admin" after an admin ticked it.
+  // manualDiscountPctFor now keys on the rule's trigger, so manualDiscountPct
+  // is 0 here and multi-trip is applied only by the step that owns it.
+  const cfg: ReconciliationConfig = {
+    multiTripDiscountPct: 0.1, minTripsPerDay: 2, siblingDiscountPct: 0.1,
+    schoolDiscounts: [{ schoolName: "Colégio Bissaya Barreto", discountPercentage: 0.2 }],
+    returningStudentDiscountPct: 0.15,
+  };
+  const carolina = (manualDiscountPct: number) => sub({
+    id: "carolina", schoolName: "Colégio Bissaya Barreto", manualDiscountPct,
+    scheduleWeekdays: ["monday", "monday", "tuesday", "tuesday", "wednesday",
+      "wednesday", "thursday", "thursday", "friday", "friday"],
+  });
+
+  it("applies the multi-trip discount once: EUR 182.40", () => {
+    const [r] = reconcileService([carolina(0)], new Map([["carolina", occurrences(20)]]), cfg);
+    expect(r.grossCents).toBe(24000);
+    expect(r.multiTripDiscountCents).toBe(1200);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.2);
+    expect(r.finalCents).toBe(18240);
+  });
+
+  it("counting the same auto rule again as a manual concession is what produced EUR 159.60", () => {
+    const [r] = reconcileService([carolina(0.1)], new Map([["carolina", occurrences(20)]]), cfg);
+    expect(r.institutionalDiscountPct).toBeCloseTo(0.3);
+    expect(r.finalCents).toBe(15960);
   });
 });

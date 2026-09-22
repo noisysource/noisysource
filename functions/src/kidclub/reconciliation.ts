@@ -59,6 +59,14 @@ export interface SubscriptionForReconciliation {
   weekPattern?: string;
   /** Per-occurrence rate in cents: transportConfig.flatRatePerTrip / studyPerDayRate(studyConfig), x100. */
   ratePerOccurrenceCents: number;
+  /**
+   * Whether the subscription's contract covers this billing period at all —
+   * computed by the caller with contractCoversPeriod() below.
+   *
+   * This, not the presence of occurrences, is what decides whether the flat
+   * monthly price applies. See the note on runsThisPeriod in reconcileService.
+   */
+  coversPeriod: boolean;
 }
 
 export interface ReconciliationConfig {
@@ -139,6 +147,30 @@ function matchesSchool(schoolName: string | undefined, ruleSchoolName: string): 
   return a.includes(b) || b.includes(a);
 }
 
+/**
+ * Does this subscription's contract overlap the billing period?
+ *
+ * Deliberately NOT clamped to the school year. The annual fee is spread over
+ * 12 months, so August — which contains no school days at all and therefore no
+ * occurrences — still bills the flat price. A missing startDate/endDate means
+ * "open at that end", which is the common case: 19 of 21 active transport
+ * subscriptions carry neither.
+ *
+ * Ending a subscription is expressed as an endDate or a cancellation, never as
+ * "the school year ran out" — that is the distinction this function exists to
+ * preserve.
+ */
+export function contractCoversPeriod(
+  startDate: Date | null | undefined,
+  endDate: Date | null | undefined,
+  periodStart: Date,
+  periodEnd: Date,
+): boolean {
+  if (startDate && startDate > periodEnd) return false;
+  if (endDate && endDate < periodStart) return false;
+  return true;
+}
+
 export function reconcileService(
   subs: SubscriptionForReconciliation[],
   eventsBySub: Map<string, ReservationEventLite[]>,
@@ -146,7 +178,8 @@ export function reconcileService(
 ): ReconciledLineItem[] {
   // ── Step 1: flat gross + marginal multi-trip, per subscription ─────────
   const step1 = subs.map(sub => {
-    const events = (eventsBySub.get(sub.id) ?? []).filter(e => e.status !== "VOIDED");
+    const rawEvents = eventsBySub.get(sub.id) ?? [];
+    const events = rawEvents.filter(e => e.status !== "VOIDED");
 
     // VOIDED under flat pricing is a per-PERIOD on/off switch, not a
     // per-occurrence deduction. Voiding happens from today forward when a
@@ -167,7 +200,22 @@ export function reconcileService(
     // is not a pricing concept. One consequence worth knowing: the >=3
     // threshold still applies, so a cancellation in the last couple of days
     // of a month credits nothing and bills the month in full.
-    const runsThisPeriod = events.length > 0;
+    //
+    // Whether the period is billable comes from the CONTRACT, not from the
+    // event count. "No events -> EUR 0" was the earlier rule and it silently
+    // zeroed August: event generation stops at
+    // config/schoolCalendar.yearEndDate (2027-07-15), so August 2027 produced
+    // no occurrences for anyone and 22 active subscriptions with existing
+    // billing records computed EUR 0 — EUR 1,800 in one month, against
+    // decision 1's explicit "no EUR 0 August". A month with no school days is
+    // still a month of the 12-month spread. A subscription stops billing
+    // because it ended or was cancelled, which is what coversPeriod encodes.
+    //
+    // "All occurrences VOIDED" is kept as a separate EUR 0: that means the
+    // subscription was already over before the period began, and unlike an
+    // empty list it is positive evidence rather than an absence of evidence.
+    const allVoided = rawEvents.length > 0 && events.length === 0;
+    const runsThisPeriod = sub.coversPeriod && !allVoided;
 
     const weeks = activeWeeksInPattern(sub.weekPattern);
     const scheduleLength = sub.scheduleWeekdays.length;
@@ -261,4 +309,56 @@ export function reconcileService(
       finalCents: Math.max(0, item.netBeforeAbsence - absenceCreditCents),
     };
   });
+}
+
+// ── Config mapping ──────────────────────────────────────────────────────────
+// These two live here rather than in billing.ts because they are pure and
+// because they decide money: the Phase 3 reconciliation report has to apply
+// exactly the same rules, and a second copy of manualDiscountPctFor in the
+// report script is precisely how the appliedBy double-count stayed invisible
+// for a run longer than it needed to.
+
+// Maps the config/discounts rules doc + service config into the flat shape
+// reconcileService() expects. Manual (admin-applied) discounts already
+// stored on the subscription are folded into the institutional tier, same
+// tier as school/returning-student — they're all "a percentage on the
+// post-sibling subtotal," just from different sources.
+export function buildReconciliationConfig(
+  type: "study" | "transport",
+  rules: any[],
+  serviceConfig: any,
+): ReconciliationConfig {
+  const multiTripRule = rules.find(r => r.active && r.trigger === "auto_multitrip" && r.appliesTo?.includes(type));
+  const siblingRule = rules.find(r => r.active && r.trigger === "auto_sibling" && r.appliesTo?.includes(type));
+  const schoolRules = rules.filter(r => r.active && r.trigger === "auto_school" && r.appliesTo?.includes(type) && r.schoolName);
+  return {
+    multiTripDiscountPct: multiTripRule?.percentage ?? 0,
+    minTripsPerDay: multiTripRule?.minTripsPerDay ?? 2,
+    siblingDiscountPct: siblingRule?.percentage ?? 0,
+    schoolDiscounts: schoolRules.map(r => ({ schoolName: r.schoolName, discountPercentage: r.percentage })),
+    returningStudentDiscountPct: serviceConfig?.returningStudentDiscountPercentage ?? 0,
+  };
+}
+
+// Only a genuinely MANUAL rule counts as a manual concession. The earlier
+// version also counted anything stamped `appliedBy: "admin"`, whatever the
+// rule's trigger — which double-charged the automatic discounts, because
+// reconcileService recomputes multi-trip/sibling/school structurally and would
+// then add the same rule again as a flat percentage.
+//
+// An admin ticking an automatic rule is not a second concession: the admin UI
+// (SubscriptionsAdminPage.toggleManualDiscount) stamps `appliedBy: "admin"` on
+// whichever rule was clicked, including an automatic one, so the label records
+// who last touched the row rather than what kind of discount it is. Two live
+// subscriptions were in that state (Carolina Almeida, Maria Manon) and would
+// each have received 30% instead of 20% at cutover. Keyed on `trigger`, an
+// auto rule toggled by an admin is applied exactly once, by the pipeline step
+// that owns it.
+//
+// A discount whose rule no longer exists is ignored rather than trusted: its
+// percentage is unverifiable, and there are none in prod today.
+export function manualDiscountPctFor(sub: any, rules: any[]): number {
+  const manual: { percentage: number }[] = (sub.appliedDiscounts ?? []).filter((ad: any) =>
+    rules.find(r => r.id === ad.ruleId)?.trigger === "manual");
+  return manual.reduce((s, d) => s + d.percentage, 0);
 }

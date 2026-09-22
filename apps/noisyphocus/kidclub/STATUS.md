@@ -10,7 +10,7 @@ The event-sourcing rewrite is merged to `staging` and validated on dev. This sec
 the plan for getting **real prod data** onto it. It was produced from a read-only analysis
 of live prod (21 active transport subs, 13 active study subs, 228 billing records, 0
 `reservationEvents`, 13 `eventModifications`) plus an offline simulation of the new
-pipeline against that data. Seven decisions were taken with Renato on 2026-09-22 and are
+pipeline against that data. Ten decisions were taken with Renato on 2026-09-22 and are
 recorded below — **do not re-litigate them, they are settled.**
 
 ### ⚠️ Branch off `staging`, NOT `main`
@@ -31,6 +31,8 @@ and is wrong for this effort specifically.
 | 5 | **Invoiced periods frozen**, plus a divergence report. | The 5 invoiced records are never recomputed. Where the new model disagrees with an issued fiscal document (e.g. Sept: system €200.64 vs invoiced €169.20), it is reported, not silently corrected. |
 | 6 | **All 35 auto-cancelled billing records → `pending`.** Default to `pending` wherever ambiguous. | Renato cancels individually in the app afterwards. Restores billing for José Miguel Duarte (~€113/mo) and Edson (~€72/mo), whose subs are active but records cancelled. |
 | 7 | **Orphan subscriptions get real family records.** | A parent never logging in does not mean no family. Minimal `families/{id}` created from `contactEmail`; the *account* link (`primaryContact.userId`) arrives on first login. |
+| 9 | **An automatic discount an admin has toggled is applied once, never twice.** `manualDiscountPctFor` keys on the rule's `trigger`, not on the `appliedBy` label. | Admins can freely toggle auto discounts; the label records who touched the row, not a second concession. |
+| 10 | **A billable period is decided by the contract, not by the event count.** August bills the flat price despite having no occurrences; subscriptions are cancelled manually. | `endDate` becomes a money field — see the Phase 3 section for the inconsistent prod values. |
 | 8 | **No pro-rating. Boundary months adjust via the absence credit.** (settled 2026-09-22, after flat pricing exposed the gap) | A subscription starting or ending mid-month bills the full month; the days not served are written as system `CANCELLED` events so the existing >=3-absence credit pro-rates it. No new pricing concept. See "Boundary months" below. |
 
 ### Boundary months — how decision 8 actually works
@@ -268,48 +270,51 @@ deliberately.
 rewrites its schoolName mirror from the child's value. For the subs storing a street address
 that is a correction, not a regression — and per the measurement above it moves no fee today.
 
-### 🔴 Phase 3 findings — the report disagrees with the baseline, twice (2026-09-22)
+### Phase 3 — report written, two findings found AND FIXED (2026-09-22)
 
-`scripts/kidclub-migration/reconcile-report.mjs` is written and has been run read-only
-against prod. It reproduces the baseline **structurally** — 17 families, **10 unchanged**,
-Oct–July all identical at EUR 2,095.44 (flat pricing removing calendar variance, exactly as
-decision 1 intends), July billing in full (no half-month) — and it reproduces **José Eduardo
-EUR 165.12 and Mogo EUR 210.00 exactly**. It disagrees on the other two, and on August.
-Both disagreements are real; neither is a reporting error.
+`scripts/kidclub-migration/reconcile-report.mjs`, run read-only against prod, initially
+disagreed with the 2026-09-20 baseline on two of the four reference families and on August.
+Both disagreements were real. **Both are now fixed, and the report reproduces the baseline
+exactly: Carolina EUR 182.40, José Eduardo EUR 165.12, Maria Manon EUR 130.56, Mogo
+EUR 210.00, 10 of 17 families unchanged, +EUR 53.28/month.** 118 tests green, typecheck clean.
 
-**Finding 1 — an auto discount stamped `appliedBy: "admin"` is counted twice.**
-`manualDiscountPctFor()` (`billing.ts:179`) treats *any* `appliedBy === "admin"` entry as a
-manual concession, whatever the rule's trigger, while `reconcileService()` independently
-recomputes the auto discount from the schedule. So the same rule lands once structurally and
-once again as a flat percentage. This is the returningStudent double-discount bug over
-again, through a different door.
+**Decision 9 (settled 2026-09-22): an automatic discount an admin has toggled is applied
+once, never twice.** `manualDiscountPctFor()` counted any `appliedBy: "admin"` entry as a
+manual concession whatever the rule's trigger, while `reconcileService()` recomputes
+multi-trip/sibling/school structurally — so an auto rule an admin had ticked landed twice.
+`SubscriptionsAdminPage.toggleManualDiscount()` stamps `appliedBy: "admin"` on whichever rule
+was clicked, including an automatic one, so the label records *who last touched the row*, not
+what kind of discount it is. Two live subscriptions were in that state (Carolina, Maria
+Manon) and would each have taken 30% instead of 20% **at cutover** — prod runs the old code,
+which simply sums the percentages once, so nothing was ever mischarged. Now keyed on
+`trigger`. Report flag (e) still lists the mislabelled rows.
 
-It is reachable through **ordinary admin use**, not a data accident:
-`SubscriptionsAdminPage.resolveSelected()` (line ~790) stamps `appliedBy: "admin"` on any
-rule the admin has *toggled* — including an auto rule toggled back to the state it already
-had. Two live subscriptions are in that state today, both stamped after the 2026-09-20
-baseline was recorded (Carolina 2026-09-20 14:27, Maria Manon 2026-09-22 10:50), which is
-why the baseline and the report disagree on exactly those two:
+**Decision 10 (settled 2026-09-22): a billable period is decided by the CONTRACT, not by the
+event count.** `runsThisPeriod = events.length > 0` silently zeroed August: generation stops
+at `config/schoolCalendar.yearEndDate` (2027-07-15), so August 2027 produced no occurrences
+for anyone and 22 active subscriptions with existing billing records computed EUR 0 —
+EUR 1,800 in one month, against decision 1's explicit "no EUR 0 August". Now
+`sub.coversPeriod && !allVoided`, via the new pure `contractCoversPeriod()`. A month with no
+school days is still a month of the 12-month spread; a subscription stops billing because it
+ended or was cancelled. **"All occurrences VOIDED" is kept as a separate EUR 0** — that is
+positive evidence the subscription was already over, unlike an empty list.
 
-| Family | Baseline | Report | Cause |
-|---|---|---|---|
-| Carolina Almeida | 182.40 | 159.60 | `Multi-viagem` 10% counted twice (inst. 30% not 20%) |
-| Maria Manon | 130.56 | 114.24 | same |
+Renato's accompanying instruction: **next August, subscriptions are cancelled manually** when
+a parent or admin decides, rather than lapsing automatically at the school year end.
 
-Dropping the `|| ad.appliedBy === "admin"` clause reproduces **all four** reference figures
-exactly (182.40 / 130.56 / 165.12 / 210.00). That one-clause change is the likely fix, but it
-is a money change and **was deliberately not made** — it needs Renato's call on the real
-question: is an admin toggling an auto rule expressing "also give this family an extra 10%",
-or just re-saving the row? The report flags every occurrence as **flag (e)**.
+**⚠️ Consequence — `endDate` is now a money field, and prod's values are inconsistent.**
+Under the old rule `endDate` barely mattered; it now decides whether August bills. Of 34
+active subscriptions, **18 have no `endDate` at all** (open-ended -> bill August), while the
+16 that do split three ways: `2027-07-30` (6 subs -> **EUR 0 in August**, flagged as (a)),
+`2027-09-07`, and `2027-09-18`. Those six are the difference between the August total billing
+EUR 2,134.56 and EUR 1,621.44. If the intent is that everyone bills August and is then
+cancelled by hand, **those `2027-07-30` endDates need clearing** — that is a Phase 2 data
+repair nobody has scheduled yet, and it is not covered by the identity script.
 
-**Finding 2 — August 2027 bills EUR 0 for everyone, contradicting decision 1.**
-Decision 1 says "no EUR 0 August"; the pipeline produces exactly that. `config/schoolCalendar.yearEndDate`
-is `2027-07-15`, so no events are generated past it, and `runsThisPeriod = events.length > 0`
-then zeroes gross. **22 active subscriptions across 16 existing Agosto 2027 billing records
-go to EUR 0 — a EUR 1,800 cliff in a single month.** July is fine (bills the full flat price
-off a half-month of occurrences, as intended). This is the "no events -> EUR 0" hazard already
-recorded above, now with a concrete date and price on it. Not fixed here — it needs a decision
-on how the 12-month spread survives a school year that ends in July.
+**Moved for a reason:** `buildReconciliationConfig()` and `manualDiscountPctFor()` now live in
+`reconciliation.ts`, not `billing.ts`. They are pure and they decide money, and the report
+script had its own copy of `manualDiscountPctFor` — which kept the double-count alive in the
+report for a run *after* `billing.ts` had been fixed. One copy, imported by both.
 
 ### The report itself
 
@@ -322,26 +327,34 @@ on any use, so the script cannot write to any project even by mistake. Prod is r
 
 It **compiles and calls the real `reconciliation.ts` and `reservationEvents.ts`** out of
 `functions/src` rather than reimplementing the money math — a second implementation would
-only prove it agrees with itself, and would drift. Because prod holds zero `reservationEvents`,
-it simulates the events Phase 2 would write (same window/bounds rules as `ensureEventsExist`),
-overlays any events that do exist (so it stays correct on dev after an import), and overlays
-decision 4's historical absences: 75 `excludedDates` + 13 `eventModifications`. The
-`eventModifications` timestamps are converted in **Europe/Lisbon**, not by slicing the ISO
-string — `2026-09-24T23:00:00Z` is the 25th here, the same off-by-one commit `eb905ed` fixed
-in the admin calendar, and a wrong day that still lands in the month is invisible in a total.
+only prove it agrees with itself, and would drift (as the `manualDiscountPctFor` copy did).
+Because prod holds zero `reservationEvents`, it simulates the events Phase 2 would write
+(same window/bounds rules as `ensureEventsExist`), overlays any events that do exist (so it
+stays correct on dev after an import), and overlays decision 4's historical absences: 75
+`excludedDates` + 13 `eventModifications`. The `eventModifications` timestamps are converted
+in **Europe/Lisbon**, not by slicing the ISO string — `2026-09-24T23:00:00Z` is the 25th here,
+the same off-by-one commit `eb905ed` fixed in the admin calendar, and a wrong day that still
+lands in the month is invisible in a total.
 
-Flags, all firing against prod today: **(a)** zero events in a billable period — 22 subs in
-2027-08; **(b)** frozen `basePriceCents` vs the live rate — dormant until Phase 2 creates
-events, and says so rather than reporting a false "none"; **(c)** the 5 invoiced periods,
+Flags against prod today: **(a)** 6 subs with an August billing record their contract does not
+cover; **(b)** frozen `basePriceCents` vs the live rate — dormant until Phase 2 creates events,
+and says so rather than reporting a false "none"; **(c)** 4 invoiced periods that diverge,
 reported and never recomputed, per decision 5; **(d)** 11 active subs with no `familyId`;
-**(e)** the double-counted auto discounts from finding 1.
+**(e)** the 2 mislabelled auto discounts.
 
-**Re-measured 2026-09-22** (moving targets, per the note above): **4** active transport subs
-still have no `childId` — unchanged. **0 of 21** active transport subs change their Bissaya
-match when sourced from the child record — unchanged. One active *study* sub carries a
-`childId` pointing at a child document that no longer exists; `resolveSchoolName` treats that
-as absent and falls back to the subscription mirror, so it is safe, but it is another reason
-step 4 must not delete the mirror before the identity repairs land.
+**Still open, NOT fixed:** an admin *un-ticking* an automatic discount has no effect. The new
+pipeline computes multi-trip/sibling/school structurally and never consults
+`appliedDiscounts` for them, and `discountRecalc` rewrites `appliedDiscounts` from the rules
+on every trigger-field change anyway — so "off" is not durably representable in either
+pipeline. Pre-existing, not introduced here, but it is the other half of "admins can toggle
+automatic discounts on and off".
+
+**Re-measured 2026-09-22** (moving targets): **4** active transport subs still have no
+`childId` — unchanged. **0 of 21** change their Bissaya match when sourced from the child
+record — unchanged. One active *study* sub carries a `childId` pointing at a child document
+that no longer exists; `resolveSchoolName` treats that as absent and falls back to the
+subscription mirror, so it is safe, but it is another reason step 4 must not delete the
+mirror before the identity repairs land.
 
 ### Expected money impact
 
