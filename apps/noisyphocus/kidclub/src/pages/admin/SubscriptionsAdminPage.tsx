@@ -8,7 +8,8 @@ import { getTransportationConfig } from '../../services/transportationService';
 import { familyService } from '../../services/familyService';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
-import { Child } from '@shared/models';
+import { Child, Family } from '@shared/models';
+import { resolvePersonalData } from '../../lib/personalData';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../components/WeekSchedulePicker';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import { DiscountRule, AppliedDiscount, DiscountScope } from '@shared/models/Discount';
@@ -310,6 +311,16 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
     try {
       const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
       const fullName = `${details.firstName.trim()} ${details.lastName.trim()}`;
+      // The personal fields below (childName/contactName/contactEmail/
+      // contactMobile/contactPhone/schoolName/schoolYear) are written to the
+      // subscription as a MIRROR of the canonical children/families records
+      // updated further down — never as an independent per-subscription edit.
+      // They are still written because functions/src/kidclub reads them:
+      // billing line-item titles and notification emails use sub.childName,
+      // notifications sends to sub.contactEmail, and discountRecalc resolves
+      // the auto_school rule (the 20% Colégio Bissaya Barreto transport
+      // discount) from sub.schoolName. Pages no longer read any of them —
+      // see lib/personalData.ts.
       const patch: Record<string, any> = {
         childName: fullName, contactName: details.contactName.trim() || null,
         contactEmail: details.contactEmail.trim() || null,
@@ -345,6 +356,33 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
         return; // subscription write failed — nothing below is safe to run
       }
 
+      // Guardian contact details live canonically on the family's primary
+      // contact, which is what the client and admin pages now read — so an
+      // admin editing them here has to land there, not only on the
+      // subscription's mirror copy. Best-effort: a subscription with no
+      // family linked yet has nowhere canonical to put them, and keeps them
+      // on its own document until the parent claims it.
+      if (item.familyId) {
+        try {
+          const famSnap = await getDoc(docRef('families', item.familyId));
+          const prev = famSnap.exists() ? (famSnap.data().primaryContact ?? {}) : {};
+          await updateDoc(docRef('families', item.familyId), {
+            primaryContact: {
+              ...prev,
+              // Only overwrite what the admin actually filled in — blanking a
+              // field here must not wipe the family's real contact details.
+              ...(details.contactName.trim() ? { name: details.contactName.trim() } : {}),
+              ...(details.contactEmail.trim() ? { email: details.contactEmail.trim() } : {}),
+              ...(details.contactPhone.trim() ? { phone: details.contactPhone.trim() } : {}),
+            },
+            updatedAt: new Date(),
+          });
+        } catch (err: any) {
+          console.error(`Failed to save families/${item.familyId}:`, err);
+          setSaveError(`Inscrição guardada, mas os contactos do encarregado falharam ao guardar: ${err?.message ?? 'erro desconhecido'}`);
+        }
+      }
+
       // Child-level fields (dateOfBirth/homeAddress/schoolName/schoolYear/name)
       // live on the children doc, not the subscription.
       const dob = new Date(details.dateOfBirth + 'T12:00:00');
@@ -355,6 +393,13 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
             firstName: details.firstName.trim(), lastName: details.lastName.trim(),
             dateOfBirth: dob, age: calculateAge(dob),
             schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
+            // Kept in step with the family's primary contact above. The child's
+            // own copy isn't merely cosmetic: the Firestore rules let a parent
+            // read and claim an admin-created child by matching
+            // children/{id}.contactEmail against their auth token, so it must
+            // not be dropped — only ever updated alongside the family's.
+            ...(details.contactEmail.trim() ? { contactEmail: details.contactEmail.trim() } : {}),
+            ...(details.contactPhone.trim() ? { contactPhone: details.contactPhone.trim() } : {}),
             homeAddress: {
               street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
               postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
@@ -384,6 +429,9 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
             firstName: details.firstName.trim(), lastName: details.lastName.trim(),
             dateOfBirth: dob, age: calculateAge(dob),
             schoolName: details.schoolName.trim() || null, schoolYear: details.schoolYear.trim() || null,
+            // Same claim-flow reason as the update branch above.
+            ...(details.contactEmail.trim() ? { contactEmail: details.contactEmail.trim() } : {}),
+            ...(details.contactPhone.trim() ? { contactPhone: details.contactPhone.trim() } : {}),
             homeAddress: {
               street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
               postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
@@ -957,10 +1005,11 @@ export default function SubscriptionsAdminPage() {
   const load = async () => {
     setIsLoading(true); setError(null);
     try {
-      const [studySnap, transportSnap, childrenSnap, cfg, studyCfgSnap, rules] = await Promise.all([
+      const [studySnap, transportSnap, childrenSnap, familiesSnap, cfg, studyCfgSnap, rules] = await Promise.all([
         getDocs(col('studyroom')),
         getDocs(col('transportationSubscriptions')),
         getDocs(col('children')),
+        getDocs(col('families')),
         getTransportationConfig(),
         getDoc(docRef('config', 'studyCenter')),
         getDiscountRules(),
@@ -969,18 +1018,37 @@ export default function SubscriptionsAdminPage() {
       if (studyCfgSnap.exists()) setStudyConfig(studyCfgSnap.data() as StudyCenterConfig);
       setDiscountRules(rules ?? []);
 
-      const childSchoolMap: Record<string, string> = {};
-      childrenSnap.docs.forEach(d => { const s = d.data().schoolName; if (s) childSchoolMap[d.id] = s; });
+      // Personal data (child name, school, guardian contact) is resolved from
+      // these two collections, not from each subscription's own denormalized
+      // copies — a child's details then appear once, identically, on every
+      // subscription they hold, instead of once per subscription with the two
+      // free to disagree (which is what had happened in prod: 5 of 10
+      // dual-service children had two different schoolName values, two of them
+      // street addresses). See lib/personalData.ts.
+      const childMap = new Map<string, Child>(
+        childrenSnap.docs.map(d => [d.id, { ...d.data(), id: d.id } as Child]),
+      );
+      const familyMap = new Map<string, Family>(
+        familiesSnap.docs.map(d => [d.id, { ...d.data(), id: d.id } as Family]),
+      );
+      const personFor = (x: any) => resolvePersonalData(
+        x.childId ? childMap.get(x.childId) : null,
+        x.familyId ? familyMap.get(x.familyId) : null,
+        { ...x, childName: x.childName ?? x.studentName },
+      );
       const study: SubItem[] = studySnap.docs.map(d => {
         const x = d.data();
+        const person = personFor(x);
         return {
           id: d.id, _type: 'study',
-          childName: x.childName || x.studentName || '—',
+          childName: person.childName || '—',
           childId: x.childId || undefined,
-          familyId: x.familyId, contactEmail: x.email || x.contactEmail,
-          contactPhone: x.phone || x.contactPhone,
+          familyId: x.familyId,
+          contactName: person.contactName,
+          contactEmail: person.contactEmail,
+          contactPhone: person.contactPhone,
           source: x.source,
-          schoolName: x.schoolName, schoolYear: x.schoolYear,
+          schoolName: person.schoolName, schoolYear: person.schoolYear,
           days: x.days || [], monthlyPrice: x.monthlyPrice ?? x.basePrice ?? 0,
           basePrice: x.basePrice ?? x.monthlyPrice ?? 0,
           returningStudent: x.returningStudent ?? false,
@@ -997,14 +1065,16 @@ export default function SubscriptionsAdminPage() {
       });
       const transport: SubItem[] = transportSnap.docs.map(d => {
         const x = d.data();
+        const person = personFor(x);
         return {
           id: d.id, _type: 'transport',
-          childName: x.childName || '—',
+          childName: person.childName || '—',
           childId: x.childId || undefined,
-          familyId: x.familyId, contactName: x.contactName,
-          contactEmail: x.contactEmail, contactPhone: x.contactMobile,
+          familyId: x.familyId,
+          contactName: person.contactName,
+          contactEmail: person.contactEmail, contactPhone: person.contactPhone,
           source: x.source,
-          schoolName: x.childId ? (childSchoolMap[x.childId] ?? x.schoolName) : x.schoolName,
+          schoolName: person.schoolName, schoolYear: person.schoolYear,
           schedule: x.schedule || [], monthlyFee: x.monthlyFee ?? 0,
           routeAssigned: x.routeAssigned ?? false,
           originalFee: x.originalFee ?? x.monthlyFee ?? 0,

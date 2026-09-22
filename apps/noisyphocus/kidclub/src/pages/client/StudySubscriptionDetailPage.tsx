@@ -3,7 +3,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
-import { StudyRoomEntry, normalizeStatus } from '@shared/models';
+import { Child, Family, StudyRoomEntry, normalizeStatus } from '@shared/models';
+import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -36,6 +37,10 @@ export default function StudySubscriptionDetailPage() {
   const navigate = useNavigate();
   const user = useUser();
   const [subscription, setSubscription] = useState<StudyRoomEntry | null>(null);
+  // Child/guardian details are resolved from children/{childId} and
+  // families/{familyId}.primaryContact, not from this subscription's own
+  // denormalized copies — see lib/personalData.ts.
+  const [person, setPerson] = useState<PersonalData | null>(null);
   const [sessions, setSessions] = useState<UpcomingSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -67,6 +72,23 @@ export default function StudySubscriptionDetailPage() {
         endDate: data.endDate?.toDate?.() ?? (data.endDate ? new Date(data.endDate) : null),
       } as StudyRoomEntry;
       setSubscription(sub);
+
+      // Best-effort: an admin-created child that no parent has claimed yet
+      // carries no userId, so the security rules can deny this read — fall
+      // back to the subscription's own copies rather than failing the page.
+      let child: Child | null = null;
+      let family: Family | null = null;
+      try {
+        const [childSnap, famSnap] = await Promise.all([
+          sub.childId ? getDoc(docRef('children', sub.childId)) : Promise.resolve(null),
+          sub.familyId ? getDoc(docRef('families', sub.familyId)) : Promise.resolve(null),
+        ]);
+        if (childSnap?.exists()) child = { ...childSnap.data(), id: childSnap.id } as Child;
+        if (famSnap?.exists()) family = { ...famSnap.data(), id: famSnap.id } as Family;
+      } catch (err) {
+        console.warn('[StudySubscriptionDetailPage] personal data read failed:', err);
+      }
+      setPerson(resolvePersonalData(child, family, sub));
 
       const calSnap = await getDoc(docRef('config', 'schoolCalendar'));
       const schoolYearEnd: Date | null =
@@ -251,8 +273,10 @@ export default function StudySubscriptionDetailPage() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-start justify-between">
           <div>
-            <p className="font-semibold text-lg">{subscription.childName}</p>
-            <p className="text-gray-500 text-sm">{subscription.schoolName}</p>
+            <p className="font-semibold text-lg">{person?.childName}</p>
+            <p className="text-gray-500 text-sm">
+              {[person?.schoolName, person?.schoolYear].filter(Boolean).join(' · ')}
+            </p>
           </div>
           <div className="flex flex-col items-end gap-1.5">
             <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
@@ -357,7 +381,7 @@ export default function StudySubscriptionDetailPage() {
         <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
           <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
           <p className="text-sm text-purple-700 mb-4">
-            A equipa fez alterações à inscrição na Sala de Estudo de <strong>{subscription.childName}</strong>.
+            A equipa fez alterações à inscrição na Sala de Estudo de <strong>{person?.childName}</strong>.
             Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
           </p>
           <div className="flex gap-3">
@@ -475,7 +499,7 @@ export default function StudySubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{person?.childName}</strong> e entrará em contacto.
             </p>
             <div className="flex gap-3">
               <button
@@ -501,7 +525,7 @@ export default function StudySubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Cancelar subscrição?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A subscrição de <strong>{subscription.childName}</strong> na Sala de Estudo será
+              A subscrição de <strong>{person?.childName}</strong> na Sala de Estudo será
               cancelada. Esta ação não pode ser desfeita.
             </p>
             <div className="flex gap-3">
