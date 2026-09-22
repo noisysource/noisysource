@@ -357,8 +357,74 @@ section once shipped, per that section's own convention.
 
 ## Currently working on
 
-**Nothing is in flight.** The session ended at a deliberate clean slate (no PRs, no
-worktrees, no branches but `main`). The next piece of work is the **prod data pass** —
+### Subscription personal data de-duplication (2026-09-22) — built, NOT deployed, NOT PR'd
+Branch `agent/subscription-personal-data`, worktree
+`.claude/worktrees/subscription-personal-data`, branched off **`staging`** (not `main` —
+`main` is ~32 commits behind and does not have the billing rewrite). One commit,
+`07a3873`. Nothing pushed, no PR opened, nothing deployed, no prod writes.
+
+**Problem it addresses:** subscription documents carry denormalized copies of personal
+data that already lives canonically on `children/{childId}` and
+`families/{familyId}.primaryContact` — `childName`, `contactEmail`, `schoolName`,
+`userId` on transport, plus `contactPhone` and `schoolYear` on study. Those copies had
+drifted in prod: of the 10 children holding both a transport and a study subscription,
+5 had two *different* `schoolName` values across their two documents, and two of the
+disagreeing values were street addresses rather than school names.
+
+**What changed (all read-side, plus one write fix):**
+- New `apps/noisyphocus/kidclub/src/lib/personalData.ts` — one resolver,
+  canonical-first and per-field (child → family primary contact → the subscription's own
+  copy). The subscription copy is only reached for a subscription with no linked child or
+  family, i.e. admin-created and not yet claimed by a parent.
+- `TransportSubscriptionDetailPage` / `StudySubscriptionDetailPage` — render the child's
+  name, school, school year and guardian email from the child + family documents. The
+  child/family reads are wrapped so a Firestore-rules denial degrades to the legacy
+  copies rather than breaking the page (an admin-created, unclaimed child carries no
+  `userId`, which is what the client-side read rule matches on).
+- `SubscriptionsAdminPage` — `load()` now also fetches `families` and builds child/family
+  maps, replacing the transport-only `childSchoolMap`; every row's name/school/school
+  year/contact resolves through them, so the same child reads identically on both of
+  their subscriptions. Its `EditForm` now also writes guardian contact to
+  `families/{id}.primaryContact` — previously an admin editing contact details only ever
+  wrote the subscription's copy, which is no longer what any page reads, so the edit
+  would have looked like it silently didn't save.
+- `ChildDetailPage` — dropped the school name repeated on each study subscription row;
+  the child's school is already shown in the details block on the same page.
+- `MySubscriptionsPage` needed no change: it already grouped by child and read
+  `child.schoolName`. Its unclaimed-by-email fallback list still reads the subscription's
+  own `childName` on purpose — those subscriptions have no child to resolve from.
+
+**Deliberately NOT done — read this before assuming the copies are gone.** The
+subscription-level copies are still written, now as a mirror of the canonical record
+rather than an independent per-subscription edit. They have to be, because
+`functions/src/kidclub` still reads them:
+- `billing.ts` reads `sub.childName` (line-item titles) and `sub.schoolName`.
+- `reconciliation.ts` reads `item.sub.schoolName`.
+- `discountRecalc.ts` reads `x.schoolName` to resolve the `auto_school` rule — which is
+  what drives the **20% Colégio Bissaya Barreto transport discount**. That rule is
+  untouched, as instructed.
+- `notifications.ts` sends approval/rejection emails to `sub.contactEmail`.
+
+`billing.ts` and `reconciliation.ts` were left alone on purpose: another agent on
+`agent/flat-gross-reconciliation` is changing billing's own `schoolName` reads.
+**Coordinate before either branch merges** — the intended end state is that the backend
+reads `children/{childId}.schoolName` too, at which point the subscription mirror can be
+dropped entirely, but neither branch does that yet.
+
+**Consequence worth stating plainly:** the UI is now consistent, but the *stored* drift
+is untouched. Prod's 5 mismatched children still have two different stored `schoolName`
+values, and `discountRecalc` still resolves the school discount from the subscription's
+possibly-stale one. Editing a subscription in the admin page rewrites its mirror from the
+child's value — which for a sub whose stored value is a street address may legitimately
+change whether the 20% discount matches, and therefore the fee. That is a correction, not
+a bug, but it is a fee-changing side effect of an otherwise cosmetic-looking edit, so
+don't be surprised by it.
+
+**Not verified in a browser.** `pnpm --filter kidclub build` passes and `tsc --noEmit`
+shows the same 16 pre-existing errors as `origin/staging` — zero new ones — but nothing
+was clicked through on dev.
+
+### Prod data pass — still the other open thread
 Renato has a plan for it and wants it started in a **fresh session**, as a read-only
 "Looking" task, not a build task. See Next step #1.
 
@@ -717,6 +783,14 @@ than another one-off patch.
 
 ## Anything risky in flight
 
+- **Open worktree `.claude/worktrees/subscription-personal-data`** (branch
+  `agent/subscription-personal-data`, off `staging`) — one unpushed commit, no PR, not
+  deployed. Remove it once the work lands or is abandoned. Note this breaks the
+  "deliberately clean slate" the 2026-09-22 checkpoint describes, on purpose.
+- **It overlaps `agent/flat-gross-reconciliation`**, which is changing billing's own
+  `schoolName` reads. Both branches touch the same `schoolName` data path from opposite
+  ends (this one the pages, that one the backend). Coordinate before either merges — see
+  "Currently working on" for the intended end state.
 - **Prod is running billing code ~32 commits behind `staging`.** Not broken — it's the old,
   working pipeline — but every fix from the dev test pass above (including the leg-collision
   bug that halves transport gross) is **absent from prod**. Prod has been pinned to
