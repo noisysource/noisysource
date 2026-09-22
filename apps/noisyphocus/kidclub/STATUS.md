@@ -31,6 +31,81 @@ and is wrong for this effort specifically.
 | 5 | **Invoiced periods frozen**, plus a divergence report. | The 5 invoiced records are never recomputed. Where the new model disagrees with an issued fiscal document (e.g. Sept: system €200.64 vs invoiced €169.20), it is reported, not silently corrected. |
 | 6 | **All 35 auto-cancelled billing records → `pending`.** Default to `pending` wherever ambiguous. | Renato cancels individually in the app afterwards. Restores billing for José Miguel Duarte (~€113/mo) and Edson (~€72/mo), whose subs are active but records cancelled. |
 | 7 | **Orphan subscriptions get real family records.** | A parent never logging in does not mean no family. Minimal `families/{id}` created from `contactEmail`; the *account* link (`primaryContact.userId`) arrives on first login. |
+| 8 | **No pro-rating. Boundary months adjust via the absence credit.** (settled 2026-09-22, after flat pricing exposed the gap) | A subscription starting or ending mid-month bills the full month; the days not served are written as system `CANCELLED` events so the existing >=3-absence credit pro-rates it. No new pricing concept. See "Boundary months" below. |
+
+### Boundary months — how decision 8 actually works
+
+Renato's instruction: "we have the absent days functionality... so we can bill the entire
+month and use that functionality to adjust either on the first or the last."
+
+The arithmetic works (start on the 15th of a 20-occurrence month -> 10 days marked absent ->
+credit = 10 x net/20 = half the month), but the mechanism could not fire as the code stood:
+
+- **End boundary:** `voidFutureEvents()` marks everything from today forward `VOIDED`,
+  including the rest of the current month. `VOIDED` deliberately does not count as an
+  absence, and `setReservationEventStatus` throws `failed-precondition` on a `VOIDED` event
+  — so nobody, staff or parent, can mark those days absent.
+- **Start boundary:** the `startDate` clamp means pre-start days generate no events at all,
+  so there is nothing to count.
+
+Resolution being implemented: **boundary months generate the full schedule pattern**, with
+out-of-contract occurrences written as `CANCELLED` / `changedByRole: "system"` and a `reason`
+of `"before subscription start"` or `"after subscription end"`. Whole months outside the
+contract still generate nothing (-> EUR 0). `VOIDED` keeps its meaning for whole future
+months after a cancellation.
+
+Two accepted consequences: system-generated boundary absences count toward the same
+3-absence threshold as real ones (correct — they are all days not served); and if fewer
+than 3 out-of-contract days fall in the month, the threshold is not met and the month bills
+full (a ~2-day rounding, deliberately not special-cased).
+
+### 🔴 Phase 2 sequencing rule — do identity and date repairs BEFORE generating events
+
+`regenerateFutureEvents()` voids all future events and recreates them as `EXPECTED`, so any
+subscription write that changes `schedule`/`days`/`weekPattern`/`startDate`/`endDate`/`status`
+**silently wipes every future parent-recorded absence on that subscription.** Verified
+against the trigger condition, not assumed.
+
+A `familyId`-only write does **not** trigger this (the trigger's `scheduleChanged` check
+does not include `familyId`), so the orphan-subscription backfill is safe. **Populating
+`startDate`/`endDate` is not** — and 19 of 21 active transport subs lack both. So: all
+identity and date repairs run before event generation, never after.
+
+### Implementation progress (2026-09-22)
+
+Integration branch **`agent/eventsourcing-integration`** (off `staging`): both completed
+agent branches merged cleanly, **84 tests passing, typecheck clean**.
+
+- `agent/reservation-events-auth` — parent auth now reads `primaryContact.userId` (with
+  top-level `userId` fallback) plus a `familyId`-falsy guard, since `.doc("")` throws rather
+  than returning a not-found snapshot; `coerceEndDate` generalised to
+  `coerceDate(raw, "start"|"end")` and a `startDate` clamp that can only move the window
+  later; missing-`familyId` guard in both pure generators; `reservationEvents` read rule
+  scoped to staff or the owning family.
+- `agent/flat-gross-reconciliation` — flat gross, notional absence credit
+  (`net / (legs x 4)`), and `returningStudent` vs manual discount made mutually exclusive via
+  `max()` rather than summing (closes a latent 30% stack). All four reference figures
+  reproduce exactly: Carolina EUR 182.40, Jose Eduardo EUR 165.12, Maria Manon EUR 130.56,
+  Mogo EUR 210.00 — the Mogo figure confirmed against prod (Diogo carries the 15%
+  "Aluno do ano anterior", 5 legs each).
+- `scripts/kidclub-migration/identity.mjs` — dry-run identity consolidation. Against prod:
+  25 document writes, 2 automatic merges, 5 families to create, 1 sub linking to an existing
+  family (Leonor Lago — her family DOES exist, via `primaryContact.email`), 3 children with
+  no `children` record at all.
+
+**Known issues surfaced, not yet addressed:**
+- Prices are no longer frozen at generation time: gross reads the live config rate, while
+  `ReservationEvent.basePriceCents` is frozen at creation. A mid-year rate change would
+  reprice old unpaid periods. Phase 3's report must compare against `basePriceCents` so a
+  reprice shows as an explicit divergence.
+- "No events -> EUR 0" is now the only thing between a failed generation and a EUR 0 invoice
+  for an active subscription. Phase 3 needs an explicit "active subscription with zero events
+  in a billable period" warning.
+- `eslint` is dead in `functions/` on `staging` — `eslint.config.js` uses ESM `import` but is
+  loaded as CJS. Pre-existing, unrelated, but lint is not running there at all.
+- The Mafalda duplicate merge is approved by Renato but **blocked by the harness permission
+  classifier** (Modify Shared Resources) and must be run by hand:
+  `node scripts/kidclub-migration/identity.mjs --apply --i-know-this-is-prod --approve-merge G1XkEDBciLr7k2Hk9eRa:6DdwHVG0WFr975wMYyBC`
 
 ### Expected money impact
 
