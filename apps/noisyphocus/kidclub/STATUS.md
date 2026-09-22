@@ -2,21 +2,35 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-21
+**Last updated:** 2026-09-22
 
-## CURRENT STATE — full event-sourcing rewrite in progress, NOT deployed
+## CURRENT STATE — rewrite merged to `staging` and validated on dev; PROD NOT UPDATED
+
+**The one-paragraph version:** the event-sourced billing rewrite is finished, merged into
+`staging`, deployed to `kidclub-dev`, and clicked through end-to-end by Renato — it works.
+It is **not on prod**. `staging` is ~32 commits ahead of `main`, and prod is still running
+the old billing code from `b415ef3`. The next move is the `staging` → `main` promotion PR,
+but that is deliberately **not** opened yet, because deploying it means recomputing real
+families' September billing under new rules — see "Next step" below, which is the whole
+point of this checkpoint.
 
 Everything below this section (up to "## Currently working on") documents how this
-design evolved over the session — read it for the *why*, but this section is the
-authoritative *what's actually true right now*. The original plan (a flat 3-day absence
-credit, computed live off billing triggers) was superseded mid-session by a real
-architectural decision: subscriptions materialize concrete `ReservationEvent` rows for
-the whole school year at creation time, and billing reconciles against those events
-rather than a schedule formula plus a disconnected `eventModifications` log.
+design evolved — read it for the *why*, but this section is the authoritative *what's
+actually true right now*. The original plan (a flat 3-day absence credit, computed live
+off billing triggers) was superseded by a real architectural decision: subscriptions
+materialize concrete `ReservationEvent` rows for the whole school year at creation time,
+and billing reconciles against those events rather than a schedule formula plus a
+disconnected `eventModifications` log.
 
-**Branch:** `agent/absence-threshold-billing` (same branch throughout — commits below in
-order). Target `staging` first when opening the PR, not `main` — see the CI/CD pipeline
-note further down for why.
+**Branch:** merged. `agent/absence-threshold-billing` → PR #28 → `staging` (2026-09-22).
+The branch and its worktree are gone; don't go looking for them.
+
+**Repo state as of this checkpoint: deliberately clean slate.** Zero open PRs, zero
+worktrees, one local branch (`main`). Every stale/abandoned branch was cleared at Renato's
+instruction ("we're starting fresh now... we won't pick that again"). Anything that was
+local-only was pushed to origin first, so nothing is unrecoverable — old branches still
+exist on GitHub if a decision gets reversed. **Start new work from a fresh worktree off
+`main`.**
 
 **What's built and typechecks clean (functions: `tsc --noEmit` + full `tsc -p .`;
 kidclub app: zero new errors, same pre-existing baseline throughout):**
@@ -80,6 +94,45 @@ not-compounded institutional discount, ordering) and `reservationEvents.test.ts`
 tests — odd/even biweekly pattern including the 5th-occurrence edge case, per-leg
 transport direction tagging, deterministic event IDs). Run with `pnpm --filter functions
 test` (or `cd functions && npx vitest run`).
+
+### Dev E2E test pass (2026-09-22) — flow validated, 8 real bugs found and fixed
+
+Renato clicked the whole flow on `kidclub-dev` with fresh data, stopping short of payment
+("that would be a hard stop — that functionality is working and doesn't need testing").
+Nearly every report surfaced a genuine defect. Test count went 42 → 50. The billing-
+correctness ones are worth knowing about because they'd all have been silent in prod:
+
+1. **Two legs on one day collided onto a single occurrence.** 0 of 109 transport schedule
+   entries carry a `direction`, so both legs keyed to `..._both` and `batch.set` overwrote
+   one. Gross billed **half** the trips and the multi-trip discount never fired. Fixed by
+   adding `legIndex` to the doc id.
+2. **Study generated ZERO occurrences, silently.** `StudyRoomEntry.endDate` is a Firestore
+   Timestamp (transport's is a `YYYY-MM-DD` string); `new Date(timestampObject)` is Invalid
+   Date, so `cursor <= to` was always false. Fixed with `coerceEndDate()`.
+3. **A missing `endDate` was treated as unusable** — but 19 of 23 transport subs have none.
+   It means "runs to school-year end", the rule `eventService.ts` already used.
+4. **Backfill started from *today*, so the elapsed part of the current month had no
+   occurrences.** Billing derives gross from occurrences → the launch month under-bills for
+   everyone. Caught via Matilde Lopes showing `Transporte — Setembro 2026 = €0.00`
+   (`weekPattern: 'odd'`, all three September service days already past). Now starts at the
+   1st of the current month.
+5. **Re-running the backfill reset absences.** `batch.set(..., { merge: true })` with a
+   hardcoded `status: "EXPECTED"` flipped CANCELLED days back — while the button's copy
+   *and* the agent's own instructions said re-running was safe. It wasn't; real test data
+   was destroyed repeatedly. New `ensureEventsExist()` writes only missing ids and never
+   touches an existing occurrence whatever its status. Schedule-change triggers keep
+   void-and-regenerate, which is correct there.
+6. Silent no-op on "Cancelar dia" (early `return` + `try/finally` with no `catch`) — now
+   shows a real error banner across all 3 pages.
+7. Biweekly subs listed off-pattern days as cancellable rows — now filtered, with a
+   "quinzenal" label.
+8. Admin calendar showed no transport (`safeDate(undefined)` returned *now* vs midnight, and
+   it read the dead `eventModifications`).
+
+**Non-obvious lesson for the next session:** dev had fresh, well-formed data and still hid
+four billing-correctness bugs behind zero error messages. Prod data is messier. Do not
+assume a clean run means correct amounts — check the numbers, not just the absence of
+errors.
 
 ### Data-quality pass — deferred until the flow is validated (Renato, 2026-09-22)
 
@@ -303,6 +356,13 @@ On billing finalize/payment, write an income record to
 section once shipped, per that section's own convention.
 
 ## Currently working on
+
+**Nothing is in flight.** The session ended at a deliberate clean slate (no PRs, no
+worktrees, no branches but `main`). The next piece of work is the **prod data pass** —
+Renato has a plan for it and wants it started in a **fresh session**, as a read-only
+"Looking" task, not a build task. See Next step #1.
+
+Sections below this line are history from earlier in the week, kept for the *why*.
 
 ### Dev/prod external-system isolation (2026-09-21) — stopgap fix, real fix still needed
 Checked whether `kidclub-dev` can actually reach real external systems, prompted by all the
@@ -550,11 +610,31 @@ still-open under-billing (Mafalda Raposo Duarte), left for the new architecture 
 than another one-off patch.
 
 ## Last completed
-- Billing double-discount fix: merged (PR #13), deployed to prod, verified live for Carolina
-  Almeida. José Eduardo + Mogo siblings still need backfill.
-- Financial Summary refactor: on `agent/financial-costs-decouple`, deployed to dev only,
-  smoke-tested manually by Renato. Currently resolving a merge conflict against `main` (this
-  branch was opened before the CI/CD pipeline work landed, so it was ~23 commits behind).
+
+**2026-09-22 session (this checkpoint):**
+- **PR #28 merged to `staging`** — the full event-sourced billing rewrite, plus the 8 fixes
+  from the dev E2E pass. 50 unit tests passing.
+- **PR #29 merged to `staging`** — two CI fixes. (a) prod now only deploys from a PR whose
+  *head* is `staging`; `branches: [main]` filters the PR's **base**, not its head, so before
+  this a stray `agent/*` → `main` PR (opened by accident via GitHub's "Compare & pull
+  request" banner, which defaults the base to the repo default branch) turned every push to
+  that branch into a live prod deploy — it happened three times in one session. (b) a
+  `concurrency` group per environment, because two deploys to the same project raced on the
+  terraform state lock. Note #29's own first deploy failed on exactly that lock — the fix
+  isn't active until it's merged.
+- **PR #19 merged to `staging`** — `externalGuard.ts` blocks live Vendus/EasyPay/Gmail from
+  `kidclub-dev`. Blunt stopgap, see Next step #5.
+- **PR #20 closed unmerged** — the financialEvents model. Written against the pre-rewrite
+  `billing.ts`: still carries `computeExclusionDeduction`, `applyDiscounts` and
+  `transportGrossAmount` (all deleted by #28), and its `emitEffectiveEventsForBilling` is
+  anchored on the removed `setBillingLineItemExcludedDays`. A rebase resurrects the old
+  discount pipeline rather than resolving. Rebuild against the new model, don't rebase.
+- **Full repo cleanup** — 22 worktrees → 0, all stale branches cleared, 2 invisible orphan
+  directories deleted. See CURRENT STATE.
+- Carried over, still true: billing double-discount fix merged (PR #13), deployed to prod,
+  verified for Carolina Almeida; José Eduardo + Mogo siblings never backfilled.
+- Financial Summary refactor: deployed to dev only; its branch was cleared in the cleanup
+  (commits remain on origin as `agent/financial-costs-decouple`).
 - Prod → dev data sync: done, verified, temp export files cleaned up from both buckets.
 - CI/CD pipeline: fully merged to `main`, branch protection configured, first real prod
   deploy went green.
@@ -568,87 +648,96 @@ than another one-off patch.
   yet opened against `staging`.
 
 ## Next step
-1. **Finish merging `main` into `agent/financial-costs-decouple`**, push, then open the PR.
-   Because branch protection is now live, opening/updating this PR will trigger a real prod
-   deploy check (`deploy-prod.yml` on `pull_request`) — this is actually a good thing: it's
-   the first real validation this branch has had against the new pipeline. Watch it go green
-   before merging.
-2. **Backfill José Eduardo's and the Mogo siblings' billing** — same double-discount bug,
-   code fix is live, their existing records just haven't been recomputed yet. See open
-   question below on running `backfillBillingSchedules` against prod.
-3. Re-enter `driverMonthlyCost: 1400` (and whatever electricity figure) into dev's Custos
-   Fixos panel — cleared by the prod→dev import.
-4. Decide on the "As minhas faturas" feature work (dead `invoices` collection, flagged in an
-   earlier session) — separate, not urgent.
-5. Prod Terraform state reconciliation (see item 5 above) — separate, not urgent, real effort.
-6. Decide whether to bring `deploy-finances.yml` onto the same staging/main pipeline model.
-7. See **Backlog** below for the two bigger features surfaced this week (discount model
-   rework, route planner rework) — neither started, both need their own scoping pass.
-8. **Confirm the `hotfix/exclusion-calendar-timezone` deploy went green and merge it**, then
-   open `agent/study-exclusion-validation` against `staging` (deduction-math + orphan-chip
-   fix — not urgent, but should still land).
-9. **Once the timezone hotfix is confirmed live, re-mark Susete Luis's real absence days**
-   (her Sept 2026 record was cleared to zero exclusions, both line items back to full gross,
-   total €156 — see item 6 above) — Renato was about to do this himself.
-10. Worth a deliberate look once things settle: audit other pending billing records for the
-    same shifted-by-one-day corruption pattern (any family with excludedDates that don't land
-    on a real schedule weekday is a symptom) — not started, flagged by Renato as a next step
-    after the hotfix ships, not done in this session.
-11. **Address the shared-`kidclub-dev`-deploy collision problem** (see Backlog below) —
-    Renato explicitly wants this picked up next. Surfaced when `agent/study-exclusion-validation`'s
-    `staging` PR failed to deploy: `onBillingPaidEffectiveEvents`, manually deployed to
-    `kidclub-dev` from the unmerged, currently-paused `agent/financial-events-model` branch,
-    blocked every other branch's dev deploy because `firebase deploy` refuses to silently
-    delete a remote function missing from the deploying branch's source. Unblocked by deleting
-    that one function from `kidclub-dev` (`firebase functions:delete
-    onBillingPaidEffectiveEvents --region europe-west3 --project kidclub-dev` — safe, only
-    removes the deployed artifact, source is untouched on that branch and will redeploy fine
-    whenever that work resumes) — but the structural cause is unaddressed.
+
+**Everything below the first item is downstream of a decision only Renato can make.**
+
+1. **Decide how prod September is handled — THIS IS THE BLOCKER.**
+   Opening `staging` → `main` deploys prod (pre-merge), and immediately after that the
+   `📅 Gerar ocorrências` backfill has to run on prod, because without occurrences every
+   line item computes as €0.00. But that backfill also makes the triggers recompute
+   September billing for **real families** under the new pipeline (marginal multi-trip,
+   marginal sibling, summed institutional %, 3+-absence uncapped credit). Amounts will
+   move. The unanswered question is whether any September invoices already went out on
+   prod under the old math — if so, stored amounts shift underneath documents families
+   have already seen.
+   Renato said (2026-09-22) he has a plan for the data and wants to start it in a **fresh
+   session**. That session is the one that answers this.
+   Suggested shape, not yet agreed: a **read-only** old-vs-new diff of prod September
+   totals for a handful of real families *before* anything is deployed or backfilled.
+   That fits the "Looking" container in root CLAUDE.md — no worktree, prod reads added to
+   a gitignored `.claude/settings.local.json` for that session only and removed after.
+   Note the earlier revenue simulation was run against **dev** data and does **not**
+   answer this.
+
+2. **Then**: open the `staging` → `main` promotion PR (~32 commits). This is also what
+   finally moves prod off the stale `b415ef3` it's been pinned to since the accidental-
+   deploy incident.
+
+3. **Immediately after that deploy**: run `📅 Gerar ocorrências` on prod. Safe to re-run
+   now (see bug 5 above) — it only fills gaps. Verify a couple of families' amounts by
+   hand before trusting the batch.
+
+4. **Land the `iam.tf` patch** saved at
+   `scratchpad/prod-ci-index-admin-iam.patch` (session `4601ed1f`). 19 lines documenting
+   the `roles/datastore.indexAdmin` grant made **by hand on prod on 2026-09-20** to unblock
+   the first-ever `firestore:indexes` deploy. Prod Terraform doesn't know this grant
+   exists; this patch is the only written record. It was rescued from an uncommitted
+   worktree during cleanup — if the scratchpad is gone, it's gone.
+
+5. **Real fix for dev's billing credentials.** PR #19 merged a *blunt stopgap*:
+   `externalGuard.ts` throws unless `GCLOUD_PROJECT === "rainbow-prod-2454b"`. That means
+   billing/camp/enrollment flows that call Vendus, EasyPay or Gmail now **error out in
+   dev** by design. The real fix is still open: obtain actual Vendus + EasyPay sandbox
+   credentials, put them in `kidclub-dev`'s own secrets (they currently mirror prod
+   byte-for-byte), set `EASYPAY_SANDBOX=true` for dev, then relax the guard.
+
+6. Lower priority, carried over and still true: re-enter `driverMonthlyCost: 1400` into
+   dev's Custos Fixos panel (cleared by the prod→dev import); decide on the dead
+   `invoices` collection behind "As minhas faturas"; prod Terraform state reconciliation;
+   decide whether `deploy-finances.yml` joins the staging/main pipeline.
+
+7. **Emulator-based integration tests for the triggers and callables** — designed and
+   documented during the rewrite, never built. The 50 unit tests only cover the two *pure*
+   modules (`reconciliation.ts`, `reservationEvents.ts`). Every bug in the dev test pass
+   above lived in the Firestore-touching glue that has no tests at all. That is not a
+   coincidence.
 
 ## Open questions for Renato
-- OK to run `backfillBillingSchedules` against **prod** to catch José Eduardo's and the Mogo
-  siblings' still-under-billed records? Recomputes every family, not just these — low risk,
-  but flagging per the no-standing-write-access rule.
-- Discount model rework (marginal/per-unit, see above) — confirmed as the intended design,
-  but not scoped/scheduled yet. When should this happen relative to other work?
-- Worth a deliberate look, not urgent: is `roles/resourcemanager.projectIamAdmin` +
-  `roles/billing.admin` on prod for dev's CI service account (granted earlier this week, for
-  the cross-project Terraform resources) the long-term shape you want, or should it get
-  narrowed to a custom role later?
-- None new for the exclusion-calendar bug itself — Renato already confirmed the fix approach
-  and the decision to correct Susete Luis's billing amount upward (€114→€138, then cleared to
-  €156 pending re-marking) rather than absorb it as goodwill.
+
+- **Were any September 2026 invoices already issued on prod under the old billing math?**
+  Everything in Next step #1 hinges on this.
+- Do the old and new pipelines agree on real prod families, or does the new model change
+  amounts materially? Unknown — only dev data has been measured.
+- The financialEvents work (closed PR #20) is still *wanted*, just superseded. When should
+  it be rebuilt against the new event-sourced model? Commits remain on
+  `agent/financial-events-model` on origin for reference.
+- Still open from earlier: is `roles/resourcemanager.projectIamAdmin` + `roles/billing.admin`
+  on prod for dev's CI service account the long-term shape, or should it narrow to a custom
+  role?
 
 ## Anything risky in flight
-- **José Eduardo and the two Mogo siblings (Diogo, Bernardo) are still under-billed in prod**
-  — the code fix is live, but their existing pending billing records haven't been recomputed
-  yet (only Carolina Almeida's has).
-- **Financial Summary refactor is only on dev** — `agent/financial-costs-decouple` not merged,
-  prod's Financial Summary page still has the old planner-snapshot dependency (shows €0
-  driver/electricity cost, fake profit) until this ships.
-- **Prod's CI service account has accumulated a lot of IAM roles this week**, granted
-  reactively as each deploy step hit a new gap (see item 5 above for the full list) — not
-  wrong, but worth knowing the shape of it if you're ever auditing prod IAM.
-- Worktrees now open: `.claude/worktrees/financial-costs-decouple` (this one, mid-merge, keep
-  until PR opens and merges). `.claude/worktrees/billing-double-discount-fix` — PR merged,
-  safe to remove. Several CI/CD-related worktrees from this week
-  (`cicd-prod-prep`, `cicd-prod-index-fix`, `cicd-prod-pr-gate`) are also fully merged now —
-  safe to remove. Plus pre-existing stale ones from prior sessions (`claim-studyroom-fix`,
-  `deploy-functions-workflow-fix`, `kidclub-cicd-automation`, and some pre-convention ones) —
-  worth Renato doing a general `git worktree list` sweep and clearing out whatever's merged.
-- Unrelated, still paused: a unified client calendar (`agent/family-calendar` branch,
-  `/client/calendar`) — built, builds clean, not deployed/reviewed. Needs a Firestore
-  composite index deployed (`firestore.indexes.json`, committed on that branch) — now that
-  the pipeline is live, opening its PR against `staging` will handle that automatically.
-- Susete Luis's Sept 2026 billing record is now correct and closed out (total €90 — see
-  section 6 above for the full chain). Not risky, noted here only so nobody re-opens it.
-- **The timezone bug likely corrupted other families' exclusion dates too**, silently, for as
-  long as it's been live — not audited yet (see Next step #10). Any other under- or
-  over-billed pending record with excludedDates that don't land on a real schedule weekday is
-  a symptom of the same root cause.
-- Worktree `.claude/worktrees/exclusion-calendar-timezone-hotfix` (the timezone hotfix) and
-  `.claude/worktrees/study-exclusion-validation` (deduction-math + orphan-chip fix) both still
-  open — remove once their respective PRs are merged.
+
+- **Prod is running billing code ~32 commits behind `staging`.** Not broken — it's the old,
+  working pipeline — but every fix from the dev test pass above (including the leg-collision
+  bug that halves transport gross) is **absent from prod**. Prod has been pinned to
+  `b415ef3` since the accidental-deploy incident.
+- **The prod backfill will move real money numbers.** See Next step #1. Do not run it
+  casually to "see what happens" — it recomputes every family.
+- **`kidclub-dev` billing/email flows now throw by design** (PR #19). If a future session
+  finds Vendus/EasyPay/Gmail failing on dev, that is the guard working, not a regression.
+- **The 2026-09-20 prod IAM grant exists only as a scratchpad patch** (Next step #4).
+- **Two orphaned worktree directories were found and deleted** on 2026-09-22 — one dating to
+  **July 31** — both holding `.env.production`. `git worktree list` could not see them
+  (their `.git` admin dirs were gone), so `git worktree prune` would never have cleared
+  them. If worktrees get abandoned again, that is the failure mode: invisible to git,
+  holding prod config. This is the second time; root CLAUDE.md already warns about it.
+- Carried over, unverified since: **José Eduardo and the two Mogo siblings may still be
+  under-billed in prod** from the older double-discount bug — code fix is live, their
+  records were never recomputed. Worth re-checking as part of the data pass, but note the
+  new pipeline changes how those amounts are derived anyway.
+- Carried over: **the old timezone bug likely corrupted other families' exclusion dates**
+  before it was fixed. `excludedDates` no longer exists in the new model, so this is now a
+  *historical data* question, not a live one — relevant to the data pass.
 
 ## Backlog — bigger features surfaced but not started
 - **`kidclub-dev` is a shared Firebase project that every branch's `staging` PR deploys a full
