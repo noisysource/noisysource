@@ -3,9 +3,10 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
-import { TransportationSubscription } from '@shared/models';
+import { Child, Family, TransportationSubscription } from '@shared/models';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { normalizeSubStatus } from '../../lib/utils';
+import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -40,7 +41,11 @@ export default function TransportSubscriptionDetailPage() {
   const [subscription, setSubscription] = useState<TransportationSubscription | null>(null);
   const [config, setConfig] = useState<TransportationConfig | null>(null);
   const [siblingRank, setSiblingRank] = useState(1);
-  const [schoolName, setSchoolName] = useState<string | undefined>();
+  // Child/guardian details are resolved from children/{childId} and
+  // families/{familyId}.primaryContact, not from this subscription's own
+  // denormalized copies — see lib/personalData.ts.
+  const [person, setPerson] = useState<PersonalData | null>(null);
+  const schoolName = person?.schoolName;
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -70,15 +75,28 @@ export default function TransportSubscriptionDetailPage() {
 
       if (cfgSnap.exists()) setConfig(cfgSnap.data() as TransportationConfig);
 
-      // Resolve school name: subscription doc first, then children doc
-      let school: string | undefined = sub.schoolName;
-      if (!school && sub.childId) {
-        const childSnap = await getDoc(docRef('children', sub.childId));
-        if (childSnap.exists()) school = childSnap.data().schoolName;
+      // Personal data (name, school, guardian contact) comes from the child
+      // and family documents. Best-effort: an admin-created child that no
+      // parent has claimed yet carries no userId, so the security rules can
+      // deny this read — fall back to the subscription's own copies rather
+      // than failing the whole page.
+      let child: Child | null = null;
+      let family: Family | null = null;
+      try {
+        const [childSnap, famSnap] = await Promise.all([
+          sub.childId ? getDoc(docRef('children', sub.childId)) : Promise.resolve(null),
+          sub.familyId ? getDoc(docRef('families', sub.familyId)) : Promise.resolve(null),
+        ]);
+        if (childSnap?.exists()) child = { ...childSnap.data(), id: childSnap.id } as Child;
+        if (famSnap?.exists()) family = { ...famSnap.data(), id: famSnap.id } as Family;
+      } catch (err) {
+        console.warn('[TransportSubscriptionDetailPage] personal data read failed:', err);
       }
-      setSchoolName(school);
+      setPerson(resolvePersonalData(child, family, sub));
 
-      // Sibling rank: count active transport subs in the same family, sorted by childName
+      // Sibling rank: count active transport subs in the same family, sorted by
+      // childName. Uses the subscriptions' own copies deliberately — this only
+      // needs a stable ordering across siblings, not display-accurate names.
       if (sub.familyId) {
         const famSnap = await getDocs(
           query(col('transportationSubscriptions'), where('familyId', '==', sub.familyId), where('status', '==', 'active'))
@@ -332,9 +350,12 @@ export default function TransportSubscriptionDetailPage() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-start justify-between">
           <div>
-            <p className="font-semibold text-lg">{subscription.childName}</p>
-            {subscription.contactEmail && (
-              <p className="text-gray-500 text-sm">{subscription.contactEmail}</p>
+            <p className="font-semibold text-lg">{person?.childName}</p>
+            {person?.schoolName && (
+              <p className="text-gray-500 text-sm">{person.schoolName}</p>
+            )}
+            {person?.contactEmail && (
+              <p className="text-gray-400 text-xs">{person.contactEmail}</p>
             )}
           </div>
           <div className="flex flex-col items-end gap-1.5">
@@ -396,7 +417,7 @@ export default function TransportSubscriptionDetailPage() {
         <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
           <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
           <p className="text-sm text-purple-700 mb-4">
-            A equipa fez alterações à inscrição de transporte de <strong>{subscription.childName}</strong>.
+            A equipa fez alterações à inscrição de transporte de <strong>{person?.childName}</strong>.
             Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
           </p>
           <div className="flex gap-3">
@@ -526,7 +547,7 @@ export default function TransportSubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{person?.childName}</strong> e entrará em contacto.
             </p>
             <div className="flex gap-3">
               <button
@@ -552,7 +573,7 @@ export default function TransportSubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Cancelar subscrição?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A subscrição de transporte de <strong>{subscription.childName}</strong> será
+              A subscrição de transporte de <strong>{person?.childName}</strong> será
               cancelada. Esta ação não pode ser desfeita.
             </p>
             <div className="flex gap-3">

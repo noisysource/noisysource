@@ -347,7 +347,6 @@ export default function ChildDetailPage() {
                       <div>
                         <div className="font-medium text-blue-900">📚 Sala de Estudo</div>
                         <div className="text-sm text-blue-700">
-                          {sub.schoolName && `${sub.schoolName} · `}
                           {(sub.basePrice ?? 0) > sub.monthlyPrice + 0.01
                             ? <><span className="line-through text-blue-400 text-xs">€{(sub.basePrice!).toFixed(2)}</span>{' '}<span className="text-green-700 font-medium">€{sub.monthlyPrice.toFixed(2)}</span>/mês</>
                             : `€${sub.monthlyPrice.toFixed(2)}/mês`}
