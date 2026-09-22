@@ -98,6 +98,116 @@ export function resolveGenerationStart(sub: any, from: Date): Date {
   return subStart && subStart > from ? subStart : from;
 }
 
+export function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+}
+
+export function endOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+}
+
+// ── Boundary months ─────────────────────────────────────────────────────────
+// KidClub bills a FLAT monthly price (scheduleLength x rate x activeWeeks), so
+// gross cannot pro-rate a month in which a subscription starts or ends — it is
+// the same number either way. Rather than reintroduce pro-rating as a pricing
+// concept, the boundary month is pro-rated through the mechanism that already
+// exists: the >=3-absence credit.
+//
+// For that to work the out-of-contract days have to EXIST as occurrences and
+// have to count as absences. So:
+//   - the calendar month containing startDate generates the FULL weekly
+//     pattern, with the days before startDate written as CANCELLED;
+//   - the calendar month containing the end/cancellation generates (or keeps)
+//     the full pattern, with the days after the end written as CANCELLED
+//     rather than VOIDED — VOIDED deliberately does not count as an absence
+//     and setReservationEventStatus refuses to touch it;
+//   - whole months entirely outside the contract still generate NOTHING, which
+//     is what the existing "no occurrences this period -> EUR 0" path relies
+//     on. A subscription starting in October must produce zero September
+//     events, not a fully-cancelled September.
+// These system-written absences carry changedByRole "system" plus an explicit
+// reason, which is what keeps them distinguishable from — and recomputable
+// without destroying — an absence a parent or staff member actually recorded.
+
+export const REASON_BEFORE_START = "before subscription start";
+export const REASON_AFTER_END = "after subscription end";
+
+// Where generation must BEGIN: normally the requested `from`, but when the
+// subscription starts later than that, the 1st of startDate's own month, so the
+// pre-start days of the boundary month get written (as CANCELLED). Months
+// wholly before the boundary month are still skipped entirely.
+export function resolveGenerationWindowStart(sub: any, from: Date): Date {
+  const subStart = coerceStartDate(sub?.startDate);
+  if (!subStart || subStart <= from) return from;
+  const monthStart = startOfMonth(subStart);
+  return monthStart > from ? monthStart : from;
+}
+
+// Where generation must END. `contractEnd` is the real last served day (the
+// earlier of the subscription's own end and the school year end); `windowEnd`
+// extends to the end of that month ONLY when the subscription's own end is what
+// binds — a school-year end is not a mid-contract cancellation and gets no
+// cancelled tail.
+export function resolveGenerationWindowEnd(contractEnd: Date | null, subEnd: Date | null, schoolYearEnd: Date | null): Date | null {
+  if (!contractEnd) return null;
+  const subEndBinds = !!subEnd && (!schoolYearEnd || subEnd <= schoolYearEnd);
+  if (!subEndBinds) return contractEnd;
+  const monthEnd = endOfMonth(contractEnd);
+  return schoolYearEnd && schoolYearEnd < monthEnd ? schoolYearEnd : monthEnd;
+}
+
+export interface ContractBounds {
+  /** First served day. Occurrences strictly before it are CANCELLED "before subscription start". */
+  start?: Date | null;
+  /** Last served day. Occurrences strictly after it are CANCELLED "after subscription end". */
+  end?: Date | null;
+}
+
+function boundaryStatus(dateIso: string, bounds?: ContractBounds):
+  { status: "EXPECTED" } | { status: "CANCELLED"; changedByRole: "system"; reason: string } {
+  if (bounds?.start && dateIso < isoDate(bounds.start)) {
+    return { status: "CANCELLED", changedByRole: "system", reason: REASON_BEFORE_START };
+  }
+  if (bounds?.end && dateIso > isoDate(bounds.end)) {
+    return { status: "CANCELLED", changedByRole: "system", reason: REASON_AFTER_END };
+  }
+  return { status: "EXPECTED" };
+}
+
+// A human-recorded status change (a parent or staff member marking an absence,
+// or restoring one) is a fact, not something generation may recompute. System
+// boundary absences carry changedByRole "system" precisely so they can be told
+// apart and safely rewritten.
+export function isHumanRecorded(e: { changedByRole?: string } | undefined | null): boolean {
+  return e?.changedByRole === "parent" || e?.changedByRole === "staff";
+}
+
+/**
+ * Splits a regeneration into "which existing future events to void" and "which
+ * generated events to (re)write", preserving human-recorded ones.
+ *
+ * Before this, regeneration voided every future event and rewrote them all as
+ * EXPECTED with merge:true — which silently erased every absence a parent had
+ * recorded, on any schedule edit. An existing event that a human touched is now
+ * left exactly as it is, as long as the new pattern still contains that
+ * occurrence; if the schedule changed so the occurrence no longer exists, it is
+ * voided like any other stale event (leaving it would otherwise credit an
+ * absence for a day that is no longer served at all).
+ */
+export function splitRegenerationWrites<T extends { id: string }>(
+  generated: T[],
+  existingFuture: { id: string; changedByRole?: string }[],
+): { toCreate: T[]; toVoid: string[] } {
+  const generatedIds = new Set(generated.map(g => g.id));
+  const preserved = new Set(
+    existingFuture.filter(e => isHumanRecorded(e) && generatedIds.has(e.id)).map(e => e.id)
+  );
+  return {
+    toCreate: generated.filter(g => !preserved.has(g.id)),
+    toVoid: existingFuture.map(e => e.id).filter(id => !preserved.has(id) && !generatedIds.has(id)),
+  };
+}
+
 async function getSchoolYearEnd(): Promise<Date | null> {
   const snap = await appCol("config").doc("schoolCalendar").get();
   const yearEndDate = snap.data()?.yearEndDate;
@@ -113,7 +223,11 @@ interface NewEvent {
   direction?: "pickup" | "dropoff" | "both";
   legIndex?: number;
   basePriceCents: number;
-  status: "EXPECTED";
+  status: "EXPECTED" | "CANCELLED";
+  /** Only set on system-written boundary absences — never on a human's. */
+  changedByRole?: "system";
+  /** REASON_BEFORE_START / REASON_AFTER_END, on system-written absences only. */
+  reason?: string;
   createdAt: admin.firestore.FieldValue;
 }
 
@@ -150,7 +264,7 @@ function hasFamilyId(sub: any, subId: string, type: "study" | "transport"): bool
   return false;
 }
 
-export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
+export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date, bounds?: ContractBounds): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
   if (!hasFamilyId(sub, subId, "study")) return out;
   const days: { day: string; hour: string }[] = sub.days ?? [];
@@ -164,7 +278,8 @@ export function generateStudyEvents(sub: any, subId: string, ratePerDay: number,
         id: eventDocId(subId, date),
         data: {
           subscriptionId: subId, subscriptionType: "study", familyId: sub.familyId, childId: sub.childId,
-          date, basePriceCents: Math.round(ratePerDay * 100), status: "EXPECTED",
+          date, basePriceCents: Math.round(ratePerDay * 100),
+          ...boundaryStatus(date, bounds),
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         },
       });
@@ -174,7 +289,7 @@ export function generateStudyEvents(sub: any, subId: string, ratePerDay: number,
   return out;
 }
 
-export function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date): { id: string; data: NewEvent }[] {
+export function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date, bounds?: ContractBounds): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
   if (!hasFamilyId(sub, subId, "transport")) return out;
   const schedule: { dayOfWeek: string; direction?: string }[] = sub.schedule ?? [];
@@ -188,6 +303,7 @@ export function generateTransportEvents(sub: any, subId: string, ratePerTrip: nu
     const matches = indexed.filter(s => s.dayOfWeek === weekday);
     if (matches.length && isActiveThisWeek(cursor, sub.weekPattern ?? "all")) {
       const date = isoDate(cursor);
+      const boundary = boundaryStatus(date, bounds);
       for (const m of matches) {
         const direction = (m.direction ?? "both") as "pickup" | "dropoff" | "both";
         out.push({
@@ -195,7 +311,8 @@ export function generateTransportEvents(sub: any, subId: string, ratePerTrip: nu
           data: {
             subscriptionId: subId, subscriptionType: "transport", familyId: sub.familyId, childId: sub.childId,
             date, direction, legIndex: m.legIndex,
-            basePriceCents: Math.round(ratePerTrip * 100), status: "EXPECTED",
+            basePriceCents: Math.round(ratePerTrip * 100),
+            ...boundary,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           },
         });
@@ -206,14 +323,33 @@ export function generateTransportEvents(sub: any, subId: string, ratePerTrip: nu
   return out;
 }
 
-async function commitInChunks(writes: { id: string; data: any }[] | { id: string; status: string }[], mode: "create" | "void"): Promise<void> {
+async function commitInChunks(writes: { id: string; data: any }[] | { id: string; status: string; reason?: string }[], mode: "create" | "setStatus"): Promise<void> {
   const CHUNK = 400; // Firestore batch limit is 500 — leave headroom
+  const del = admin.firestore.FieldValue.delete();
   for (let i = 0; i < writes.length; i += CHUNK) {
     const batch = db.batch();
     for (const w of writes.slice(i, i + CHUNK)) {
       const ref = appCol("reservationEvents").doc(w.id);
-      if (mode === "create") batch.set(ref, (w as any).data, { merge: true });
-      else batch.update(ref, { status: (w as any).status, changedByRole: "system", changedAt: admin.firestore.FieldValue.serverTimestamp() });
+      if (mode === "create") {
+        // merge:true only protects fields the payload omits — which is exactly
+        // how a previously-cancelled day could keep a stale `reason` or
+        // `changedByRole` after being regenerated as EXPECTED. Explicitly clear
+        // the provenance fields the generator did not set, so an event's
+        // status and its provenance can never disagree.
+        const data = { ...(w as any).data };
+        if (data.changedByRole === undefined) data.changedByRole = del;
+        if (data.reason === undefined) data.reason = del;
+        if (data.changedBy === undefined) data.changedBy = del;
+        batch.set(ref, data, { merge: true });
+      } else {
+        batch.update(ref, {
+          status: (w as any).status,
+          changedByRole: "system",
+          changedBy: del,
+          ...((w as any).reason ? { reason: (w as any).reason } : { reason: del }),
+          changedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
     }
     await batch.commit();
   }
@@ -230,13 +366,48 @@ async function voidFutureEvents(subscriptionId: string, fromIso: string): Promis
     .where("date", ">=", fromIso)
     .get();
   if (snap.empty) return;
-  await commitInChunks(snap.docs.map(d => ({ id: d.id, status: "VOIDED" })), "void");
+  await commitInChunks(snap.docs.map(d => ({ id: d.id, status: "VOIDED" })), "setStatus");
+}
+
+/**
+ * Cancelling a subscription mid-month. The remainder of the CURRENT month
+ * becomes CANCELLED (a system absence, so the existing >=3-absence credit
+ * pro-rates that month); every later month is VOIDED, which is what makes it
+ * bill EUR 0 outright.
+ *
+ * Voiding the current month's remainder — the previous behaviour — was a dead
+ * end: VOIDED deliberately does not count as an absence, and
+ * setReservationEventStatus refuses to touch a VOIDED event, so neither the
+ * system nor staff could ever make the cancellation month bill less than a
+ * full month.
+ *
+ * Already-elapsed occurrences are never touched, and an occurrence a human
+ * already marked CANCELLED is left exactly as it is — same billing effect,
+ * and its provenance is a fact worth keeping.
+ */
+async function closeOutSubscription(subscriptionId: string, cutoff: Date): Promise<void> {
+  const cutoffIso = isoDate(cutoff);
+  const monthEndIso = isoDate(endOfMonth(cutoff));
+  const snap = await appCol("reservationEvents")
+    .where("subscriptionId", "==", subscriptionId)
+    .where("date", ">=", cutoffIso)
+    .get();
+  if (snap.empty) return;
+
+  const writes: { id: string; status: string; reason?: string }[] = [];
+  for (const d of snap.docs) {
+    const data = d.data();
+    if (data.date > monthEndIso) { writes.push({ id: d.id, status: "VOIDED" }); continue; }
+    if (data.status === "CANCELLED") continue; // never overwrite a recorded absence
+    writes.push({ id: d.id, status: "CANCELLED", reason: REASON_AFTER_END });
+  }
+  if (writes.length) await commitInChunks(writes, "setStatus");
 }
 
 // Resolves how far forward to generate: the earlier of the subscription's own
 // end and the school year end; a missing endDate means "to the school year
 // end" (see the fallback note above). Null when neither is knowable.
-async function resolveGenerationEnd(sub: any, subId: string, type: string): Promise<Date | null> {
+async function resolveGenerationEnd(sub: any, subId: string, type: string): Promise<{ contractEnd: Date; windowEnd: Date } | null> {
   const schoolYearEnd = await getSchoolYearEnd();
   const subEnd = coerceEndDate(sub.endDate);
   const to = subEnd && schoolYearEnd
@@ -250,7 +421,10 @@ async function resolveGenerationEnd(sub: any, subId: string, type: string): Prom
     );
     return null;
   }
-  return to;
+  // The window runs to the end of the ending month so the post-end days can be
+  // written as CANCELLED (see the boundary-month note above); `contractEnd` is
+  // still the real last served day.
+  return { contractEnd: to, windowEnd: resolveGenerationWindowEnd(to, subEnd, schoolYearEnd)! };
 }
 
 // Creates only the occurrences that don't exist yet, and never touches one
@@ -262,13 +436,15 @@ async function ensureEventsExist(
   sub: any, subId: string, type: "study" | "transport",
   configs: { studyConfig: any; transportConfig: any }, requestedFrom: Date,
 ): Promise<number> {
-  const from = resolveGenerationStart(sub, requestedFrom);
-  const to = await resolveGenerationEnd(sub, subId, type);
-  if (!to || to < from) return 0;
+  const from = resolveGenerationWindowStart(sub, requestedFrom);
+  const ends = await resolveGenerationEnd(sub, subId, type);
+  if (!ends || ends.windowEnd < from) return 0;
+  const { contractEnd, windowEnd: to } = ends;
+  const bounds: ContractBounds = { start: coerceStartDate(sub?.startDate), end: contractEnd };
 
   const events = type === "study"
-    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to)
-    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to);
+    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to, bounds)
+    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to, bounds);
   if (!events.length) return 0;
 
   const existing = await appCol("reservationEvents")
@@ -287,19 +463,29 @@ async function regenerateFutureEvents(
 ): Promise<void> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const from = resolveGenerationStart(sub, today);
-  const to = await resolveGenerationEnd(sub, subId, type);
-  if (!to || to < from) return;
-
-  // Voiding still starts at today, not at `from`: anything already written
-  // between today and a later startDate is exactly the bad data this fix
-  // prevents, and it should be cleared rather than left behind.
-  await voidFutureEvents(subId, isoDate(today));
+  const from = resolveGenerationWindowStart(sub, today);
+  const ends = await resolveGenerationEnd(sub, subId, type);
+  if (!ends || ends.windowEnd < from) return;
+  const { contractEnd, windowEnd: to } = ends;
+  const bounds: ContractBounds = { start: coerceStartDate(sub?.startDate), end: contractEnd };
 
   const events = type === "study"
-    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to)
-    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to);
-  if (events.length) await commitInChunks(events, "create");
+    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to, bounds)
+    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to, bounds);
+
+  // Clearing still starts at today, not at `from`: anything already written
+  // between today and a later startDate is exactly the bad data the startDate
+  // clamp prevents, and it should be cleared rather than left behind.
+  const existingFuture = await appCol("reservationEvents")
+    .where("subscriptionId", "==", subId)
+    .where("date", ">=", isoDate(today))
+    .get();
+  const { toCreate, toVoid } = splitRegenerationWrites(
+    events,
+    existingFuture.docs.map(d => ({ id: d.id, changedByRole: d.data()?.changedByRole })),
+  );
+  if (toVoid.length) await commitInChunks(toVoid.map(id => ({ id, status: "VOIDED" })), "setStatus");
+  if (toCreate.length) await commitInChunks(toCreate, "create");
 }
 
 async function loadConfigs(): Promise<{ studyConfig: any; transportConfig: any }> {
@@ -325,7 +511,14 @@ export const onStudyroomReservationEventsSync = onDocumentWritten(
     const after = event.data?.after?.data();
     const subId = event.params.entryId;
     if (!after) { await voidFutureEvents(subId, isoDate(new Date())); return; } // deleted
-    if (CANCELLED_SUB_STATUSES.has(after.status)) { await voidFutureEvents(subId, isoDate(new Date())); return; }
+    if (CANCELLED_SUB_STATUSES.has(after.status)) {
+      // Cutoff is today: what already happened this month stands, the rest of
+      // the month becomes a system absence, later months are voided.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      await closeOutSubscription(subId, today);
+      return;
+    }
     const scheduleChanged = !before
       || JSON.stringify(before.days) !== JSON.stringify(after.days)
       || before.weekPattern !== after.weekPattern
@@ -345,7 +538,14 @@ export const onTransportReservationEventsSync = onDocumentWritten(
     const after = event.data?.after?.data();
     const subId = event.params.subId;
     if (!after) { await voidFutureEvents(subId, isoDate(new Date())); return; } // deleted
-    if (CANCELLED_SUB_STATUSES.has(after.status)) { await voidFutureEvents(subId, isoDate(new Date())); return; }
+    if (CANCELLED_SUB_STATUSES.has(after.status)) {
+      // Cutoff is today: what already happened this month stands, the rest of
+      // the month becomes a system absence, later months are voided.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      await closeOutSubscription(subId, today);
+      return;
+    }
     const scheduleChanged = !before
       || JSON.stringify(before.schedule) !== JSON.stringify(after.schedule)
       || before.weekPattern !== after.weekPattern
