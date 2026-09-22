@@ -4,7 +4,7 @@ import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
-import { reconcileService, studyPerDayRate, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
+import { reconcileService, studyPerDayRate, resolveSchoolName, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -125,11 +125,13 @@ interface ChildRecord { birthDate?: Date; schoolName?: string }
 // their Bissaya match when sourced from the child record instead of the
 // subscription, so this corrects the source without moving anyone's fee.
 //
-// The subscription copy stays as a fallback only while the Phase 0 childId
-// backfill is outstanding - 4 active transport subs still have no childId and
-// would otherwise resolve to no school at all. None of those 4 currently match
-// the rule, so the fallback moves no money either; remove it once every
-// subscription has a childId.
+// The subscription copy stays as a per-field fallback - see resolveSchoolName
+// in reconciliation.ts for why it is per FIELD and not per record. It covers
+// two cases, only the first of which is transitional: a subscription with no
+// childId at all (4 active transport subs today, closed by the Phase 0
+// backfill), and a linked child record that has no schoolName of its own. The
+// second is permanently reachable, because ClaimSubscriptionsPage does not
+// require a school and writes null when it is blank.
 async function fetchChildRecords(childIds: string[]): Promise<Map<string, ChildRecord>> {
   const out = new Map<string, ChildRecord>();
   const ids = [...new Set(childIds)].filter(Boolean);
@@ -411,7 +413,7 @@ async function computeLineItems(
     const studyRate = studyPerDayRate(configs.studyConfig);
     const subsForRecon: SubscriptionForReconciliation[] = group.study.map(sub => ({
       id: sub.id, childId: sub.childId,
-      schoolName: childRecords.get(sub.childId)?.schoolName ?? sub.schoolName,
+      schoolName: resolveSchoolName(childRecords.get(sub.childId)?.schoolName, sub.schoolName),
       returningStudent: sub.returningStudent,
       manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
       enrollmentDate: enrollmentDateOf(sub),
@@ -446,7 +448,7 @@ async function computeLineItems(
     const tripRate: number = configs.transportConfig?.flatRatePerTrip ?? 0;
     const subsForRecon: SubscriptionForReconciliation[] = group.transport.map(sub => ({
       id: sub.id, childId: sub.childId,
-      schoolName: childRecords.get(sub.childId)?.schoolName ?? sub.schoolName,
+      schoolName: resolveSchoolName(childRecords.get(sub.childId)?.schoolName, sub.schoolName),
       returningStudent: sub.returningStudent,
       manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
       enrollmentDate: enrollmentDateOf(sub),

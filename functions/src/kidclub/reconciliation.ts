@@ -109,6 +109,29 @@ export function studyPerDayRate(cfg: any): number {
   return 0;
 }
 
+/**
+ * schoolName is canonical on the child record, but subscriptions keep a mirror
+ * of it and the two disagree in prod. It decides the 20% school discount, so
+ * how the two are combined is a money decision, not a display one.
+ *
+ * Resolved per FIELD, never per record. Keying the fallback on whether a
+ * childId exists has a hole that is reachable today: ClaimSubscriptionsPage
+ * validates only firstName/lastName/dateOfBirth and writes
+ * `schoolName: f.schoolName.trim() || null`, so a parent claiming a
+ * subscription can create a child record with no school while the subscription
+ * simultaneously gains a childId. Keyed on the record, that subscription would
+ * switch to reading a child that has no school and silently lose the discount.
+ *
+ * Blank and whitespace-only count as absent, not as an answer — `??` alone
+ * would let `schoolName: ""` resolve to empty and drop the match the same way.
+ */
+export function resolveSchoolName(
+  childSchoolName: string | null | undefined,
+  subSchoolName: string | null | undefined,
+): string | undefined {
+  return childSchoolName?.trim() || subSchoolName?.trim() || undefined;
+}
+
 function matchesSchool(schoolName: string | undefined, ruleSchoolName: string): boolean {
   if (!schoolName) return false;
   const a = schoolName.toLowerCase();

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcileService, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
+import { reconcileService, resolveSchoolName, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -489,5 +489,42 @@ describe("reference families (real prod shapes, October 2026 — service line it
     expect(rSibling.siblingDiscountCents).toBe(1200);
     expect(rSibling.finalCents).toBe(10800); // €120 - 10% sibling = €108.00
     expect(rDiogo.finalCents + rSibling.finalCents).toBe(21000); // €210.00
+  });
+});
+
+describe("resolveSchoolName", () => {
+  it("prefers the child record, which is canonical", () => {
+    expect(resolveSchoolName("Colégio Bissaya Barreto", "Rua Pedro Alvares Cabral")).toBe("Colégio Bissaya Barreto");
+  });
+
+  // The reachable claim-flow hole: a parent claims a subscription, which links a
+  // childId AND creates a child record with schoolName null. Keyed on childId
+  // rather than on the field, this subscription would silently lose its 20%.
+  it("falls back to the subscription copy when the linked child has no school", () => {
+    expect(resolveSchoolName(null, "Colégio Bissaya Barreto")).toBe("Colégio Bissaya Barreto");
+    expect(resolveSchoolName(undefined, "Colégio Bissaya Barreto")).toBe("Colégio Bissaya Barreto");
+  });
+
+  it("treats blank and whitespace-only as absent, not as an answer", () => {
+    expect(resolveSchoolName("", "Colégio Bissaya Barreto")).toBe("Colégio Bissaya Barreto");
+    expect(resolveSchoolName("   ", "Colégio Bissaya Barreto")).toBe("Colégio Bissaya Barreto");
+  });
+
+  it("returns undefined when neither source has a school", () => {
+    expect(resolveSchoolName(null, null)).toBeUndefined();
+    expect(resolveSchoolName("  ", "")).toBeUndefined();
+  });
+
+  // The fee consequence, end to end: a child record with no school must still
+  // reach the 20% rule through the subscription copy.
+  it("still matches the discount rule through the fallback", () => {
+    const subs = [sub({ id: "s1", schoolName: resolveSchoolName(null, "Colégio Bissaya Barreto") })];
+    const events = new Map([["s1", occurrences(20)]]);
+    const [r] = reconcileService(subs, events, {
+      ...NO_DISCOUNTS,
+      schoolDiscounts: [{ schoolName: "Colégio Bissaya Barreto", discountPercentage: 0.2 }],
+    });
+    expect(r.institutionalDiscountPct).toBe(0.2);
+    expect(r.institutionalDiscountCents).toBe(2400); // 20% of EUR 120 flat gross
   });
 });
