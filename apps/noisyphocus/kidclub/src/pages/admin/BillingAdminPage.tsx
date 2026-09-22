@@ -493,10 +493,10 @@ export default function BillingAdminPage() {
     setGeneratingEvents(true);
     setGenerateEventsResult(null);
     try {
-      const fn = callable<object, { studySubscriptions: number; transportSubscriptions: number }>('backfillReservationEvents');
+      const fn = callable<object, { studySubscriptions: number; transportSubscriptions: number; created: number }>('backfillReservationEvents');
       const res = await fn({});
-      const { studySubscriptions, transportSubscriptions } = res.data;
-      setGenerateEventsResult(`✅ ${studySubscriptions} inscrições de sala de estudo · ${transportSubscriptions} de transporte processadas`);
+      const { studySubscriptions, transportSubscriptions, created } = res.data;
+      setGenerateEventsResult(`✅ ${studySubscriptions} inscrições de sala de estudo · ${transportSubscriptions} de transporte · ${created} ocorrência(s) criada(s)`);
     } catch (err: any) {
       setGenerateEventsResult(`❌ ${err.message}`);
     } finally {
@@ -598,7 +598,9 @@ export default function BillingAdminPage() {
           <p className="text-xs text-amber-800">
             Necessário <strong>uma vez</strong> depois de instalar o sistema de ocorrências:
             inscrições criadas antes dele não têm ocorrências e faturariam <strong>zero</strong>.
-            Repetível em segurança — só afeta datas de hoje em diante, nunca dias já passados.
+            Cobre o mês atual inteiro (incluindo dias já passados), para que o mês de arranque
+            não fique subfaturado. Repetível em segurança — só cria o que falta, nunca
+            altera faltas já marcadas.
           </p>
         </div>
         <button onClick={handleGenerateEvents} disabled={generatingEvents}

@@ -191,33 +191,61 @@ async function voidFutureEvents(subscriptionId: string, fromIso: string): Promis
   await commitInChunks(snap.docs.map(d => ({ id: d.id, status: "VOIDED" })), "void");
 }
 
-async function regenerateFutureEvents(
-  sub: any, subId: string, type: "study" | "transport", configs: { studyConfig: any; transportConfig: any },
-): Promise<void> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+// Resolves how far forward to generate: the earlier of the subscription's own
+// end and the school year end; a missing endDate means "to the school year
+// end" (see the fallback note above). Null when neither is knowable.
+async function resolveGenerationEnd(sub: any, subId: string, type: string): Promise<Date | null> {
   const schoolYearEnd = await getSchoolYearEnd();
-  // Most subscriptions have no endDate at all (19 of 23 active transport subs
-  // on dev). That means "runs to the end of the school year", not "has no
-  // end" — the same rule eventService.ts already applies when it computes the
-  // calendar. Treating a missing endDate as unusable generated zero events for
-  // most of transport. Where both exist, the earlier one wins.
   const subEnd = coerceEndDate(sub.endDate);
   const to = subEnd && schoolYearEnd
     ? (subEnd < schoolYearEnd ? subEnd : schoolYearEnd)
     : (subEnd ?? schoolYearEnd);
   if (!to) {
-    // Neither an endDate nor a configured school-year end: generating
-    // "forever" would be worse than generating nothing, but this must be
-    // loud — the silent version of this shipped twice already.
     console.error(
       `[reservationEvents] ${type} subscription ${subId} has no usable end date `
       + `(endDate=${JSON.stringify(sub.endDate)}) and config/schoolCalendar.yearEndDate is unset `
       + `— no events generated. Set the school year end date.`
     );
-    return;
+    return null;
   }
-  if (to < today) return;
+  return to;
+}
+
+// Creates only the occurrences that don't exist yet, and never touches one
+// that does. The backfill uses this rather than regenerateFutureEvents:
+// commitInChunks writes with { merge: true } and a hardcoded status of
+// "EXPECTED", so re-running a regenerate would quietly reset every CANCELLED
+// day back to EXPECTED and wipe real absences.
+async function ensureEventsExist(
+  sub: any, subId: string, type: "study" | "transport",
+  configs: { studyConfig: any; transportConfig: any }, from: Date,
+): Promise<number> {
+  const to = await resolveGenerationEnd(sub, subId, type);
+  if (!to || to < from) return 0;
+
+  const events = type === "study"
+    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to)
+    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to);
+  if (!events.length) return 0;
+
+  const existing = await appCol("reservationEvents")
+    .where("subscriptionId", "==", subId)
+    .where("date", ">=", isoDate(from))
+    .where("date", "<=", isoDate(to))
+    .get();
+  const seen = new Set(existing.docs.map(d => d.id));
+  const missing = events.filter(e => !seen.has(e.id));
+  if (missing.length) await commitInChunks(missing, "create");
+  return missing.length;
+}
+
+async function regenerateFutureEvents(
+  sub: any, subId: string, type: "study" | "transport", configs: { studyConfig: any; transportConfig: any },
+): Promise<void> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const to = await resolveGenerationEnd(sub, subId, type);
+  if (!to || to < today) return;
 
   await voidFutureEvents(subId, isoDate(today));
 
@@ -349,15 +377,25 @@ export const backfillReservationEvents = onCall(
       appCol("transportationSubscriptions").where("status", "==", "active").get(),
     ]);
 
-    let studyCount = 0, transportCount = 0;
+    // Start at the beginning of the CURRENT billing month, not today.
+    // Generation from "today" leaves the already-elapsed part of this month
+    // with no occurrences, and billing derives gross from occurrences — so
+    // the month this system ships in bills short for everyone. Matilde's
+    // transport billed EUR 0.00 for September precisely this way: a biweekly
+    // subscription whose only September service days (7th, 16th, 21st) had
+    // already passed by the time generation first ran.
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    let studySubscriptions = 0, transportSubscriptions = 0, created = 0;
     for (const d of studySnap.docs) {
-      await regenerateFutureEvents({ id: d.id, ...d.data() }, d.id, "study", configs);
-      studyCount++;
+      created += await ensureEventsExist({ id: d.id, ...d.data() }, d.id, "study", configs, monthStart);
+      studySubscriptions++;
     }
     for (const d of transportSnap.docs) {
-      await regenerateFutureEvents({ id: d.id, ...d.data() }, d.id, "transport", configs);
-      transportCount++;
+      created += await ensureEventsExist({ id: d.id, ...d.data() }, d.id, "transport", configs, monthStart);
+      transportSubscriptions++;
     }
-    return { studySubscriptions: studyCount, transportSubscriptions: transportCount };
+    return { studySubscriptions, transportSubscriptions, created };
   }
 );
