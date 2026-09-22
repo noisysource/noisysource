@@ -396,6 +396,30 @@ Kidclub app typecheck: **13 errors before and after — the pre-existing baselin
 | 14 | **Phase 2 clears the 6 `endDate: 2027-07-30` values** so all 22 subscriptions bill August 2027. | Cancellation becomes purely manual, consistent with decision 10. ⚠️ Writing `endDate` triggers `regenerateFutureEvents`, so this MUST happen in the date-repair step **before** event generation — see the Phase 2 sequencing rule. |
 | 15 | **The next agent writes the Phase 2 script only.** No dev wipe, no import, no deploy. | Renato reviews the dry run before anything executes. The wipe runbook is written down, not run. |
 
+### Branch state (2026-09-22)
+
+`agent/eventsourcing-integration` is **pushed to origin** (head `e86af02`, 27 commits ahead of
+`staging`). It carries Phases 0, 1 and 3 plus decisions 9-11. Phase 2 branches from it, not
+from `main` or `staging` — neither has `reservationEvents.ts`, `reconciliation.ts` or the
+decision 9-11 money changes.
+
+**Route to dev: PR into `staging`, never into `main`.** Opening a PR against `main` deploys
+to **prod immediately, before merge** (`deploy-prod.yml`). A PR against `staging` deploys to
+`kidclub-dev`, which is where this gets validated.
+
+### 🔴 OPEN Phase 5 question — how the fix reaches prod
+
+Renato (2026-09-22): "we can bring data from prod, fix in dev and then import." The first
+half is decision 12 and is settled. The second half is ambiguous and **is not yet decided**:
+
+- **Re-run the validated script against prod** — the script is the artifact, dev proves it,
+  prod gets the same transformation. Recommended, and what the phase plan assumes.
+- **Import dev's repaired data into prod** — would overwrite prod with dev state. Dev will by
+  then hold test mutations, and `primaryContact.userId` values in dev are **dev** Auth UIDs
+  that match no prod account, so a straight import would break every parent login it touched.
+
+Decide this before Phase 5. It does not block Phase 2.
+
 ### ⚠️ The dev wipe must target KidClub ONLY — `users` is shared (verified 2026-09-22)
 
 Renato's explicit instruction: the wipe targets KidClub, never Finances or any other app.
