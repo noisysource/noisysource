@@ -420,9 +420,34 @@ change whether the 20% discount matches, and therefore the fee. That is a correc
 a bug, but it is a fee-changing side effect of an otherwise cosmetic-looking edit, so
 don't be surprised by it.
 
-**Not verified in a browser.** `pnpm --filter kidclub build` passes and `tsc --noEmit`
-shows the same 16 pre-existing errors as `origin/staging` — zero new ones — but nothing
-was clicked through on dev.
+**Second commit (`ec97f46`) — the admin page restructure.** The read-side fix above stopped
+the *display* diverging, but the admin page still showed and separately edited the same
+child's details once per subscription, which is what let them diverge in the first place.
+So the list is now **family → child → subscriptions**:
+- Family row has a contact editor (`FamilyContactForm`) writing
+  `families/{id}.primaryContact` — guardian name/email/phone, once per family.
+- New child row groups that child's subscriptions under one header (name, school · year)
+  with a details editor (`ChildDetailsForm`) writing `children/{childId}` — name, date of
+  birth, school, school year, home address, once per child.
+- `EditForm` lost the entire `EnrollmentDetailsForm` block and all its child/family
+  writes. It now covers only schedule, week pattern, discounts, fee and the internal note.
+- Subscription cards no longer repeat the child's name or school; they lead with the
+  service type.
+
+Both new forms write the canonical record and then mirror `childName`/`schoolName`/
+`schoolYear`/contact onto **every** affected subscription in one pass. That is what
+actually converges the stored drift, rather than only hiding it: editing one child fixes
+both of their documents. `ChildDetailsForm` shows a warning when the school field changes,
+because the fee can move with it.
+
+**Not verified in a browser.** `pnpm --filter kidclub build` passes; `tsc --noEmit` is at
+13 errors vs the 16 on `origin/staging` — zero new, and three pre-existing ones went away
+(two in `SubscriptionsAdminPage`, one `zod` resolution fixed by `pnpm install`). Nothing
+was clicked through on dev. **The admin subscriptions page is the single highest-traffic
+admin screen and its render tree was substantially rewritten — this needs a real
+click-through on dev before it goes anywhere near a `main` PR**, particularly: a family
+with two children, a child with both a transport and a study subscription, an unlinked
+(unclaimed) subscription with no `childId`, and the 🔗 Vincular flow.
 
 ### Prod data pass — still the other open thread
 Renato has a plan for it and wants it started in a **fresh session**, as a read-only
