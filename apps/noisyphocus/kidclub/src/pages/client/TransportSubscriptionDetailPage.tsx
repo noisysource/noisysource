@@ -44,6 +44,7 @@ export default function TransportSubscriptionDetailPage() {
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -159,12 +160,21 @@ export default function TransportSubscriptionDetailPage() {
   };
 
   const toggleTrip = async (trip: UpcomingTrip) => {
-    if (!user || !id || !trip.reservationEventId) return;
+    if (!user || !id) return;
+    // See StudySubscriptionDetailPage's toggleDay — a missing ReservationEvent
+    // means the occurrence was never generated; say so rather than no-op.
+    if (!trip.reservationEventId) {
+      setActionError('Esta viagem ainda não tem ocorrência gerada, por isso não pode ser cancelada. Peça ao Kid Club para gerar as ocorrências desta inscrição.');
+      return;
+    }
     setActionInProgress(trip.reservationEventId);
+    setActionError(null);
     try {
       const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
       await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
     }
@@ -411,6 +421,17 @@ export default function TransportSubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele viagens individualmente. O cancelamento é imediato e pode ser revertido.
             </p>
+            {actionError && (
+              <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                {actionError}
+              </p>
+            )}
+            {dayGroups.length > 0 && dayGroups.every(g => g.trips.every(t => !t.reservationEventId)) && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Esta inscrição ainda não tem ocorrências geradas — as viagens abaixo não podem
+                ser canceladas até que isso seja feito.
+              </p>
+            )}
           </div>
 
           {dayGroups.length === 0 ? (
@@ -446,8 +467,9 @@ export default function TransportSubscriptionDetailPage() {
                           </div>
                           <button
                             onClick={() => toggleTrip(trip)}
-                            disabled={!!actionInProgress}
-                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 ${
+                            disabled={!!actionInProgress || !trip.reservationEventId}
+                            title={!trip.reservationEventId ? 'Sem ocorrência gerada para esta viagem — não pode ser cancelada' : undefined}
+                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                               isCancelled
                                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                 : 'bg-red-50 text-red-600 hover:bg-red-100'

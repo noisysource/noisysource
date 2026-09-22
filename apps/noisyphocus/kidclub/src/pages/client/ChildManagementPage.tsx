@@ -73,6 +73,7 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
   const [sessions, setSessions] = useState<UpcomingSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionAction, setSessionAction] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [draftDays, setDraftDays] = useState<StudyRoomEntry['days']>([]);
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -174,15 +175,22 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
   };
 
   const toggleDay = async (session: UpcomingSession) => {
-    if (!session.reservationEventId) return;
+    // No ReservationEvent = the occurrence was never generated; surface that
+    // instead of silently doing nothing (see StudySubscriptionDetailPage).
+    if (!session.reservationEventId) {
+      setSessionError('Este dia ainda não tem ocorrência gerada, por isso não pode ser cancelado.');
+      return;
+    }
     setSessionAction(session.dateStr);
+    setSessionError(null);
     try {
       const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
       const nextStatus = session.cancelled ? 'EXPECTED' : 'CANCELLED';
       await fn({ eventId: session.reservationEventId, status: nextStatus });
       setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancelled: nextStatus === 'CANCELLED' } : s));
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to toggle day:', e);
+      setSessionError(e?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setSessionAction(null);
     }
@@ -402,6 +410,14 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
         {selected.type === 'study' && isActive && !editingSchedule && (
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Próximas sessões</p>
+            {sessionError && (
+              <p className="mb-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">{sessionError}</p>
+            )}
+            {!loadingSessions && sessions.length > 0 && sessions.every(s => !s.reservationEventId) && (
+              <p className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Sem ocorrências geradas para esta inscrição — os dias abaixo não podem ser cancelados.
+              </p>
+            )}
             {loadingSessions ? (
               <p className="text-xs text-gray-400">A carregar...</p>
             ) : sessions.length === 0 ? (
@@ -419,8 +435,10 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
                         </p>
                         <p className="text-xs text-gray-400">{session.hour}{session.transport ? ' · 🚌' : ''}</p>
                       </div>
-                      <button onClick={() => toggleDay(session)} disabled={!!sessionAction}
-                        className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 transition ${
+                      <button onClick={() => toggleDay(session)}
+                        disabled={!!sessionAction || !session.reservationEventId}
+                        title={!session.reservationEventId ? 'Sem ocorrência gerada para este dia' : undefined}
+                        className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed transition ${
                           cancelled ? 'bg-green-50 text-green-700 hover:bg-green-100' : 'bg-red-50 text-red-600 hover:bg-red-100'
                         }`}>
                         {inProgress ? '...' : cancelled ? 'Restaurar' : 'Cancelar'}

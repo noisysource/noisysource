@@ -39,6 +39,7 @@ export default function StudySubscriptionDetailPage() {
   const [sessions, setSessions] = useState<UpcomingSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [draftDays, setDraftDays] = useState<StudyRoomEntry['days']>([]);
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -119,12 +120,23 @@ export default function StudySubscriptionDetailPage() {
   };
 
   const toggleDay = async (session: UpcomingSession) => {
-    if (!user || !id || !session.reservationEventId) return;
+    if (!user || !id) return;
+    // No ReservationEvent for this date means nothing can be cancelled — the
+    // occurrence was never generated (subscription predates the occurrences
+    // system, or an admin hasn't run "Gerar ocorrências" yet). Say so instead
+    // of returning silently and leaving a button that looks live but isn't.
+    if (!session.reservationEventId) {
+      setActionError('Este dia ainda não tem ocorrência gerada, por isso não pode ser cancelado. Peça ao Kid Club para gerar as ocorrências desta inscrição.');
+      return;
+    }
     setActionInProgress(session.dateStr);
+    setActionError(null);
     try {
       const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
       await fn({ eventId: session.reservationEventId, status: session.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
     }
@@ -377,6 +389,17 @@ export default function StudySubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele dias específicos (ex: férias). O cancelamento é imediato e pode ser revertido.
             </p>
+            {actionError && (
+              <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                {actionError}
+              </p>
+            )}
+            {sessions.length > 0 && sessions.every(s => !s.reservationEventId) && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Esta inscrição ainda não tem ocorrências geradas — os dias abaixo não podem ser
+                cancelados até que isso seja feito.
+              </p>
+            )}
           </div>
           {sessions.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-8">
@@ -403,8 +426,9 @@ export default function StudySubscriptionDetailPage() {
                     </div>
                     <button
                       onClick={() => toggleDay(session)}
-                      disabled={!!actionInProgress}
-                      className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 ${
+                      disabled={!!actionInProgress || !session.reservationEventId}
+                      title={!session.reservationEventId ? 'Sem ocorrência gerada para este dia — não pode ser cancelado' : undefined}
+                      className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                         isCancelled
                           ? 'bg-green-100 text-green-700 hover:bg-green-200'
                           : 'bg-red-50 text-red-600 hover:bg-red-100'
