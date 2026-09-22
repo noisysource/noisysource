@@ -4,7 +4,7 @@ import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
-import { reconcileService, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
+import { reconcileService, studyPerDayRate, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -72,10 +72,12 @@ function chunk<T>(arr: T[], size = 30): T[][] {
 }
 
 // Every occurrence actually scheduled this period, for a set of
-// subscriptions, read from the materialized ReservationEvents collection —
-// this is the single source of truth for both gross (EXPECTED + CANCELLED)
-// and the absence count (CANCELLED only), replacing the old split between a
-// schedule-derived formula for gross and eventModifications for absences.
+// subscriptions, read from the materialized ReservationEvents collection.
+// These drive the absence count (CANCELLED only) and the "did this
+// subscription run at all this period" test (all-VOIDED = no). They do NOT
+// drive gross: gross is the flat monthly price derived from the schedule
+// pattern in reconcileService(), so a five-Monday month costs the same as a
+// four-Monday one.
 async function fetchReservationEventsForPeriod(
   studyIds: string[],
   transportIds: string[],
@@ -253,7 +255,7 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
 export interface BillingLineItem {
   title: string;
   amount: number;               // net, after discounts AND absence credit
-  grossAmount: number;          // before discounts — sum of this period's EXPECTED+CANCELLED ReservationEvents
+  grossAmount: number;          // before discounts — the flat monthly price (scheduleLength x rate x activeWeeksInPattern), not a count of this period's occurrences
   subscriptionId: string;
   type: "study" | "transport" | "enrollment";
   appliedDiscounts: AppliedDiscount[]; // kept for type compatibility; study/transport line items no longer populate this — see multiTripDiscountAmount etc. below
@@ -384,11 +386,15 @@ async function computeLineItems(
 
   if (group.study.length) {
     const cfg = buildReconciliationConfig("study", configs.discountRules, configs.studyConfig);
+    const studyRate = studyPerDayRate(configs.studyConfig);
     const subsForRecon: SubscriptionForReconciliation[] = group.study.map(sub => ({
       id: sub.id, childId: sub.childId, schoolName: sub.schoolName, returningStudent: sub.returningStudent,
       manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
       enrollmentDate: enrollmentDateOf(sub),
       childBirthDate: childBirthDates.get(sub.childId),
+      scheduleWeekdays: (sub.days ?? []).map((d: any) => d.day),
+      weekPattern: sub.weekPattern,
+      ratePerOccurrenceCents: Math.round(studyRate * 100),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
       const sub = group.study.find(s => s.id === r.subscriptionId)!;
@@ -413,11 +419,15 @@ async function computeLineItems(
 
   if (group.transport.length) {
     const cfg = buildReconciliationConfig("transport", configs.discountRules, configs.transportConfig);
+    const tripRate: number = configs.transportConfig?.flatRatePerTrip ?? 0;
     const subsForRecon: SubscriptionForReconciliation[] = group.transport.map(sub => ({
       id: sub.id, childId: sub.childId, schoolName: sub.schoolName, returningStudent: sub.returningStudent,
       manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
       enrollmentDate: enrollmentDateOf(sub),
       childBirthDate: childBirthDates.get(sub.childId),
+      scheduleWeekdays: (sub.schedule ?? []).map((sl: any) => sl.dayOfWeek),
+      weekPattern: sub.weekPattern,
+      ratePerOccurrenceCents: Math.round(tripRate * 100),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
       const sub = group.transport.find(s => s.id === r.subscriptionId)!;
