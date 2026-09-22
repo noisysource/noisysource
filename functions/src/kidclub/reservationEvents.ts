@@ -184,15 +184,26 @@ async function regenerateFutureEvents(
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const schoolYearEnd = await getSchoolYearEnd();
+  // Most subscriptions have no endDate at all (19 of 23 active transport subs
+  // on dev). That means "runs to the end of the school year", not "has no
+  // end" — the same rule eventService.ts already applies when it computes the
+  // calendar. Treating a missing endDate as unusable generated zero events for
+  // most of transport. Where both exist, the earlier one wins.
   const subEnd = coerceEndDate(sub.endDate);
-  if (!subEnd) {
-    // No usable end date at all — generating "forever" would be worse than
-    // generating nothing, so stop, but say so: the silent version of this
-    // shipped once and produced zero study occurrences with no signal.
-    console.error(`[reservationEvents] ${type} subscription ${subId} has an unusable endDate (${JSON.stringify(sub.endDate)}) — no events generated`);
+  const to = subEnd && schoolYearEnd
+    ? (subEnd < schoolYearEnd ? subEnd : schoolYearEnd)
+    : (subEnd ?? schoolYearEnd);
+  if (!to) {
+    // Neither an endDate nor a configured school-year end: generating
+    // "forever" would be worse than generating nothing, but this must be
+    // loud — the silent version of this shipped twice already.
+    console.error(
+      `[reservationEvents] ${type} subscription ${subId} has no usable end date `
+      + `(endDate=${JSON.stringify(sub.endDate)}) and config/schoolCalendar.yearEndDate is unset `
+      + `— no events generated. Set the school year end date.`
+    );
     return;
   }
-  const to = schoolYearEnd && schoolYearEnd < subEnd ? schoolYearEnd : subEnd;
   if (to < today) return;
 
   await voidFutureEvents(subId, isoDate(today));

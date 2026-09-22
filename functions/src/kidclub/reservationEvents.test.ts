@@ -40,6 +40,15 @@ describe("coerceEndDate (study Timestamp vs transport string)", () => {
     expect(coerceEndDate(new Date("nonsense"))).toBeNull();
   });
 
+  // Second regression from the same dev session: 19 of 23 active transport
+  // subscriptions have no endDate field at all. Treating that as "unusable"
+  // generated zero events for nearly all of transport. A missing endDate
+  // means "runs to the end of the school year" — the rule eventService.ts
+  // already uses — not "has no end".
+  it("returns null for a missing endDate so the caller can fall back to the school year end", () => {
+    expect(coerceEndDate(undefined)).toBeNull();
+  });
+
   it("a Timestamp end date still produces events — the actual bug", () => {
     const sub = { familyId: "f1", childId: "c1", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
     const to = coerceEndDate({ toDate: () => new Date(2026, 8, 30) })!;
