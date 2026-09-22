@@ -271,7 +271,62 @@ const [families, children, study, transport] = await Promise.all(
 const plan = main({ families, children, study, transport });
 report(plan);
 
-if (APPLY) {
-  console.error("APPLY mode is not implemented yet — the dry-run plan must be reviewed and signed off first.");
+// ── Approved fuzzy merges ───────────────────────────────────────────────────
+// Near-name duplicates are never merged unattended. A merge happens only when
+// it is named explicitly on the command line as loserId:survivorId, so the
+// invocation itself is the audit record of who approved what:
+//
+//   node identity.mjs --apply --i-know-this-is-prod \
+//     --approve-merge G1XkEDBciLr7k2Hk9eRa:6DdwHVG0WFr975wMYyBC
+//
+// The loser is RETIRED, never deleted — status becomes "merged" with a pointer
+// to the survivor, so the record stays auditable and the merge is reversible.
+// Any subscription pointing at the loser is repointed first; if one still does
+// and cannot be repointed, the merge is refused rather than orphaning it.
+async function patchDoc(collection, id, fields) {
+  const mask = Object.keys(fields).map(f => `updateMask.fieldPaths=${encodeURIComponent(f)}`).join("&");
+  const res = await fetch(`${ROOT}/${collection}/${id}?${mask}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw new Error(`PATCH ${collection}/${id}: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+const approved = args.flatMap((a, i) => (a === "--approve-merge" && args[i + 1] ? [args[i + 1]] : []));
+
+if (approved.length) {
+  const all = [...study.map(s => ({ ...s, _col: "studyroom" })),
+               ...transport.map(s => ({ ...s, _col: "transportationSubscriptions" }))];
+  for (const pair of approved) {
+    const [loserId, survivorId] = pair.split(":");
+    const loser = children.find(c => c.id === loserId);
+    const survivor = children.find(c => c.id === survivorId);
+    if (!loser || !survivor) { console.error(`  SKIP ${pair}: record not found`); continue; }
+
+    const pointing = all.filter(s => s.childId === loserId);
+    console.log(`\nMERGE ${loser.firstName} ${loser.lastName} (${loserId}) -> ${survivor.firstName} ${survivor.lastName} (${survivorId})`);
+    console.log(`  subscriptions pointing at the duplicate: ${pointing.length ? pointing.map(s => `${s._col}/${s.id}`).join(", ") : "none"}`);
+    const salvage = CHILD_FIELDS.filter(f => !survivor[f] && loser[f]);
+    console.log(`  fields the survivor is missing that the duplicate has: ${salvage.length ? salvage.join(", ") : "none"}`);
+
+    if (!APPLY) { console.log("  DRY RUN — not written."); continue; }
+
+    for (const s of pointing) {
+      await patchDoc(s._col, s.id, { childId: { stringValue: survivorId } });
+      console.log(`  repointed ${s._col}/${s.id}`);
+    }
+    await patchDoc("children", loserId, {
+      status: { stringValue: "merged" },
+      mergedInto: { stringValue: survivorId },
+      mergedAt: { timestampValue: new Date().toISOString() },
+    });
+    console.log(`  retired children/${loserId} (status=merged, mergedInto=${survivorId}) — not deleted, reversible`);
+  }
+}
+
+if (APPLY && !approved.length) {
+  console.error("Full APPLY mode is not implemented yet — the dry-run plan must be reviewed and signed off first.");
   process.exit(2);
 }
