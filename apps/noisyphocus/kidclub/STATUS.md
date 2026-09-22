@@ -183,7 +183,9 @@ nothing. Impersonation has the same problem if it keeps the admin's own uid.
 To actually exercise the fix, temporarily clear the roles on
 `users/DXMww3tno5Z6yYY01dv5Yq3bptf2` while testing the parent flow, then restore them.
 Do not skip this — it is the difference between validating the fix and validating the staff
-bypass.
+bypass. **Renato approved this 2026-09-22** ("it's ok to remove the permissions on my
+personal email to test"), and confirmed dev must NOT be opened to outside parents — so the
+parent path is validated by de-privileging renato343 rather than by inviting a real family in.
 
 **dev Auth accounts (5, verified 2026-09-22):**
 
