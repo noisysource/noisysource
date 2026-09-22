@@ -2,6 +2,8 @@
 // Docs: https://api.prod.easypay.pt/docs
 // Credentials come from Firebase secrets: EASYPAY_ACCOUNT_ID, EASYPAY_API_KEY
 
+import { assertExternalCallsAllowed } from "../externalGuard";
+
 const EASYPAY_BASE = process.env.EASYPAY_SANDBOX === "true"
   ? "https://api.test.easypay.pt/2.0"
   : "https://api.prod.easypay.pt/2.0";
@@ -22,6 +24,7 @@ function webhookUrl(): string | undefined {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
+  assertExternalCallsAllowed("EasyPay");
   console.log(`[Easypay] POST ${path} body:`, JSON.stringify(body));
   const res = await fetch(`${EASYPAY_BASE}${path}`, {
     method: "POST",
