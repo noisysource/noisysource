@@ -134,9 +134,60 @@ agent branches merged cleanly, **84 tests passing, typecheck clean**.
   in a billable period" warning.
 - `eslint` is dead in `functions/` on `staging` — `eslint.config.js` uses ESM `import` but is
   loaded as CJS. Pre-existing, unrelated, but lint is not running there at all.
-- The Mafalda duplicate merge is approved by Renato but **blocked by the harness permission
-  classifier** (Modify Shared Resources) and must be run by hand:
-  `node scripts/kidclub-migration/identity.mjs --apply --i-know-this-is-prod --approve-merge G1XkEDBciLr7k2Hk9eRa:6DdwHVG0WFr975wMYyBC`
+- ~~The Mafalda duplicate merge~~ **DONE** — run by Renato 2026-09-22 19:22 UTC. Verified in
+  prod: `children/G1XkEDBciLr7k2Hk9eRa` now `status: merged`, `mergedInto:
+  6DdwHVG0WFr975wMYyBC`. Retired, not deleted, so it remains reversible.
+
+### Phase 1 — dev wipe before import (Renato, 2026-09-22)
+
+Renato's instruction: wipe dev completely first, then import prod, so the migration is proved
+against real data with no pre-existing dev records polluting the result. `gcloud firestore
+import` **merges**, it does not replace, so without an explicit delete the old dev docs
+survive alongside the imported ones — exactly the pollution this is meant to avoid.
+
+**⚠️ Do NOT run `firestore:delete --all-collections` on `kidclub-dev`.** Per the root
+CLAUDE.md, KidClub and FinHub share the single `(default)` database in each project. A
+blanket wipe destroys `finances_entities/**` (FinHub dev) as well. Scope the delete to
+KidClub's own root: `_apps/arcoiris/**`.
+
+Open question before running it: the top-level `users` collection is NOT under
+`_apps/arcoiris` (`billing.ts` reads `db.collection("users")` directly) and may be shared
+with FinHub. Confirm whether it is KidClub-only before including it in the wipe.
+
+**Firebase Auth is not touched by a Firestore wipe**, and Auth UIDs are per-project, so the
+imported `primaryContact.userId` values will be prod UIDs that match no dev account. To
+exercise the newly-fixed parent path on dev, pick a test family after the import and set its
+`primaryContact.userId` to a real `kidclub-dev` Auth UID. Without that step the parent-side
+validation cannot run at all — which is the whole point of the auth fix.
+
+Also re-enter dev's own `config/transportation` values after the import
+(`driverMonthlyCost` / `electricityMonthlyCost`), which the import overwrites with prod's doc.
+
+### schoolName ownership — resolved (2026-09-22)
+
+A parallel branch (`agent/subscription-personal-data`) moved the KidClub UI to resolve
+personal data from `children/{childId}` and `families/{familyId}.primaryContact`, but could
+not delete the subscription-level `schoolName` mirror because three backend consumers still
+read it.
+
+**Measured before changing anything: 0 of 21 active transport subscriptions change their 20%
+Bissaya match when schoolName is sourced from the child record instead of the subscription.**
+So this is a correction of source with no fee movement.
+
+Done on the integration branch: `billing.ts` now reads schoolName from the child document
+(`fetchChildrenBirthDates` became `fetchChildRecords`, same query, no extra reads), falling
+back to the subscription copy only while the Phase 0 `childId` backfill is outstanding — 4
+active transport subs still have no `childId`, and none of them match the rule either way.
+
+**Still reading the mirror, blocking its deletion:** `discountRecalc.ts:148,180` (the
+`auto_school` rule), `billing.ts` line-item titles (`sub.childName`), and
+`notifications.ts:139,169` (`contactEmail`). The mirror can only be dropped once
+`discountRecalc.ts` is moved too — that is owned by neither branch and needs doing
+deliberately.
+
+**Known side effect, already flagged by that branch:** saving a subscription in the admin page
+rewrites its schoolName mirror from the child's value. For the subs storing a street address
+that is a correction, not a regression — and per the measurement above it moves no fee today.
 
 ### Expected money impact
 
