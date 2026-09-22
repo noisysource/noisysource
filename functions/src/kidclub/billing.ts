@@ -111,8 +111,27 @@ async function fetchReservationEventsForPeriod(
 // Children's birthdates, for the sibling-discount ordering tie-break
 // (older child -> position 1 / full price, once value and enrollment date
 // are both tied).
-async function fetchChildrenBirthDates(childIds: string[]): Promise<Map<string, Date>> {
-  const out = new Map<string, Date>();
+interface ChildRecord { birthDate?: Date; schoolName?: string }
+
+// The child document is the canonical source for a child's personal data.
+// Subscriptions carry their own copies of schoolName/childName, and those
+// copies have drifted: of the 10 children holding both a transport and a study
+// subscription in prod, 5 store two different schoolName values across their
+// two documents, and 2 of those values are street addresses rather than
+// schools. Since schoolName decides the 20% Colegio Bissaya Barreto transport
+// discount, billing must not read the drifted copy.
+//
+// Measured before switching: 0 of 21 active transport subscriptions change
+// their Bissaya match when sourced from the child record instead of the
+// subscription, so this corrects the source without moving anyone's fee.
+//
+// The subscription copy stays as a fallback only while the Phase 0 childId
+// backfill is outstanding - 4 active transport subs still have no childId and
+// would otherwise resolve to no school at all. None of those 4 currently match
+// the rule, so the fallback moves no money either; remove it once every
+// subscription has a childId.
+async function fetchChildRecords(childIds: string[]): Promise<Map<string, ChildRecord>> {
+  const out = new Map<string, ChildRecord>();
   const ids = [...new Set(childIds)].filter(Boolean);
   if (!ids.length) return out;
   const snaps = await Promise.all(chunk(ids).map(batch =>
@@ -120,8 +139,11 @@ async function fetchChildrenBirthDates(childIds: string[]): Promise<Map<string, 
   ));
   for (const snap of snaps) {
     for (const doc of snap.docs) {
-      const dob = doc.data()?.dateOfBirth;
-      if (dob) out.set(doc.id, dob.toDate ? dob.toDate() : new Date(dob));
+      const d = doc.data() ?? {};
+      out.set(doc.id, {
+        birthDate: d.dateOfBirth ? (d.dateOfBirth.toDate ? d.dateOfBirth.toDate() : new Date(d.dateOfBirth)) : undefined,
+        schoolName: d.schoolName ?? undefined,
+      });
     }
   }
   return out;
@@ -373,9 +395,9 @@ async function computeLineItems(
 
   const studyIds = group.study.map(s => s.id);
   const transportIds = group.transport.map(s => s.id);
-  const [eventsBySub, childBirthDates] = await Promise.all([
+  const [eventsBySub, childRecords] = await Promise.all([
     fetchReservationEventsForPeriod(studyIds, transportIds, period),
-    fetchChildrenBirthDates([...group.study, ...group.transport].map(s => s.childId)),
+    fetchChildRecords([...group.study, ...group.transport].map(s => s.childId)),
   ]);
 
   const enrollmentDateOf = (sub: any): Date => {
@@ -388,10 +410,12 @@ async function computeLineItems(
     const cfg = buildReconciliationConfig("study", configs.discountRules, configs.studyConfig);
     const studyRate = studyPerDayRate(configs.studyConfig);
     const subsForRecon: SubscriptionForReconciliation[] = group.study.map(sub => ({
-      id: sub.id, childId: sub.childId, schoolName: sub.schoolName, returningStudent: sub.returningStudent,
+      id: sub.id, childId: sub.childId,
+      schoolName: childRecords.get(sub.childId)?.schoolName ?? sub.schoolName,
+      returningStudent: sub.returningStudent,
       manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
       enrollmentDate: enrollmentDateOf(sub),
-      childBirthDate: childBirthDates.get(sub.childId),
+      childBirthDate: childRecords.get(sub.childId)?.birthDate,
       scheduleWeekdays: (sub.days ?? []).map((d: any) => d.day),
       weekPattern: sub.weekPattern,
       ratePerOccurrenceCents: Math.round(studyRate * 100),
@@ -421,10 +445,12 @@ async function computeLineItems(
     const cfg = buildReconciliationConfig("transport", configs.discountRules, configs.transportConfig);
     const tripRate: number = configs.transportConfig?.flatRatePerTrip ?? 0;
     const subsForRecon: SubscriptionForReconciliation[] = group.transport.map(sub => ({
-      id: sub.id, childId: sub.childId, schoolName: sub.schoolName, returningStudent: sub.returningStudent,
+      id: sub.id, childId: sub.childId,
+      schoolName: childRecords.get(sub.childId)?.schoolName ?? sub.schoolName,
+      returningStudent: sub.returningStudent,
       manualDiscountPct: manualDiscountPctFor(sub, configs.discountRules),
       enrollmentDate: enrollmentDateOf(sub),
-      childBirthDate: childBirthDates.get(sub.childId),
+      childBirthDate: childRecords.get(sub.childId)?.birthDate,
       scheduleWeekdays: (sub.schedule ?? []).map((sl: any) => sl.dayOfWeek),
       weekPattern: sub.weekPattern,
       ratePerOccurrenceCents: Math.round(tripRate * 100),
