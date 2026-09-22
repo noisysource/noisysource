@@ -405,11 +405,30 @@ rather than an independent per-subscription edit. They have to be, because
   untouched, as instructed.
 - `notifications.ts` sends approval/rejection emails to `sub.contactEmail`.
 
-`billing.ts` and `reconciliation.ts` were left alone on purpose: another agent on
-`agent/flat-gross-reconciliation` is changing billing's own `schoolName` reads.
-**Coordinate before either branch merges** — the intended end state is that the backend
-reads `children/{childId}.schoolName` too, at which point the subscription mirror can be
-dropped entirely, but neither branch does that yet.
+`billing.ts` and `reconciliation.ts` were left alone on purpose: `agent/flat-gross-reconciliation`
+owns them. **That side is now done and has reported back (2026-09-22):**
+- `billing.ts` reads `schoolName` from `children/{childId}` — `fetchChildrenBirthDates`
+  became `fetchChildRecords` and returns it from the same query, so no extra reads.
+  104 tests green, typecheck clean.
+- **Zero fee movement, measured.** Across all 21 active transport subscriptions, none
+  change their 20% Bissaya Barreto match when `schoolName` comes from the child record
+  instead of the subscription. The two address-valued ones (Maria Vicente, Camila Felix)
+  match the rule under neither source, and neither do their child records. So the
+  "money change falling out of a cosmetic edit" warning below is real in principle but
+  empirically nil today — the mirror rewrite on admin save is safe. The warning in
+  `ChildDetailsForm` stays anyway, since it is about what the field *can* do, not about
+  today's data.
+- **Sequencing constraint from that side:** 4 active transport subs still have no
+  `childId`, so they cannot resolve from a child record at all. `billing.ts` keeps the
+  subscription copy as a fallback for exactly those, to be removed once the Phase 0
+  `childId` backfill lands. None of the 4 match the rule either way.
+
+**Still blocking deletion of the mirror, and owned by nobody:**
+- `discountRecalc.ts:148,180` — `x.schoolName`. **This is the real one.** Neither branch
+  touches it; the mirror cannot be dropped until it moves to the child record too. Needs
+  doing deliberately, by someone, and it is not in anyone's current scope.
+- `billing.ts` line-item titles (`sub.childName`) and `notifications.ts:139,169`
+  (`contactEmail`) — same story, lower stakes.
 
 **Consequence worth stating plainly:** the UI is now consistent, but the *stored* drift
 is untouched. Prod's 5 mismatched children still have two different stored `schoolName`
@@ -812,10 +831,16 @@ than another one-off patch.
   `agent/subscription-personal-data`, off `staging`) — one unpushed commit, no PR, not
   deployed. Remove it once the work lands or is abandoned. Note this breaks the
   "deliberately clean slate" the 2026-09-22 checkpoint describes, on purpose.
-- **It overlaps `agent/flat-gross-reconciliation`**, which is changing billing's own
-  `schoolName` reads. Both branches touch the same `schoolName` data path from opposite
-  ends (this one the pages, that one the backend). Coordinate before either merges — see
-  "Currently working on" for the intended end state.
+- **Deploy order with `agent/flat-gross-reconciliation` matters, and is settled:** this
+  branch goes **first**, that one second. This branch touches no functions/rules/infra, so
+  its `kidclub-dev` deploy syncs functions at staging's current state — which means
+  deploying it *after* that branch would silently revert that branch's `billing.ts` on the
+  shared dev project. (This is the known shared-`kidclub-dev` collision in the Backlog
+  below, in its overwrite form rather than its delete-refusal form.) Deploying it first is
+  neutral. Whichever merges to `staging` second should also expect a **STATUS.md
+  conflict** — both branches rewrote overlapping sections of this file.
+- **`discountRecalc.ts:148,180` still reads `sub.schoolName` and nobody owns it.** Until
+  that moves to the child record, the subscription mirror has to keep being written.
 - **Prod is running billing code ~32 commits behind `staging`.** Not broken — it's the old,
   working pipeline — but every fix from the dev test pass above (including the leg-collision
   bug that halves transport gross) is **absent from prod**. Prod has been pinned to
