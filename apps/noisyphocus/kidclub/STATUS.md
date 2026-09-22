@@ -357,8 +357,122 @@ section once shipped, per that section's own convention.
 
 ## Currently working on
 
-**Nothing is in flight.** The session ended at a deliberate clean slate (no PRs, no
-worktrees, no branches but `main`). The next piece of work is the **prod data pass** —
+### Subscription personal data de-duplication (2026-09-22) — built, NOT deployed, NOT PR'd
+Branch `agent/subscription-personal-data`, worktree
+`.claude/worktrees/subscription-personal-data`, branched off **`staging`** (not `main` —
+`main` is ~32 commits behind and does not have the billing rewrite). One commit,
+`07a3873`. Nothing pushed, no PR opened, nothing deployed, no prod writes.
+
+**Problem it addresses:** subscription documents carry denormalized copies of personal
+data that already lives canonically on `children/{childId}` and
+`families/{familyId}.primaryContact` — `childName`, `contactEmail`, `schoolName`,
+`userId` on transport, plus `contactPhone` and `schoolYear` on study. Those copies had
+drifted in prod: of the 10 children holding both a transport and a study subscription,
+5 had two *different* `schoolName` values across their two documents, and two of the
+disagreeing values were street addresses rather than school names.
+
+**What changed (all read-side, plus one write fix):**
+- New `apps/noisyphocus/kidclub/src/lib/personalData.ts` — one resolver,
+  canonical-first and per-field (child → family primary contact → the subscription's own
+  copy). The subscription copy is only reached for a subscription with no linked child or
+  family, i.e. admin-created and not yet claimed by a parent.
+- `TransportSubscriptionDetailPage` / `StudySubscriptionDetailPage` — render the child's
+  name, school, school year and guardian email from the child + family documents. The
+  child/family reads are wrapped so a Firestore-rules denial degrades to the legacy
+  copies rather than breaking the page (an admin-created, unclaimed child carries no
+  `userId`, which is what the client-side read rule matches on).
+- `SubscriptionsAdminPage` — `load()` now also fetches `families` and builds child/family
+  maps, replacing the transport-only `childSchoolMap`; every row's name/school/school
+  year/contact resolves through them, so the same child reads identically on both of
+  their subscriptions. Its `EditForm` now also writes guardian contact to
+  `families/{id}.primaryContact` — previously an admin editing contact details only ever
+  wrote the subscription's copy, which is no longer what any page reads, so the edit
+  would have looked like it silently didn't save.
+- `ChildDetailPage` — dropped the school name repeated on each study subscription row;
+  the child's school is already shown in the details block on the same page.
+- `MySubscriptionsPage` needed no change: it already grouped by child and read
+  `child.schoolName`. Its unclaimed-by-email fallback list still reads the subscription's
+  own `childName` on purpose — those subscriptions have no child to resolve from.
+
+**Deliberately NOT done — read this before assuming the copies are gone.** The
+subscription-level copies are still written, now as a mirror of the canonical record
+rather than an independent per-subscription edit. They have to be, because
+`functions/src/kidclub` still reads them:
+- `billing.ts` reads `sub.childName` (line-item titles) and `sub.schoolName`.
+- `reconciliation.ts` reads `item.sub.schoolName`.
+- `discountRecalc.ts` reads `x.schoolName` to resolve the `auto_school` rule — which is
+  what drives the **20% Colégio Bissaya Barreto transport discount**. That rule is
+  untouched, as instructed.
+- `notifications.ts` sends approval/rejection emails to `sub.contactEmail`.
+
+`billing.ts` and `reconciliation.ts` were left alone on purpose: `agent/flat-gross-reconciliation`
+owns them. **That side is now done and has reported back (2026-09-22):**
+- `billing.ts` reads `schoolName` from `children/{childId}` — `fetchChildrenBirthDates`
+  became `fetchChildRecords` and returns it from the same query, so no extra reads.
+  104 tests green, typecheck clean.
+- **Zero fee movement, measured.** Across all 21 active transport subscriptions, none
+  change their 20% Bissaya Barreto match when `schoolName` comes from the child record
+  instead of the subscription. The two address-valued ones (Maria Vicente, Camila Felix)
+  match the rule under neither source, and neither do their child records. So the
+  "money change falling out of a cosmetic edit" warning below is real in principle but
+  empirically nil today — the mirror rewrite on admin save is safe. The warning in
+  `ChildDetailsForm` stays anyway, since it is about what the field *can* do, not about
+  today's data.
+- **Sequencing constraint from that side:** 4 active transport subs still have no
+  `childId`, so they cannot resolve from a child record at all. `billing.ts` keeps the
+  subscription copy as a fallback for exactly those, to be removed once the Phase 0
+  `childId` backfill lands. None of the 4 match the rule either way.
+
+**Still blocking deletion of the mirror, and owned by nobody:**
+- `discountRecalc.ts:148,180` — `x.schoolName`. **This is the real one.** Neither branch
+  touches it; the mirror cannot be dropped until it moves to the child record too. Needs
+  doing deliberately, by someone, and it is not in anyone's current scope.
+- `billing.ts` line-item titles (`sub.childName`) and `notifications.ts:139,169`
+  (`contactEmail`) — same story, lower stakes.
+
+**Consequence worth stating plainly:** the UI is now consistent, but the *stored* drift
+is untouched. Prod's 5 mismatched children still have two different stored `schoolName`
+values, and `discountRecalc` still resolves the school discount from the subscription's
+possibly-stale one. Editing a subscription in the admin page rewrites its mirror from the
+child's value — which for a sub whose stored value is a street address may legitimately
+change whether the 20% discount matches, and therefore the fee. That is a correction, not
+a bug, but it is a fee-changing side effect of an otherwise cosmetic-looking edit, so
+don't be surprised by it.
+
+**Second commit (`ec97f46`) — the admin page restructure.** The read-side fix above stopped
+the *display* diverging, but the admin page still showed and separately edited the same
+child's details once per subscription, which is what let them diverge in the first place.
+So the list is now **family → child → subscriptions**:
+- Family row has a contact editor (`FamilyContactForm`) writing
+  `families/{id}.primaryContact` — guardian name/email/phone, once per family.
+- New child row groups that child's subscriptions under one header (name, school · year)
+  with a details editor (`ChildDetailsForm`) writing `children/{childId}` — name, date of
+  birth, school, school year, home address, once per child.
+- `EditForm` lost the entire `EnrollmentDetailsForm` block and all its child/family
+  writes. It now covers only schedule, week pattern, discounts, fee and the internal note.
+- Subscription cards no longer repeat the child's name or school; they lead with the
+  service type.
+
+Both new forms write the canonical record and then mirror `childName`/`schoolName`/
+`schoolYear`/contact onto **every** affected subscription in one pass. That is what
+actually converges the stored drift, rather than only hiding it: editing one child fixes
+both of their documents. `ChildDetailsForm` shows a warning when the school field changes,
+because the fee can move with it.
+
+**Tested on dev and passed (2026-09-22).** PR #31 → `staging`, both `kidclub-dev` deploys
+green, clicked through by Renato against the prod data copy (which still carries the
+drifted `schoolName` values, so the fix was exercised on the real shape of the bug). Build
+passes; `tsc --noEmit` is at 13 errors vs the 16 on `origin/staging` — zero new, three
+pre-existing ones resolved (two in `SubscriptionsAdminPage`, one `zod` resolution fixed by
+`pnpm install`). Merged to `staging`.
+
+**One deliberate behaviour worth revisiting if it proves noisy:** saving a child's details
+sets `clientReviewPending` on *every* subscription that child holds, not just one — so the
+parent is asked to confirm once per subscription. That is intentional (the change really
+does affect all of them) but it is more nagging than the old per-subscription edit.
+Renato saw it during testing and did not object; flagging it as a tuning knob, not a bug.
+
+### Prod data pass — still the other open thread
 Renato has a plan for it and wants it started in a **fresh session**, as a read-only
 "Looking" task, not a build task. See Next step #1.
 
@@ -717,6 +831,20 @@ than another one-off patch.
 
 ## Anything risky in flight
 
+- **Open worktree `.claude/worktrees/subscription-personal-data`** (branch
+  `agent/subscription-personal-data`, off `staging`) — one unpushed commit, no PR, not
+  deployed. Remove it once the work lands or is abandoned. Note this breaks the
+  "deliberately clean slate" the 2026-09-22 checkpoint describes, on purpose.
+- **Deploy order with `agent/flat-gross-reconciliation` matters, and is settled:** this
+  branch goes **first**, that one second. This branch touches no functions/rules/infra, so
+  its `kidclub-dev` deploy syncs functions at staging's current state — which means
+  deploying it *after* that branch would silently revert that branch's `billing.ts` on the
+  shared dev project. (This is the known shared-`kidclub-dev` collision in the Backlog
+  below, in its overwrite form rather than its delete-refusal form.) Deploying it first is
+  neutral. Whichever merges to `staging` second should also expect a **STATUS.md
+  conflict** — both branches rewrote overlapping sections of this file.
+- **`discountRecalc.ts:148,180` still reads `sub.schoolName` and nobody owns it.** Until
+  that moves to the child record, the subscription mirror has to keep being written.
 - **Prod is running billing code ~32 commits behind `staging`.** Not broken — it's the old,
   working pipeline — but every fix from the dev test pass above (including the leg-collision
   bug that halves transport gross) is **absent from prod**. Prod has been pinned to
