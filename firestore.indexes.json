@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "reservationEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subscriptionId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "plannedInstances",
       "queryScope": "COLLECTION",
       "fields": [
