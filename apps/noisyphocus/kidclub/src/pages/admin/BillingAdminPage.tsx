@@ -426,6 +426,8 @@ export default function BillingAdminPage() {
 
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  const [generatingEvents, setGeneratingEvents] = useState(false);
+  const [generateEventsResult, setGenerateEventsResult] = useState<string | null>(null);
 
   const fetchRecords = async () => {
     setLoading(true);
@@ -455,6 +457,32 @@ export default function BillingAdminPage() {
       setBackfillResult(`❌ ${err.message}`);
     } finally {
       setBackfilling(false);
+    }
+  };
+
+  // Generates the ReservationEvent rows that billing now computes gross from.
+  // Required once after this system ships: subscriptions created before it
+  // existed have no events, and a subscription with no events bills as zero.
+  // Safe to re-run — event ids are deterministic, so a rerun overwrites
+  // rather than duplicating, and it only ever touches dates from today
+  // forward (past occurrences are immutable facts).
+  const handleGenerateEvents = async () => {
+    if (!confirm(
+      'Gerar ocorrências (ReservationEvents) para todas as inscrições ativas?\n\n'
+      + 'Necessário uma vez depois de instalar este sistema — sem ocorrências, a faturação '
+      + 'calcula zero. Pode ser repetido em segurança: só afeta datas de hoje em diante.'
+    )) return;
+    setGeneratingEvents(true);
+    setGenerateEventsResult(null);
+    try {
+      const fn = callable<object, { studySubscriptions: number; transportSubscriptions: number }>('backfillReservationEvents');
+      const res = await fn({});
+      const { studySubscriptions, transportSubscriptions } = res.data;
+      setGenerateEventsResult(`✅ ${studySubscriptions} inscrições de sala de estudo · ${transportSubscriptions} de transporte processadas`);
+    } catch (err: any) {
+      setGenerateEventsResult(`❌ ${err.message}`);
+    } finally {
+      setGeneratingEvents(false);
     }
   };
 
@@ -540,10 +568,32 @@ export default function BillingAdminPage() {
         </div>
       </div>
 
+      {/* One-time setup after this system ships. Billing computes gross from
+          ReservationEvents, and subscriptions created before the collection
+          existed have none — which bills as zero. Must be run once per
+          environment, right after deploy, BEFORE any trigger recomputes a
+          family. Deliberately placed above the repair tool and styled as a
+          prerequisite, not an afterthought. */}
+      <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 flex items-center gap-4 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-amber-900">📅 Gerar ocorrências das inscrições</p>
+          <p className="text-xs text-amber-800">
+            Necessário <strong>uma vez</strong> depois de instalar o sistema de ocorrências:
+            inscrições criadas antes dele não têm ocorrências e faturariam <strong>zero</strong>.
+            Repetível em segurança — só afeta datas de hoje em diante, nunca dias já passados.
+          </p>
+        </div>
+        <button onClick={handleGenerateEvents} disabled={generatingEvents}
+          className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700 disabled:opacity-50 shrink-0">
+          {generatingEvents ? 'A gerar...' : '📅 Gerar ocorrências'}
+        </button>
+        {generateEventsResult && <span className="text-sm text-amber-900 w-full">{generateEventsResult}</span>}
+      </div>
+
       {/* Backfill — manual repair tool, not the normal flow. Subscription and
           absence changes already recompute billing automatically on their
           own (onStudyroomBillingSync / onTransportBillingSync /
-          onEventModificationBillingSync); this exists for forcing a full
+          onReservationEventBillingSync); this exists for forcing a full
           recompute of every family at once when something needs a one-off
           correction (e.g. a config/pricing fix applied retroactively). */}
       <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center gap-4 flex-wrap">
