@@ -376,6 +376,15 @@ exactly this shape and simply was not being saved. **Zero prod subscriptions car
 today**, so this changes nobody's bill until an admin uses it; the Oct baseline is unmoved at
 +EUR 53.28/month.
 
+**"Repor automático" button** (row-level, shown only when a subscription actually carries
+overrides): drops every override and lets the automatic rules decide again. It writes *only*
+the override field — `discountRecalc` owns recomputing `appliedDiscounts` and the fee, and is
+the only place that counts siblings across both collections, so recomputing in the row would
+mean a second, worse copy of that logic. Manual concessions ("Aluno do ano anterior") are
+deliberately kept: they were never automatic. Because the recalculation is a backend trigger,
+the button waits before reloading — reloading immediately shows the pre-reset fee and reads
+as "the button did nothing" on a money screen.
+
 Kidclub app typecheck: **13 errors before and after — the pre-existing baseline, zero new.**
 
 ### August remainders — handled by hand (2026-09-22)

@@ -1433,6 +1433,38 @@ export default function SubscriptionsAdminPage() {
     } finally { setProcessing(null); }
   };
 
+  /**
+   * Drop every admin override on this subscription and let the automatic
+   * rules decide again.
+   *
+   * Only the override field is written. discountRecalc (onDocumentWritten)
+   * owns the recomputation of appliedDiscounts and the fee, and it is the only
+   * place that counts siblings across BOTH collections — recomputing here
+   * would mean a second, worse copy of that logic in the row. Manual
+   * concessions ("Aluno do ano anterior") are deliberately kept: they were
+   * never automatic, so "back to automatic" has nothing to say about them.
+   */
+  const resetDiscountsToAuto = async (item: SubItem) => {
+    const n = Object.keys(item.discountOverrides ?? {}).length;
+    if (!confirm(
+      `Repor os descontos automáticos de ${item.childName}?\n\n`
+      + `${n} ajuste(s) manual(is) serão removidos e os descontos voltam a ser `
+      + `calculados automaticamente. Descontos manuais (ex. "Aluno do ano anterior") são mantidos.`
+    )) return;
+    setProcessing(item.id);
+    try {
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      await updateDoc(docRef(colName, item.id), {
+        discountOverrides: deleteField(), updatedAt: new Date(),
+      });
+      // The recalculation is a backend trigger, so it lands a moment after the
+      // write. Reloading immediately would show the pre-reset fee and read as
+      // "the button did nothing" on a money screen.
+      await new Promise(r => setTimeout(r, 1500));
+      await load();
+    } finally { setProcessing(null); }
+  };
+
   const clearFeeReview = async (item: SubItem) => {
     const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
     await updateDoc(docRef(colName, item.id), { feeReviewRequired: false, updatedAt: new Date() });
@@ -1847,6 +1879,20 @@ export default function SubscriptionsAdminPage() {
                                             </button>
                                           );
                                         })}
+                                      </div>
+                                    )}
+
+                                    {/* Overrides present — offer a way back to automatic */}
+                                    {Object.keys(item.discountOverrides ?? {}).length > 0 && (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Ajustado</span>
+                                        <button
+                                          onClick={() => resetDiscountsToAuto(item)}
+                                          disabled={processing === item.id}
+                                          className="text-xs px-2 py-0.5 rounded-full border border-purple-300 bg-purple-50 text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-50"
+                                          title="Remove os ajustes manuais e volta a calcular os descontos automaticamente">
+                                          ↺ Repor automático
+                                        </button>
                                       </div>
                                     )}
 
