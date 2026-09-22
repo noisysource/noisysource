@@ -1,5 +1,6 @@
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { appCol } from "./db";
+import { resolveSchoolName } from "./reconciliation";
 
 // ── Types (duplicated from @shared/models/Discount to avoid cross-package runtime dep) ──
 
@@ -99,6 +100,27 @@ function triggerFieldsChanged(before: any, after: any): boolean {
   );
 }
 
+/**
+ * schoolName for each of a family's children, keyed by child id.
+ *
+ * Fetched by document reference rather than a chunked `documentId() in [...]`
+ * query because a family holds a handful of children at most, and a ref get
+ * cannot silently drop ids past the 30-value `in` limit. A childId pointing at
+ * a document that no longer exists resolves to undefined, which
+ * resolveSchoolName then treats as absent and falls back to the subscription
+ * mirror — one active study subscription in prod is in exactly that state.
+ */
+async function fetchChildSchoolNames(childIds: (string | undefined)[]): Promise<Map<string, string | undefined>> {
+  const out = new Map<string, string | undefined>();
+  const ids = [...new Set(childIds.filter((id): id is string => !!id))];
+  if (!ids.length) return out;
+  const snaps = await Promise.all(ids.map(id => appCol("children").doc(id).get()));
+  for (const snap of snaps) {
+    if (snap.exists) out.set(snap.id, snap.data()?.schoolName ?? undefined);
+  }
+  return out;
+}
+
 async function recalcForFamily(familyId: string): Promise<void> {
   const [transportConfigSnap, discountRulesSnap, transportSnap, studySnap] = await Promise.all([
     appCol("config").doc("transportation").get(),
@@ -110,6 +132,23 @@ async function recalcForFamily(familyId: string): Promise<void> {
   const tCfg = transportConfigSnap.data() ?? {};
   const rules: DiscountRule[] = (discountRulesSnap.data()?.rules ?? []) as DiscountRule[];
   const flatRatePerTrip: number = tCfg.flatRatePerTrip ?? 0;
+
+  // schoolName is canonical on the child record; the subscription copy is a
+  // mirror that has drifted in prod (5 of 10 dual-service children hold two
+  // different values, 2 of them street addresses). It decides the 20% Colegio
+  // Bissaya Barreto transport discount, so this function — which writes
+  // monthlyFee — must read the same source billing.ts does, through the same
+  // per-FIELD resolveSchoolName contract. A bare `??` is not equivalent:
+  // ClaimSubscriptionsPage writes `schoolName: trim() || null`, so a claimed
+  // subscription can gain a childId while its child record has no school, and
+  // keying the fallback on the record would silently drop the 20%.
+  //
+  // Measured against prod before switching: 0 of 21 active transport
+  // subscriptions change their Bissaya match when sourced from the child
+  // record, so this corrects the source without moving any fee today.
+  const childSchoolById = await fetchChildSchoolNames(
+    [...transportSnap.docs, ...studySnap.docs].map(d => d.data().childId)
+  );
 
   // Unified sibling set: all non-cancelled childIds across both collections
   const allChildIds = new Set<string>();
@@ -145,7 +184,8 @@ async function recalcForFamily(familyId: string): Promise<void> {
       return rule?.trigger === "manual";
     });
 
-    const autoDiscounts = resolveAutoDiscounts(rules, "transport", fakeDays, x.schoolName, siblingCount);
+    const schoolName = resolveSchoolName(childSchoolById.get(x.childId), x.schoolName);
+    const autoDiscounts = resolveAutoDiscounts(rules, "transport", fakeDays, schoolName, siblingCount);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
     const scheduleLen: number = x.schedule?.length ?? 0;
@@ -177,7 +217,8 @@ async function recalcForFamily(familyId: string): Promise<void> {
       return rule?.trigger === "manual";
     });
 
-    const autoDiscounts = resolveAutoDiscounts(rules, "study", [], x.schoolName, siblingCount);
+    const schoolName = resolveSchoolName(childSchoolById.get(x.childId), x.schoolName);
+    const autoDiscounts = resolveAutoDiscounts(rules, "study", [], schoolName, siblingCount);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
     const grossFee: number = x.basePrice ?? x.monthlyPrice ?? 0;

@@ -218,12 +218,13 @@ record has no school.
    `resolveSchoolName()`.
 2. **DONE** — the UI resolves from `children`/`families.primaryContact` via
    `src/lib/personalData.ts` (PR #31, merged to `staging` as `afca32e`).
-3. **TODO, next agent** — point `discountRecalc.ts:148,180` at the child record. It resolves
-   the `auto_school` rule from `x.schoolName` on the subscription doc and is the last reader
-   that computes money from the mirror. Use the same `resolveSchoolName()` contract, not a
-   bare `??`. Re-measure first: at the time of writing, **0 of 21 active transport subs**
-   change their Bissaya match when sourced from the child, so this should move no fee — if
-   your measurement disagrees, stop and report rather than proceeding.
+3. **DONE (2026-09-22)** — `discountRecalc.ts` now resolves schoolName from the child record
+   through `resolveSchoolName()` imported from `reconciliation.ts` (one contract, not a second
+   copy). A new `fetchChildSchoolNames()` reads the family's children by document reference
+   rather than a chunked `documentId() in [...]` query — a family holds a handful of children
+   and a ref get cannot silently drop ids past the 30-value `in` limit. **Re-measured against
+   prod first: still 0 of 21 active transport subs change their Bissaya match**, so no fee
+   moves. 109 tests green, typecheck clean.
 4. **TODO, only after 3** — remove the mirror *write* (the admin-save path in
    `SubscriptionsAdminPage` that rewrites `subscription.schoolName` from the child's value),
    then drop the field. Once no reader depends on it the drift becomes structurally
@@ -266,6 +267,81 @@ deliberately.
 **Known side effect, already flagged by that branch:** saving a subscription in the admin page
 rewrites its schoolName mirror from the child's value. For the subs storing a street address
 that is a correction, not a regression — and per the measurement above it moves no fee today.
+
+### 🔴 Phase 3 findings — the report disagrees with the baseline, twice (2026-09-22)
+
+`scripts/kidclub-migration/reconcile-report.mjs` is written and has been run read-only
+against prod. It reproduces the baseline **structurally** — 17 families, **10 unchanged**,
+Oct–July all identical at EUR 2,095.44 (flat pricing removing calendar variance, exactly as
+decision 1 intends), July billing in full (no half-month) — and it reproduces **José Eduardo
+EUR 165.12 and Mogo EUR 210.00 exactly**. It disagrees on the other two, and on August.
+Both disagreements are real; neither is a reporting error.
+
+**Finding 1 — an auto discount stamped `appliedBy: "admin"` is counted twice.**
+`manualDiscountPctFor()` (`billing.ts:179`) treats *any* `appliedBy === "admin"` entry as a
+manual concession, whatever the rule's trigger, while `reconcileService()` independently
+recomputes the auto discount from the schedule. So the same rule lands once structurally and
+once again as a flat percentage. This is the returningStudent double-discount bug over
+again, through a different door.
+
+It is reachable through **ordinary admin use**, not a data accident:
+`SubscriptionsAdminPage.resolveSelected()` (line ~790) stamps `appliedBy: "admin"` on any
+rule the admin has *toggled* — including an auto rule toggled back to the state it already
+had. Two live subscriptions are in that state today, both stamped after the 2026-09-20
+baseline was recorded (Carolina 2026-09-20 14:27, Maria Manon 2026-09-22 10:50), which is
+why the baseline and the report disagree on exactly those two:
+
+| Family | Baseline | Report | Cause |
+|---|---|---|---|
+| Carolina Almeida | 182.40 | 159.60 | `Multi-viagem` 10% counted twice (inst. 30% not 20%) |
+| Maria Manon | 130.56 | 114.24 | same |
+
+Dropping the `|| ad.appliedBy === "admin"` clause reproduces **all four** reference figures
+exactly (182.40 / 130.56 / 165.12 / 210.00). That one-clause change is the likely fix, but it
+is a money change and **was deliberately not made** — it needs Renato's call on the real
+question: is an admin toggling an auto rule expressing "also give this family an extra 10%",
+or just re-saving the row? The report flags every occurrence as **flag (e)**.
+
+**Finding 2 — August 2027 bills EUR 0 for everyone, contradicting decision 1.**
+Decision 1 says "no EUR 0 August"; the pipeline produces exactly that. `config/schoolCalendar.yearEndDate`
+is `2027-07-15`, so no events are generated past it, and `runsThisPeriod = events.length > 0`
+then zeroes gross. **22 active subscriptions across 16 existing Agosto 2027 billing records
+go to EUR 0 — a EUR 1,800 cliff in a single month.** July is fine (bills the full flat price
+off a half-month of occurrences, as intended). This is the "no events -> EUR 0" hazard already
+recorded above, now with a concrete date and price on it. Not fixed here — it needs a decision
+on how the 12-month spread survives a school year that ends in July.
+
+### The report itself
+
+`node scripts/kidclub-migration/reconcile-report.mjs [--period 2026-10] [--changed-only] [--json out.json]`
+
+**Read-only by construction, not just by convention**: there is no `--apply`, and the
+firebase-admin handed to the imported production code is a stub whose Firestore proxy throws
+on any use, so the script cannot write to any project even by mistake. Prod is read via
+`gcloud auth print-access-token` against the REST API, same as `identity.mjs`.
+
+It **compiles and calls the real `reconciliation.ts` and `reservationEvents.ts`** out of
+`functions/src` rather than reimplementing the money math — a second implementation would
+only prove it agrees with itself, and would drift. Because prod holds zero `reservationEvents`,
+it simulates the events Phase 2 would write (same window/bounds rules as `ensureEventsExist`),
+overlays any events that do exist (so it stays correct on dev after an import), and overlays
+decision 4's historical absences: 75 `excludedDates` + 13 `eventModifications`. The
+`eventModifications` timestamps are converted in **Europe/Lisbon**, not by slicing the ISO
+string — `2026-09-24T23:00:00Z` is the 25th here, the same off-by-one commit `eb905ed` fixed
+in the admin calendar, and a wrong day that still lands in the month is invisible in a total.
+
+Flags, all firing against prod today: **(a)** zero events in a billable period — 22 subs in
+2027-08; **(b)** frozen `basePriceCents` vs the live rate — dormant until Phase 2 creates
+events, and says so rather than reporting a false "none"; **(c)** the 5 invoiced periods,
+reported and never recomputed, per decision 5; **(d)** 11 active subs with no `familyId`;
+**(e)** the double-counted auto discounts from finding 1.
+
+**Re-measured 2026-09-22** (moving targets, per the note above): **4** active transport subs
+still have no `childId` — unchanged. **0 of 21** active transport subs change their Bissaya
+match when sourced from the child record — unchanged. One active *study* sub carries a
+`childId` pointing at a child document that no longer exists; `resolveSchoolName` treats that
+as absent and falls back to the subscription mirror, so it is safe, but it is another reason
+step 4 must not delete the mirror before the identity repairs land.
 
 ### Expected money impact
 
