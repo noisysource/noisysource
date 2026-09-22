@@ -134,9 +134,16 @@ export function reconcileService(
     //   - a period whose occurrences are ALL voided = the subscription was
     //     already over before the period began -> nothing is billed.
     // That is what stops a mid-month cancellation from billing future
-    // periods while leaving the elapsed one intact. Note the deliberate
-    // consequence: flat pricing does not pro-rate, so the month in which the
-    // cancellation happens is billed in full.
+    // periods while leaving the elapsed one intact.
+    //
+    // The BOUNDARY month itself is not voided and is not pro-rated here
+    // either: gross stays flat. Instead the days outside the contract are
+    // written as CANCELLED system absences by reservationEvents.ts, so step 4
+    // below pro-rates that month through the ordinary absence credit. Nothing
+    // in this file is aware of the boundary — that is deliberate, pro-rating
+    // is not a pricing concept. One consequence worth knowing: the >=3
+    // threshold still applies, so a cancellation in the last couple of days
+    // of a month credits nothing and bills the month in full.
     const runsThisPeriod = events.length > 0;
 
     const weeks = activeWeeksInPattern(sub.weekPattern);
