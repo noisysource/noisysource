@@ -205,6 +205,42 @@ one). So `users` is safe to wipe and recreate with just the two needed docs.
 affect the Pi bridge (it is scoped by rules, not by a roles doc) — verify before relying on
 that.
 
+### 🔧 Finishing the schoolName mirror removal — ordered, do NOT reorder
+
+The subscription-level `schoolName` copy is a mirror of `children/{childId}.schoolName`. It
+has drifted in prod (5 of 10 dual-service children store two different values; 2 of them hold
+street addresses), and it decides the 20% Colegio Bissaya Barreto **transport** discount, so
+every step here is a money step. Two of the four steps are done. The order matters: deleting
+the mirror before every reader has moved silently drops the discount for anyone whose child
+record has no school.
+
+1. **DONE** — `billing.ts` reads the child record via `fetchChildRecords()`, combined with
+   `resolveSchoolName()`.
+2. **DONE** — the UI resolves from `children`/`families.primaryContact` via
+   `src/lib/personalData.ts` (PR #31, merged to `staging` as `afca32e`).
+3. **TODO, next agent** — point `discountRecalc.ts:148,180` at the child record. It resolves
+   the `auto_school` rule from `x.schoolName` on the subscription doc and is the last reader
+   that computes money from the mirror. Use the same `resolveSchoolName()` contract, not a
+   bare `??`. Re-measure first: at the time of writing, **0 of 21 active transport subs**
+   change their Bissaya match when sourced from the child, so this should move no fee — if
+   your measurement disagrees, stop and report rather than proceeding.
+4. **TODO, only after 3** — remove the mirror *write* (the admin-save path in
+   `SubscriptionsAdminPage` that rewrites `subscription.schoolName` from the child's value),
+   then drop the field. Once no reader depends on it the drift becomes structurally
+   impossible instead of merely hidden.
+
+**Do not skip `resolveSchoolName`'s per-field semantics at step 3.** `ClaimSubscriptionsPage`
+validates only firstName/lastName/dateOfBirth and writes `schoolName: f.schoolName.trim() ||
+null`, so a parent claiming a subscription can create a child record with no school while the
+subscription gains a `childId`. Keyed on the record rather than the field, that subscription
+would switch to reading a child that has no school and lose its 20% silently. Blank and
+whitespace-only must count as absent too — `??` alone lets `""` through.
+
+**Other readers of the denormalized copies** (not money, but they pin the fields in place):
+`billing.ts` line-item titles use `sub.childName`; `notifications.ts:139,169` uses
+`after.contactEmail`/`after.email` to pick the notification recipient. Neither blocks the
+`schoolName` work, but both need moving before `childName`/`contactEmail` can be dropped.
+
 ### schoolName ownership — resolved (2026-09-22)
 
 A parallel branch (`agent/subscription-personal-data`) moved the KidClub UI to resolve
