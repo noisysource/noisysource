@@ -51,6 +51,21 @@ on:
 jobs:
   deploy:
     name: "Deploy KidClub (${{ inputs.environment }})"
+    # One deploy at a time per environment. Both dev PRs and staging pushes
+    # run `terraform apply` against the same GCS state prefix, so two
+    # overlapping runs collide on the state lock and the later one dies with
+    # "Error acquiring the state lock ... 412 conditionNotMet". That has now
+    # happened twice — once across two branches, once from two pushes to the
+    # same branch 2.5 minutes apart (the second was a docs-only commit that
+    # needed no deploy at all).
+    #
+    # cancel-in-progress is deliberately FALSE: cancelling a run mid
+    # `terraform apply` is what leaves a genuinely stale lock behind, which
+    # then needs a manual force-unlock. Queue instead. GitHub keeps only the
+    # newest pending run per group, so rapid pushes collapse rather than pile up.
+    concurrency:
+      group: deploy-kidclub-${{ inputs.environment }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
