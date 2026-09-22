@@ -4,6 +4,135 @@
 
 **Last updated:** 2026-09-22
 
+## AUTHORITATIVE — prod data migration plan (supersedes the section below it)
+
+The event-sourcing rewrite is merged to `staging` and validated on dev. This section is
+the plan for getting **real prod data** onto it. It was produced from a read-only analysis
+of live prod (21 active transport subs, 13 active study subs, 228 billing records, 0
+`reservationEvents`, 13 `eventModifications`) plus an offline simulation of the new
+pipeline against that data. Seven decisions were taken with Renato on 2026-09-22 and are
+recorded below — **do not re-litigate them, they are settled.**
+
+### ⚠️ Branch off `staging`, NOT `main`
+
+`reservationEvents.ts` and `reconciliation.ts` **do not exist on `main`**. Any work on this
+migration must branch from `origin/staging` and PR back into `staging`. The older advice
+further down this file ("start new work from a fresh worktree off `main`") predates this
+and is wrong for this effort specifically.
+
+### Decisions (settled 2026-09-22)
+
+| # | Decision | Consequence |
+|---|---|---|
+| 1 | **Flat monthly price is retained.** Gross stays `scheduleLen × rate × activeWeeksInPattern`, NOT a sum of occurrences. | No month-to-month variance, no July half-month, no €0 August. Events drive absences and logistics only — never gross. |
+| 2 | **Two legs on one day is real** (genuine pickup + dropoff), not duplicated data. | No bill change from this on its own; gross already counted both legs. |
+| 3 | **Absence credit uses the notional rate**: `net ÷ (legs × 4)`. | Credit per absence is constant every month, consistent with a flat price. Carolina ≈ €7.60/absence. |
+| 4 | **Migrate historical absences**: 75 `excludedDates` + 13 `eventModifications` → `CANCELLED` events. | No recorded absence is lost. Note the rule underneath them changes: <3 credits nothing, ≥3 credits all, uncapped. |
+| 5 | **Invoiced periods frozen**, plus a divergence report. | The 5 invoiced records are never recomputed. Where the new model disagrees with an issued fiscal document (e.g. Sept: system €200.64 vs invoiced €169.20), it is reported, not silently corrected. |
+| 6 | **All 35 auto-cancelled billing records → `pending`.** Default to `pending` wherever ambiguous. | Renato cancels individually in the app afterwards. Restores billing for José Miguel Duarte (~€113/mo) and Edson (~€72/mo), whose subs are active but records cancelled. |
+| 7 | **Orphan subscriptions get real family records.** | A parent never logging in does not mean no family. Minimal `families/{id}` created from `contactEmail`; the *account* link (`primaryContact.userId`) arrives on first login. |
+
+### Expected money impact
+
+Comparing a clean full month (Oct 2026), service line items only. **10 of 17 families
+change by €0.00.** The entire delta is the marginal-discount change already approved
+on 2026-09-20 — it is not introduced by this migration.
+
+| Family | Current | New | Delta | Cause |
+|---|---|---|---|---|
+| Carolina Almeida | 168.00 | 182.40 | +14.40 | marginal multi-trip |
+| José Eduardo | 151.20 | 165.12 | +13.92 | marginal multi-trip |
+| Maria Manon | 117.60 | 130.56 | +12.96 | marginal multi-trip |
+| Mogo siblings | 198.00 | 210.00 | +12.00 | Diogo loses sibling discount (ranked #1 by value) |
+| **Total** | **€1,800** | **€1,853** | **+€53.28/mo (+3.0%)** | |
+
+These four figures independently reproduce the comparison table recorded on 2026-09-20,
+which is a useful cross-check on both the implementation and the simulation.
+
+### 🔴 Blocker found in prod data — fix before ANY dev validation
+
+`setReservationEventStatus` (`functions/src/kidclub/reservationEvents.ts`) authorises a
+parent with:
+
+```js
+const famSnap = await appCol("families").doc(data.familyId).get();
+if (!famSnap.exists || famSnap.data()?.userId !== uid) throw permission-denied
+```
+
+**`families/{id}` has no top-level `userId` in prod.** The login link lives at
+**`primaryContact.userId`** — populated on all 36 families, top-level populated on **zero**.
+So every parent receives `permission-denied` and only staff can mark an absence. The shared
+parent/staff write path — the central point of the rewrite — does not work against real
+data. Any dev validation done before this is fixed is validating a flow no parent can use.
+
+Two lesser issues alongside it:
+- `firestore.rules` allows **any authenticated user to read every family's
+  `reservationEvents`** (`allow read: if isAuthenticated()`). Should be scoped to the
+  owning family.
+- `setReservationEventStatus` permits cancelling a **past** date with no cutoff.
+
+### Other prod findings feeding the plan
+
+- **`startDate` is ignored by event generation.** `ensureEventsExist` starts at the current
+  month's 1st, `regenerateFutureEvents` at today; neither clamps to `sub.startDate`. Maria
+  Clara's study sub starts 2026-10-01 — a backfill run in September generates September
+  occurrences and bills her before she starts.
+- **Identity is fragmented.** Lourenço Bernardino has **2** `children` records (transport
+  and study point at different ones); Maria Vicente has **3**. 7 children have an empty
+  `familyId`. 6 active transport + 5 active study subs have no `familyId` at all — but every
+  one carries a `contactEmail`, and the same email appears on both of that child's subs, so
+  the family key is already present in the data.
+- **Personal data is copied onto subscriptions and drifts.** `schoolName` diverges for 5 of
+  10 dual-service children; two of those values are street addresses, not schools. Duplicated
+  fields: transport (`childName`, `contactEmail`, `schoolName`, `userId`), study (those plus
+  `contactPhone`, `schoolYear`). All of it already exists canonically on `children` /
+  `families.primaryContact`. This is the source of the repeated personal-data blocks in the UI.
+- **`returningStudent` latent double-discount.** The flag is set on **zero** subs, while 7
+  carry the manual "Aluno do ano anterior" 15% discount. `reconcileService` sums
+  `returningStudentDiscountPct` + `manualDiscountPct`, and transport config has
+  `returningStudentDiscountPercentage: 0.15` — so ticking that flag on a sub that also has
+  the manual discount silently yields 30%. Same class as the double-discount bug already
+  fixed once.
+- **School discount is already correct** — the `auto_school` rule is `appliesTo:
+  ['transport']` only and `buildReconciliationConfig` filters on it, so study room never
+  receives it. Confirms Renato's rule; nothing to change.
+- **August bills in full, deliberately** — the annual fee is spread over 12 months. Recorded
+  so it is not later mistaken for a bug.
+
+### Execution phases
+
+- **Phase 0 — identity, permissions, UI.** Fix `primaryContact.userId`; scope the
+  `reservationEvents` read rule; `startDate` clamp; orphan-subscription guard. Merge duplicate
+  children (keep the most complete record, reuse whichever link exists). Create minimal family
+  records for the 6 orphan emails; backfill `familyId`/`childId` on the 11 orphan subs. Make
+  subscriptions *reference* `children`/`families` instead of copying personal data, and show
+  it once in the UI.
+- **Phase 1 — billing code.** Flat-gross mode; notional absence credit; close the
+  `returningStudent` double-count. Extend the existing vitest suite.
+- **Phase 2 — migration script.** Dry-run-first, standalone, never a deployed function.
+  Generate events; convert the 88 historical absences; set the 35 auto-cancelled records to
+  `pending`. Hard-guard against writing to any `invoiced` record.
+- **Phase 3 — reconciliation report.** Per family, per month: current, new, delta, reason.
+  Run on dev, then dry-run against prod. **Nothing writes to prod until Renato approves this.**
+- **Phase 4 — dev validation** on a fresh prod→dev snapshot: real triggers, all four client
+  cancellation paths, a family with school discount + siblings + 3 absences checked by hand.
+- **Phase 5 — prod cutover.** Full export backup; invoiced frozen + divergence report; apply
+  the approved migration. Explicitly **not** a `backfillBillingSchedules` click — that would
+  resurrect records indiscriminately and destroy the 75 `excludedDates`.
+- **Phase 6 — final audit.** Verify every subscription's `active`/`pending`/`cancelled` state
+  and its generated events agree, with nothing orphaned.
+
+### How prod was read
+
+Read-only, via a `gcloud auth print-access-token` against the Firestore REST API against
+`rainbow-prod-2454b` — no service-account key, no standing access added to
+`.claude/settings.local.json`, nothing to revoke. Reuse this pattern; do not provision
+new prod credentials.
+
+---
+
+**Last updated:** 2026-09-22
+
 ## CURRENT STATE — rewrite merged to `staging` and validated on dev; PROD NOT UPDATED
 
 **The one-paragraph version:** the event-sourced billing rewrite is finished, merged into
