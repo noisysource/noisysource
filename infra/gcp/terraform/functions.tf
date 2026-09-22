@@ -110,9 +110,17 @@ locals {
     "createPartyDeposit",
     "retryVendusInvoice",
     "easypayWebhook",
-    # KidClub — reservation events
-    "setReservationEventStatus",
-    "backfillReservationEvents",
+    # NOTE: setReservationEventStatus and backfillReservationEvents are
+    # deliberately NOT here yet. A name in this list is created from the
+    # dummy placeholder zip below with entry_point = that name, and CI runs
+    # `terraform apply` BEFORE `firebase deploy --only functions` — so a
+    # brand-new callable added here in the same PR as its code fails to
+    # create ("Container Healthcheck failed... failed to start and listen on
+    # PORT"), because the dummy source has no such entry point. Every other
+    # entry in this list exists because firebase deploy created it first and
+    # terraform then adopted it (build_config is ignored below). Add a new
+    # callable here only in a follow-up, after one real functions deploy has
+    # created it.
     # KidClub — camps
     "createCampSubscription",
     "confirmCampSubscription",
