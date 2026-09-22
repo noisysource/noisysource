@@ -1,5 +1,52 @@
 import { describe, it, expect } from "vitest";
-import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents } from "./reservationEvents";
+import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate } from "./reservationEvents";
+
+// Regression: StudyRoomEntry.endDate is a Firestore Timestamp while
+// TransportationSubscription.endDate is a "YYYY-MM-DD" string. Passing a
+// Timestamp to `new Date()` yields Invalid Date, which made every
+// `cursor <= to` comparison false and generated ZERO study occurrences
+// without throwing. Found on dev when every "Cancelar dia" button was
+// disabled for a study subscription.
+describe("coerceEndDate (study Timestamp vs transport string)", () => {
+  it("reads a Firestore Timestamp (duck-typed .toDate())", () => {
+    const real = new Date(2027, 6, 31);
+    const ts = { toDate: () => real };
+    expect(coerceEndDate(ts)?.getTime()).toBe(real.getTime());
+  });
+
+  it("reads a plain Date", () => {
+    const d = new Date(2027, 6, 31);
+    expect(coerceEndDate(d)?.getTime()).toBe(d.getTime());
+  });
+
+  it("reads a YYYY-MM-DD string as end-of-day so the last day stays inclusive", () => {
+    const d = coerceEndDate("2027-07-31")!;
+    expect(d.getFullYear()).toBe(2027);
+    expect(d.getMonth()).toBe(6);
+    expect(d.getDate()).toBe(31);
+    expect(d.getHours()).toBe(23);
+  });
+
+  it("reads the raw REST/JSON timestamp shape", () => {
+    const secs = Math.floor(new Date(2027, 6, 31).getTime() / 1000);
+    expect(coerceEndDate({ _seconds: secs, _nanoseconds: 0 })?.getTime()).toBe(secs * 1000);
+  });
+
+  it("returns null rather than Invalid Date for unusable input", () => {
+    expect(coerceEndDate(null)).toBeNull();
+    expect(coerceEndDate(undefined)).toBeNull();
+    expect(coerceEndDate("not a date")).toBeNull();
+    expect(coerceEndDate({})).toBeNull();
+    expect(coerceEndDate(new Date("nonsense"))).toBeNull();
+  });
+
+  it("a Timestamp end date still produces events — the actual bug", () => {
+    const sub = { familyId: "f1", childId: "c1", days: [{ day: "monday", hour: "16:00" }], weekPattern: "all" };
+    const to = coerceEndDate({ toDate: () => new Date(2026, 8, 30) })!;
+    const events = generateStudyEvents(sub, "sub1", 6, new Date(2026, 8, 1), to);
+    expect(events.length).toBeGreaterThan(0); // was 0 before the fix
+  });
+});
 
 describe("isActiveThisWeek (biweekly odd/even pattern)", () => {
   it("'all' pattern is always active", () => {

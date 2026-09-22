@@ -43,6 +43,38 @@ function studyPerDayRate(cfg: any): number {
   return 0;
 }
 
+// The two subscription collections disagree on how endDate is stored:
+// StudyRoomEntry.endDate is a Date (a Firestore Timestamp once read back),
+// TransportationSubscription.endDate is a "YYYY-MM-DD" string. Handle all
+// three shapes. Getting this wrong is not loud: `new Date(timestampObject)`
+// yields Invalid Date, every `cursor <= to` comparison against it is false,
+// and generation returns zero events without throwing — which is exactly
+// what shipped and left every study subscription with no occurrences.
+export function coerceEndDate(raw: any): Date | null {
+  if (!raw) return null;
+  // Firestore Timestamp (Admin SDK or client), duck-typed to avoid importing it
+  if (typeof raw?.toDate === "function") {
+    const d = raw.toDate();
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw;
+  if (typeof raw === "string") {
+    // Date-only strings are end-of-day so the final day is inclusive
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T23:59:59`) : new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof raw === "number") {
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // Raw Firestore REST/JSON shape: { _seconds, _nanoseconds }
+  if (typeof raw?._seconds === "number") {
+    const d = new Date(raw._seconds * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
 async function getSchoolYearEnd(): Promise<Date | null> {
   const snap = await appCol("config").doc("schoolCalendar").get();
   const yearEndDate = snap.data()?.yearEndDate;
@@ -152,7 +184,14 @@ async function regenerateFutureEvents(
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const schoolYearEnd = await getSchoolYearEnd();
-  const subEnd = type === "study" ? new Date(sub.endDate) : new Date(`${sub.endDate}T23:59:59`);
+  const subEnd = coerceEndDate(sub.endDate);
+  if (!subEnd) {
+    // No usable end date at all — generating "forever" would be worse than
+    // generating nothing, so stop, but say so: the silent version of this
+    // shipped once and produced zero study occurrences with no signal.
+    console.error(`[reservationEvents] ${type} subscription ${subId} has an unusable endDate (${JSON.stringify(sub.endDate)}) — no events generated`);
+    return;
+  }
   const to = schoolYearEnd && schoolYearEnd < subEnd ? schoolYearEnd : subEnd;
   if (to < today) return;
 
