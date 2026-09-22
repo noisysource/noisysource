@@ -81,6 +81,27 @@ tests — odd/even biweekly pattern including the 5th-occurrence edge case, per-
 transport direction tagging, deterministic event IDs). Run with `pnpm --filter functions
 test` (or `cd functions && npx vitest run`).
 
+### Data-quality pass — deferred until the flow is validated (Renato, 2026-09-22)
+
+Renato's sequencing: `kidclub-dev` is **fresh test data**, used only to prove the flow
+works. Analysing and fixing real data is the step *after* that, not now. Things noticed
+while testing, to pick up then — **do not treat any dev observation as a prod finding
+without re-checking against prod**:
+
+- **19 of 23 active transport subs on dev have no `startDate`/`endDate` at all** (only 4
+  carry them); all 13 study subs do. This is what made transport generate zero
+  occurrences until the school-year-end fallback landed. **Very possibly just an artifact
+  of how dev was seeded** — needs confirming against prod before concluding anything
+  about the real enrollment flows.
+- From `agent/exclusion-audit-notes` (these ARE prod): Mafalda Raposo Duarte still
+  under-billed €15.30; a stray `2026-09-06` (a Sunday) in `excludedDates` for Diogo Mogo /
+  Bernardo Mogo / José Eduardo (€0 impact, data oddity); José Eduardo's line item listing
+  his weekdays twice with a gross (€216) too high for a 5-day schedule — possibly a
+  duplicated schedule entry on the subscription doc.
+- The dev-data revenue simulation put study+transport ~€750/month **below** their own
+  direct costs. That was dev data, so it proves nothing about the real business — worth
+  re-running against prod as part of this pass.
+
 **Still not done, not deploy-blocking:**
 
 - **No emulator-based integration tests yet** — the triggers
