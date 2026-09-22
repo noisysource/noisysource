@@ -581,6 +581,19 @@ export const setReservationEventStatus = onCall(
     if (data.status === "VOIDED") {
       throw new HttpsError("failed-precondition", "This subscription has ended — this occurrence can no longer be changed");
     }
+    // A boundary-month day the system cancelled is outside the contract: the
+    // child is not enrolled on that date. Marking it EXPECTED again would put
+    // a child on a run they aren't signed up for (and quietly raise the bill
+    // by removing a credit), so restoring it is refused — unlike a normal
+    // absence, which anyone may undo. Re-cancelling it is a no-op, so only the
+    // restore direction is blocked.
+    if (status === "EXPECTED" && data.changedByRole === "system"
+        && (data.reason === REASON_BEFORE_START || data.reason === REASON_AFTER_END)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This date falls outside the subscription's start/end dates — change the subscription's dates instead",
+      );
+    }
 
     const userDoc = await db.collection("users").doc(uid).get();
     const roles = userDoc.data()?.roles ?? {};

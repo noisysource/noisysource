@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart } from "./reservationEvents";
+import { reconcileService } from "./reconciliation";
+import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart, resolveGenerationWindowStart, resolveGenerationWindowEnd, splitRegenerationWrites, REASON_BEFORE_START, REASON_AFTER_END } from "./reservationEvents";
 
 // Regression: StudyRoomEntry.endDate is a Firestore Timestamp while
 // TransportationSubscription.endDate is a "YYYY-MM-DD" string. Passing a
@@ -295,5 +296,224 @@ describe("coerceDate (shared start/end coercer)", () => {
     const d = new Date(2026, 9, 1, 14, 30);
     expect(coerceDate(d, "start")!.getTime()).toBe(coerceDate(d, "end")!.getTime());
     expect(coerceStartDate(null)).toBeNull();
+  });
+});
+
+// ── Boundary months ─────────────────────────────────────────────────────────
+// A flat monthly price cannot pro-rate the month a subscription starts or
+// ends. The agreed answer is not to add pro-rating as a pricing concept but to
+// let the days outside the contract exist as SYSTEM-recorded absences, so the
+// >=3-absence credit that already exists does the pro-rating.
+//
+// October 2026 is the worked example throughout: Oct 1 is a Thursday, so a
+// Mon-Fri pattern has 22 occurrences — 10 of them before the 15th, 12 on or
+// after. The notional denominator behind the flat price is still 5 x 4 = 20.
+
+const MON_FRI = ["monday", "tuesday", "wednesday", "thursday", "friday"].map(day => ({ day, hour: "16:00" }));
+const OCT_START = new Date(2026, 9, 1);
+const OCT_END = new Date(2026, 9, 31, 23, 59, 59);
+
+describe("boundary month — subscription STARTS mid-month", () => {
+  const sub = { familyId: "f1", childId: "c1", startDate: "2026-10-15", days: MON_FRI, weekPattern: "all" };
+  const bounds = { start: coerceStartDate(sub.startDate) };
+
+  it("generates the whole calendar month, not just the in-contract part", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    expect(events).toHaveLength(22);
+  });
+
+  it("marks every pre-start occurrence CANCELLED by the system, with a reason", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    const before = events.filter(e => e.data.date < "2026-10-15");
+    expect(before).toHaveLength(10);
+    expect(before.every(e => e.data.status === "CANCELLED")).toBe(true);
+    expect(before.every(e => e.data.changedByRole === "system")).toBe(true);
+    expect(before.every(e => e.data.reason === REASON_BEFORE_START)).toBe(true);
+  });
+
+  it("leaves everything from startDate onward EXPECTED, with no system provenance", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    const after = events.filter(e => e.data.date >= "2026-10-15");
+    expect(after).toHaveLength(12);
+    expect(after.every(e => e.data.status === "EXPECTED")).toBe(true);
+    expect(after.every(e => e.data.changedByRole === undefined)).toBe(true);
+    expect(after.every(e => e.data.reason === undefined)).toBe(true);
+  });
+
+  it("still bills the FULL flat gross and pro-rates through the credit — half a month, half the money", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    const [r] = reconcileService(
+      [{
+        id: "s1", childId: "c1", manualDiscountPct: 0, enrollmentDate: new Date("2026-09-01"),
+        scheduleWeekdays: MON_FRI.map(d => d.day), weekPattern: "all", ratePerOccurrenceCents: 600,
+      }],
+      new Map([["s1", events.map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status }))]]),
+      { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
+    );
+    expect(r.grossCents).toBe(12000);        // unchanged — gross never pro-rates
+    expect(r.absenceCount).toBe(10);
+    expect(r.absenceCreditCents).toBe(6000); // 10 x (net / 20 notional)
+    expect(r.finalCents).toBe(6000);         // ~half a month, ~half the price
+  });
+
+  it("generates NOTHING for a whole month before the start — not a fully-cancelled month", () => {
+    // The backfill asks for September; the window must still open on Oct 1.
+    const windowStart = resolveGenerationWindowStart(sub, new Date(2026, 8, 1));
+    expect(windowStart.getTime()).toBe(OCT_START.getTime());
+    const events = generateStudyEvents(sub, "s1", 6, windowStart, OCT_END, bounds);
+    expect(events.some(e => e.data.date.startsWith("2026-09"))).toBe(false);
+  });
+
+  it("opens the window on the 1st only when startDate is in a LATER month than requested", () => {
+    // Already inside the boundary month: the requested `from` already covers it.
+    expect(resolveGenerationWindowStart(sub, OCT_START).getTime()).toBe(OCT_START.getTime());
+    // 19 of 21 active transport subs in prod carry no startDate at all.
+    expect(resolveGenerationWindowStart({}, OCT_START).getTime()).toBe(OCT_START.getTime());
+    // A start already in the past never moves the window earlier.
+    expect(resolveGenerationWindowStart({ startDate: "2025-09-01" }, OCT_START).getTime()).toBe(OCT_START.getTime());
+  });
+});
+
+describe("boundary month — subscription ENDS mid-month", () => {
+  const sub = { familyId: "f1", childId: "c1", endDate: "2026-10-15", days: MON_FRI, weekPattern: "all" };
+  const bounds = { end: coerceEndDate(sub.endDate) };
+
+  it("cancels the post-end tail instead of omitting or voiding it", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    const after = events.filter(e => e.data.date > "2026-10-15");
+    expect(after).toHaveLength(11);
+    expect(after.every(e => e.data.status === "CANCELLED")).toBe(true);
+    expect(after.every(e => e.data.changedByRole === "system")).toBe(true);
+    expect(after.every(e => e.data.reason === REASON_AFTER_END)).toBe(true);
+    // VOIDED would have been unreachable for both the credit and for staff.
+    expect(events.some(e => (e.data.status as string) === "VOIDED")).toBe(false);
+  });
+
+  it("leaves the already-served part of the month EXPECTED, endDate inclusive", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    const served = events.filter(e => e.data.status === "EXPECTED");
+    expect(served).toHaveLength(11);
+    expect(served[served.length - 1].data.date).toBe("2026-10-15"); // last day inclusive
+  });
+
+  it("pro-rates the ending month through the credit", () => {
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, OCT_END, bounds);
+    const [r] = reconcileService(
+      [{
+        id: "s1", childId: "c1", manualDiscountPct: 0, enrollmentDate: new Date("2026-09-01"),
+        scheduleWeekdays: MON_FRI.map(d => d.day), weekPattern: "all", ratePerOccurrenceCents: 600,
+      }],
+      new Map([["s1", events.map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status }))]]),
+      { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
+    );
+    expect(r.grossCents).toBe(12000);
+    expect(r.absenceCount).toBe(11);
+    expect(r.absenceCreditCents).toBe(6600); // 11 x €6 notional
+    expect(r.finalCents).toBe(5400);
+  });
+
+  it("the credit can never exceed the month — a start on the last working day bills EUR 0", () => {
+    const late = { familyId: "f1", childId: "c1", startDate: "2026-10-30", days: MON_FRI, weekPattern: "all" };
+    const events = generateStudyEvents(late, "s1", 6, OCT_START, OCT_END, { start: coerceStartDate(late.startDate) });
+    const [r] = reconcileService(
+      [{
+        id: "s1", childId: "c1", manualDiscountPct: 0, enrollmentDate: new Date("2026-09-01"),
+        scheduleWeekdays: MON_FRI.map(d => d.day), weekPattern: "all", ratePerOccurrenceCents: 600,
+      }],
+      new Map([["s1", events.map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status }))]]),
+      { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
+    );
+    expect(r.absenceCount).toBe(21);      // more absences than the 20 notional
+    expect(r.absenceCreditCents).toBe(12000); // floored at the net
+    expect(r.finalCents).toBe(0);
+  });
+
+  it("gives transport BOTH legs of a post-end day the same cancelled status", () => {
+    const t = {
+      familyId: "f1", childId: "c1", weekPattern: "all", endDate: "2026-10-15",
+      schedule: [{ dayOfWeek: "monday" }, { dayOfWeek: "monday" }],
+    };
+    const events = generateTransportEvents(t, "t1", 6, OCT_START, OCT_END, { end: coerceEndDate(t.endDate) });
+    const oct19 = events.filter(e => e.data.date === "2026-10-19");
+    expect(oct19).toHaveLength(2);
+    expect(oct19.every(e => e.data.status === "CANCELLED" && e.data.reason === REASON_AFTER_END)).toBe(true);
+  });
+});
+
+describe("resolveGenerationWindowEnd (how far past the contract to generate)", () => {
+  const schoolYearEnd = new Date(2027, 6, 31, 23, 59, 59);
+
+  it("extends to the end of the month the subscription's own end falls in", () => {
+    const subEnd = coerceEndDate("2026-10-15")!;
+    const w = resolveGenerationWindowEnd(subEnd, subEnd, schoolYearEnd)!;
+    expect(isoLike(w)).toBe("2026-10-31");
+  });
+
+  it("generates NOTHING past that month — a whole month after the end is not written at all", () => {
+    const subEnd = coerceEndDate("2026-10-15")!;
+    const w = resolveGenerationWindowEnd(subEnd, subEnd, schoolYearEnd)!;
+    const sub = { familyId: "f1", childId: "c1", endDate: "2026-10-15", days: MON_FRI, weekPattern: "all" };
+    const events = generateStudyEvents(sub, "s1", 6, OCT_START, w, { end: subEnd });
+    expect(events.some(e => e.data.date.startsWith("2026-11"))).toBe(false);
+  });
+
+  it("does NOT add a cancelled tail when the school year end is what binds", () => {
+    // The school year ending is not a mid-contract cancellation, and July must
+    // not sprout a fortnight of system absences for every family.
+    const w = resolveGenerationWindowEnd(schoolYearEnd, null, schoolYearEnd)!;
+    expect(w.getTime()).toBe(schoolYearEnd.getTime());
+    const subEndLater = coerceEndDate("2027-12-31")!;
+    expect(resolveGenerationWindowEnd(schoolYearEnd, subEndLater, schoolYearEnd)!.getTime()).toBe(schoolYearEnd.getTime());
+  });
+
+  it("never runs past the school year end even inside the boundary month", () => {
+    const subEnd = coerceEndDate("2027-07-10")!;
+    const w = resolveGenerationWindowEnd(subEnd, subEnd, schoolYearEnd)!;
+    expect(w.getTime()).toBe(schoolYearEnd.getTime()); // not 2027-07-31
+  });
+});
+
+function isoLike(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Regeneration previously voided every future event and rewrote them all as
+// EXPECTED with merge:true — silently erasing every absence a parent had
+// recorded, on any schedule edit. System boundary absences must stay
+// recomputable; a human's must not be touched.
+describe("splitRegenerationWrites (human absences survive a regeneration)", () => {
+  const generated = [{ id: "s1_2026-10-05" }, { id: "s1_2026-10-06" }, { id: "s1_2026-10-07" }];
+
+  it("keeps a parent-recorded absence untouched: neither rewritten nor voided", () => {
+    const { toCreate, toVoid } = splitRegenerationWrites(generated, [
+      { id: "s1_2026-10-05", changedByRole: "parent" },
+      { id: "s1_2026-10-06" },
+    ]);
+    expect(toCreate.map(g => g.id)).toEqual(["s1_2026-10-06", "s1_2026-10-07"]);
+    expect(toVoid).toEqual([]);
+  });
+
+  it("keeps a staff-recorded one the same way", () => {
+    const { toCreate } = splitRegenerationWrites(generated, [{ id: "s1_2026-10-05", changedByRole: "staff" }]);
+    expect(toCreate.map(g => g.id)).not.toContain("s1_2026-10-05");
+  });
+
+  it("DOES recompute a system boundary absence — that is the point of the role tag", () => {
+    const { toCreate } = splitRegenerationWrites(generated, [{ id: "s1_2026-10-05", changedByRole: "system" }]);
+    expect(toCreate.map(g => g.id)).toContain("s1_2026-10-05");
+  });
+
+  it("voids a stale event the new schedule no longer contains, even a human one", () => {
+    // Leaving it would credit an absence for a day that is no longer served.
+    const { toVoid } = splitRegenerationWrites(generated, [
+      { id: "s1_2026-10-08", changedByRole: "parent" },
+      { id: "s1_2026-10-09" },
+    ]);
+    expect(toVoid.sort()).toEqual(["s1_2026-10-08", "s1_2026-10-09"]);
+  });
+
+  it("never voids an occurrence it is about to rewrite", () => {
+    const { toVoid } = splitRegenerationWrites(generated, generated.map(g => ({ id: g.id })));
+    expect(toVoid).toEqual([]);
   });
 });
