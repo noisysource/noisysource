@@ -14,16 +14,21 @@ export type BillingStatus =
 
 export interface BillingLineItem {
   title: string;
-  amount: number;                    // net, after discounts AND excluded days
-  // Present on records generated after the day-exclusion feature shipped;
-  // absent on older legacy line items.
+  amount: number;                    // net, after discounts and absence credit
   subscriptionId?: string;
-  type?: 'study' | 'transport' | 'enrollment'; // 'enrollment' = one-time registration+insurance fee, not day-editable
-  grossAmount?: number;               // before discounts and exclusions
+  type?: 'study' | 'transport' | 'enrollment'; // 'enrollment' = one-time registration+insurance fee
+  grossAmount?: number;               // sum of this period's EXPECTED+CANCELLED ReservationEvents, before any discount
+  /** @deprecated study/transport line items no longer populate this — see the breakdown fields below. Still used by one-time enrollment fee line items (always empty array there). */
   appliedDiscounts?: AppliedDiscount[];
-  excludedDates?: string[];           // "yyyy-mm-dd" (whole day) or "yyyy-mm-dd:pickup"/"yyyy-mm-dd:dropoff" (single trip) — admin-marked "not provided" for THIS record only
   scheduleDays?: string[];            // weekday names (english, lowercase) this line item is actually billed for
   tripsByDay?: Record<string, ('pickup' | 'dropoff' | 'both')[]>; // transport only — trip(s) scheduled per weekday
+  multiTripDiscountAmount?: number;     // marginal — only trip #2+ on a multi-trip day
+  siblingDiscountAmount?: number;       // marginal — 0 if this is the family's highest-value subscription for this service
+  institutionalDiscountAmount?: number; // school + returning-student + manual admin overrides, summed
+  institutionalDiscountPct?: number;
+  absenceCount?: number;                // CANCELLED ReservationEvents this period, this subscription
+  absenceCreditAmount?: number;
+  absenceCreditDates?: string[];        // "yyyy-mm-dd" — every CANCELLED date credited once the 3-absence threshold was reached (uncapped)
 }
 
 export interface BillingRecord {

@@ -18,6 +18,7 @@ export * from './Payment';
 export * from './Family';
 export * from './Child';
 export * from './EventModification';
+export * from './ReservationEvent';
 export * from './Camp';
 export * from './Event';
 export * from './Discount';

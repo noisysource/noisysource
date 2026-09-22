@@ -178,6 +178,17 @@ service cloud.firestore {
         allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
       }
 
+      // Materialized subscription occurrences (one per date, generated for the whole
+      // school year on subscription create). Read by the client calendar/subscription
+      // pages and the admin billing page; every write goes through
+      // setReservationEventStatus (parents and staff) or the generation triggers in
+      // reservationEvents.ts, both Admin SDK and so bypass these rules entirely — no
+      // direct client write path exists or is needed.
+      match /reservationEvents/{doc} {
+        allow read: if isAuthenticated();
+        allow write: if isRainbowAdmin();
+      }
+
       // Financial events
       match /financialEvents/{doc} {
         allow read, write: if isRainbowAdmin() || isOwner();

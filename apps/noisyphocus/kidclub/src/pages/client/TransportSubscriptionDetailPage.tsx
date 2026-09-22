@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
+import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { callable } from '../../lib/callable';
 import { TransportationSubscription } from '@shared/models';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { normalizeSubStatus } from '../../lib/utils';
@@ -17,13 +18,13 @@ const PT_DAY: Record<string, string> = {
 };
 
 interface UpcomingTrip {
-  eventId: string;
   date: Date;
   dateStr: string;
   pickupTime: string;
   pickupLocation: string;
   dropoffLocation: string;
-  cancellationId?: string;
+  reservationEventId?: string; // undefined if no ReservationEvent was generated for this exact date+leg
+  cancelled: boolean;
 }
 
 interface DayGroup {
@@ -43,6 +44,7 @@ export default function TransportSubscriptionDetailPage() {
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -93,22 +95,6 @@ export default function TransportSubscriptionDetailPage() {
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`)
           : null;
 
-      const modsSnap = await getDocs(
-        query(
-          col('eventModifications'),
-          where('subscriptionId', '==', id),
-          where('subscriptionType', '==', 'transport'),
-          where('modificationType', '==', 'cancelled'),
-          where('status', '==', 'approved'),
-        ),
-      );
-      // Key cancellations by eventId for per-trip precision
-      const cancelledByEventId: Record<string, string> = {};
-      modsSnap.docs.forEach(d => {
-        const eventId = d.data().eventId;
-        if (eventId) cancelledByEventId[eventId] = d.id;
-      });
-
       const today = startOfToday();
       const rangeEnd = addWeeks(today, 4);
       const effectiveEnd = schoolYearEnd
@@ -118,6 +104,25 @@ export default function TransportSubscriptionDetailPage() {
       const subStart = sub.startDate ? new Date(sub.startDate) : today;
       const subEnd = sub.endDate ? new Date(sub.endDate) : null;
 
+      // Keyed by "date_legIndex" — matching how reservationEvents.ts ids each
+      // leg. Keying by direction collided: no schedule entry carries one, so
+      // both legs of a day resolved to the same occurrence and cancelling one
+      // cancelled both.
+      const eventsSnap = await getDocs(
+        query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ),
+      );
+      const eventByDateLeg: Record<string, { id: string; status: string }> = {};
+      eventsSnap.docs.forEach(d => {
+        const data = d.data();
+        eventByDateLeg[`${data.date}_${data.legIndex ?? 0}`] = { id: d.id, status: data.status };
+      });
+      const hasAnyEvents = eventsSnap.docs.length > 0;
+
       const groupMap = new Map<string, DayGroup>();
 
       for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -126,18 +131,27 @@ export default function TransportSubscriptionDetailPage() {
         const dayName = DAY_NAMES[day.getDay()];
         const dateStr = format(day, 'yyyy-MM-dd');
 
-        for (const sched of sub.schedule ?? []) {
+        for (const [legIndex, sched] of (sub.schedule ?? []).entries()) {
           if (sched.dayOfWeek !== dayName) continue;
-          // Match the same eventId format used in eventService.ts
-          const eventId = `transport_sub_${id}_${dateStr}_${sched.pickupTime.replace(':', '')}`;
+          const ev = eventByDateLeg[`${dateStr}_${legIndex}`];
+          if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
+          // No occurrence for a scheduled weekday means this date isn't a
+          // service day — normal for a biweekly (odd/even) subscription,
+          // where only half the matching weekdays are active. Listing it
+          // anyway produced rows that looked like trips but couldn't be
+          // cancelled. Only skip when SOME occurrences exist: if the
+          // subscription has none at all, keep the rows so the
+          // "no occurrences generated" banner below still has something to
+          // explain rather than showing a misleading empty list.
+          if (!ev && hasAnyEvents) continue;
           const trip: UpcomingTrip = {
-            eventId,
             date: day,
             dateStr,
             pickupTime: sched.pickupTime,
             pickupLocation: sched.pickupLocation,
             dropoffLocation: sched.dropoffLocation,
-            cancellationId: cancelledByEventId[eventId],
+            reservationEventId: ev?.id,
+            cancelled: ev?.status === 'CANCELLED',
           };
           if (!groupMap.has(dateStr)) {
             groupMap.set(dateStr, { dateStr, date: day, trips: [] });
@@ -158,25 +172,20 @@ export default function TransportSubscriptionDetailPage() {
 
   const toggleTrip = async (trip: UpcomingTrip) => {
     if (!user || !id) return;
-    setActionInProgress(trip.eventId);
+    // See StudySubscriptionDetailPage's toggleDay — a missing ReservationEvent
+    // means the occurrence was never generated; say so rather than no-op.
+    if (!trip.reservationEventId) {
+      setActionError('Esta viagem ainda não tem ocorrência gerada, por isso não pode ser cancelada. Peça ao Kid Club para gerar as ocorrências desta inscrição.');
+      return;
+    }
+    setActionInProgress(trip.reservationEventId);
+    setActionError(null);
     try {
-      if (trip.cancellationId) {
-        await deleteDoc(docRef('eventModifications', trip.cancellationId));
-      } else {
-        await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'transport',
-          eventId: trip.eventId,
-          date: trip.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId: user.uid,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
     }
@@ -423,6 +432,23 @@ export default function TransportSubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele viagens individualmente. O cancelamento é imediato e pode ser revertido.
             </p>
+            {subscription?.weekPattern && subscription.weekPattern !== 'all' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Esta inscrição é <strong>quinzenal</strong> ({subscription.weekPattern === 'odd' ? '1.ª e 3.ª semanas' : '2.ª e 4.ª semanas'} do mês),
+                por isso só aparecem as semanas em que há serviço.
+              </p>
+            )}
+            {actionError && (
+              <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                {actionError}
+              </p>
+            )}
+            {dayGroups.length > 0 && dayGroups.every(g => g.trips.every(t => !t.reservationEventId)) && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Esta inscrição ainda não tem ocorrências geradas — as viagens abaixo não podem
+                ser canceladas até que isso seja feito.
+              </p>
+            )}
           </div>
 
           {dayGroups.length === 0 ? (
@@ -441,11 +467,11 @@ export default function TransportSubscriptionDetailPage() {
                   {/* Trips for this day */}
                   <div className="space-y-2 pl-2">
                     {group.trips.map(trip => {
-                      const isCancelled = !!trip.cancellationId;
-                      const inProgress = actionInProgress === trip.eventId;
+                      const isCancelled = trip.cancelled;
+                      const inProgress = actionInProgress === trip.reservationEventId;
                       return (
                         <div
-                          key={trip.eventId}
+                          key={trip.reservationEventId ?? `${trip.dateStr}_${trip.pickupTime}`}
                           className={`flex items-center justify-between rounded-lg px-3 py-2 ${
                             isCancelled ? 'bg-gray-50' : 'bg-green-50'
                           }`}
@@ -458,8 +484,9 @@ export default function TransportSubscriptionDetailPage() {
                           </div>
                           <button
                             onClick={() => toggleTrip(trip)}
-                            disabled={!!actionInProgress}
-                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 ${
+                            disabled={!!actionInProgress || !trip.reservationEventId}
+                            title={!trip.reservationEventId ? 'Sem ocorrência gerada para esta viagem — não pode ser cancelada' : undefined}
+                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                               isCancelled
                                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                 : 'bg-red-50 text-red-600 hover:bg-red-100'

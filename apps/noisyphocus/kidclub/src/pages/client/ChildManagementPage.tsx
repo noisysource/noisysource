@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { Family, Child, StudyRoomEntry, TransportationSubscription } from '@shared/models';
 import { Link } from 'react-router-dom';
-import { updateDoc, getDoc, getDocs, addDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { updateDoc, getDoc, getDocs, addDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
+import { callable } from '../../lib/callable';
 import { calculateAge } from '../../lib/utils';
 import { familyService } from '../../services/familyService';
 import PlacesInput from '../../components/PlacesInput';
@@ -56,7 +57,8 @@ interface UpcomingSession {
   dateStr: string;
   hour: string;
   transport: boolean;
-  cancellationId?: string;
+  reservationEventId?: string;
+  cancelled: boolean;
 }
 
 // ─── Detail panel ─────────────────────────────────────────────────────────────
@@ -71,6 +73,7 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
   const [sessions, setSessions] = useState<UpcomingSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionAction, setSessionAction] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [draftDays, setDraftDays] = useState<StudyRoomEntry['days']>([]);
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -97,29 +100,29 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
       setLoadingSessions(true);
       try {
         const sub = selected.sub as StudyRoomEntry;
-        const [calSnap, modsSnap] = await Promise.all([
+        const today = startOfToday();
+        const rangeEnd = addWeeks(today, 4);
+
+        const [calSnap] = await Promise.all([
           getDoc(docRef('config', 'schoolCalendar')),
-          getDocs(query(
-            col('eventModifications'),
-            where('subscriptionId', '==', id),
-            where('subscriptionType', '==', 'study'),
-            where('modificationType', '==', 'cancelled'),
-            where('status', '==', 'approved'),
-          )),
         ]);
 
         const schoolYearEnd: Date | null = calSnap.exists() && calSnap.data().yearEndDate
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`) : null;
-
-        const cancelledDates: Record<string, string> = {};
-        modsSnap.docs.forEach(d => {
-          const date = d.data().date?.toDate?.() ?? new Date(d.data().date);
-          cancelledDates[format(date, 'yyyy-MM-dd')] = d.id;
-        });
-
-        const today = startOfToday();
-        const rangeEnd = addWeeks(today, 4);
         const effectiveEnd = schoolYearEnd ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd) : rangeEnd;
+
+        const eventsSnap = await getDocs(query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ));
+        const eventByDate: Record<string, { id: string; status: string }> = {};
+        eventsSnap.docs.forEach(d => {
+          const data = d.data();
+          eventByDate[data.date] = { id: d.id, status: data.status };
+        });
+        const hasAnyEvents = eventsSnap.docs.length > 0;
 
         const upcoming: UpcomingSession[] = [];
         for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -127,7 +130,11 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
           for (const sel of sub.days ?? []) {
             if (sel.day !== dayName) continue;
             const dateStr = format(day, 'yyyy-MM-dd');
-            upcoming.push({ date: day, dateStr, hour: sel.hour, transport: (sel as any).transport, cancellationId: cancelledDates[dateStr] });
+            const ev = eventByDate[dateStr];
+            if (ev?.status === 'VOIDED') continue;
+            // Off-pattern day of a biweekly subscription — not a service day.
+            if (!ev && hasAnyEvents) continue;
+            upcoming.push({ date: day, dateStr, hour: sel.hour, transport: (sel as any).transport, reservationEventId: ev?.id, cancelled: ev?.status === 'CANCELLED' });
           }
         }
         upcoming.sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -171,27 +178,22 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
   };
 
   const toggleDay = async (session: UpcomingSession) => {
+    // No ReservationEvent = the occurrence was never generated; surface that
+    // instead of silently doing nothing (see StudySubscriptionDetailPage).
+    if (!session.reservationEventId) {
+      setSessionError('Este dia ainda não tem ocorrência gerada, por isso não pode ser cancelado.');
+      return;
+    }
     setSessionAction(session.dateStr);
+    setSessionError(null);
     try {
-      if (session.cancellationId) {
-        await deleteDoc(docRef('eventModifications', session.cancellationId));
-        setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancellationId: undefined } : s));
-      } else {
-        const ref = await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'study',
-          date: session.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancellationId: ref.id } : s));
-      }
-    } catch (e) {
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      const nextStatus = session.cancelled ? 'EXPECTED' : 'CANCELLED';
+      await fn({ eventId: session.reservationEventId, status: nextStatus });
+      setSessions(prev => prev.map(s => s.dateStr === session.dateStr ? { ...s, cancelled: nextStatus === 'CANCELLED' } : s));
+    } catch (e: any) {
       console.error('Failed to toggle day:', e);
+      setSessionError(e?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setSessionAction(null);
     }
@@ -411,6 +413,14 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
         {selected.type === 'study' && isActive && !editingSchedule && (
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Próximas sessões</p>
+            {sessionError && (
+              <p className="mb-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">{sessionError}</p>
+            )}
+            {!loadingSessions && sessions.length > 0 && sessions.every(s => !s.reservationEventId) && (
+              <p className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Sem ocorrências geradas para esta inscrição — os dias abaixo não podem ser cancelados.
+              </p>
+            )}
             {loadingSessions ? (
               <p className="text-xs text-gray-400">A carregar...</p>
             ) : sessions.length === 0 ? (
@@ -418,7 +428,7 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
             ) : (
               <div className="space-y-1 max-h-48 overflow-y-auto">
                 {sessions.map(session => {
-                  const cancelled = !!session.cancellationId;
+                  const cancelled = session.cancelled;
                   const inProgress = sessionAction === session.dateStr;
                   return (
                     <div key={session.dateStr} className={`flex items-center justify-between py-1.5 ${cancelled ? 'opacity-50' : ''}`}>
@@ -428,8 +438,10 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
                         </p>
                         <p className="text-xs text-gray-400">{session.hour}{session.transport ? ' · 🚌' : ''}</p>
                       </div>
-                      <button onClick={() => toggleDay(session)} disabled={!!sessionAction}
-                        className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 transition ${
+                      <button onClick={() => toggleDay(session)}
+                        disabled={!!sessionAction || !session.reservationEventId}
+                        title={!session.reservationEventId ? 'Sem ocorrência gerada para este dia' : undefined}
+                        className={`text-xs px-2 py-1 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed transition ${
                           cancelled ? 'bg-green-50 text-green-700 hover:bg-green-100' : 'bg-red-50 text-red-600 hover:bg-red-100'
                         }`}>
                         {inProgress ? '...' : cancelled ? 'Restaurar' : 'Cancelar'}
