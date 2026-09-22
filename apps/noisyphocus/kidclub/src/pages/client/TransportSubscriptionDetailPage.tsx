@@ -119,6 +119,7 @@ export default function TransportSubscriptionDetailPage() {
         const data = d.data();
         eventByDateDirection[`${data.date}_${data.direction ?? 'both'}`] = { id: d.id, status: data.status };
       });
+      const hasAnyEvents = eventsSnap.docs.length > 0;
 
       const groupMap = new Map<string, DayGroup>();
 
@@ -133,6 +134,15 @@ export default function TransportSubscriptionDetailPage() {
           const direction = sched.direction ?? 'both';
           const ev = eventByDateDirection[`${dateStr}_${direction}`];
           if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
+          // No occurrence for a scheduled weekday means this date isn't a
+          // service day — normal for a biweekly (odd/even) subscription,
+          // where only half the matching weekdays are active. Listing it
+          // anyway produced rows that looked like trips but couldn't be
+          // cancelled. Only skip when SOME occurrences exist: if the
+          // subscription has none at all, keep the rows so the
+          // "no occurrences generated" banner below still has something to
+          // explain rather than showing a misleading empty list.
+          if (!ev && hasAnyEvents) continue;
           const trip: UpcomingTrip = {
             date: day,
             dateStr,
@@ -421,6 +431,12 @@ export default function TransportSubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele viagens individualmente. O cancelamento é imediato e pode ser revertido.
             </p>
+            {subscription?.weekPattern && subscription.weekPattern !== 'all' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Esta inscrição é <strong>quinzenal</strong> ({subscription.weekPattern === 'odd' ? '1.ª e 3.ª semanas' : '2.ª e 4.ª semanas'} do mês),
+                por isso só aparecem as semanas em que há serviço.
+              </p>
+            )}
             {actionError && (
               <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
                 {actionError}

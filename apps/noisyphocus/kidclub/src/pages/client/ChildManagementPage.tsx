@@ -122,6 +122,7 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
           const data = d.data();
           eventByDate[data.date] = { id: d.id, status: data.status };
         });
+        const hasAnyEvents = eventsSnap.docs.length > 0;
 
         const upcoming: UpcomingSession[] = [];
         for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -131,6 +132,8 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
             const dateStr = format(day, 'yyyy-MM-dd');
             const ev = eventByDate[dateStr];
             if (ev?.status === 'VOIDED') continue;
+            // Off-pattern day of a biweekly subscription — not a service day.
+            if (!ev && hasAnyEvents) continue;
             upcoming.push({ date: day, dateStr, hour: sel.hour, transport: (sel as any).transport, reservationEventId: ev?.id, cancelled: ev?.status === 'CANCELLED' });
           }
         }

@@ -93,6 +93,7 @@ export default function StudySubscriptionDetailPage() {
         const data = d.data();
         eventByDate[data.date] = { id: d.id, status: data.status };
       });
+      const hasAnyEvents = eventsSnap.docs.length > 0;
 
       const upcoming: UpcomingSession[] = [];
       for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -102,6 +103,9 @@ export default function StudySubscriptionDetailPage() {
           const dateStr = format(day, 'yyyy-MM-dd');
           const ev = eventByDate[dateStr];
           if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
+          // Off-pattern day of a biweekly subscription — not a service day.
+          // See TransportSubscriptionDetailPage for the full reasoning.
+          if (!ev && hasAnyEvents) continue;
           upcoming.push({
             date: day,
             dateStr,
@@ -389,6 +393,12 @@ export default function StudySubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele dias específicos (ex: férias). O cancelamento é imediato e pode ser revertido.
             </p>
+            {subscription?.weekPattern && subscription.weekPattern !== 'all' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Esta inscrição é <strong>quinzenal</strong> ({subscription.weekPattern === 'odd' ? '1.ª e 3.ª semanas' : '2.ª e 4.ª semanas'} do mês),
+                por isso só aparecem as semanas em que há serviço.
+              </p>
+            )}
             {actionError && (
               <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
                 {actionError}
