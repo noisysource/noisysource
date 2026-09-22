@@ -163,6 +163,46 @@ validation cannot run at all — which is the whole point of the auth fix.
 Also re-enter dev's own `config/transportation` values after the import
 (`driverMonthlyCost` / `electricityMonthlyCost`), which the import overwrites with prod's doc.
 
+### 🔴 Phase 4 hazard — the parent path CANNOT be validated with renato343@gmail.com
+
+Renato: dev needs only two logins, `renato343@gmail.com` (used as the parent/personal
+account) and `admin@kidclub.pt`; everyone else is reached by impersonation.
+
+**But `renato343@gmail.com` holds `owner: true, rainbowAdmin: true, finhubAdmin: true` in
+dev's `users` collection.** `setReservationEventStatus` checks staff FIRST:
+
+```js
+const isStaff = !!(roles.owner || roles.rainbowAdmin);
+if (!isStaff) { /* the primaryContact.userId family check */ }
+```
+
+So logging in as renato343 takes the **staff** branch and never reaches the parent
+authorization we just fixed. Validating with that account would appear to pass while proving
+nothing. Impersonation has the same problem if it keeps the admin's own uid.
+
+To actually exercise the fix, temporarily clear the roles on
+`users/DXMww3tno5Z6yYY01dv5Yq3bptf2` while testing the parent flow, then restore them.
+Do not skip this — it is the difference between validating the fix and validating the staff
+bypass.
+
+**dev Auth accounts (5, verified 2026-09-22):**
+
+| email | dev uid |
+|---|---|
+| admin@kidclub.pt | `BY4uhnhFEfZI7ymADbT3wggFI4k2` |
+| renato343@gmail.com | `DXMww3tno5Z6yYY01dv5Yq3bptf2` |
+| noisysource@gmail.com | `Y1oGutoJsTdd6ZpcqEk100TI5Nr1` |
+| domotics-bridge@kidclub.pt | `lekp4l20Q2d8GQtJvQ2KLI28uZJ3` |
+| beritogabriel@hotmail.com | `zAAnp9JEQHTDM3vFyWy6JWUIXk52` |
+
+**dev `users` collection holds 49 docs but only 5 dev Auth accounts exist** — 44 are prod
+UIDs carried in by the earlier prod->dev import and match no dev login. `renato343@gmail.com`
+and `noisysource@gmail.com` each appear twice (once under their dev uid, once under a prod
+one). So `users` is safe to wipe and recreate with just the two needed docs.
+`domotics-bridge@kidclub.pt` has **no** `users` doc at all, so wiping the collection does not
+affect the Pi bridge (it is scoped by rules, not by a roles doc) — verify before relying on
+that.
+
 ### schoolName ownership — resolved (2026-09-22)
 
 A parallel branch (`agent/subscription-personal-data`) moved the KidClub UI to resolve
