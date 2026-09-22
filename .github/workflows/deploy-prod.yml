@@ -1,12 +1,29 @@
 name: Deploy to Prod
 
-# Deploys on the PR itself (opened/updated against main), same pattern as
-# deploy-dev.yml/staging — so a prod deploy failure surfaces and gets fixed
-# on the PR branch, before merge, not after. Also re-runs on push to main
-# (i.e. right when the PR actually merges), which re-deploys the merged
-# state and is what triggers sync-staging below. A staging→main promotion
-# PR and a direct hotfix/* PR land here the same way, so there's no
-# separate hotfix pipeline: the entry point differs, the deploy doesn't.
+# Deploys to prod in exactly two situations:
+#   1. A PR into `main` whose HEAD IS `staging` — i.e. the real promotion
+#      path, dev-tested code being promoted. Deploying pre-merge means a
+#      prod deploy failure surfaces and gets fixed before the merge button
+#      is available, same model as deploy-dev.yml/staging.
+#   2. A push to `main` (the merge itself), which re-deploys the merged
+#      state and triggers sync-staging below.
+#
+# The head-branch check on (1) exists because of a real incident on
+# 2026-09-21/22: `branches: [main]` only filters the PR's BASE, so ANY
+# branch with a PR open against `main` — including one opened by accident,
+# e.g. by clicking GitHub's suggested "Compare & pull request" banner,
+# which defaults its base to the repo default branch — turned every
+# subsequent push to that branch into a live prod deploy. An
+# `agent/*` feature branch did exactly that, silently deploying WIP
+# Cloud Functions to prod 3 times over a working session before anyone
+# noticed, and it had already happened once before on another branch.
+# A stray PR against `main` must be inert; only a deliberate
+# staging→main promotion is prod-bound.
+#
+# NOTE: this means a `hotfix/*` branch PR'd straight into `main` no longer
+# deploys when the PR opens — it deploys on merge (the push trigger). If
+# you want pre-merge deploy verification for hotfixes too, add
+# `|| startsWith(github.head_ref, 'hotfix/')` to the deploy job's `if:`.
 #
 # Pair this with a required-status-check branch protection rule on `main`
 # for the `deploy` job — without it, GitHub still lets you merge a PR whose
@@ -21,6 +38,10 @@ on:
 
 jobs:
   deploy:
+    # A pull_request event only deploys when it's the staging→main
+    # promotion; a push to main (the merge) always deploys. See the header
+    # comment for why this guard exists.
+    if: github.event_name == 'push' || github.head_ref == 'staging'
     uses: ./.github/workflows/_deploy-kidclub-env.yml
     permissions:
       contents: 'read'
@@ -45,9 +66,10 @@ jobs:
   sync-staging:
     name: 'Sync staging with main'
     needs: deploy
-    # Only after an actual merge — the deploy job also runs on PR
-    # open/update (see the `on:` block above), and staging has no business
-    # being resynced from a PR that hasn't merged yet.
+    # Only after an actual merge — the deploy job also runs on a
+    # staging→main PR (see the `on:` block above), and staging has no
+    # business being resynced from a PR that hasn't merged yet. On a push
+    # the deploy job always runs, so `needs: deploy` is satisfied here.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
