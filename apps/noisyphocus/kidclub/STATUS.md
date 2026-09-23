@@ -496,7 +496,34 @@ subscription create, sibling ranking puts Ana at full price and Bruno at a disco
 credits **€4.80 = only the second leg of each two-leg day** (marginal, not flat), and decision 8
 pro-rates Carla's boundary month through system-CANCELLED pre-start days.
 
-#### Next step
+#### 🔴 Finding (2026-09-23) — a status change DESTROYS that period's recorded absences
+
+Renato corrected Francisco and Julia Brito from `pending` to `active` in dev
+(`cz7N6U8qsO20Zvo2wBEM`, `MFsSlj2IN7rAI98k0FyK`) — `active` is the true status. Two consequences
+came out of it, both real:
+
+1. **Julia's recorded absence was wiped.** She carried `excludedDates: ['2026-09-22']` on
+   September's billing record. The status write fired `onTransportBillingSync`, which recomputed
+   the record and rebuilt the line item **without** it. Prod still holds the value, so nothing
+   was lost permanently; dev was repaired by regenerating the back-dated events and re-marking
+   2026-09-22 CANCELLED on both legs with the migration's own provenance.
+2. **`regenerateFutureEvents` only generates from today forward**, so activating the subs left
+   September 1–22 with no occurrences at all. Re-running `migrate.mjs --apply` created the
+   missing 99 events (its window opens at the earliest billing period, not the current month).
+
+> **Sequencing rule for prod: migrate FIRST, then correct statuses.** The migration converts
+> `excludedDates` into `reservationEvents`, which a billing recompute cannot touch. Correcting a
+> status before migrating destroys exactly the history the migration exists to preserve.
+
+**Prod still has both subs as `pending`** and must be corrected there too — but only *after* the
+prod migration, per the rule above. Because `migrate.mjs` generates only for `active` transport
+subs, a prod run today would skip both Britos entirely.
+
+#### Next step — `scripts/kidclub-migration/PHASE4-TEST-PLAN.md`
+
+A ticklist covering the parent path and its authorisation boundary, the ≥3-absence threshold in
+both directions, the marginal discount model, the real migrated figures, the frozen invoiced
+records, and read-only prod divergence checks. Written for someone with no context.
 
 Phase 4 — dev validation: set one family's `primaryContact.userId` to a real dev Auth UID, then
 click through the four cancellation paths and a family with school discount + siblings + 3
