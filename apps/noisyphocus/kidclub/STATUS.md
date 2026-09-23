@@ -454,6 +454,38 @@ Treat €2,892.96/month as the new reference figure; €2,134.56 should not be q
   Phase 4's prerequisite, and `renato343@gmail.com` cannot serve for it (it holds `owner`/
   `rainbowAdmin`, and `setReservationEventStatus` checks staff first).
 
+#### Phase 4 setup — DONE (2026-09-23): a real non-staff test parent exists on dev
+
+**The hazard was worse than recorded.** STATUS said `renato343@gmail.com` could not validate the
+parent path because it holds `owner`/`rainbowAdmin`. In fact **all 5 dev Auth accounts are
+staff** — `admin@kidclub.pt`, `noisysource@gmail.com` and `renato343@gmail.com` hold
+owner + rainbowAdmin, `beritogabriel@hotmail.com` holds rainbowAdmin, and
+`domotics-bridge@kidclub.pt` is a service account. `setReservationEventStatus` checks
+`roles.owner || roles.rainbowAdmin` before it ever reaches the family check, so none of them
+could exercise the parent path at all.
+
+Resolved by creating a dev-only account rather than demoting an existing one:
+
+- **`parent-test@kidclub.pt`**, UID `M1Hp6oQo6yUaGBLCszouR5o0Heq2`, **no `users` doc and
+  therefore no roles** — a pure parent. Dev only; prod Auth untouched. Password was set at
+  creation and is not recorded here on purpose — reset it from the Firebase console if lost.
+- Pointed at **`families/lwHDLzM42YlNfiYen4GA`** (Inês Pinto / Carolina Almeida) by setting
+  `primaryContact.userId`. Written with a nested field mask, so name/email/phone survived.
+- **The original prod UID was `OB22dXJO1hZj6qke8WExkKKkXEV2`** — restore that value if this
+  family ever needs to look like prod again.
+
+Chosen because no single family matches Phase 4's "school discount + siblings + 3 absences":
+this one has the school discount (Colégio Bissaya Barreto), marginal multi-trip, **14 migrated
+absences**, and is the €182.40 reference figure. For the sibling case use **Sandra Abreu**
+(`nnBmdqT7MEL3tNeTQqbM`, Mogo siblings, sibling + "Aluno do ano anterior" discounts) — it sits
+at **2 cancelled events, one short of the ≥3 credit threshold**, which makes it a useful
+boundary test: marking one more absence should flip the credit on.
+
+🔴 **This write is exactly the kind decision 16 would propagate.** `primaryContact.userId` on
+this family is now a **dev** UID. Under decision 16 (import dev → prod) it would overwrite
+prod's real UID and break that parent's login in prod. It is one known instance of the general
+risk; every further dev test mutation adds more.
+
 #### Next step
 
 Phase 4 — dev validation: set one family's `primaryContact.userId` to a real dev Auth UID, then
