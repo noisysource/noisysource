@@ -5,7 +5,7 @@ import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
 import { Child, Family, TransportationSubscription } from '@shared/models';
 import { TransportationConfig } from '@shared/models/Transportation';
-import { normalizeSubStatus } from '../../lib/utils';
+import { normalizeSubStatus , coerceSubscriptionDate } from '../../lib/utils';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
@@ -119,8 +119,12 @@ export default function TransportSubscriptionDetailPage() {
         ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd)
         : rangeEnd;
 
-      const subStart = sub.startDate ? new Date(sub.startDate) : today;
-      const subEnd = sub.endDate ? new Date(sub.endDate) : null;
+      // coerceSubscriptionDate, not new Date(): transport stores startDate as a
+      // "YYYY-MM-DD" string, which new Date() reads as UTC midnight — 01:00 in
+      // Lisbon — so `day < subStart` was true for the start day itself and the
+      // subscription's first day never appeared in this list.
+      const subStart = coerceSubscriptionDate(sub.startDate, 'start') ?? today;
+      const subEnd = coerceSubscriptionDate(sub.endDate, 'end');
 
       // Keyed by "date_legIndex" — matching how reservationEvents.ts ids each
       // leg. Keying by direction collided: no schedule entry carries one, so

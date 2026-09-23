@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { getDocs, query, where } from 'firebase/firestore';
 import { col } from '../../lib/db';
+import { coerceSubscriptionDate } from '../../lib/utils';
 import { StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
 import { format, parseISO, isPast, isFuture, startOfDay, addDays } from 'date-fns';
 import { Link } from 'react-router-dom';
@@ -43,8 +44,8 @@ export default function ClientSchedulePage() {
             return {
               ...data,
               id: doc.id,
-              startDate: data.startDate?.toDate?.() || new Date(data.startDate),
-              endDate: data.endDate?.toDate?.() || new Date(data.endDate),
+              startDate: coerceSubscriptionDate(data.startDate, 'start'),
+              endDate: coerceSubscriptionDate(data.endDate, 'end'),
               createdAt: data.createdAt?.toDate?.() || new Date(data.createdAt),
             } as StudyRoomEntry;
           })

@@ -260,6 +260,7 @@ export interface BillingLineItem {
   institutionalDiscountAmount?: number; // school + returning-student + manual, summed, on the post-sibling subtotal
   institutionalDiscountPct?: number;
   absenceCount?: number;         // CANCELLED ReservationEvents this period, this subscription
+  absenceDates?: string[];       // ISO yyyy-mm-dd — every CANCELLED date, credited or not
   absenceCreditAmount?: number;
   absenceCreditDates?: string[]; // ISO yyyy-mm-dd — every CANCELLED date credited once the 3-absence threshold was reached (uncapped, not just the first 3)
 }
@@ -418,6 +419,7 @@ async function computeLineItems(
         institutionalDiscountAmount: r.institutionalDiscountCents / 100,
         institutionalDiscountPct: r.institutionalDiscountPct,
         absenceCount: r.absenceCount,
+        ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
         ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
       });
@@ -457,6 +459,7 @@ async function computeLineItems(
         institutionalDiscountAmount: r.institutionalDiscountCents / 100,
         institutionalDiscountPct: r.institutionalDiscountPct,
         absenceCount: r.absenceCount,
+        ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
         ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
       });

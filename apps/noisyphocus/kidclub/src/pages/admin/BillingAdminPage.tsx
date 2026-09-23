@@ -95,13 +95,22 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           )}
         </div>
       )}
-      {!!lineItem.absenceCreditDates?.length && (
+      {/* Absences are shown from absenceCount, NOT from absenceCreditDates.
+          absenceCreditDates is only populated once the >=3 threshold is met
+          (reconciliation.ts), so gating the whole block on it made 1 or 2
+          recorded absences completely invisible here: a parent cancelled a day
+          and staff had no way to tell that apart from "nothing was cancelled".
+          The credit line below stays conditional — that part really is about
+          money — but the count is always visible. */}
+      {!!lineItem.absenceCount && (
         <div className="mt-1 pl-2">
           <p className="text-[11px] text-gray-500">
-            Crédito de {lineItem.absenceCount} falta{lineItem.absenceCount === 1 ? '' : 's'} (limite de 3 atingido este mês): −{fmtEur(lineItem.absenceCreditAmount ?? 0)}
+            {lineItem.absenceCreditDates?.length
+              ? <>Crédito de {lineItem.absenceCount} falta{lineItem.absenceCount === 1 ? '' : 's'} (limite de 3 atingido este mês): −{fmtEur(lineItem.absenceCreditAmount ?? 0)}</>
+              : <>{lineItem.absenceCount} falta{lineItem.absenceCount === 1 ? '' : 's'} registada{lineItem.absenceCount === 1 ? '' : 's'} — sem crédito (mínimo 3 por mês)</>}
           </p>
           <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-            {lineItem.absenceCreditDates.map(d => (
+            {(lineItem.absenceCreditDates ?? lineItem.absenceDates ?? []).map((d: string) => (
               <span key={d} className="text-[11px] bg-blue-50 text-blue-800 border border-blue-200 rounded-full px-2 py-0.5">
                 {formatExclusionEntry(d)}
               </span>
@@ -133,6 +142,20 @@ interface ReservationEventDoc {
 // same call the client calendar uses — no local staging, no separate
 // "save" step, since this is now just one more front-end onto the same
 // facts the client and the absence threshold already read.
+/**
+ * The child's name out of a line-item title. billing.ts builds these as
+ * "Sala de Estudo — Ana Teste (3ª, 5ª) — Outubro 2026", so the name is the
+ * second segment with any schedule parenthetical dropped. Returns null rather
+ * than guessing if the shape is not what we expect, and the caller falls back
+ * to the service label.
+ */
+function childNameOf(li: BillingLineItem): string | null {
+  const parts = (li.title ?? '').split(' — ');
+  if (parts.length < 2) return null;
+  const name = parts[1].replace(/\s*\(.*$/, '').trim();
+  return name || null;
+}
+
 function ServiceCalendar({ li, events, onToggle, savingId }: {
   li: BillingLineItem;
   events: ReservationEventDoc[];
@@ -152,7 +175,14 @@ function ServiceCalendar({ li, events, onToggle, savingId }: {
   return (
     <div className={`rounded-lg border ${accent.header.split(' ').pop()} overflow-hidden`}>
       <div className={`flex items-baseline justify-between px-3 py-2 ${accent.header}`}>
-        <p className="text-sm font-semibold flex items-center gap-1.5">{meta.icon} {meta.label}</p>
+        {/* The child's name, not just the service. With several subscriptions
+            in one record every calendar read "Sala de Estudo" / "Transporte"
+            and there was no way to tell whose days you were about to change —
+            on a screen whose whole purpose is changing them. */}
+        <p className="text-sm font-semibold flex items-center gap-1.5">
+          {meta.icon} {childNameOf(li) ?? meta.label}
+          <span className="font-normal opacity-70">· {meta.label}</span>
+        </p>
         <p className="text-xs opacity-80">{markedCount > 0 ? `${markedCount} marcado(s)` : 'nenhum dia marcado'}</p>
       </div>
       {sortedDates.length === 0 ? (

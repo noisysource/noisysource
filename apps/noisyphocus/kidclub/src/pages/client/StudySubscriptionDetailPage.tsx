@@ -6,6 +6,7 @@ import { callable } from '../../lib/callable';
 import { Child, Family, StudyRoomEntry, normalizeStatus } from '@shared/models';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
+import { coerceSubscriptionDate } from '../../lib/utils';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
 
@@ -68,8 +69,10 @@ export default function StudySubscriptionDetailPage() {
         ...data,
         id: subSnap.id,
         status: normalizeStatus(data),
-        startDate: data.startDate?.toDate?.() ?? (data.startDate ? new Date(data.startDate) : null),
-        endDate: data.endDate?.toDate?.() ?? (data.endDate ? new Date(data.endDate) : null),
+        // Timestamps here today, but a string would hit the same UTC-midnight
+        // off-by-one the transport page did — one coercer for both.
+        startDate: coerceSubscriptionDate(data.startDate, 'start'),
+        endDate: coerceSubscriptionDate(data.endDate, 'end'),
       } as StudyRoomEntry;
       setSubscription(sub);
 
