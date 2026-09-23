@@ -184,8 +184,18 @@ service cloud.firestore {
       // setReservationEventStatus (parents and staff) or the generation triggers in
       // reservationEvents.ts, both Admin SDK and so bypass these rules entirely — no
       // direct client write path exists or is needed.
+      // Reads are scoped to staff or the owning family — `isAuthenticated()`
+      // alone let any logged-in parent read every other family's occurrences.
+      // The family link lives at families/{id}.primaryContact.userId (the same
+      // field the families rule above matches on); the cross-document get() is
+      // the same idiom eventModifications uses.
       match /reservationEvents/{doc} {
-        allow read: if isAuthenticated();
+        allow read: if isRainbowAdmin() || isOwner() ||
+          (isAuthenticated()
+            && 'familyId' in resource.data
+            && resource.data.familyId != ''
+            && get(/databases/$(database)/documents/_apps/arcoiris/families/$(resource.data.familyId))
+                 .data.primaryContact.userId == request.auth.uid);
         allow write: if isRainbowAdmin();
       }
 

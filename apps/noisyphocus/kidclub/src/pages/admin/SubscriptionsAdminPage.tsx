@@ -46,6 +46,8 @@ interface SubItem {
   basePrice?: number;      // study: fee before discount
   // Central discount system
   appliedDiscounts?: AppliedDiscount[];
+  /** Admin overrides of the automatic discounts, by rule id. See DiscountOverrides. */
+  discountOverrides?: Record<string, boolean>;
   weekPattern?: 'all' | 'odd' | 'even';
   // Common
   status: SubStatus;
@@ -857,6 +859,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           schoolName: details.schoolName.trim() || null,
           status: 'pending', source: 'manual', monthlyFee, originalFee: transportGross,
           appliedDiscounts: transportSelected,
+          discountOverrides: Object.fromEntries(transportOverrides),
           weekPattern: schedule.weekPattern,
           schedule: fsSchedule, note: note.trim() || null,
           createdAt: now, updatedAt: now,
@@ -868,6 +871,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           contactPhone: details.contactPhone.trim() || undefined,
           schoolName: details.schoolName.trim() || undefined,
           source: 'manual', schedule: fsSchedule, monthlyFee, appliedDiscounts: transportSelected,
+          discountOverrides: Object.fromEntries(transportOverrides),
           status: 'pending', note: note.trim() || undefined, createdAt: now,
         });
       }
@@ -885,6 +889,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           days, weekPattern: schedule.weekPattern,
           monthlyPrice, basePrice: studyGross,
           appliedDiscounts: studySelected,
+          discountOverrides: Object.fromEntries(studyOverrides),
           note: note.trim() || null,
           status: 'pending', source: 'manual',
           startDate: now, endDate,
@@ -899,6 +904,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           schoolName: details.schoolName.trim() || undefined,
           schoolYear: details.schoolYear.trim() || undefined,
           days, monthlyPrice, basePrice: studyGross, appliedDiscounts: studySelected,
+          discountOverrides: Object.fromEntries(studyOverrides),
           source: 'manual', status: 'pending',
           note: note.trim() || undefined, createdAt: now,
         });
@@ -1403,17 +1409,59 @@ export default function SubscriptionsAdminPage() {
         ? current.filter(d => d.ruleId !== rule.id)
         : [...current, { ruleId: rule.id, name: rule.name, percentage: rule.percentage, appliedAt: new Date(), appliedBy: 'admin' as const }];
 
+      // An admin's click on an AUTOMATIC rule is an override, and has to be
+      // recorded as one: appliedDiscounts is rewritten from the rules by
+      // discountRecalc on every schedule change, so an "off" stored only there
+      // is silently undone the next time anyone edits the schedule. Manual
+      // rules need no override — they are only ever applied by hand.
+      const newOverrides = rule.trigger === 'manual'
+        ? item.discountOverrides
+        : { ...(item.discountOverrides ?? {}), [rule.id]: !isApplied };
+
       const gross = computeGross(item);
       const newFee = Math.round(applyDiscounts(gross, newDiscounts) * 100) / 100;
       const feeField = item._type === 'transport' ? 'monthlyFee' : 'monthlyPrice';
 
       await updateDoc(docRef(colName, item.id), {
         appliedDiscounts: newDiscounts, [feeField]: newFee, updatedAt: new Date(),
+        ...(newOverrides ? { discountOverrides: newOverrides } : {}),
       });
       setItems(prev => prev.map(i => i.id === item.id
         ? { ...i, appliedDiscounts: newDiscounts, ...(i._type === 'transport' ? { monthlyFee: newFee } : { monthlyPrice: newFee }) }
         : i
       ));
+    } finally { setProcessing(null); }
+  };
+
+  /**
+   * Drop every admin override on this subscription and let the automatic
+   * rules decide again.
+   *
+   * Only the override field is written. discountRecalc (onDocumentWritten)
+   * owns the recomputation of appliedDiscounts and the fee, and it is the only
+   * place that counts siblings across BOTH collections — recomputing here
+   * would mean a second, worse copy of that logic in the row. Manual
+   * concessions ("Aluno do ano anterior") are deliberately kept: they were
+   * never automatic, so "back to automatic" has nothing to say about them.
+   */
+  const resetDiscountsToAuto = async (item: SubItem) => {
+    const n = Object.keys(item.discountOverrides ?? {}).length;
+    if (!confirm(
+      `Repor os descontos automáticos de ${item.childName}?\n\n`
+      + `${n} ajuste(s) manual(is) serão removidos e os descontos voltam a ser `
+      + `calculados automaticamente. Descontos manuais (ex. "Aluno do ano anterior") são mantidos.`
+    )) return;
+    setProcessing(item.id);
+    try {
+      const colName = item._type === 'study' ? 'studyroom' : 'transportationSubscriptions';
+      await updateDoc(docRef(colName, item.id), {
+        discountOverrides: deleteField(), updatedAt: new Date(),
+      });
+      // The recalculation is a backend trigger, so it lands a moment after the
+      // write. Reloading immediately would show the pre-reset fee and read as
+      // "the button did nothing" on a money screen.
+      await new Promise(r => setTimeout(r, 1500));
+      await load();
     } finally { setProcessing(null); }
   };
 
@@ -1831,6 +1879,20 @@ export default function SubscriptionsAdminPage() {
                                             </button>
                                           );
                                         })}
+                                      </div>
+                                    )}
+
+                                    {/* Overrides present — offer a way back to automatic */}
+                                    {Object.keys(item.discountOverrides ?? {}).length > 0 && (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Ajustado</span>
+                                        <button
+                                          onClick={() => resetDiscountsToAuto(item)}
+                                          disabled={processing === item.id}
+                                          className="text-xs px-2 py-0.5 rounded-full border border-purple-300 bg-purple-50 text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-50"
+                                          title="Remove os ajustes manuais e volta a calcular os descontos automaticamente">
+                                          ↺ Repor automático
+                                        </button>
                                       </div>
                                     )}
 

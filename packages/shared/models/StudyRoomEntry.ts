@@ -67,6 +67,8 @@ export interface StudyRoomEntry {
   total?: number;
   returningStudent?: boolean;
   appliedDiscounts?: import('./Discount').AppliedDiscount[];
+  /** Admin overrides of automatic discounts, by rule id. See DiscountOverrides. */
+  discountOverrides?: import('./Discount').DiscountOverrides;
   
   // Dates
   startDate: Date;
