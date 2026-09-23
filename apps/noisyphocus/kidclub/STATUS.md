@@ -4,21 +4,92 @@
 
 **Last updated:** 2026-09-23
 
-## AUTHORITATIVE — prod data migration plan (supersedes the section below it)
+## WHERE THINGS STAND
 
-The event-sourcing rewrite is merged to `staging` and validated on dev. This section is
-the plan for getting **real prod data** onto it. It was produced from a read-only analysis
-of live prod (21 active transport subs, 13 active study subs, 228 billing records, 0
-`reservationEvents`, 13 `eventModifications`) plus an offline simulation of the new
-pipeline against that data. Fifteen decisions were taken with Renato on 2026-09-22 and are
-recorded below — **do not re-litigate them, they are settled.**
+**Dev is migrated and validated. Prod is untouched and still on the old model.**
 
-### ⚠️ Branch off `staging`, NOT `main`
+PRs #32, #33, #34 and #35 are **merged to `staging`** (87 commits ahead of `main`), so
+everything below is live on `kidclub-dev`. Branch new work off `origin/staging` and PR back
+into `staging` — advice further down this file about branching off `main` predates the
+event-sourcing rewrite and is wrong for this effort.
 
-`reservationEvents.ts` and `reconciliation.ts` **do not exist on `main`**. Any work on this
-migration must branch from `origin/staging` and PR back into `staging`. The older advice
-further down this file ("start new work from a fresh worktree off `main`") predates this
-and is wrong for this effort specifically.
+| | State |
+|---|---|
+| Event-sourcing rewrite (Phases 0/1/3, decisions 8–11) | ✅ merged, on dev |
+| Phase 1 — dev wiped and reimported from prod | ✅ done 2026-09-23 |
+| Phase 2 — migration applied to dev | ✅ 25 identity + 7 date + 4,742 writes |
+| Phase 3 — reconciliation report | ✅ reproduces every reference figure |
+| Phase 4 — dev validation | 🟡 **in progress — Renato testing** |
+| Phase 5 — prod cutover | ⛔ not started, and gated (see below) |
+| Phase 6 — final audit | ⛔ not started |
+
+### What is verified, and how
+
+- **The four reference figures reproduce exactly** on dev: Carolina €182.40, José Eduardo
+  €165.12, Maria Manon €130.56, Mogo €210.00 — deltas summing to **+€53.28/month**.
+- **Every month bills €2,892.96**, August 2027 included. That is flat pricing plus decision 10
+  working. ⚠️ The old **€2,134.56** August estimate is **superseded** — it predates decision 6
+  (three restored subscriptions, +€281.28) and decision 18 (the cliff is 7 subs, not 6).
+- **The parent write path works, tested end to end against dev** (2026-09-23), over the Auth
+  REST API rather than a browser, since the dev site is not externally reachable:
+  parent cancels own occurrence → **200**, stored `changedByRole: "parent"`; parent touches
+  another family → **403**; parent reads another family's events → **403** by `firestore.rules`.
+  Script: `scripts/kidclub-migration/parent-path-test.mjs` — re-run it whenever auth,
+  `firestore.rules` or the callable changes; it would have caught the original
+  `primaryContact.userId` blocker before prod.
+- **Invoiced records are provably frozen** — the 5 September records still carry their original
+  prod `updatedAt` of 2026-09-20/22, untouched by the 2026-09-23 run.
+- **What is NOT verified: the UI in a browser.** Rendering, layout and density are unproven.
+
+### 🔴 Before Phase 5 — three gates
+
+1. **Sequencing: migrate prod FIRST, correct statuses AFTER.** Flipping Francisco and Julia
+   Brito to `active` in dev **destroyed** Julia's recorded absence: `onTransportBillingSync`
+   recomputed September's record and rebuilt the line item without its `excludedDates`. After
+   migration those absences live in `reservationEvents`, which a billing recompute cannot
+   reach — so this hazard exists **only before** the migration runs. Dev is migrated, so status
+   corrections there are now safe; **prod is not**.
+2. **Both Britos are still `pending` in prod.** `migrate.mjs` only generates for `active`
+   transport subs, so a prod run today skips them both.
+3. **Decision 16's route needs a second look** — see its caveat below. Dev now holds a synthetic
+   QA family, a test Auth account and test mutations.
+
+`migrate.mjs` **refuses `--apply` against prod outright**, with no override flag. Enabling it is
+a deliberate reviewed change, not a flag added in passing.
+
+### Tooling
+
+| Path | What |
+|---|---|
+| `scripts/kidclub-migration/migrate.mjs` | Phase 2 migration. Dry run by default, dev only |
+| `scripts/kidclub-migration/identity.mjs` | identity consolidation, `--apply` implemented |
+| `scripts/kidclub-migration/reconcile-report.mjs` | read-only reconciliation, any project |
+| `scripts/kidclub-migration/seed-test-family.mjs` | the QA family, re-runnable after a wipe |
+| `scripts/kidclub-migration/set-test-absences.mjs` | absences either side of the ≥3 threshold |
+| `scripts/kidclub-migration/parent-path-test.mjs` | parent auth end-to-end, no browser needed |
+| `scripts/kidclub-migration/DEV-WIPE-RUNBOOK.md` | wipe + import, scoped to `_apps/arcoiris` |
+| `scripts/kidclub-migration/PHASE4-TEST-PLAN.md` | validation checklist incl. prod checks |
+| `scripts/kidclub-migration/MANUAL-TEST-STEPS.md` | click-by-click manual script |
+| `apps/noisyphocus/kidclub/CALENDAR-VIEWS.md` | the two calendar refactors |
+
+### Test access (dev)
+
+`parent-test@kidclub.pt` — **no roles**, a true parent; password set at seed time, reset from
+the Firebase console if lost. It owns `TEST-FAMILY-QA` (Ana, Bruno, Carla), which carries
+sibling + school + multi-trip + manual discounts, a mid-October start for decision 8, and
+absences deliberately at 2 and 3 to sit either side of the credit threshold.
+
+⚠️ **All five human dev accounts are staff** (`owner`/`rainbowAdmin`), and
+`setReservationEventStatus` checks staff before the family check — which is why a roleless
+account had to be created, and why impersonation cannot stand in for the parent path.
+
+---
+
+## The migration plan (decisions and findings)
+
+Produced from a read-only analysis of live prod (21 active transport subs, 13 active study
+subs, 228 billing records, 0 `reservationEvents`, 13 `eventModifications`) plus an offline
+simulation. **Eighteen decisions** are settled with Renato — **do not re-litigate them.**
 
 ### Decisions (settled 2026-09-22)
 
@@ -141,7 +212,14 @@ agent branches merged cleanly, **84 tests passing, typecheck clean**.
   prod: `children/G1XkEDBciLr7k2Hk9eRa` now `status: merged`, `mergedInto:
   6DdwHVG0WFr975wMYyBC`. Retired, not deleted, so it remains reversible.
 
-### Phase 1 — dev wipe before import (Renato, 2026-09-22)
+### ✅ DONE — Phase 1 dev wipe and import (executed 2026-09-23)
+
+> Executed via `gcloud firestore bulk-delete` (the firebase CLI's credentials had expired and
+> its reauth is interactive). 11,440 documents across 12 collection IDs; `users` verified intact
+> at 49 docs. The open question below about `users` is answered: it **is** shared, and was not
+> wiped. Runbook with both methods and their caveats:
+> `scripts/kidclub-migration/DEV-WIPE-RUNBOOK.md`. Kept for the reasoning.
+
 
 Renato's instruction: wipe dev completely first, then import prod, so the migration is proved
 against real data with no pre-existing dev records polluting the result. `gcloud firestore
@@ -166,7 +244,13 @@ validation cannot run at all — which is the whole point of the auth fix.
 Also re-enter dev's own `config/transportation` values after the import
 (`driverMonthlyCost` / `electricityMonthlyCost`), which the import overwrites with prod's doc.
 
-### 🔴 Phase 4 hazard — the parent path CANNOT be validated with renato343@gmail.com
+### ✅ RESOLVED — Phase 4 parent-path hazard (was: cannot validate with renato343@gmail.com)
+
+> **Resolved 2026-09-23** by creating `parent-test@kidclub.pt` with no `users` doc and therefore
+> no roles. The hazard was also **wider than described below**: not just `renato343`, but **all
+> five** dev Auth accounts are staff. Impersonation cannot substitute — it is an admin feature,
+> and the staff check returns before the family check is ever reached. Kept for the reasoning.
+
 
 Renato: dev needs only two logins, `renato343@gmail.com` (used as the parent/personal
 account) and `admin@kidclub.pt`; everyone else is reached by impersonation.
@@ -551,7 +635,12 @@ Confirmed intentional, not a typo. Events stop mid-July 2027 while billing runs 
 Confirmed: the 4 study subs missed by decision 14's string match are in scope along with the 3
 transport ones. Decision 14's count of 6 is superseded by 7.
 
-### Phase 2 — SCRIPT WRITTEN, dry run signed off, NOTHING APPLIED (2026-09-22/23)
+### ✅ Phase 2 — script written, signed off, and APPLIED to dev (2026-09-22/23)
+
+> Applied 2026-09-23: 4,742 writes to `kidclub-dev`, after 25 identity writes and 7 date
+> repairs. **Nothing has ever been written to prod.** The section below describes the script
+> as reviewed; it is still accurate about behaviour.
+
 
 Branch `agent/phase2-migration`, off `agent/eventsourcing-integration`. **PR #33 → `staging`.**
 Nothing has been written to any project — every figure below is a dry run.
@@ -670,39 +759,68 @@ and why `renato343@gmail.com` cannot validate the parent path), and the ordered 
 `gcloud auth print-access-token` against the Firestore REST API, with no standing access added
 and nothing to revoke. Both PRs target `staging`.
 
-### Branch state (2026-09-22)
+### UI work found by testing the migrated data (2026-09-23, PRs #34 and #35)
 
-`agent/eventsourcing-integration` is **pushed to origin** (head `9b083ae`, 27 commits ahead of
-`staging`). It carries Phases 0, 1 and 3 plus decisions 9-11. Phase 2 branches from it, not
-from `main` or `staging` — neither has `reservationEvents.ts`, `reconciliation.ts` or the
-decision 9-11 money changes.
+Three bugs, found by Renato clicking through dev, and two refactors.
 
-**Both PRs are open against `staging`, in this order:**
-- **PR #32** — `agent/eventsourcing-integration` → `staging`. Phases 0/1/3 + decisions 8-11.
-  This is the one that gets the rewrite onto `kidclub-dev` and unblocks testing.
-- **PR #33** — `agent/phase2-migration` → `staging`. The migration script above.
+**Bugs (#34)**
+1. **A recorded absence was invisible in Cobranças below the ≥3 threshold.** The row gated its
+   whole absence display on `absenceCreditDates`, which `reconciliation.ts` only populates once
+   the credit fires — so staff could not tell "no absences" from "2 absences, no credit". Adds
+   `absenceDates` (unconditional) next to `absenceCreditDates` (gated): they answer different
+   questions.
+2. **The "Dias sem serviço" modal never named the child** — several calendars all headed
+   "Sala de Estudo" / "Transporte", on the screen whose only job is changing those days.
+3. 🔴 **A subscription's own first day vanished from the parent's trip list.**
+   `new Date("2026-10-15")` parses as **UTC midnight = 01:00 Lisbon**, compared against
+   date-fns local midnights, so `day < subStart` was true for the start day itself. Carla's
+   15 October disappeared while the 20th showed.
 
-Note also (root `CLAUDE.md`, updated since this section was first written): the prod deploy job
-is now guarded by `github.head_ref == 'staging'`, so only a `staging` → `main` PR deploys to
-prod pre-merge. An `agent/*` → `main` PR is inert — but it is still the wrong target, and the
-staging → main promotion remains Renato's call after dev validation.
+   **This was the third appearance of this bug class** — after `toIsoDate()` (`eb905ed`) and
+   the `eventModifications` timestamps in the migration. Fixed with a
+   `coerceSubscriptionDate(raw, 'start' | 'end')` helper in `src/lib/utils.ts` mirroring the
+   backend's `coerceDate()`, applied to **all three** client pages carrying the pattern.
+   **If you write date handling in this app, use it.** A date-only string is not a Date.
 
-**Route to dev: PR into `staging`, never into `main`.** Opening a PR against `main` deploys
-to **prod immediately, before merge** (`deploy-prod.yml`). A PR against `staging` deploys to
-`kidclub-dev`, which is where this gets validated.
+**Refactors (#35)** — see `apps/noisyphocus/kidclub/CALENDAR-VIEWS.md`.
+- **`/client/calendar`** — one grid, every child, both services, filterable, cancel/restore
+  inline. Replaces a four-screen path. Reads `reservationEvents` directly, one query per month
+  scoped by `familyId`. It is also a **data-correctness tool**: it warns when an active
+  subscription generated no occurrences for a month, which under flat pricing still bills in
+  full — the client-side counterpart of flag (a) in `reconcile-report.mjs`.
+- **Admin day editor is now inline** in the expanded billing row, not a modal, so the calendar
+  and the amounts it moves are visible together. Pending records only; invoiced stays frozen.
+- **Removed four unreachable files** (verified by reference count): `ClientDashboardPage`,
+  `FamilyDashboardPage.tsx.example`, `FamilySchedulePage`, `ClientSchedulePage`. Their routes
+  redirect to the calendar. `ClaimSubscriptionsPage` was checked and **kept** — not routed, but
+  `ClientLayout` renders it directly.
 
-### 🔴 OPEN Phase 5 question — how the fix reaches prod
+⚠️ **The calendar needs a composite index**: `reservationEvents` on `familyId` + `date`, now in
+`firestore.indexes.json` so CI deploys it to **both** projects. A console-created index covers
+only the project it was made in — the page would work on dev and throw `FAILED_PRECONDITION`
+for every family in prod. Confirmed `READY` on dev 2026-09-23.
 
-Renato (2026-09-22): "we can bring data from prod, fix in dev and then import." The first
-half is decision 12 and is settled. The second half is ambiguous and **is not yet decided**:
+### ✅ Branch state — all merged (2026-09-23)
 
-- **Re-run the validated script against prod** — the script is the artifact, dev proves it,
-  prod gets the same transformation. Recommended, and what the phase plan assumes.
-- **Import dev's repaired data into prod** — would overwrite prod with dev state. Dev will by
-  then hold test mutations, and `primaryContact.userId` values in dev are **dev** Auth UIDs
-  that match no prod account, so a straight import would break every parent login it touched.
+PRs **#32, #33, #34, #35** are merged into `staging`, which is 87 commits ahead of `main`.
+The worktrees behind them can be removed. The promotion `staging` → `main` is Renato's call and
+deploys to prod pre-merge, so it waits on Phase 4 sign-off.
 
-Decide this before Phase 5. It does not block Phase 2.
+### Phase 5 route — DECIDED (decision 16), with a caveat that has since grown
+
+Settled 2026-09-23: **import dev into prod.** See decision 16 below for the caveat — the risk
+is not parents logging into dev, it is that the import overwrites **prod's**
+`primaryContact.userId` values with dev ones, breaking real parents' logins in prod.
+
+Since that decision, dev has accumulated more that must not travel: `TEST-FAMILY-QA`, three
+synthetic children, the `parent-test@kidclub.pt` account and test mutations. Every synthetic
+document carries **`isTestData: true` and a `TEST-` id prefix** precisely so exclusion is
+mechanical rather than remembered — but exclusion-by-filter is a control you must get right
+every time, whereas re-running `migrate.mjs` against prod is correct by construction.
+
+The alternative remains: re-run the validated script against prod. Dev proved it; prod gets the
+same transformation; synthetic data cannot travel because the script only ever touches prod's
+own documents.
 
 ### ⚠️ The dev wipe must target KidClub ONLY — `users` is shared (verified 2026-09-22)
 
@@ -717,12 +835,23 @@ Renato's explicit instruction: the wipe targets KidClub, never Finances or any o
   KidClub-scoped — gates on `roles.finhubAdmin`. Wiping `users` would strip FinHub's admin
   access in dev. Fix the two accounts that need fixing individually instead.
 
-### August remainders
+### ✅ SUPERSEDED — August remainders
+
+> Decision 14 cleared the cliff, and decision 18 corrected its size to **7 subscriptions, not
+> 6** — the string match missed all four study subs, whose timestamps read 2027-07-31 in
+> Lisbon. Applied to dev 2026-09-23. Kept for the reasoning.
+
 
 Superseded by decision 14 — Phase 2 now clears the 6 `endDate: 2027-07-30` values, rather
 than Renato clearing them by hand. Report flag (a) lists them until it does.
 
-### Known `identity.mjs` gap
+### ✅ FIXED — `identity.mjs` gaps (2026-09-23)
+
+> Two, not one. The merged-child filter below is fixed; separately, **`--apply` was not
+> implemented at all** — it printed the plan and exited 2 for everything except an explicitly
+> named `--approve-merge` pair, while the whole sequencing rule depends on running it. Both
+> done; 25 writes applied to dev. Kept for the reasoning.
+
 
 It still flags the **Mafalda** pair as needing a human decision even though that merge was
 completed on 2026-09-22 — it does not filter out children with `status: "merged"`. Harmless
@@ -759,7 +888,14 @@ on 2026-09-20 — it is not introduced by this migration.
 These four figures independently reproduce the comparison table recorded on 2026-09-20,
 which is a useful cross-check on both the implementation and the simulation.
 
-### 🔴 Blocker found in prod data — fix before ANY dev validation
+### ✅ FIXED and VERIFIED — the parent-auth blocker in prod data
+
+> The `primaryContact.userId` fix, the `reservationEvents` read-rule scoping and the parent
+> path itself are all verified against dev with a real roleless parent account (2026-09-23):
+> 200 for own family, 403 for another, 403 on a direct read. The past-date cutoff noted below
+> is **still open** — a parent can still cancel a day that has already passed. Kept for the
+> reasoning.
+
 
 `setReservationEventStatus` (`functions/src/kidclub/reservationEvents.ts`) authorises a
 parent with:
