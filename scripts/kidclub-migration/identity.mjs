@@ -20,6 +20,10 @@
  *   node identity.mjs --project kidclub-dev
  *   node identity.mjs --project kidclub-dev --apply
  *
+ * Run this BEFORE migrate.mjs, not after. migrate.mjs refuses to generate
+ * events while any active subscription still has no familyId, because every
+ * generated event freezes familyId into its own document.
+ *
  * Auth: uses `gcloud auth print-access-token` against the Firestore REST API —
  * no service-account key on disk, matching the org policy that blocks SA keys.
  */
@@ -117,7 +121,11 @@ function completeness(c) {
 }
 
 function main(data) {
-  const { families, children, study, transport } = data;
+  const { families, study, transport } = data;
+  // A child retired by an earlier merge is not a duplicate any more. Without
+  // this filter the Mafalda pair completed on 2026-09-22 keeps being
+  // re-proposed, and --apply would try to redo a merge that is already done.
+  const children = data.children.filter(c => c.status !== "merged");
   const activeStudy = study.filter(s => ["active", "confirmed"].includes(s.status));
   const activeTransport = transport.filter(s => s.status === "active");
   const allSubs = [
@@ -198,7 +206,9 @@ function main(data) {
     const merge = plan.mergeChildren.find(m => m.losers.some(l => l.id === c.id));
     if (merge) continue; // handled by the merge
     const sub = allSubs.find(s => norm(s.childName) === childKey(c));
-    plan.linkChildren.push({ child: c, viaSub: sub?.id ?? null, email: sub?.contactEmail ?? null });
+    // The subscription object itself is kept, not just its id: --apply needs
+    // the familyId it ends up with, which may be one created moments earlier.
+    plan.linkChildren.push({ child: c, viaSub: sub?.id ?? null, sub: sub ?? null, email: sub?.contactEmail ?? null });
   }
 
   return plan;
@@ -271,18 +281,25 @@ const [families, children, study, transport] = await Promise.all(
 const plan = main({ families, children, study, transport });
 report(plan);
 
-// ── Approved fuzzy merges ───────────────────────────────────────────────────
-// Near-name duplicates are never merged unattended. A merge happens only when
-// it is named explicitly on the command line as loserId:survivorId, so the
-// invocation itself is the audit record of who approved what:
-//
-//   node identity.mjs --apply --i-know-this-is-prod \
-//     --approve-merge G1XkEDBciLr7k2Hk9eRa:6DdwHVG0WFr975wMYyBC
-//
-// The loser is RETIRED, never deleted — status becomes "merged" with a pointer
-// to the survivor, so the record stays auditable and the merge is reversible.
-// Any subscription pointing at the loser is repointed first; if one still does
-// and cannot be repointed, the merge is refused rather than orphaning it.
+// ── Writing ─────────────────────────────────────────────────────────────────
+// Every repair here is an identity link — familyId, childId, a retired
+// duplicate. NONE of it touches schedule/days/weekPattern/startDate/endDate/
+// status, which is deliberate and load-bearing: those fields fire
+// regenerateFutureEvents() in reservationEvents.ts, which voids and recreates
+// future events and would wipe parent-recorded absences. familyId and childId
+// are absent from both triggers' `scheduleChanged` check, so these writes are
+// inert as far as event generation is concerned. Keep it that way.
+
+function encode(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (v instanceof Date) return { timestampValue: v.toISOString() };
+  if (typeof v === "boolean") return { booleanValue: v };
+  if (typeof v === "number") return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(encode) } };
+  if (typeof v === "object") return { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, encode(x)])) } };
+  return { stringValue: String(v) };
+}
+
 async function patchDoc(collection, id, fields) {
   const mask = Object.keys(fields).map(f => `updateMask.fieldPaths=${encodeURIComponent(f)}`).join("&");
   const res = await fetch(`${ROOT}/${collection}/${id}?${mask}`, {
@@ -294,6 +311,141 @@ async function patchDoc(collection, id, fields) {
   return res.json();
 }
 
+/** patchDoc with plain JS values rather than hand-encoded REST ones. */
+const setFields = (collection, id, obj) =>
+  patchDoc(collection, id, Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, encode(v)])));
+
+async function createDoc(collection, obj) {
+  const res = await fetch(`${ROOT}/${collection}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, encode(v)])) }),
+  });
+  if (!res.ok) throw new Error(`CREATE ${collection}: ${res.status} ${await res.text()}`);
+  return (await res.json()).name.split("/").pop();
+}
+
+let written = 0;
+const did = (msg) => { written++; console.log(`  ${APPLY ? "WROTE" : "would write"}  ${msg}`); };
+
+/**
+ * Applies the reviewed plan. Exact-name duplicate merges, orphan → family
+ * links and child → family links only; the near-name pairs in section 1b are
+ * never touched here, they go through --approve-merge below.
+ */
+async function applyPlan(plan) {
+  console.log(`\n${"=".repeat(78)}`);
+  console.log(APPLY ? "APPLYING PLAN" : "APPLY PREVIEW (dry run — nothing written)");
+  console.log("=".repeat(78));
+
+  // Subscriptions that get a familyId in this run, so step 4 can resolve a
+  // child's family through a subscription repaired moments earlier rather than
+  // reading a stale familyId off the snapshot loaded at startup.
+  const familyIdBySub = new Map();
+
+  console.log(`\n1. Duplicate children (${plan.mergeChildren.length})`);
+  for (const m of plan.mergeChildren) {
+    if (Object.keys(m.salvage).length) {
+      if (APPLY) await setFields("children", m.survivor.id, m.salvage);
+      did(`children/${m.survivor.id} salvage ${Object.keys(m.salvage).join(", ")}`);
+    }
+    // Repoint before retiring: if this fails, the loser is still live and the
+    // subscription still resolves to a real child record.
+    for (const r of m.repoint) {
+      if (APPLY) await setFields(r.col, r.id, { childId: r.to });
+      did(`${r.col}/${r.id} childId ${r.from} → ${r.to}`);
+    }
+    for (const l of m.losers) {
+      if (APPLY) await setFields("children", l.id, { status: "merged", mergedInto: m.survivor.id, mergedAt: new Date() });
+      did(`children/${l.id} retired (status=merged → ${m.survivor.id}) — not deleted, reversible`);
+    }
+  }
+  if (!plan.mergeChildren.length) console.log("  nothing to do.");
+
+  console.log(`\n2. Families to create (${plan.createFamilies.length})`);
+  for (const f of plan.createFamilies) {
+    // profileComplete stays false and status "active": the family exists for
+    // billing and event generation, but NIF / billing address / payment method
+    // are genuinely unknown, and the parent's own onboarding fills them in.
+    // primaryContact.userId is deliberately left empty — the account link
+    // arrives on first login (decision 7), it cannot be invented here.
+    const doc = {
+      primaryContact: {
+        name: f.primaryContact.name ?? "",
+        email: f.primaryContact.email ?? "",
+        phone: f.primaryContact.phone ?? "",
+        userId: "",
+      },
+      profileComplete: false,
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      notes: "Created by identity.mjs (Phase 0 migration) from subscription contactEmail.",
+    };
+    const famId = APPLY ? await createDoc("families", doc) : `(new-family:${f.email})`;
+    did(`families/${famId} for ${f.email}`);
+    for (const s of f.subs) {
+      if (APPLY) await setFields(s._col, s.id, { familyId: famId });
+      familyIdBySub.set(s.id, famId);
+      did(`${s._col}/${s.id} familyId → ${famId}  (${s.childName})`);
+    }
+    for (const c of f.matchedChildren) {
+      if (!c.resolvedId) {
+        console.log(`  SKIP   child "${c.name}" has no children record — not created here, repair by hand`);
+        continue;
+      }
+      if (APPLY) await setFields("children", c.resolvedId, { familyId: famId });
+      did(`children/${c.resolvedId} familyId → ${famId}  (${c.name})`);
+    }
+  }
+  if (!plan.createFamilies.length) console.log("  nothing to do.");
+
+  console.log(`\n3. Orphan subs matching an existing family (${plan.linkSubs.length})`);
+  for (const l of plan.linkSubs) {
+    for (const s of l.subs) {
+      if (APPLY) await setFields(s._col, s.id, { familyId: l.familyId });
+      familyIdBySub.set(s.id, l.familyId);
+      did(`${s._col}/${s.id} familyId → ${l.familyId}  (${s.childName})`);
+    }
+    for (const c of l.matchedChildren) {
+      if (!c.resolvedId) continue;
+      if (APPLY) await setFields("children", c.resolvedId, { familyId: l.familyId });
+      did(`children/${c.resolvedId} familyId → ${l.familyId}  (${c.name})`);
+    }
+  }
+  if (!plan.linkSubs.length) console.log("  nothing to do.");
+
+  console.log(`\n4. Children with no familyId (${plan.linkChildren.length})`);
+  for (const c of plan.linkChildren) {
+    const familyId = c.sub ? (familyIdBySub.get(c.sub.id) ?? c.sub.familyId) : null;
+    if (!familyId) {
+      console.log(`  SKIP   children/${c.child.id} ${c.child.firstName} ${c.child.lastName} — no subscription resolves a family`);
+      continue;
+    }
+    if (APPLY) await setFields("children", c.child.id, { familyId });
+    did(`children/${c.child.id} familyId → ${familyId}  (${c.child.firstName} ${c.child.lastName})`);
+  }
+  if (!plan.linkChildren.length) console.log("  nothing to do.");
+
+  console.log(`\n${"=".repeat(78)}`);
+  console.log(`${APPLY ? "DOCUMENTS WRITTEN" : "DOCUMENTS THAT WOULD BE WRITTEN"}: ${written}`);
+  console.log("=".repeat(78) + "\n");
+}
+
+await applyPlan(plan);
+
+// ── Approved fuzzy merges ───────────────────────────────────────────────────
+// Near-name duplicates are never merged unattended. A merge happens only when
+// it is named explicitly on the command line as loserId:survivorId, so the
+// invocation itself is the audit record of who approved what:
+//
+//   node identity.mjs --apply --i-know-this-is-prod \
+//     --approve-merge G1XkEDBciLr7k2Hk9eRa:6DdwHVG0WFr975wMYyBC
+//
+// The loser is RETIRED, never deleted — status becomes "merged" with a pointer
+// to the survivor, so the record stays auditable and the merge is reversible.
+// Any subscription pointing at the loser is repointed first.
+
 const approved = args.flatMap((a, i) => (a === "--approve-merge" && args[i + 1] ? [args[i + 1]] : []));
 
 if (approved.length) {
@@ -304,6 +456,10 @@ if (approved.length) {
     const loser = children.find(c => c.id === loserId);
     const survivor = children.find(c => c.id === survivorId);
     if (!loser || !survivor) { console.error(`  SKIP ${pair}: record not found`); continue; }
+    if (loser.status === "merged") {
+      console.log(`  SKIP ${pair}: children/${loserId} is already merged into ${loser.mergedInto ?? "?"} — nothing to do.`);
+      continue;
+    }
 
     const pointing = all.filter(s => s.childId === loserId);
     console.log(`\nMERGE ${loser.firstName} ${loser.lastName} (${loserId}) -> ${survivor.firstName} ${survivor.lastName} (${survivorId})`);
@@ -324,9 +480,4 @@ if (approved.length) {
     });
     console.log(`  retired children/${loserId} (status=merged, mergedInto=${survivorId}) — not deleted, reversible`);
   }
-}
-
-if (APPLY && !approved.length) {
-  console.error("Full APPLY mode is not implemented yet — the dry-run plan must be reviewed and signed off first.");
-  process.exit(2);
 }
