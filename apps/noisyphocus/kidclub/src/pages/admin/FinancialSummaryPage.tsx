@@ -20,6 +20,7 @@ interface TransportSub {
 interface StudySub {
   id: string;
   status: SubStatus;
+  monthlyPrice: number;
   daysCount: number;
   familyId: string;
   childName: string;
@@ -239,6 +240,7 @@ export default function FinancialSummaryPage() {
         return {
           id: d.id,
           status: normalizeSubStatus(x.status),
+          monthlyPrice: x.monthlyPrice ?? 0,
           daysCount: (x.days ?? []).filter((dd: any) => dd.day).length,
           familyId: x.familyId ?? '',
           childName: x.childName ?? '',
@@ -260,7 +262,14 @@ export default function FinancialSummaryPage() {
 
   const sAmountFor = (s: StudySub) => {
     const dayRate = sConfig?.monthlyPricePerWeekday ?? 24;
-    return s.daysCount * dayRate;
+    // Mirrors tAmountFor above: prefer the stored price, which is NET of
+    // sibling / returning-student discounts, and only fall back to the
+    // computed gross when there isn't one. This used to return the gross
+    // unconditionally, so every study-room discount was invisible here and
+    // the page overstated revenue (and therefore profit) by exactly the
+    // discounts it had given away — while transport, right above, had always
+    // reported net.
+    return s.monthlyPrice > 0 ? s.monthlyPrice : s.daysCount * dayRate;
   };
   const sRevenueFor = (subs: StudySub[]) => subs.reduce((sum, s) => sum + sAmountFor(s), 0);
 
