@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-23
 
 ## AUTHORITATIVE — prod data migration plan (supersedes the section below it)
 
@@ -396,7 +396,75 @@ Kidclub app typecheck: **13 errors before and after — the pre-existing baselin
 | 14 | **Phase 2 clears the 6 `endDate: 2027-07-30` values** so all 22 subscriptions bill August 2027. | Cancellation becomes purely manual, consistent with decision 10. ⚠️ Writing `endDate` triggers `regenerateFutureEvents`, so this MUST happen in the date-repair step **before** event generation — see the Phase 2 sequencing rule. |
 | 15 | **The next agent writes the Phase 2 script only.** No dev wipe, no import, no deploy. | Renato reviews the dry run before anything executes. The wipe runbook is written down, not run. |
 
-### Phase 2 — SCRIPT WRITTEN, dry run needs sign-off, NOTHING APPLIED (2026-09-22)
+### 🔴 STOP HERE FIRST — dev's KidClub data is WIPED and NOT YET REIMPORTED (2026-09-23)
+
+The Phase 1 wipe was run and **stopped part-way through** when gcloud's credentials expired.
+`kidclub-dev` currently holds **no KidClub data at all** — the app on `kidclub-dev` will show
+empty everything. This is the expected intermediate state of the runbook, not damage, and there
+is a verified backup. But it is not a state to leave dev sitting in.
+
+**To resume, run `gcloud auth login` first** (it is interactive; an agent cannot do it), then:
+
+```bash
+# 1. confirm the copy landed. The prefix BASENAME must match the metadata filename — gcloud
+#    derives it from the prefix, so from-prod-* fails and to-dev-* works (see the runbook).
+gcloud storage du -s gs://kidclub-dev-exports/to-dev-20260923-0000/    # expect 458973
+#    if it is short or missing, rsync is idempotent — just re-run:
+#    gcloud storage rsync -r gs://kidclub-dev-exports/from-prod-20260923-0000 \
+#                            gs://kidclub-dev-exports/to-dev-20260923-0000
+# 2. import
+gcloud firestore import gs://kidclub-dev-exports/to-dev-20260923-0000 --project kidclub-dev
+# 3. then the migration, in order
+cd scripts/kidclub-migration
+node identity.mjs --project kidclub-dev                       # dry run, expect 11 orphan subs
+node identity.mjs --project kidclub-dev --apply               # ~25 identity writes
+node migrate.mjs  --project kidclub-dev --only dates --apply  # 7 writes, check one doc
+node migrate.mjs  --project kidclub-dev --apply               # ~4,700 writes
+node reconcile-report.mjs --project kidclub-dev               # verify
+```
+
+**What was done (2026-09-23):**
+
+| Step | State | Detail |
+|---|---|---|
+| Dev backup | ✅ verified | `gs://kidclub-dev-exports/pre-wipe-20260923-0000` — 4,925,447 bytes, operation `SUCCESSFUL`, contents listed |
+| Dev KidClub delete | ✅ verified | `gcloud firestore bulk-delete`, 12 collection IDs, 11,440 docs. Scope pre-verified by collection-group query (every hit under `_apps/arcoiris`), post-verified: KidClub collections read 0, **shared `users` still 49 docs** |
+| Prod export | ✅ verified | `gs://rainbow-prod-2454b-exports/to-dev-20260923-0000` — 458,973 bytes, `SUCCESSFUL`. Read-only on prod; excludes `reservationEvents` and `users` |
+| Copy → `from-prod-*` | ✅ verified | byte-identical (458,973 = 458,973) |
+| Copy → `to-dev-*` | ⚠️ exit 0, **size unverified** | the rename-copy reported success, but auth expired before the size check. Confirm with the `du` above |
+| Import into dev | ⏸️ not run | |
+| `identity.mjs --apply` | ⏸️ not run | |
+| `migrate.mjs --apply` | ⏸️ not run | **no migration write has been made to any project** |
+
+Two things the runbook did not know, now written into it: the firebase CLI's credentials expire
+separately from gcloud's and need an interactive `--reauth` (which is why the delete went via
+`gcloud firestore bulk-delete`), and `bulk-delete` scopes by **collection ID at any depth, not
+by path** — a different, wider boundary than `--recursive _apps/arcoiris`, which must be
+re-verified against FinHub's collection names before every run.
+
+### Decision 16 — Phase 5 route: import dev into prod (Renato, 2026-09-23)
+
+Renato settled the open Phase 5 question: **import dev's repaired data into prod**, on the basis
+that parents logging into dev is not a requirement.
+
+⚠️ **Recorded with a caveat, because the stated reason addresses a different risk than the real
+one.** The hazard is not parents logging into *dev*. It is that importing dev→prod **overwrites
+prod's `primaryContact.userId` values with dev's**, and dev's are `kidclub-dev` Auth UIDs that
+match no prod account — so the import would break parent login **in prod, for real customers**,
+along with anything else a dev test mutated in the meantime. Re-examine before the cutover, not
+at it. Does not block Phase 2 either way.
+
+### Decision 17 — `yearEndDate: 2027-07-15` is correct (Renato, 2026-09-23)
+
+Confirmed intentional, not a typo. Events stop mid-July 2027 while billing runs through August
+2027 — that is decision 10 working as designed. No change.
+
+### Decision 18 — the July-2027 cliff is all 7 subscriptions (Renato, 2026-09-23)
+
+Confirmed: the 4 study subs missed by decision 14's string match are in scope along with the 3
+transport ones. Decision 14's count of 6 is superseded by 7.
+
+### Phase 2 — SCRIPT WRITTEN, dry run signed off, NOTHING APPLIED (2026-09-22/23)
 
 Branch `agent/phase2-migration`, off `agent/eventsourcing-integration`. **PR #33 → `staging`.**
 Nothing has been written to any project — every figure below is a dry run.

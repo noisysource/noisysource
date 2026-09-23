@@ -46,14 +46,43 @@ invoices,reservationEvents,settings,studyroom,subscriptionVersions,transportatio
 KidClub's subcollections. `emailOutbox` / `emailCampaigns` are deliberately excluded so
 nothing can re-queue real emails — same exclusion the 2026-09-22 prod→dev sync used.
 
-## 2. Delete KidClub's root only
+## 2. Delete KidClub's data only
+
+Two ways. The second is what actually worked on 2026-09-23.
+
+**(a) Path-scoped, via the firebase CLI** — the obvious one, but its credentials expire
+independently of gcloud's and it needs an interactive `firebase login --reauth`:
 
 ```bash
 firebase firestore:delete --project kidclub-dev --recursive _apps/arcoiris
 ```
 
-A path-scoped recursive delete. Confirm the path echoed in the prompt says `_apps/arcoiris`
-before answering yes. `users`, `finances_entities` and everything else are untouched.
+**(b) Collection-group scoped, via gcloud** — server-side and fast (11,440 documents in about
+two minutes, versus one API round trip per document for a client-side recursive walk):
+
+```bash
+gcloud firestore bulk-delete --project kidclub-dev --collection-ids=billing,children,config,\
+eventModifications,families,financialEvents,invoices,reservationEvents,settings,studyroom,\
+subscriptionVersions,transportationSubscriptions
+```
+
+🔴 **`bulk-delete` scopes by collection ID at ANY depth, not by path.** It is not the same
+boundary as `--recursive _apps/arcoiris`. If FinHub ever holds a collection sharing one of
+these IDs — `invoices`, `config`, `settings` and `financialEvents` are all plausible under
+`finances_entities/{entityId}/` — this deletes those too. **Verify before every run**, with a
+collection-group query per ID checking that every hit is under `_apps/arcoiris/`:
+
+```js
+// structuredQuery: { from: [{ collectionId: id, allDescendants: true }],
+//                    select: { fields: [{ fieldPath: "__name__" }] } }
+// then assert every document name starts with "_apps/arcoiris/"
+```
+
+Verified clean on 2026-09-23: all 11,440 documents across the 12 IDs were inside
+`_apps/arcoiris`, and `finances_entities` held nothing at top level.
+
+**Confirm afterwards** that `users` still has its full count (49 docs in dev on 2026-09-23) —
+that is the check that the boundary held.
 
 ## 3. Export prod (read-only on prod)
 
@@ -72,13 +101,29 @@ across broken on purpose; `identity.mjs --apply` is what fixes them, in dev.
 
 ## 4. Copy the export between buckets and import
 
+⚠️ **The destination prefix's basename must match the source's**, or the import fails. `gcloud
+firestore import` derives the metadata filename from the prefix basename — it looks for
+`<prefix>/<basename>.overall_export_metadata` — while `rsync` keeps the original filename
+`to-dev-<stamp>.overall_export_metadata`. Copying into a prefix named `from-prod-<stamp>` gives
+a `NOT_FOUND` on a path that does not exist, and passing the metadata file explicitly does not
+help: gcloud appends `.overall_export_metadata` to whatever it is given. So keep the name:
+
 ```bash
-gsutil -m rsync -r gs://rainbow-prod-2454b-exports/to-dev-<stamp> \
-                   gs://kidclub-dev-exports/from-prod-<stamp>
-gcloud firestore import gs://kidclub-dev-exports/from-prod-<stamp> --project kidclub-dev
+gcloud storage rsync -r gs://rainbow-prod-2454b-exports/to-dev-<stamp> \
+                        gs://kidclub-dev-exports/to-dev-<stamp>
+gcloud storage du -s gs://kidclub-dev-exports/to-dev-<stamp>/ \
+                     gs://rainbow-prod-2454b-exports/to-dev-<stamp>/   # sizes must match
+gcloud firestore import gs://kidclub-dev-exports/to-dev-<stamp> --project kidclub-dev
 ```
 
+The copy has to go through dev's own bucket rather than importing straight from prod's:
+dev's service agent has no read access to `rainbow-prod-2454b-exports`.
+
 Delete both temporary export prefixes afterwards.
+
+⚠️ **gcloud's own credentials can expire mid-runbook** (they did on 2026-09-23, between the
+copy and the import). `gcloud auth login` is interactive, so an agent cannot recover from it —
+if you are handing this to one, re-auth first.
 
 ## 5. Post-import fixes
 
