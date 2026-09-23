@@ -454,37 +454,47 @@ Treat €2,892.96/month as the new reference figure; €2,134.56 should not be q
   Phase 4's prerequisite, and `renato343@gmail.com` cannot serve for it (it holds `owner`/
   `rainbowAdmin`, and `setReservationEventStatus` checks staff first).
 
-#### Phase 4 setup — DONE (2026-09-23): a real non-staff test parent exists on dev
+#### Phase 4 setup — DONE (2026-09-23): a synthetic QA family, not a borrowed real one
 
-**The hazard was worse than recorded.** STATUS said `renato343@gmail.com` could not validate the
-parent path because it holds `owner`/`rainbowAdmin`. In fact **all 5 dev Auth accounts are
-staff** — `admin@kidclub.pt`, `noisysource@gmail.com` and `renato343@gmail.com` hold
-owner + rainbowAdmin, `beritogabriel@hotmail.com` holds rainbowAdmin, and
-`domotics-bridge@kidclub.pt` is a service account. `setReservationEventStatus` checks
-`roles.owner || roles.rainbowAdmin` before it ever reaches the family check, so none of them
-could exercise the parent path at all.
+**The auth hazard was wider than recorded.** STATUS said `renato343@gmail.com` could not
+validate the parent path. In fact **all 5 dev Auth accounts are staff** —
+`admin@kidclub.pt`, `noisysource@gmail.com` and `renato343@gmail.com` hold owner +
+rainbowAdmin, `beritogabriel@hotmail.com` holds rainbowAdmin, `domotics-bridge@kidclub.pt` is a
+service account. `setReservationEventStatus` checks `roles.owner || roles.rainbowAdmin` before
+the family check, so none of them could exercise the parent path at all.
 
-Resolved by creating a dev-only account rather than demoting an existing one:
+- **`parent-test@kidclub.pt`**, UID `M1Hp6oQo6yUaGBLCszouR5o0Heq2`, **no `users` doc and so no
+  roles** — a pure parent. Dev only. Password set at creation, deliberately not recorded here;
+  reset from the Firebase console if lost.
+- Inês Pinto's family was briefly pointed at it and has been **restored** to its original prod
+  UID `OB22dXJO1hZj6qke8WExkKKkXEV2` (verified). No real family is borrowed any more.
 
-- **`parent-test@kidclub.pt`**, UID `M1Hp6oQo6yUaGBLCszouR5o0Heq2`, **no `users` doc and
-  therefore no roles** — a pure parent. Dev only; prod Auth untouched. Password was set at
-  creation and is not recorded here on purpose — reset it from the Firebase console if lost.
-- Pointed at **`families/lwHDLzM42YlNfiYen4GA`** (Inês Pinto / Carolina Almeida) by setting
-  `primaryContact.userId`. Written with a nested field mask, so name/email/phone survived.
-- **The original prod UID was `OB22dXJO1hZj6qke8WExkKKkXEV2`** — restore that value if this
-  family ever needs to look like prod again.
+**`scripts/kidclub-migration/seed-test-family.mjs`** — creates `TEST-FAMILY-QA`, re-runnable
+after any dev wipe, dev-only with no override flag. Renato's call, and the right one: a
+purpose-built family beats borrowing a real one and remembering to put it back.
 
-Chosen because no single family matches Phase 4's "school discount + siblings + 3 absences":
-this one has the school discount (Colégio Bissaya Barreto), marginal multi-trip, **14 migrated
-absences**, and is the €182.40 reference figure. For the sibling case use **Sandra Abreu**
-(`nnBmdqT7MEL3tNeTQqbM`, Mogo siblings, sibling + "Aluno do ano anterior" discounts) — it sits
-at **2 cancelled events, one short of the ≥3 credit threshold**, which makes it a useful
-boundary test: marking one more absence should flip the credit on.
+Every document carries **`isTestData: true` AND a `TEST-` id prefix**. One is queryable, the
+other is visible in a console listing and in an export's filenames. This is the control that
+makes decision 16 survivable — synthetic data is exactly what must not reach prod, and
+"we'll remember to exclude it" is not a control.
 
-🔴 **This write is exactly the kind decision 16 would propagate.** `primaryContact.userId` on
-this family is now a **dev** UID. Under decision 16 (import dev → prod) it would overwrite
-prod's real UID and break that parent's login in prod. It is one known instance of the general
-risk; every further dev test mutation adds more.
+| Subscription | Exercises | October result |
+|---|---|---|
+| `TEST-SUB-ST-ANA` | rank-1 child — **no** sibling discount | €48.00, 0 absences |
+| `TEST-SUB-ST-BRUNO` | sibling + manual "Aluno do ano anterior" 15% | €22.95, **3 absences → €13.77 credit** |
+| `TEST-SUB-TR-ANA` | marginal multi-trip + school 20% | €92.16, **2 absences → €0 credit** |
+| `TEST-SUB-TR-BRUNO` | multi-trip + sibling + school | €65.66 |
+| `TEST-SUB-TR-CARLA` | **decision 8 boundary** — starts Oct 15 | €17.28, 4 system absences → €17.28 credit |
+
+**The threshold boundary is one click away**: Ana's transport sits at 2 absences with no credit.
+Marking a third must switch the credit on. `set-test-absences.mjs` seeds and `--reset`s these,
+scoped to a single period — absences split across two months are two sub-threshold months, not
+one qualifying one.
+
+**Verified live, not asserted:** the deployed triggers generated all 297 events by themselves on
+subscription create, sibling ranking puts Ana at full price and Bruno at a discount, multi-trip
+credits **€4.80 = only the second leg of each two-leg day** (marginal, not flat), and decision 8
+pro-rates Carla's boundary month through system-CANCELLED pre-start days.
 
 #### Next step
 
