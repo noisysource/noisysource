@@ -23,6 +23,12 @@ export default function ClientSidebar({ open, onClose }: ClientSidebarProps) {
       <Link to="/client" onClick={onClick} className={linkClass('/client')}>
         <span>🏠</span> Dashboard
       </Link>
+      {/* Second in the list, not buried under a child: cancelling a day is the
+          most frequent thing a parent comes here to do, and it used to take
+          four screens. */}
+      <Link to="/client/calendar" onClick={onClick} className={linkClass('/client/calendar')}>
+        <span>📅</span> Calendário
+      </Link>
 
       <div className="pt-3 pb-1">
         <p className="text-xs text-gray-500 uppercase tracking-wider px-3">Crianças</p>

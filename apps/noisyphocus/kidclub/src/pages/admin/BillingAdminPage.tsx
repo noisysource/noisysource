@@ -226,9 +226,15 @@ function ServiceCalendar({ li, events, onToggle, savingId }: {
 // use). No local staging: one click, one save, immediate feedback — the
 // billing record itself then updates the next time onReservationEventBillingSync
 // fires (a status change on any of these events triggers a recompute).
-function DayExclusionModal({ record, onClose, onRefreshNeeded }: {
+/**
+ * The day editor, rendered INLINE in the expanded billing row rather than in a
+ * modal. Marking a day is the most common thing done on this screen, and
+ * behind a dialog it cost a click to open, a click to close, and a reload to
+ * see the effect — while the line items it changes sat hidden underneath.
+ * Inline, the calendar and the amount it moves are visible together.
+ */
+function DayEditor({ record, onRefreshNeeded }: {
   record: BillingRecord;
-  onClose: () => void;
   onRefreshNeeded: () => void;
 }) {
   const editableItems = record.lineItems
@@ -298,25 +304,16 @@ function DayExclusionModal({ record, onClose, onRefreshNeeded }: {
 
   const monthName = record.periodStart.toDate().toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
 
-  const handleClose = () => {
-    if (changed) onRefreshNeeded();
-    onClose();
-  };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={handleClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between">
-          <div>
-            <h3 className="font-semibold text-gray-800">Dias sem serviço</h3>
-            <p className="text-xs text-gray-400">{record.billingName} · <span className="capitalize">{monthName}</span></p>
-          </div>
-          <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
-        </div>
-
-        <div className="px-5 py-4 space-y-4">
-          {editableItems.length === 0 && (
-            <p className="text-sm text-gray-400">
+    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/40 overflow-hidden">
+      <div className="px-3 py-2 border-b border-amber-200/70 flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold text-gray-800">📅 Dias sem serviço</h3>
+        <span className="text-[11px] text-gray-500 capitalize">{monthName}</span>
+      </div>
+      <div className="px-3 py-3 space-y-3">
+        {editableItems.length === 0 && (
+          <p className="text-sm text-gray-400">
               Este registo não tem parcelas de sala de estudo nem de transporte — só taxas
               (inscrição/seguro), que não têm dias para marcar.
             </p>
@@ -339,22 +336,25 @@ function DayExclusionModal({ record, onClose, onRefreshNeeded }: {
               savingId={savingId}
             />
           ))}
-          {error && <p className="text-xs text-red-600">{error}</p>}
-        </div>
-
-        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between gap-3">
-          <p className="text-[11px] text-gray-400">
+        {error && <p className="text-xs text-red-600">{error}</p>}
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <p className="text-[11px] text-gray-500">
             Cada serviço é independente e visível para a família de imediato. O valor da fatura
-            demora alguns segundos a recalcular — feche e reabra se não vir a atualização.
+            demora alguns segundos a recalcular.
           </p>
-          <button onClick={handleClose} className="px-4 py-1.5 bg-gray-600 text-white text-sm font-medium rounded hover:bg-gray-700 shrink-0">Fechar</button>
+          {changed && (
+            <button onClick={onRefreshNeeded}
+              className="px-3 py-1 bg-gray-700 text-white text-xs font-medium rounded hover:bg-gray-800 shrink-0">
+              Atualizar valores
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExpandRecord, sendingId, sendResult, onSendNotice, onOpenDayEditor }: {
+function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExpandRecord, sendingId, sendResult, onSendNotice, onRefreshNeeded }: {
   monthKey: string;
   records: BillingRecord[];
   expanded: boolean;
@@ -364,7 +364,7 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
   sendingId: string | null;
   sendResult: Record<string, string>;
   onSendNotice: (r: BillingRecord) => void;
-  onOpenDayEditor: (r: BillingRecord) => void;
+  onRefreshNeeded: () => void;
 }) {
   const sub = subtotals(records);
   const label = records[0]?.periodLabel ?? monthKey;
@@ -417,9 +417,9 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                     <div className="flex items-center gap-2 flex-wrap">
                       {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && (li.type === 'study' || li.type === 'transport')) && (
                         <button
-                          onClick={() => onOpenDayEditor(r)}
+                          onClick={() => onExpandRecord(r.id)}
                           className="px-3 py-1 bg-white border border-amber-300 text-amber-700 text-xs font-medium rounded hover:bg-amber-50 whitespace-nowrap">
-                          📅 Dias
+                          {expandedId === r.id ? '📅 Fechar dias' : '📅 Dias'}
                         </button>
                       )}
                       {['pending', 'failed'].includes(r.status) && (
@@ -448,6 +448,11 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                       )}
                       {r.paidAt && <p className="text-xs text-green-700 mt-1">Pago em {fmtDate(r.paidAt)}</p>}
                       {r.invoiceNumber && <p className="text-xs text-purple-700 mt-1">Fatura: {r.invoiceNumber}</p>}
+                      {/* Only a pending record is editable. An invoiced one backs
+                          an issued fiscal document and is frozen (decision 5). */}
+                      {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && (li.type === 'study' || li.type === 'transport')) && (
+                        <DayEditor record={r} onRefreshNeeded={onRefreshNeeded} />
+                      )}
                     </td>
                   </tr>
                 )}
@@ -467,7 +472,6 @@ export default function BillingAdminPage() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<Record<string, string>>({});
   const [expandedMonths, setExpandedMonths] = useState<Set<string> | null>(null);
-  const [dayEditorRecordId, setDayEditorRecordId] = useState<string | null>(null);
 
   const [filterStatus, setFilterStatus] = useState('pending');
   const [filterPeriod, setFilterPeriod] = useState('all');
@@ -694,23 +698,12 @@ export default function BillingAdminPage() {
               sendingId={sendingId}
               sendResult={sendResult}
               onSendNotice={handleSendNotice}
-              onOpenDayEditor={r => setDayEditorRecordId(r.id)}
+              onRefreshNeeded={fetchRecords}
             />
           ))}
         </div>
       )}
 
-      {dayEditorRecordId && (() => {
-        const record = records.find(r => r.id === dayEditorRecordId);
-        if (!record) return null;
-        return (
-          <DayExclusionModal
-            record={record}
-            onClose={() => setDayEditorRecordId(null)}
-            onRefreshNeeded={fetchRecords}
-          />
-        );
-      })()}
     </div>
   );
 }
