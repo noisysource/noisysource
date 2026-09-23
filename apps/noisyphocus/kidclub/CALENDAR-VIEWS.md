@@ -23,6 +23,19 @@ parent with three children had no way to see a week.
   scopes `reservationEvents` to the owning family, so this is both cheaper and exactly the set
   the parent is allowed to read.
 
+> ⚠️ **This query needs a composite index**: `reservationEvents` on `familyId` ASC + `date` ASC,
+> added to `firestore.indexes.json` so CI deploys it to **both** projects. A hand-created index
+> in the console covers only the project it was made in and is lost on the next environment
+> rebuild — the calendar would then throw `FAILED_PRECONDITION` for every family in the other
+> one. The admin day editor's `subscriptionId in [...]` + date query is already covered by the
+> existing `subscriptionId` + `date` index.
+>
+> Firestore builds indexes asynchronously. Until the index reports `READY` the page errors; check
+> with:
+> ```bash
+> gcloud firestore indexes composite list --project kidclub-dev --filter="reservationEvents"
+> ```
+
 ### It is also a data-correctness tool
 
 This is why the view earns its place beyond convenience. A per-subscription page cannot show
