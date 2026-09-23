@@ -396,51 +396,69 @@ Kidclub app typecheck: **13 errors before and after — the pre-existing baselin
 | 14 | **Phase 2 clears the 6 `endDate: 2027-07-30` values** so all 22 subscriptions bill August 2027. | Cancellation becomes purely manual, consistent with decision 10. ⚠️ Writing `endDate` triggers `regenerateFutureEvents`, so this MUST happen in the date-repair step **before** event generation — see the Phase 2 sequencing rule. |
 | 15 | **The next agent writes the Phase 2 script only.** No dev wipe, no import, no deploy. | Renato reviews the dry run before anything executes. The wipe runbook is written down, not run. |
 
-### 🔴 STOP HERE FIRST — dev's KidClub data is WIPED and NOT YET REIMPORTED (2026-09-23)
+### ✅ Phase 1 + Phase 2 COMPLETE ON DEV — validated (2026-09-23)
 
-The Phase 1 wipe was run and **stopped part-way through** when gcloud's credentials expired.
-`kidclub-dev` currently holds **no KidClub data at all** — the app on `kidclub-dev` will show
-empty everything. This is the expected intermediate state of the runbook, not damage, and there
-is a verified backup. But it is not a state to leave dev sitting in.
+Dev was wiped, reimported from prod, repaired and migrated. **Prod is untouched** — the only
+prod operation all session was a read-only export. Everything below is verified, not assumed.
 
-**To resume, run `gcloud auth login` first** (it is interactive; an agent cannot do it), then:
+| Step | Result |
+|---|---|
+| Dev backup | `gs://kidclub-dev-exports/pre-wipe-20260923-0000`, 4,925,447 bytes |
+| Dev KidClub delete | 11,440 docs, 12 collection IDs. Scope pre- and post-verified; **shared `users` untouched at 49 docs** |
+| Prod export → dev import | 458,973 bytes, `SUCCESSFUL`. Dev then mirrored prod exactly: 13 study + 21 transport, 228 billing, **0** events, 11 orphans |
+| `identity.mjs --apply` | **25 writes** — 5 families created, 2 child merges, familyId links. Matches the recorded plan exactly |
+| `migrate.mjs --only dates --apply` | **7 writes**. `endDate` cleared on both storage shapes, every other field intact (inspected) |
+| `migrate.mjs --apply` | **4,742 writes** — events, absences, billing status |
 
-```bash
-# 1. confirm the copy landed. The prefix BASENAME must match the metadata filename — gcloud
-#    derives it from the prefix, so from-prod-* fails and to-dev-* works (see the runbook).
-gcloud storage du -s gs://kidclub-dev-exports/to-dev-20260923-0000/    # expect 458973
-#    if it is short or missing, rsync is idempotent — just re-run:
-#    gcloud storage rsync -r gs://kidclub-dev-exports/from-prod-20260923-0000 \
-#                            gs://kidclub-dev-exports/to-dev-20260923-0000
-# 2. import
-gcloud firestore import gs://kidclub-dev-exports/to-dev-20260923-0000 --project kidclub-dev
-# 3. then the migration, in order
-cd scripts/kidclub-migration
-node identity.mjs --project kidclub-dev                       # dry run, expect 11 orphan subs
-node identity.mjs --project kidclub-dev --apply               # ~25 identity writes
-node migrate.mjs  --project kidclub-dev --only dates --apply  # 7 writes, check one doc
-node migrate.mjs  --project kidclub-dev --apply               # ~4,700 writes
-node reconcile-report.mjs --project kidclub-dev               # verify
-```
+**Verification — the four reference figures reproduce exactly:** Carolina €182.40, José Eduardo
+€165.12, Maria Manon €130.56, Mogo €210.00, and their deltas sum to **+€53.28/month**
+(14.40 + 13.92 + 12.96 + 12.00).
 
-**What was done (2026-09-23):**
+**Flags all clean:** (a) zero silent €0 periods, (b) zero reprice divergences, (c) 4 invoiced
+divergences *reported not corrected*, exactly as decision 5 requires, (d) **zero** subscriptions
+without a familyId. **The invoiced guard provably held** — the frozen records still read
+`status: invoiced` carrying their original prod `updatedAt` of 2026-09-20/22, untouched by the
+2026-09-23 run.
 
-| Step | State | Detail |
-|---|---|---|
-| Dev backup | ✅ verified | `gs://kidclub-dev-exports/pre-wipe-20260923-0000` — 4,925,447 bytes, operation `SUCCESSFUL`, contents listed |
-| Dev KidClub delete | ✅ verified | `gcloud firestore bulk-delete`, 12 collection IDs, 11,440 docs. Scope pre-verified by collection-group query (every hit under `_apps/arcoiris`), post-verified: KidClub collections read 0, **shared `users` still 49 docs** |
-| Prod export | ✅ verified | `gs://rainbow-prod-2454b-exports/to-dev-20260923-0000` — 458,973 bytes, `SUCCESSFUL`. Read-only on prod; excludes `reservationEvents` and `users` |
-| Copy → `from-prod-*` | ✅ verified | byte-identical (458,973 = 458,973) |
-| Copy → `to-dev-*` | ⚠️ exit 0, **size unverified** | the rename-copy reported success, but auth expired before the size check. Confirm with the `du` above |
-| Import into dev | ⏸️ not run | |
-| `identity.mjs --apply` | ⏸️ not run | |
-| `migrate.mjs --apply` | ⏸️ not run | **no migration write has been made to any project** |
+#### 🔴 August 2027 is €2,892.96, NOT the €2,134.56 the plan predicted — the plan's number was stale
 
-Two things the runbook did not know, now written into it: the firebase CLI's credentials expire
-separately from gcloud's and need an interactive `--reauth` (which is why the delete went via
-`gcloud firestore bulk-delete`), and `bulk-delete` scopes by **collection ID at any depth, not
-by path** — a different, wider boundary than `--recursive _apps/arcoiris`, which must be
-re-verified against FinHub's collection names before every run.
+Investigated rather than accepted. **€2,134.56 is superseded**, for two reasons that both
+postdate it:
+
+- **Decision 6** restores three subscriptions that the estimate had billing nothing: José Miguel
+  Duarte €113.28, Maria Clara €96.00, Edson €72.00 — **+€281.28**.
+- **Decision 18** — the cliff is 7 subscriptions, not 6. The estimate was built from the string
+  match that missed all 4 study subs, so their August revenue was still counted as €0.
+
+The result is right, and here is the check that settles it: **every month across the whole
+horizon now computes exactly €2,892.96** — Oct 2026, Nov 2026, Jan, Jun, Jul and Aug 2027, all
+identical. That is precisely what decisions 1 and 10 require (flat monthly price; a billable
+period is decided by the contract, not the event count), including for August and the second
+half of July 2027, which hold **zero events** because `yearEndDate` is 2027-07-15. A month with
+no school days still bills its share of the 12-month spread.
+
+Treat €2,892.96/month as the new reference figure; €2,134.56 should not be quoted again.
+
+#### Still open on dev, deliberately
+
+- **3 children have no `children` record** (Afonso Santos, Camila Felix, Laura Baptista) and one
+  (`Cn5TOmtPauRVnn6cC1jY`, Matilde Lopes) resolves to no family. `identity.mjs` reports and skips
+  them rather than inventing records. Does not block anything — generation needs `familyId`, not
+  `childId`.
+- **31 historical absences were not migrated**, each classified: a cancelled/pending subscription
+  (expected), or a weekend/unserved weekday, which is the pre-`eb905ed` off-by-one. Not migrated
+  by guessing a corrected date.
+- **Post-import fixes from the runbook are NOT done**: dev's `driverMonthlyCost` /
+  `electricityMonthlyCost` were overwritten by prod's config, and no family points at a real
+  `kidclub-dev` Auth UID yet — so **the parent path still cannot be exercised on dev**. That is
+  Phase 4's prerequisite, and `renato343@gmail.com` cannot serve for it (it holds `owner`/
+  `rainbowAdmin`, and `setReservationEventStatus` checks staff first).
+
+#### Next step
+
+Phase 4 — dev validation: set one family's `primaryContact.userId` to a real dev Auth UID, then
+click through the four cancellation paths and a family with school discount + siblings + 3
+absences. Then Phase 5, whose route is decision 16 below — **and read its caveat first.**
 
 ### Decision 16 — Phase 5 route: import dev into prod (Renato, 2026-09-23)
 
