@@ -98,6 +98,8 @@ export interface ReconciledLineItem {
   netBeforeAbsenceCents: number;
   absenceCount: number;
   absenceCreditCents: number;
+  /** Every CANCELLED date this period, credited or not — what actually happened. */
+  absenceDates: string[];
   absenceCreditDates: string[];
   finalCents: number;
 }
@@ -356,6 +358,11 @@ export function reconcileService(
       netBeforeAbsenceCents: item.netBeforeAbsence,
       absenceCount,
       absenceCreditCents,
+      // absenceDates is unconditional; absenceCreditDates stays gated on the
+      // threshold. The two answer different questions — "which days did the
+      // child miss" and "which days were credited" — and collapsing them made
+      // a sub-threshold absence invisible to staff.
+      absenceDates: cancelled.map(c => c.date),
       absenceCreditDates: qualifies ? cancelled.map(c => c.date) : [],
       finalCents: Math.max(0, item.netBeforeAbsence - absenceCreditCents),
     };

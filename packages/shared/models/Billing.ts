@@ -28,6 +28,7 @@ export interface BillingLineItem {
   institutionalDiscountPct?: number;
   absenceCount?: number;                // CANCELLED ReservationEvents this period, this subscription
   absenceCreditAmount?: number;
+  absenceDates?: string[];              // "yyyy-mm-dd" — every CANCELLED date this period, credited or not
   absenceCreditDates?: string[];        // "yyyy-mm-dd" — every CANCELLED date credited once the 3-absence threshold was reached (uncapped)
 }
 

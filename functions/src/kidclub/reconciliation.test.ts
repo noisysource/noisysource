@@ -161,6 +161,25 @@ describe("VOIDED occurrences (flat pricing makes this a per-period on/off switch
     expect(r.absenceCreditCents).toBe(0); // under threshold
     expect(r.finalCents).toBe(12000);
   });
+
+  // absenceDates and absenceCreditDates answer different questions, and the
+  // billing UI was gating its whole absence display on the credited one — so
+  // one or two recorded absences were invisible to staff, indistinguishable
+  // from none at all.
+  it("records the dates of a sub-threshold absence even though nothing is credited", () => {
+    const s = sub({ id: "s1" });
+    const [r] = reconcileService([s], new Map([["s1", cancelledOn(2)]]), NO_DISCOUNTS);
+    expect(r.absenceDates).toHaveLength(2);
+    expect(r.absenceCreditDates).toEqual([]);
+    expect(r.absenceCreditCents).toBe(0);
+  });
+
+  it("reports the same dates in both lists once the threshold is met", () => {
+    const s = sub({ id: "s1" });
+    const [r] = reconcileService([s], new Map([["s1", cancelledOn(3)]]), NO_DISCOUNTS);
+    expect(r.absenceDates).toEqual(r.absenceCreditDates);
+    expect(r.absenceCreditCents).toBeGreaterThan(0);
+  });
 });
 
 // ── Absence threshold: gate at 3, uncapped, floored at zero, NOTIONAL rate ──
