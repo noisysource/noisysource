@@ -6,10 +6,13 @@ import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { normalizeSubStatus, SubStatus } from '../../lib/utils';
 
+interface AppliedDiscountLite { ruleId: string; name: string; percentage: number }
+
 interface TransportSub {
   id: string;
   status: SubStatus;
   monthlyFee: number;
+  appliedDiscounts: AppliedDiscountLite[];
   scheduleLength: number;
   familyId: string;
   childName: string;
@@ -21,6 +24,7 @@ interface StudySub {
   id: string;
   status: SubStatus;
   monthlyPrice: number;
+  appliedDiscounts: AppliedDiscountLite[];
   daysCount: number;
   familyId: string;
   childName: string;
@@ -183,6 +187,10 @@ export default function FinancialSummaryPage() {
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('both');
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [detailOpen, setDetailOpen] = useState(false);
+  // Discount scenario: rule ids switched OFF for simulation only. Nothing here
+  // is ever written — it re-prices the displayed figures so "what if we dropped
+  // this discount" can be answered without touching a single subscription.
+  const [offRules, setOffRules] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const load = async () => {
@@ -228,6 +236,7 @@ export default function FinancialSummaryPage() {
           id: d.id,
           status: normalizeSubStatus(x.status),
           monthlyFee: x.monthlyFee ?? 0,
+          appliedDiscounts: (x.appliedDiscounts ?? []) as AppliedDiscountLite[],
           scheduleLength: (x.schedule ?? []).length,
           familyId: x.familyId ?? '',
           childName: x.childName ?? '',
@@ -240,6 +249,7 @@ export default function FinancialSummaryPage() {
         return {
           id: d.id,
           status: normalizeSubStatus(x.status),
+          appliedDiscounts: (x.appliedDiscounts ?? []) as AppliedDiscountLite[],
           monthlyPrice: x.monthlyPrice ?? 0,
           daysCount: (x.days ?? []).filter((dd: any) => dd.day).length,
           familyId: x.familyId ?? '',
@@ -272,6 +282,49 @@ export default function FinancialSummaryPage() {
     return s.monthlyPrice > 0 ? s.monthlyPrice : s.daysCount * dayRate;
   };
   const sRevenueFor = (subs: StudySub[]) => subs.reduce((sum, s) => sum + sAmountFor(s), 0);
+
+  // ── Discount scenarios ────────────────────────────────────────────────────
+  // Gross is derived from the stored NET and the discounts actually on the
+  // document, rather than recomputed from the schedule. That makes the
+  // baseline exact by construction: with nothing toggled off the scenario
+  // total equals the real total to the cent, even for a subscription whose
+  // stored fee has drifted from what the formula would produce. Recomputing
+  // gross from trips/days would quietly "correct" such a row and the baseline
+  // would no longer match the page above it.
+  const pctOf = (ds: AppliedDiscountLite[], skip: Set<string>) =>
+    Math.min(ds.reduce((n, d) => n + (skip.has(d.ruleId) ? 0 : d.percentage), 0), 1);
+
+  const grossOf = (net: number, ds: AppliedDiscountLite[]) => {
+    const all = pctOf(ds, new Set());
+    return all > 0 && all < 1 ? net / (1 - all) : net;
+  };
+
+  const scenarioAmount = (net: number, ds: AppliedDiscountLite[], off: Set<string>) =>
+    Math.round(grossOf(net, ds) * (1 - pctOf(ds, off)) * 100) / 100;
+
+  /** Every discount rule actually in use, with what it currently costs. */
+  const rulesInUse = useMemo(() => {
+    const m = new Map<string, { ruleId: string; name: string; percentage: number; subs: number; worth: number }>();
+    const add = (ds: AppliedDiscountLite[], net: number) => {
+      for (const d of ds) {
+        const e = m.get(d.ruleId) ?? { ruleId: d.ruleId, name: d.name, percentage: d.percentage, subs: 0, worth: 0 };
+        e.subs += 1;
+        // What this one rule gives away on this subscription, holding the others.
+        e.worth += scenarioAmount(net, ds, new Set([d.ruleId])) - net;
+        m.set(d.ruleId, e);
+      }
+    };
+    for (const s of tSubs) if (s.status !== 'cancelled') add(s.appliedDiscounts, tAmountFor(s));
+    for (const s of sSubs) if (s.status !== 'cancelled') add(s.appliedDiscounts, sAmountFor(s));
+    return [...m.values()].sort((a, b) => b.worth - a.worth);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tSubs, sSubs]);
+
+  const toggleRule = (id: string) => setOffRules(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
   const tByStatus = useMemo(() => {
     const m: Record<string, number> = {};
@@ -311,6 +364,18 @@ export default function FinancialSummaryPage() {
   const showStudy = serviceFilter !== 'transport';
 
   const totalRevenue = (showTransport ? tRevenue : 0) + (showStudy ? sRevenue : 0);
+
+  // Same filtered sets, re-priced with offRules removed. Equals totalRevenue
+  // exactly when nothing is toggled off.
+  const scenarioRevenue = useMemo(() => {
+    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(tAmountFor(x), x.appliedDiscounts, offRules), 0) : 0;
+    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(sAmountFor(x), x.appliedDiscounts, offRules), 0) : 0;
+    return Math.round((t + st) * 100) / 100;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tFiltered, sFiltered, offRules, showTransport, showStudy, tConfig, sConfig]);
+
+  const scenarioDelta = Math.round((scenarioRevenue - totalRevenue) * 100) / 100;
+  const scenarioOn = offRules.size > 0;
   const totalCost = (showTransport ? tCost : 0) + (showStudy ? sCost : 0);
   const totalProfit = totalRevenue - totalCost;
   const deltaVsActive = totalRevenue - activeOnlyRevenue;
@@ -593,6 +658,74 @@ export default function FinancialSummaryPage() {
           )}
         </div>
       </div>
+
+      {/* Discount scenarios — simulation only, nothing is written */}
+      {rulesInUse.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">Simular descontos</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Desligue um ou mais descontos para ver o efeito na receita. Simulação apenas — nenhuma inscrição é alterada.
+              </p>
+            </div>
+            {scenarioOn && (
+              <button
+                onClick={() => setOffRules(new Set())}
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors"
+              >
+                Repor
+              </button>
+            )}
+          </div>
+
+          <div className="px-5 py-3 flex flex-wrap gap-2">
+            {rulesInUse.map(r => {
+              const off = offRules.has(r.ruleId);
+              return (
+                <button
+                  key={r.ruleId}
+                  onClick={() => toggleRule(r.ruleId)}
+                  aria-pressed={off}
+                  className={`text-xs px-3 py-2 rounded-lg border text-left transition-colors ${
+                    off
+                      ? 'bg-amber-50 border-amber-300 text-amber-900'
+                      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <span className={`inline-block w-2 h-2 rounded-full ${off ? 'bg-amber-500' : 'bg-green-500'}`} />
+                    {r.name}
+                    <span className="text-gray-400 font-normal">{Math.round(r.percentage * 100)}%</span>
+                  </span>
+                  <span className="block mt-0.5 text-[11px] text-gray-400">
+                    {r.subs} inscriç{r.subs === 1 ? 'ão' : 'ões'} · vale {eur(Math.abs(r.worth))}/mês
+                    {off && <span className="text-amber-700 font-medium"> · desligado</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+            <span className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Receita simulada</span>
+            <span className="font-mono text-lg font-semibold text-gray-900">{eur(scenarioRevenue)}</span>
+            {scenarioOn ? (
+              <>
+                <span className={`font-mono text-sm font-semibold ${scenarioDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {scenarioDelta >= 0 ? '+' : ''}{eur(scenarioDelta)}
+                </span>
+                <span className="text-xs text-gray-400">
+                  face a {eur(totalRevenue)} ({filterLabel})
+                  {totalRevenue > 0 && ` · ${scenarioDelta >= 0 ? '+' : ''}${(scenarioDelta / totalRevenue * 100).toFixed(1)}%`}
+                </span>
+              </>
+            ) : (
+              <span className="text-xs text-gray-400">igual à receita atual — nada desligado</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Revenue detail — collapsible, line-by-line origin of the "Receita (filtro atual)" figure */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
