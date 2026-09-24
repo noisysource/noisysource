@@ -187,10 +187,13 @@ export default function FinancialSummaryPage() {
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('both');
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [detailOpen, setDetailOpen] = useState(false);
-  // Discount scenario: rule ids switched OFF for simulation only. Nothing here
-  // is ever written — it re-prices the displayed figures so "what if we dropped
-  // this discount" can be answered without touching a single subscription.
-  const [offRules, setOffRules] = useState<Set<string>>(new Set());
+  // Discount scenario: ruleId -> simulated percentage (0-1). A rule absent from
+  // the map keeps whatever percentage the subscription actually carries, so an
+  // empty map reproduces today's revenue exactly. Setting a rule to 0 is the
+  // "drop it entirely" case. Nothing here is ever written — it re-prices the
+  // displayed figures so rate changes can be costed without touching a single
+  // subscription.
+  const [rates, setRates] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const load = async () => {
@@ -291,16 +294,16 @@ export default function FinancialSummaryPage() {
   // stored fee has drifted from what the formula would produce. Recomputing
   // gross from trips/days would quietly "correct" such a row and the baseline
   // would no longer match the page above it.
-  const pctOf = (ds: AppliedDiscountLite[], skip: Set<string>) =>
-    Math.min(ds.reduce((n, d) => n + (skip.has(d.ruleId) ? 0 : d.percentage), 0), 1);
+  const pctOf = (ds: AppliedDiscountLite[], ov: Record<string, number>) =>
+    Math.min(ds.reduce((n, d) => n + (ov[d.ruleId] ?? d.percentage), 0), 1);
 
   const grossOf = (net: number, ds: AppliedDiscountLite[]) => {
-    const all = pctOf(ds, new Set());
+    const all = pctOf(ds, {});
     return all > 0 && all < 1 ? net / (1 - all) : net;
   };
 
-  const scenarioAmount = (net: number, ds: AppliedDiscountLite[], off: Set<string>) =>
-    Math.round(grossOf(net, ds) * (1 - pctOf(ds, off)) * 100) / 100;
+  const scenarioAmount = (net: number, ds: AppliedDiscountLite[], ov: Record<string, number>) =>
+    Math.round(grossOf(net, ds) * (1 - pctOf(ds, ov)) * 100) / 100;
 
   /** Every discount rule actually in use, with what it currently costs. */
   const rulesInUse = useMemo(() => {
@@ -310,7 +313,7 @@ export default function FinancialSummaryPage() {
         const e = m.get(d.ruleId) ?? { ruleId: d.ruleId, name: d.name, percentage: d.percentage, subs: 0, worth: 0 };
         e.subs += 1;
         // What this one rule gives away on this subscription, holding the others.
-        e.worth += scenarioAmount(net, ds, new Set([d.ruleId])) - net;
+        e.worth += scenarioAmount(net, ds, { [d.ruleId]: 0 }) - net;
         m.set(d.ruleId, e);
       }
     };
@@ -320,11 +323,10 @@ export default function FinancialSummaryPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tSubs, sSubs]);
 
-  const toggleRule = (id: string) => setOffRules(prev => {
-    const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
+  const setRate = (id: string, pct: number) => setRates(prev => ({ ...prev, [id]: pct }));
+  const clearRate = (id: string) => setRates(prev => { const n = { ...prev }; delete n[id]; return n; });
+  /** Simulated percentage for a rule — its own value until someone moves the slider. */
+  const rateOf = (r: { ruleId: string; percentage: number }) => rates[r.ruleId] ?? r.percentage;
 
   const tByStatus = useMemo(() => {
     const m: Record<string, number> = {};
@@ -365,17 +367,17 @@ export default function FinancialSummaryPage() {
 
   const totalRevenue = (showTransport ? tRevenue : 0) + (showStudy ? sRevenue : 0);
 
-  // Same filtered sets, re-priced with offRules removed. Equals totalRevenue
-  // exactly when nothing is toggled off.
+  // Same filtered sets, re-priced at the simulated rates. Equals totalRevenue
+  // exactly while the map is empty.
   const scenarioRevenue = useMemo(() => {
-    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(tAmountFor(x), x.appliedDiscounts, offRules), 0) : 0;
-    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(sAmountFor(x), x.appliedDiscounts, offRules), 0) : 0;
+    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(tAmountFor(x), x.appliedDiscounts, rates), 0) : 0;
+    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(sAmountFor(x), x.appliedDiscounts, rates), 0) : 0;
     return Math.round((t + st) * 100) / 100;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tFiltered, sFiltered, offRules, showTransport, showStudy, tConfig, sConfig]);
+  }, [tFiltered, sFiltered, rates, showTransport, showStudy, tConfig, sConfig]);
 
   const scenarioDelta = Math.round((scenarioRevenue - totalRevenue) * 100) / 100;
-  const scenarioOn = offRules.size > 0;
+  const scenarioOn = rulesInUse.some(r => rateOf(r) !== r.percentage);
   const totalCost = (showTransport ? tCost : 0) + (showStudy ? sCost : 0);
   const totalProfit = totalRevenue - totalCost;
   const deltaVsActive = totalRevenue - activeOnlyRevenue;
@@ -666,12 +668,12 @@ export default function FinancialSummaryPage() {
             <div>
               <h2 className="text-sm font-semibold text-gray-700">Simular descontos</h2>
               <p className="text-xs text-gray-400 mt-0.5">
-                Desligue um ou mais descontos para ver o efeito na receita. Simulação apenas — nenhuma inscrição é alterada.
+                Ajuste as percentagens para ver o efeito na receita. Zero remove o desconto. Simulação apenas — nenhuma inscrição é alterada.
               </p>
             </div>
             {scenarioOn && (
               <button
-                onClick={() => setOffRules(new Set())}
+                onClick={() => setRates({})}
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors"
               >
                 Repor
@@ -679,30 +681,53 @@ export default function FinancialSummaryPage() {
             )}
           </div>
 
-          <div className="px-5 py-3 flex flex-wrap gap-2">
+          <div className="px-5 py-3 grid gap-3 sm:grid-cols-2">
             {rulesInUse.map(r => {
-              const off = offRules.has(r.ruleId);
+              const pct = rateOf(r);
+              const moved = pct !== r.percentage;
+              const gone = pct === 0;
               return (
-                <button
+                <div
                   key={r.ruleId}
-                  onClick={() => toggleRule(r.ruleId)}
-                  aria-pressed={off}
-                  className={`text-xs px-3 py-2 rounded-lg border text-left transition-colors ${
-                    off
-                      ? 'bg-amber-50 border-amber-300 text-amber-900'
-                      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
+                  className={`rounded-lg border p-3 transition-colors ${
+                    moved ? 'bg-amber-50 border-amber-300' : 'bg-white border-gray-200'
                   }`}
                 >
-                  <span className="flex items-center gap-1.5 font-medium">
-                    <span className={`inline-block w-2 h-2 rounded-full ${off ? 'bg-amber-500' : 'bg-green-500'}`} />
-                    {r.name}
-                    <span className="text-gray-400 font-normal">{Math.round(r.percentage * 100)}%</span>
-                  </span>
-                  <span className="block mt-0.5 text-[11px] text-gray-400">
-                    {r.subs} inscriç{r.subs === 1 ? 'ão' : 'ões'} · vale {eur(Math.abs(r.worth))}/mês
-                    {off && <span className="text-amber-700 font-medium"> · desligado</span>}
-                  </span>
-                </button>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-700">{r.name}</span>
+                    <span className={`font-mono text-sm font-semibold tabular-nums ${
+                      gone ? 'text-red-600' : moved ? 'text-amber-800' : 'text-gray-900'
+                    }`}>
+                      {(pct * 100).toFixed(1)}%
+                    </span>
+                  </div>
+
+                  <input
+                    id={`rate-${r.ruleId}`}
+                    type="range"
+                    min={0}
+                    max={50}
+                    step={2.5}
+                    value={pct * 100}
+                    onChange={e => setRate(r.ruleId, Number(e.target.value) / 100)}
+                    aria-label={`${r.name} — percentagem simulada`}
+                    className="w-full mt-2 accent-indigo-600 cursor-pointer"
+                  />
+
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <span className="text-[11px] text-gray-400">
+                      atual {(r.percentage * 100).toFixed(1)}% · {r.subs} inscriç{r.subs === 1 ? 'ão' : 'ões'} · vale {eur(Math.abs(r.worth))}/mês
+                    </span>
+                    {moved && (
+                      <button
+                        onClick={() => clearRate(r.ruleId)}
+                        className="text-[11px] text-amber-700 hover:underline whitespace-nowrap"
+                      >
+                        repor
+                      </button>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -721,7 +746,7 @@ export default function FinancialSummaryPage() {
                 </span>
               </>
             ) : (
-              <span className="text-xs text-gray-400">igual à receita atual — nada desligado</span>
+              <span className="text-xs text-gray-400">igual à receita atual — nenhuma percentagem alterada</span>
             )}
           </div>
         </div>
