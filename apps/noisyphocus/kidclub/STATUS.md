@@ -1699,6 +1699,14 @@ still-open under-billing (Mafalda Raposo Duarte), left for the new architecture 
 than another one-off patch.
 
 ## Last completed
+- **prodata reconciliation (2026-09-23)**: compared the team's manually-kept
+  `prodata/studyroom.pdf` (week 21-25 Sep 2026 timetable) and `prodata/transport.xlsx`
+  against `kidclub-dev`. Root cause of most drift: `WeekSchedulePicker` only offered a
+  30-minute grid, so real route times (07:20, 15:40, 17:15, 18:15) were forced onto rounded
+  half-hours — 16 of 19 children disagreed on time alone. Fixed the picker to quarter-hour
+  granularity (`agent/quarter-hour-slots`, commit b0cd52a, **not yet pushed or PR'd**) and
+  normalised 73 time entries in dev (72 transport `pickupTime` + Laura Baptista's study-room
+  Monday). Comparison scripts are in this session's scratchpad, not the repo.
 
 **2026-09-22 session (this checkpoint):**
 - **PR #28 merged to `staging`** — the full event-sourced billing rewrite, plus the 8 fixes
@@ -1792,6 +1800,32 @@ than another one-off patch.
    coincidence.
 
 ## Open questions for Renato
+- **prodata reconciliation (2026-09-23) — RESOLVED except where noted.** Renato's calls:
+  Afonso Santos / Bernardo Mogo / Diogo Mogo / Leonor Lago are all genuinely active — the
+  Mogos and Leonor are absent from the route tabs because **another driver** covers them, so
+  the sheet is incomplete there, not dev. Sofia Carvalho is **Wednesday + Thursday** for both
+  services (dev was already correct; studyroom.pdf's Friday entry is simply wrong — do not
+  trust that row). Laura Baptista uses transport as the tiebreaker. Test data deleted.
+  Remaining originally-flagged conflicts, for the record:
+  - **João Lopes** — RESOLVED 2026-09-23: he dropped out, dev is correct, the sheets are
+    stale for him. Left `cancelled` in both collections. See "Anything risky in flight".
+  - **Edson** — RESOLVED 2026-09-24: the red in studyroom.pdf carries no meaning we need to
+    act on; Renato confirmed his subscription is correct as it stands. Study-room Monday is
+    16:00 per the sheet, transport stays `cancelled`. Nothing further to do.
+  - **Camila Felix** — RESOLVED: sheets won, now 2 days in both collections; transport
+    €120 -> €48 and study €120 -> €48.
+  - **José Eduardo** — transport sheet marks him *Quinzenal* (fortnightly); dev has
+    `weekPattern: "all"` at full €151.20. Roughly halves his fee if the sheet is right.
+  - **Maria Clara** — dev has 16:30 vs the PDF's 17:00, Wednesday missing, a duplicate
+    cancelled doc, and both `childId` and `familyId` dangling.
+  - **Afonso Santos** — active transport in dev (Tue+Wed 14:00) corroborated by nothing:
+    on the roster but absent from the route tabs and the attendance list.
+  - **Sheet gaps, dev likely right**: Bernardo Mogo, Diogo Mogo and Leonor Lago are active
+    in dev and on both the roster and attendance list, but have no rows in any weekday route
+    tab — 12 trips/week the team's sheet does not cover.
+- **13 non-cancelled subscriptions in dev have an empty or dangling `childId`** (Afonso
+  Santos, Camila Felix, Laura Baptista, Laura Mendes, Leonor Lago, Maria Clara and others).
+  Breaks child linking and anything downstream of it, including sibling discounts.
 
 - **Were any September 2026 invoices already issued on prod under the old billing math?**
   Everything in Next step #1 hinges on this.
@@ -1805,6 +1839,64 @@ than another one-off patch.
   role?
 
 ## Anything risky in flight
+- **BUG (found 2026-09-23, affects prod): changing a study-room subscription's days does not
+  reprice it.** `discountRecalc.ts` is asymmetric — transport recomputes gross from the
+  schedule (`scheduleLen * flatRatePerTrip * activeWeeksInPattern`, line ~152) but study room
+  takes the *stored* value (`const grossFee = x.basePrice ?? x.monthlyPrice ?? 0`, line ~185)
+  and never derives it from `days.length`. Study-room base should be
+  `config/studyCenter.monthlyPricePerWeekday` (24) x weekdays. So any admin or client edit
+  that changes study-room days leaves the price at whatever the enrolment form first
+  computed. Also note `basePrice` is **not** in `triggerFieldsChanged`, so correcting a base
+  price by hand does not fire a recalc either — both fields must be written together.
+  Surfaced by editing 3 subs in dev (Camila Felix was left at 5 days' price on 2 days =
+  €72/mo overbilled; Laura Mendes and Maria Clara were €24/mo under). Fixed those 3 in dev by
+  hand; **the code is still wrong and prod is unaudited** — any prod study-room sub whose days
+  were ever edited is mispriced. Needs a real fix plus a prod audit of
+  `basePrice == 24 * days.length`.
+- **Stale fees are wider than the three children already tracked below.** Touching just 15
+  subscriptions in dev during the 2026-09-23 reconciliation caused two silent corrections:
+  José Miguel Duarte €115.20 → €100.80 (never given the 10% multi-trip discount he
+  qualified for) and Vasco Moura €120 → €96 (20% school discount listed in
+  `appliedDiscounts` but never applied to the fee). Both were pre-existing errors that only
+  surfaced because `discountRecalc` re-ran on write. **Any active subscription not written
+  recently may be carrying a wrong fee** — this needs a deliberate recalc sweep, not
+  incidental discovery. Same class as the under-billing item below, but not limited to those
+  three children, and confirmed in dev only — prod not yet checked.
+- ~~PR #36 conflicts with this file.~~ RESOLVED 2026-09-24: `agent/status-consolidate`
+  carries #36's consolidation **plus** the reconciliation notes, merged by hand. Merge that
+  branch and close #36; do not merge both.
+- **dev holds a copy of prod's data (see "Prod -> dev data sync" below), so the 2026-09-23
+  reconciliation IS the prod audit, done in dev on purpose.** The intended path is: fix it
+  here, verify here, then move the corrected data to prod. That promotion has NOT happened
+  and is the outstanding piece of work — see "Next step". It needs a real plan: the dev docs
+  now differ from prod in schedules, prices, base prices and deletions, and prod may also
+  have drifted on its own since the sync, so this is a reconciled-migration problem, not a
+  blind copy.
+- **dev was reconciled to the manual sheets on 2026-09-23; prod was not.** Applied to dev:
+  73 time normalisations, 12 structural day/leg corrections, 3 study-room base-price repairs,
+  and deletion of all 10 test/synthetic records (9 `TEST-*` docs + a junk `test` transport
+  sub). dev and prod now deliberately differ until the same pass is replayed against prod as
+  its own reviewed task. Fee movements in dev: Manuel Oliveira €102→€126 (2 missing
+  Arco-Íris→home legs added), Camila Felix €120→€48 transport + €120→€48 study (5 days→2),
+  Lourenço Bernardino €38.40→€19.20 (extra Monday leg removed), Laura Mendes study
+  €86.40→€108, Maria Clara study €96→€120, plus the two stale-fee corrections noted above.
+- **Both reconciliation branches are deployed to dev and awaiting review** (2026-09-23):
+  PR #37 `agent/studyroom-pricing-parity` (4f7d8bb) and PR #38 `agent/quarter-hour-slots`
+  (b0cd52a), both open against `staging`, both dev deploys green. They serialised rather than
+  running in parallel — same shared `kidclub-dev` project, the known collision. **Neither is
+  merged**, so per the deploy-on-PR model dev is running code that is not on `staging`.
+  The pricing fix was verified live on dev after deploy: adding a day to a 1-day study-room
+  sub repriced it €24 -> €48 automatically and removing it returned €24, with the record
+  restored byte-identical. Before the fix both would have stayed at €24.
+- **João Lopes (João Duarte Silva Lopes): CANCELLED, settled.** He appears in
+  studyroom.pdf (Wed+Fri) and on the September attendance list, which briefly looked like a
+  conflict — but Renato confirmed 2026-09-23 that he dropped out. The PDF simply predates his
+  2026-09-22 withdrawal. Both subs were reverted to their exact pre-session state (status,
+  cancelledAt, and days back to Wed+Fri 16:00). **Do not "fix" this again** from the sheets —
+  the sheets are stale for him, not dev.
+- **Three worktrees are live and need cleanup when their PRs land**:
+  `.claude/worktrees/quarter-hour-slots`, `.claude/worktrees/studyroom-parity`, and the
+  pre-existing `.claude/worktrees/status-cleanup` (PR #36).
 
 - **Open worktree `.claude/worktrees/subscription-personal-data`** (branch
   `agent/subscription-personal-data`, off `staging`) — one unpushed commit, no PR, not
@@ -1843,6 +1935,25 @@ than another one-off patch.
   *historical data* question, not a live one — relevant to the data pass.
 
 ## Backlog — bigger features surfaced but not started
+- **Billing page refactor — stop clients paying the wrong period** (surfaced 2026-09-24,
+  confirmed by Renato as a real incident, not a data glitch): a parent can pay *any* period
+  offered to them, including one eleven months out. Mary Pratas (Manuel Oliveira's family)
+  paid **2027-08 instead of 2026-09** — €142.80, `paidAt` 2026-09-18, Vendus invoice
+  `FR 01P2026/195`. She clicked the last row instead of the first.
+
+  Why this is worse than a single mis-click: the record went `paid` → `invoiced`, which is
+  terminal, and `isRecomputable()` only recomputes `pending` or auto-cancelled records — so
+  the wrong-period payment is **frozen against every future recompute** and will never
+  self-correct. Meanwhile her actual September invoice is still `pending` and will keep being
+  rewritten. A real Vendus fiscal document also exists against the wrong period, so unwinding
+  it is a credit-note problem, not a Firestore edit.
+
+  Scope, roughly: the payment UI should default to (and probably restrict to) the oldest
+  unpaid period rather than presenting all twelve as equal choices; out-of-order payment
+  should be either blocked or an explicit, confirmed action. Needs a decision on what to do
+  with the one already-wrong record before prod — it is NOT fixable by re-running any
+  migration script. Pairs naturally with the "billing record already generated for the current
+  period" design question above, since both are about which billing rows may still move.
 - **`kidclub-dev` is a shared Firebase project that every branch's `staging` PR deploys a full
   functions sync to** (surfaced 2026-09-21, Renato wants this picked up next). Any branch with
   in-progress functions work that gets deployed to dev directly (not yet merged to `staging`)
