@@ -1880,23 +1880,25 @@ than another one-off patch.
   Arco-Íris→home legs added), Camila Felix €120→€48 transport + €120→€48 study (5 days→2),
   Lourenço Bernardino €38.40→€19.20 (extra Monday leg removed), Laura Mendes study
   €86.40→€108, Maria Clara study €96→€120, plus the two stale-fee corrections noted above.
-- **Both reconciliation branches are deployed to dev and awaiting review** (2026-09-23):
-  PR #37 `agent/studyroom-pricing-parity` (4f7d8bb) and PR #38 `agent/quarter-hour-slots`
-  (b0cd52a), both open against `staging`, both dev deploys green. They serialised rather than
-  running in parallel — same shared `kidclub-dev` project, the known collision. **Neither is
-  merged**, so per the deploy-on-PR model dev is running code that is not on `staging`.
-  The pricing fix was verified live on dev after deploy: adding a day to a 1-day study-room
-  sub repriced it €24 -> €48 automatically and removing it returned €24, with the record
-  restored byte-identical. Before the fix both would have stayed at €24.
+- ~~Both reconciliation branches awaiting review.~~ RESOLVED 2026-09-24: all five merged
+  (#37 #38 #39 #40 #41; #36 closed as superseded). `staging` HEAD `5602c75`, deployed to
+  dev, **no PRs open**. dev is clean and current. Verified at three levels rather than on a
+  green check: the bundle carries the generated quarter-hour picker
+  (`D2(13,19).filter(t=>t>="13:30")` with `[0,15,30,45]`), the eventService status fix
+  (`"confirmed","active"`), and `toLowerCase`; and the deployed Cloud Function was tested
+  behaviourally — a 1-day study-room sub went €24 → €48 on adding a day and back to €24 on
+  removing it, record restored identically. Before the fix it would have stayed at €24.
+  Worth remembering for next time: an open PR's preview deploy can land *after* a `staging`
+  push on that shared project and overwrite it — check which ran last, not which merged last.
 - **João Lopes (João Duarte Silva Lopes): CANCELLED, settled.** He appears in
   studyroom.pdf (Wed+Fri) and on the September attendance list, which briefly looked like a
   conflict — but Renato confirmed 2026-09-23 that he dropped out. The PDF simply predates his
   2026-09-22 withdrawal. Both subs were reverted to their exact pre-session state (status,
   cancelledAt, and days back to Wed+Fri 16:00). **Do not "fix" this again** from the sheets —
   the sheets are stale for him, not dev.
-- **Three worktrees are live and need cleanup when their PRs land**:
-  `.claude/worktrees/quarter-hour-slots`, `.claude/worktrees/studyroom-parity`, and the
-  pre-existing `.claude/worktrees/status-cleanup` (PR #36).
+- ~~Three worktrees are live.~~ RESOLVED 2026-09-24: all removed, including the stale
+  pre-existing `status-cleanup` one. Every branch was confirmed pushed and identical to
+  origin first, so nothing was lost. `git worktree list` shows only the main checkout.
 
 - **Open worktree `.claude/worktrees/subscription-personal-data`** (branch
   `agent/subscription-personal-data`, off `staging`) — one unpushed commit, no PR, not

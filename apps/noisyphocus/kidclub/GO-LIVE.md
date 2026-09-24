@@ -46,16 +46,25 @@ Applied to dev during the reconciliation (see STATUS.md for the full record):
 Dev totals after all of it: **€2 983,20/month** — transport €2 095,20, study
 €888,00, across 23 active transport and 13 active study subscriptions.
 
-**Five PRs are open against `staging`**, all verified to merge cleanly together
-(test-merged and typechecked: 16 frontend errors, identical to clean `staging`;
-functions 0). Suggested order — **merge them in one sitting**, because each merge
-redeploys `staging` over dev and only the last deploy is live:
+**All five PRs are merged and `staging` is deployed to dev. No PRs are open.**
+`staging` HEAD is `5602c75` (#37). Merged 2026-09-24: `#39` calendar indexes,
+`#38` quarter-hour picker, `#40` email normalisation, `#37` study-room pricing +
+event parity, `#41` STATUS consolidation + this file. `#36` was closed,
+superseded by `#41`.
 
-1. `#39` calendar indexes (infra, +42/−0)
-2. `#38` quarter-hour picker
-3. `#40` email normalisation
-4. `#37` study-room pricing + event parity
-5. `#36` STATUS — **superseded**, see §5
+**dev is clean and current — you do not need to deploy anything to start.**
+Verified after the final staging deploy, at three levels rather than trusting a
+green check:
+
+| Layer | Evidence |
+|---|---|
+| picker (#38) | bundle contains `D2(13,19).filter(t=>t>="13:30")`, `D2(7,20)`, with `[0,15,30,45]` inside — the generated quarter-hour list |
+| events (#37) | bundle contains `"confirmed","active"` ×2 |
+| emails (#40) | `toLowerCase` present |
+| **functions (#37)** | live behavioural test: study-room sub 1 day €24 → add a day → **€48** → revert → **€24**, record restored identically |
+
+That last row is the one that matters — it proves the deployed Cloud Function,
+not just the shipped bundle.
 
 ---
 
@@ -129,9 +138,7 @@ present in prod too:
 
 ## 5. Housekeeping
 
-- **`#36` is superseded.** `agent/status-consolidate` carries #36's consolidation
-  *plus* this session's reconciliation notes, merged by hand. Merge that and
-  close #36 — do not merge both.
+- ~~`#36` is superseded.~~ DONE — `#41` merged, `#36` closed.
 - **`staging` is ~10 commits ahead of `main`** and has never been promoted.
   CLAUDE.md says to branch off `main`; that is currently wrong in practice and
   produced one PR that couldn't even compute a merge ref, and another that
@@ -140,15 +147,17 @@ present in prod too:
 - **Every PR deploys to the same `kidclub-dev` project**, so only the most
   recent deploy is live. Testing between merges is misleading; merge, then test
   once.
-- Worktrees from this session have been removed. `git worktree list` should show
-  only the main checkout plus whatever the next session creates.
+- Worktrees from the reconciliation session have been removed. `git worktree
+  list` should show only the main checkout plus whatever you create. Branches
+  stay on origin, so nothing was lost — but clean up after yourself too, since a
+  stale worktree has already caused one credential-exposure incident here.
 
 ---
 
 ## 6. Suggested order for the next session
 
-1. Merge the five PRs (§2), then smoke-test dev **once** against the merged
-   result. The runbook from this session lists the checks.
+1. ~~Merge the five PRs.~~ Done — dev already holds `staging` (§2), verified at
+   bundle and function level. Start from step 2.
 2. Decide the discount model and rates (§4). Re-run the simulation afterwards —
    the numbers above assume the current flat model.
 3. Dry-run `identity.mjs` against **prod**, read the report, decide what to apply.
