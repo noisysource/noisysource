@@ -380,6 +380,14 @@ export default function FinancialSummaryPage() {
   const scenarioOn = rulesInUse.some(r => rateOf(r) !== r.percentage);
   const totalCost = (showTransport ? tCost : 0) + (showStudy ? sCost : 0);
   const totalProfit = totalRevenue - totalCost;
+  // Costs are fixed monthly inputs — van, driver, electricity, teacher, rent —
+  // and none of them move with a discount. So every euro given away in
+  // discounts is a euro straight off profit, and the margin swing is the whole
+  // point of simulating a rate rather than just the revenue line.
+  const scenarioProfit = Math.round((scenarioRevenue - totalCost) * 100) / 100;
+  const scenarioMargin = scenarioRevenue > 0 ? scenarioProfit / scenarioRevenue : 0;
+  /** Revenue needed to cover fixed costs, and what the scenario leaves against it. */
+  const breakEvenGap = Math.round((totalCost - scenarioRevenue) * 100) / 100;
   const deltaVsActive = totalRevenue - activeOnlyRevenue;
   const isActiveOnlyFilter = samePreset(statusFilter, ['active']);
 
@@ -653,6 +661,9 @@ export default function FinancialSummaryPage() {
           {!isActiveOnlyFilter && (
             <ScenarioRow label="Referência: apenas ativos" revenue={activeOnlyRevenue} cost={totalCost} color="text-gray-400" />
           )}
+          {scenarioOn && (
+            <ScenarioRow label="Simulação de descontos" revenue={scenarioRevenue} cost={totalCost} color="text-amber-700" />
+          )}
           {deltaVsActive > 0 && (
             <div className="pt-2 text-xs text-gray-400">
               Face a "apenas ativos": <span className="font-semibold text-gray-600">{eur(deltaVsActive)}</span> de receita adicional incluída pelo filtro
@@ -732,22 +743,58 @@ export default function FinancialSummaryPage() {
             })}
           </div>
 
-          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-baseline gap-x-6 gap-y-1">
-            <span className="text-xs text-gray-400 uppercase tracking-wide font-semibold">Receita simulada</span>
-            <span className="font-mono text-lg font-semibold text-gray-900">{eur(scenarioRevenue)}</span>
-            {scenarioOn ? (
-              <>
-                <span className={`font-mono text-sm font-semibold ${scenarioDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {scenarioDelta >= 0 ? '+' : ''}{eur(scenarioDelta)}
-                </span>
-                <span className="text-xs text-gray-400">
-                  face a {eur(totalRevenue)} ({filterLabel})
-                  {totalRevenue > 0 && ` · ${scenarioDelta >= 0 ? '+' : ''}${(scenarioDelta / totalRevenue * 100).toFixed(1)}%`}
-                </span>
-              </>
-            ) : (
-              <span className="text-xs text-gray-400">igual à receita atual — nenhuma percentagem alterada</span>
-            )}
+          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Receita</div>
+                <div className="font-mono text-base font-semibold text-blue-600 tabular-nums">{eur(scenarioRevenue)}</div>
+                {scenarioOn && (
+                  <div className={`font-mono text-[11px] tabular-nums ${scenarioDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {scenarioDelta >= 0 ? '+' : ''}{eur(scenarioDelta)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Custos</div>
+                <div className="font-mono text-base font-semibold text-red-500 tabular-nums">−{eur(totalCost)}</div>
+                <div className="text-[11px] text-gray-400">fixos — não variam</div>
+              </div>
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Lucro</div>
+                <div className={`font-mono text-base font-semibold tabular-nums ${scenarioProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {eur(scenarioProfit)}
+                </div>
+                {scenarioOn && (
+                  <div className={`font-mono text-[11px] tabular-nums ${scenarioDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {scenarioDelta >= 0 ? '+' : ''}{eur(scenarioDelta)} face a {eur(totalProfit)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Margem</div>
+                <div className={`font-mono text-base font-semibold tabular-nums ${scenarioMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {(scenarioMargin * 100).toFixed(1)}%
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  {scenarioOn ? `atual ${(totalRevenue > 0 ? totalProfit / totalRevenue * 100 : 0).toFixed(1)}%` : 'nenhuma alteração'}
+                </div>
+              </div>
+            </div>
+
+            <div className={`mt-3 pt-3 border-t border-gray-200 text-xs ${breakEvenGap > 0 ? 'text-red-700' : 'text-green-700'}`}>
+              {breakEvenGap > 0 ? (
+                <>
+                  <span className="font-semibold">Abaixo do break-even.</span>{' '}
+                  Faltam <span className="font-mono font-semibold">{eur(breakEvenGap)}</span> de receita para cobrir os custos fixos de {eur(totalCost)}.
+                  {' '}Como os custos não variam com descontos, cada euro de desconto é um euro de lucro.
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold">Acima do break-even</span> por{' '}
+                  <span className="font-mono font-semibold">{eur(Math.abs(breakEvenGap))}</span> face aos custos fixos de {eur(totalCost)}.
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
