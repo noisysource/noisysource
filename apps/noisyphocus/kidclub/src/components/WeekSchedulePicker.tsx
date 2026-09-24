@@ -23,16 +23,24 @@ function weekIsActive(weekNum: 1 | 2 | 3 | 4, pattern: WeekPattern): boolean {
   return pattern === 'odd' ? weekNum % 2 === 1 : weekNum % 2 === 0;
 }
 
-const ARRIVAL_TIMES = [
-  '13:30', '14:00', '14:30', '15:00', '15:30', '16:00',
-  '16:30', '17:00', '17:30', '18:00', '18:30', '19:00',
-];
+// Quarter-hour granularity: the real study-room timetable and transport
+// routes run on :00/:15/:30/:45 (a 15:40 school pickup is recorded as 15:45,
+// a 08:20 one as 08:15). A 30-minute grid could not represent those and
+// forced every route onto a rounded hour, which is what made the Firestore
+// schedules disagree with the manually-kept route sheet.
+const buildTimes = (startHour: number, endHour: number): string[] => {
+  const out: string[] = [];
+  for (let h = startHour; h <= endHour; h++) {
+    for (const m of [0, 15, 30, 45]) {
+      if (h === endHour && m > 0) break;
+      out.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    }
+  }
+  return out;
+};
 
-const TRIP_TIMES: string[] = [];
-for (let h = 7; h <= 20; h++) {
-  TRIP_TIMES.push(`${String(h).padStart(2, '0')}:00`);
-  if (h < 20) TRIP_TIMES.push(`${String(h).padStart(2, '0')}:30`);
-}
+const ARRIVAL_TIMES = buildTimes(13, 19).filter(t => t >= '13:30');
+const TRIP_TIMES = buildTimes(7, 20);
 
 // Coimbra city centre — all address inputs are biased to this area
 const COIMBRA_BIAS = { lat: 40.2033, lng: -8.4103, radiusMeters: 20000 };
