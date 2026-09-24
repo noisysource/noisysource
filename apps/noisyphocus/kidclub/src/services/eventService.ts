@@ -30,8 +30,16 @@ export const schoolCalendarService = {
 };
 
 //<editor-fold desc="Data Fetching">
+// "confirmed" is the legacy spelling of "active" for study room (see
+// normalizeStatus in @shared/models/StudyRoomEntry) — both mean an enrolled,
+// billable subscription. Querying only 'confirmed' silently dropped every
+// study-room sub stored as 'active' from event AND income generation, while
+// the calendar query below already included both. That mismatch meant a
+// subscription could appear on the calendar and contribute nothing to the
+// financial summary. Transport has no equivalent split — it only ever uses
+// 'active'.
 const getConfirmedStudyRoomEntries = async () => {
-  const studyRoomQuery = query(col('studyroom'), where('status', '==', 'confirmed'));
+  const studyRoomQuery = query(col('studyroom'), where('status', 'in', ['confirmed', 'active']));
   const snapshot = await getDocs(studyRoomQuery);
   return snapshot.docs.map(doc => ({ ...doc.data() as StudyRoomEntry, id: doc.id }));
 };

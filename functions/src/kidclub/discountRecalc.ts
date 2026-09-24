@@ -105,6 +105,15 @@ function activeWeeksInPattern(pattern: string): 2 | 4 {
   return pattern === "all" ? 4 : 2;
 }
 
+// Same per-occurrence rate billing.ts uses (studyPerDayRate there), kept
+// identical so a study day costs the same euro amount in the recalc, in the
+// invoice, and in an exclusion deduction. Mirrors transport's flatRatePerTrip.
+function studyPerDayRate(cfg: any): number {
+  if (cfg?.pricePerDayPerWeek != null) return cfg.pricePerDayPerWeek;
+  if (cfg?.monthlyPricePerWeekday != null) return cfg.monthlyPricePerWeekday / (cfg?.weeksPerMonth ?? 4);
+  return 0;
+}
+
 const REGION = "europe-west3";
 const CANCELLED = new Set(["cancelled", "canceled"]);
 
@@ -149,16 +158,19 @@ async function fetchChildSchoolNames(childIds: (string | undefined)[]): Promise<
 }
 
 async function recalcForFamily(familyId: string): Promise<void> {
-  const [transportConfigSnap, discountRulesSnap, transportSnap, studySnap] = await Promise.all([
+  const [transportConfigSnap, studyConfigSnap, discountRulesSnap, transportSnap, studySnap] = await Promise.all([
     appCol("config").doc("transportation").get(),
+    appCol("config").doc("studyCenter").get(),
     appCol("config").doc("discounts").get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).get(),
     appCol("studyroom").where("familyId", "==", familyId).get(),
   ]);
 
   const tCfg = transportConfigSnap.data() ?? {};
+  const sCfg = studyConfigSnap.data() ?? {};
   const rules: DiscountRule[] = (discountRulesSnap.data()?.rules ?? []) as DiscountRule[];
   const flatRatePerTrip: number = tCfg.flatRatePerTrip ?? 0;
+  const studyRatePerDay: number = studyPerDayRate(sCfg);
 
   // schoolName is canonical on the child record; the subscription copy is a
   // mirror that has drifted in prod (5 of 10 dual-service children hold two
@@ -252,7 +264,16 @@ async function recalcForFamily(familyId: string): Promise<void> {
       x.discountOverrides);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
-    const grossFee: number = x.basePrice ?? x.monthlyPrice ?? 0;
+    // Mirror the transport branch above: gross is DERIVED from the current
+    // schedule, never read back from the stored price. Study room used to take
+    // `x.basePrice ?? x.monthlyPrice` here, so editing a subscription's days
+    // silently left the family paying whatever the enrolment form first
+    // computed — 2 days billed at a 5-day price, and vice versa. The two
+    // services use the same per-occurrence rate (6/day/week) and the same
+    // week-pattern multiplier, so the formulas are now identical in shape.
+    const daysLen: number = (x.days ?? []).length;
+    const grossFromDays = daysLen * studyRatePerDay * activeWeeksInPattern(x.weekPattern ?? "all");
+    const grossFee: number = grossFromDays > 0 ? grossFromDays : (x.basePrice ?? x.monthlyPrice ?? 0);
     const newFee = applyDiscounts(grossFee, allDiscounts);
 
     const prevRuleIds = [...(x.appliedDiscounts ?? [])].map((a: any) => a.ruleId).sort().join(",");
@@ -261,7 +282,13 @@ async function recalcForFamily(familyId: string): Promise<void> {
     const discountsChanged = prevRuleIds !== newRuleIds;
 
     if (feeChanged || discountsChanged) {
-      writes.push(d.ref.update({ monthlyPrice: newFee, appliedDiscounts: allDiscounts, updatedAt: new Date() }));
+      // basePrice is written alongside monthlyPrice because billing.ts prices a
+      // study line item from `sub.basePrice ?? sub.monthlyPrice` — leaving a
+      // stale basePrice behind would just move the wrong number downstream.
+      writes.push(d.ref.update({
+        monthlyPrice: newFee, basePrice: grossFee,
+        appliedDiscounts: allDiscounts, updatedAt: new Date(),
+      }));
     }
   }
 
