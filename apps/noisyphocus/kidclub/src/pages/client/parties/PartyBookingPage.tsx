@@ -4,6 +4,7 @@ import { useUser } from '@shared/hooks';
 import { Child, PartyConfig } from '@shared/models';
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
+import { normalizeEmail } from '../../../lib/utils';
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 
@@ -78,7 +79,7 @@ export default function PartyBookingPage() {
         childId: manualChild ? '' : childId,
         userId: user.uid,
         parentName: user.name || user.email?.split('@')[0] || '',
-        email: user.email || '',
+        email: normalizeEmail(user.email),
         phone: '',
         childName: resolvedName,
         childAge: resolvedAge,

@@ -15,7 +15,7 @@ import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../compo
 import { DiscountRule } from '@shared/models/Discount';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
-import { calculateAge, normalizeSubStatus } from '../../../lib/utils';
+import { calculateAge, normalizeSubStatus, normalizeEmail } from '../../../lib/utils';
 
 function computeTransportFee(
   days: DayConfig[],
@@ -254,7 +254,7 @@ export default function TransportEnrollPage() {
           childName: `${child.firstName} ${child.lastName}`,
           studentName: `${child.firstName} ${child.lastName}`,
           schoolName: child.schoolName || '', schoolYear: child.schoolYear || '',
-          guardianName: user?.name || '', email: user?.email || '', phone: '',
+          guardianName: user?.name || '', email: normalizeEmail(user?.email), phone: '',
           days: studyDays.map(d => ({ day: d.weekday, hour: d.hour })),
           weekPattern: schedule.weekPattern,
           monthlyPrice: sFee, basePrice: sFee,

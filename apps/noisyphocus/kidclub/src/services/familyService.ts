@@ -1,7 +1,7 @@
 import { getDocs, query, where, getDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { col, docRef } from '../lib/db';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
-import { calculateAge, normalizeName, normalizeSubStatus } from '../lib/utils';
+import { calculateAge, normalizeName, normalizeSubStatus, normalizeEmail } from '../lib/utils';
 import type { ImpersonationState } from '../contexts/ImpersonationContext';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
@@ -52,7 +52,7 @@ export const familyService = {
     }
 
     const newFamily: Omit<Family, 'id'> = {
-      primaryContact: { name: userName, email: userEmail, phone: '', userId },
+      primaryContact: { name: userName, email: normalizeEmail(userEmail), phone: '', userId },
       status: 'active',
       profileComplete: false,
       createdAt: new Date(),
@@ -96,7 +96,7 @@ export const familyService = {
     const matches = new Map<string, Child>();
 
     if (contactEmail) {
-      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', contactEmail)));
+      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', normalizeEmail(contactEmail))));
       for (const famDoc of famSnap.docs) {
         const childSnap = await getDocs(query(col('children'), where('familyId', '==', famDoc.id)));
         for (const d of childSnap.docs) matches.set(d.id, mapChild(d.id, d.data()));
@@ -125,9 +125,9 @@ export const familyService = {
    */
   async hasUnclaimedSubscriptions(email: string): Promise<boolean> {
     const [transportSnap, studyByEmailSnap, studyByContactEmailSnap] = await Promise.all([
-      getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', email))),
-      getDocs(query(col('studyroom'), where('email', '==', email))),
-      getDocs(query(col('studyroom'), where('contactEmail', '==', email))),
+      getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', normalizeEmail(email)))),
+      getDocs(query(col('studyroom'), where('email', '==', normalizeEmail(email)))),
+      getDocs(query(col('studyroom'), where('contactEmail', '==', normalizeEmail(email)))),
     ]);
     const isUnclaimed = (d: any) => !d.data().familyId && !CANCELLED_STATUSES.has(d.data().status);
     if (transportSnap.docs.some(isUnclaimed)) return true;

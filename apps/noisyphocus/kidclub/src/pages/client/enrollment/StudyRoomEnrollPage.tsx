@@ -13,7 +13,7 @@ import { col, docRef } from '../../../lib/db';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
-import { calculateAge, normalizeSubStatus } from '../../../lib/utils';
+import { calculateAge, normalizeSubStatus, normalizeEmail } from '../../../lib/utils';
 
 
 function buildTransportCoverage(subs: any[]) {
@@ -209,7 +209,7 @@ export default function StudyRoomEnrollPage() {
         schoolName: child.schoolName || '',
         schoolYear: child.schoolYear || '',
         guardianName: user?.name || '',
-        email: user?.email || '',
+        email: normalizeEmail(user?.email),
         phone: '',
         days,
         weekPattern: schedule.weekPattern,
