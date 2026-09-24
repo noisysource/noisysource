@@ -9,6 +9,7 @@ import { getDocs, query, where } from 'firebase/firestore';
 import { col } from '../../lib/db';
 import { format } from 'date-fns';
 import { pt } from 'date-fns/locale';
+import { normalizeEmail } from '../../lib/utils';
 
 interface EmailLinkedSub {
   id: string;
@@ -89,7 +90,7 @@ export default function MySubscriptionsPage() {
       try {
         if (user.email) {
           const emailSnap = await getDocs(
-            query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))
+            query(col('transportationSubscriptions'), where('contactEmail', '==', normalizeEmail(user.email)))
           );
           // Only show subscriptions still awaiting claim (no familyId) as a fallback
           const subs: EmailLinkedSub[] = emailSnap.docs

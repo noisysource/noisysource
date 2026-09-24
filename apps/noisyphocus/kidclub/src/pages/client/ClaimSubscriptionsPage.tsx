@@ -4,7 +4,7 @@ import { useUser } from '@shared/hooks';
 import { Child } from '@shared/models';
 import { col, docRef } from '../../lib/db';
 import { familyService } from '../../services/familyService';
-import { calculateAge, normalizeName } from '../../lib/utils';
+import { calculateAge, normalizeName, normalizeEmail } from '../../lib/utils';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
@@ -69,9 +69,9 @@ export default function ClaimSubscriptionsPage({ onComplete }: { onComplete: () 
       // admin flow created them (confirmed against prod: neither field alone covers every
       // record) — query both and dedupe.
       const [transportSnap, studyByEmailSnap, studyByContactEmailSnap] = await Promise.all([
-        getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', user.email))),
-        getDocs(query(col('studyroom'), where('email', '==', user.email))),
-        getDocs(query(col('studyroom'), where('contactEmail', '==', user.email))),
+        getDocs(query(col('transportationSubscriptions'), where('contactEmail', '==', normalizeEmail(user.email)))),
+        getDocs(query(col('studyroom'), where('email', '==', normalizeEmail(user.email)))),
+        getDocs(query(col('studyroom'), where('contactEmail', '==', normalizeEmail(user.email)))),
       ]);
       const studyDocsById = new Map(
         [...studyByEmailSnap.docs, ...studyByContactEmailSnap.docs].map(d => [d.id, d])

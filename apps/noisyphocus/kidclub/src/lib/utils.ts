@@ -24,6 +24,24 @@ export function normalizeName(name: string): string {
  */
 export type SubStatus = 'pending' | 'active' | 'cancelled';
 
+/**
+ * Canonical form of an email used as a lookup key.
+ *
+ * A parent's account is linked to their subscriptions purely by email —
+ * there is no other join — and Firestore's `==` is case-sensitive, so a
+ * single capital letter anywhere in the address silently hides every
+ * subscription from the client while the admin list still shows it. That
+ * is not hypothetical: one subscription stored "Teresasplazevedo@..."
+ * against an account of "teresasplazevedo@...", and the parent saw nothing.
+ *
+ * Apply this on BOTH sides — every write that persists an address, and
+ * every query that matches one — because normalising only the query still
+ * misses rows already stored with capitals.
+ */
+export function normalizeEmail(raw: string | undefined | null): string {
+  return (raw ?? '').trim().toLowerCase();
+}
+
 export function normalizeSubStatus(raw: string | undefined | null): SubStatus {
   if (raw === 'active' || raw === 'confirmed' || raw === 'offered') return 'active';
   if (raw === 'cancelled' || raw === 'canceled' || raw === 'archived' || raw === 'inactive') return 'cancelled';

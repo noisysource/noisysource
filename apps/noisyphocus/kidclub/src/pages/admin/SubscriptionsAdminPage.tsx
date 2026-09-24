@@ -14,7 +14,7 @@ import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../componen
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import { DiscountRule, AppliedDiscount, DiscountScope } from '@shared/models/Discount';
 import { getDiscountRules, applyDiscounts, resolveAutoDiscounts, grossFromAppliedDiscounts, DayLike } from '../../services/discountService';
-import { calculateAge, normalizeName, SubStatus, normalizeSubStatus } from '../../lib/utils';
+import { calculateAge, normalizeName, SubStatus, normalizeSubStatus, normalizeEmail } from '../../lib/utils';
 
 type TypeFilter = 'all' | 'transport' | 'study' | 'unlinked';
 
@@ -752,7 +752,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
       const found = await familyService.findMatchingChildren(details.firstName, details.lastName, details.contactEmail);
       setMatches(found);
       if (found.length === 0) setSelectedChildId('new');
-      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', details.contactEmail.trim())));
+      const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', normalizeEmail(details.contactEmail))));
       if (!famSnap.empty) {
         const siblings = await familyService.getFamilyChildren(famSnap.docs[0].id);
         const counts = await Promise.all(siblings.map(s => familyService.getChildSubscriptionCounts(s.id)));
@@ -831,7 +831,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
             postalCode: details.homeAddress.postalCode.trim(),
             country: details.homeAddress.country.trim() || null,
           },
-          contactEmail: details.contactEmail.trim() || null,
+          contactEmail: normalizeEmail(details.contactEmail) || null,
           contactPhone: details.contactPhone.trim() || null,
           status: 'active',
           createdAt: now, updatedAt: now,
@@ -855,7 +855,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
         const ref = await addDoc(col('transportationSubscriptions'), {
           childId, childName: fullName,
           contactName: details.contactName.trim() || null,
-          contactEmail: details.contactEmail.trim() || null, contactMobile: details.contactPhone.trim() || null,
+          contactEmail: normalizeEmail(details.contactEmail) || null, contactMobile: details.contactPhone.trim() || null,
           schoolName: details.schoolName.trim() || null,
           status: 'pending', source: 'manual', monthlyFee, originalFee: transportGross,
           appliedDiscounts: transportSelected,
@@ -867,7 +867,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
         created.push({
           id: ref.id, _type: 'transport', childId, childName: fullName,
           contactName: details.contactName.trim() || undefined,
-          contactEmail: details.contactEmail.trim() || undefined,
+          contactEmail: normalizeEmail(details.contactEmail) || undefined,
           contactPhone: details.contactPhone.trim() || undefined,
           schoolName: details.schoolName.trim() || undefined,
           source: 'manual', schedule: fsSchedule, monthlyFee, appliedDiscounts: transportSelected,
@@ -883,7 +883,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
           childId, childName: fullName, familyId: '',
           schoolName: details.schoolName.trim() || null,
           schoolYear: details.schoolYear.trim() || null,
-          contactEmail: details.contactEmail.trim() || null,
+          contactEmail: normalizeEmail(details.contactEmail) || null,
           contactName: details.contactName.trim() || null,
           contactMobile: details.contactPhone.trim() || null,
           days, weekPattern: schedule.weekPattern,
@@ -899,7 +899,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
         created.push({
           id: ref.id, _type: 'study', childId, childName: fullName,
           contactName: details.contactName.trim() || undefined,
-          contactEmail: details.contactEmail.trim() || undefined,
+          contactEmail: normalizeEmail(details.contactEmail) || undefined,
           contactPhone: details.contactPhone.trim() || undefined,
           schoolName: details.schoolName.trim() || undefined,
           schoolYear: details.schoolYear.trim() || undefined,
@@ -1304,7 +1304,7 @@ export default function SubscriptionsAdminPage() {
       // Same convenience the old approve() had — try to auto-resolve familyId
       // by contact email if not yet linked. Doesn't gate the status change.
       if (!item.familyId && item.contactEmail) {
-        const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
+        const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', normalizeEmail(item.contactEmail))));
         if (!famSnap.empty) patch.familyId = famSnap.docs[0].id;
       }
 
@@ -1478,7 +1478,7 @@ export default function SubscriptionsAdminPage() {
       let familyId = item.familyId;
       if (!familyId) {
         if (!item.contactEmail) { alert('Sem email de contacto para vincular.'); return; }
-        const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', item.contactEmail)));
+        const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', normalizeEmail(item.contactEmail))));
         if (famSnap.empty) { alert(`Nenhuma conta encontrada para ${item.contactEmail}.`); return; }
         familyId = famSnap.docs[0].id;
       }
