@@ -95,6 +95,41 @@ never created.
 
 ## 4. Not covered — decide before running anything
 
+**The operation is running at a loss, and discounts alone cannot fix it.**
+Surfaced 2026-09-24 by the new discount simulator on Resumo Financeiro. Fixed
+monthly costs are **€3 400** (transport €1 850: van 500 + driver 1200 +
+electricity 150; study €1 550: teacher 800 + rent 750) against revenue of
+€2 983,20 — a **−€416,80/month loss, −14,0% margin**.
+
+| Scenario | Receita | Lucro | Margem |
+|---|---|---|---|
+| Current | €2 983,20 | **−€416,80** | −14,0% |
+| Bissaya 10% | €3 129,60 | −€270,40 | −8,6% |
+| Aluno 0% + Bissaya 10% | €3 237,60 | −€162,40 | −5,0% |
+| Aluno 0% + Bissaya 0% | €3 384,00 | −€16,00 | −0,5% |
+| **All four discounts at 0%** | €3 600,00 | **+€200,00** | +5,6% |
+
+Removing *every* discount only reaches +€200. So this is not a "how much margin
+do we want" decision — the discount levers cannot close a €417 gap on their own.
+Closing it properly means base prices, cost structure, or volume. Sanity-check
+the cost inputs first: they are editable on that page, and if driver (€1 200) or
+teacher (€800) are aspirational rather than actual, the picture changes.
+
+**Two things the simulator does NOT model** (accepted, deferred by Renato
+2026-09-25):
+
+1. It prices discounts with the **current flat sum-of-percentages** logic, not
+   the marginal/per-unit design recorded below. Worked example: José Miguel
+   Duarte, 6 trips, gross €144, Multi-viagem 10% + Bissaya 20%. Flat gives
+   144 × 0.70 = **€100,80** (what he pays today). Marginal would apply
+   Multi-viagem only to the 1 trip that is a same-day second trip — he has two
+   trips on Monday and one on every other day — landing near **€113**, about
+   €12/month more for one child. **Decide the model before using the slider to
+   pick rates**, or the rates chosen will not produce the numbers seen.
+2. Costs are a fixed constant in the scenario. It can answer "what if Bissaya
+   were 10%" but not "what if we dropped the van". The cost fields on the page
+   are editable, but that writes real config — a change, not a simulation.
+
 **Pricing and discounts.** Renato wants these tackled in the promotion session.
 Findings that bear on it:
 
