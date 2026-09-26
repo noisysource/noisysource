@@ -4,7 +4,6 @@ import { Child, StudyRoomEntry, TransportationSubscription, Family } from '@shar
 import { CampSubscription } from '@shared/models/Camp';
 import { Link } from 'react-router-dom';
 import { familyService } from '../../services/familyService';
-import { grossFromAppliedDiscounts } from '../../services/discountService';
 import { getDocs, query, where } from 'firebase/firestore';
 import { col } from '../../lib/db';
 import { format } from 'date-fns';
@@ -172,16 +171,9 @@ export default function MySubscriptionsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
-                    {sub.monthlyFee > 0 && (() => {
-                      const g = grossFromAppliedDiscounts(sub.monthlyFee, (sub as any).appliedDiscounts);
-                      const hasDiscount = g != null && g > sub.monthlyFee + 0.01;
-                      return (
-                        <span className="font-semibold text-right">
-                          {hasDiscount && <span className="line-through text-gray-400 text-xs mr-1">€{g!.toFixed(2)}</span>}
-                          <span className={hasDiscount ? 'text-green-700' : 'text-gray-900'}>€{sub.monthlyFee.toFixed(2)}/mês</span>
-                        </span>
-                      );
-                    })()}
+                    {sub.monthlyFee > 0 && (
+                      <span className="font-semibold text-right text-gray-900">€{sub.monthlyFee.toFixed(2)}/mês</span>
+                    )}
                     <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${st.cls}`}>{st.label}</span>
                     <span className="text-gray-300 text-lg">›</span>
                   </div>
@@ -262,8 +254,8 @@ export default function MySubscriptionsPage() {
               return 'pending';
             };
             const allSubs = [
-              ...study.map(s => ({ key: `study-${s.id}`, type: 'Sala de Estudo' as const, status: toSubStatus(s.status, 'study'), price: s.monthlyPrice, gross: (s.basePrice ?? 0) > s.monthlyPrice + 0.01 ? s.basePrice! : null, days: s.days, startDate: s.startDate, id: s.id })),
-              ...transport.map(t => { const g = grossFromAppliedDiscounts(t.monthlyFee, t.appliedDiscounts); return { key: `transport-${t.id}`, type: 'Transporte' as const, status: toSubStatus(t.status, 'transport'), price: t.monthlyFee, gross: g != null && g > t.monthlyFee + 0.01 ? g : null, days: null as any, startDate: t.createdAt, id: t.id }; }),
+              ...study.map(s => ({ key: `study-${s.id}`, type: 'Sala de Estudo' as const, status: toSubStatus(s.status, 'study'), price: s.monthlyPrice, days: s.days, startDate: s.startDate, id: s.id })),
+              ...transport.map(t => ({ key: `transport-${t.id}`, type: 'Transporte' as const, status: toSubStatus(t.status, 'transport'), price: t.monthlyFee, days: null as any, startDate: t.createdAt, id: t.id })),
             ];
 
             return (
@@ -323,10 +315,7 @@ export default function MySubscriptionsPage() {
                           </div>
                           <div className="flex items-center gap-4">
                             {sub.price != null && sub.status === 'active' && (
-                              <span className="font-semibold">
-                                {sub.gross != null && <span className="line-through text-gray-400 text-xs mr-1">€{sub.gross.toFixed(2)}</span>}
-                                <span className={sub.gross != null ? 'text-green-700' : 'text-gray-900'}>€{(sub.price).toFixed(2)}/mês</span>
-                              </span>
+                              <span className="font-semibold text-gray-900">€{(sub.price).toFixed(2)}/mês</span>
                             )}
                             <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${statusClass[sub.status]}`}>
                               {statusLabel[sub.status]}

@@ -656,6 +656,7 @@ function EditForm({ item, transportConfig, studyConfig, discountRules, onSave, o
       </p>
 
       <WeekSchedulePicker
+        showDiscountBreakdown
         value={schedule}
         onChange={setSchedule}
         availableServices={[item._type]}
@@ -925,6 +926,7 @@ function ManualEnrollForm({ transportConfig, studyConfig, discountRules, onSave,
         placeholder="Nota (opcional, apenas interna)" className={fieldCls} />
 
       <WeekSchedulePicker
+        showDiscountBreakdown
         value={schedule}
         onChange={setSchedule}
         availableServices={['transport', 'study']}

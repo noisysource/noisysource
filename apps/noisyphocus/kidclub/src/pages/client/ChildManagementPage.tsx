@@ -87,7 +87,6 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
   const fee = selected.type === 'transport'
     ? (selected.sub as TransportationSubscription).monthlyFee
     : (selected.sub as StudyRoomEntry).monthlyPrice;
-  const discounts = selected.sub.appliedDiscounts ?? [];
 
   const isActive = status === 'active';
   const isPending = status === 'pending';
@@ -247,15 +246,6 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
             <p className="text-2xl font-bold text-gray-900">
               €{(fee ?? 0).toFixed(2)}<span className="text-base font-normal text-gray-500">/mês</span>
             </p>
-            {discounts.length > 0 && (
-              <div className="flex gap-1.5 flex-wrap mt-2">
-                {discounts.map(d => (
-                  <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                    {d.name} −{Math.round(d.percentage * 100)}%
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         )}
 
@@ -642,7 +632,6 @@ export default function ChildManagementPage() {
                   price: s.monthlyPrice,
                   detail: s.days?.length ? s.days.map((d: any) => PT_DAY[d.day ?? d] ?? d.day ?? d).join(', ') : null,
                   since: (s as any).startDate ? new Date((s as any).startDate?.toDate?.() ?? (s as any).startDate).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' }) : null,
-                  discounts: s.appliedDiscounts ?? [],
                   onSelect: () => setSelected({ type: 'study', sub: s, childName: `${child.firstName} ${child.lastName}` }),
                   isSelected: selected?.sub.id === s.id,
                 })),
@@ -652,7 +641,6 @@ export default function ChildManagementPage() {
                   price: t.monthlyFee,
                   detail: null,
                   since: t.startDate ? new Date(t.startDate).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' }) : null,
-                  discounts: t.appliedDiscounts ?? [],
                   onSelect: () => setSelected({ type: 'transport', sub: t, childName: `${child.firstName} ${child.lastName}` }),
                   isSelected: selected?.sub.id === t.id,
                 })),
@@ -689,15 +677,6 @@ export default function ChildManagementPage() {
                                 {sub.detail ? `${sub.detail} · ` : ''}
                                 {sub.since ? `Desde ${sub.since}` : ''}
                               </p>
-                              {sub.discounts.length > 0 && (
-                                <div className="flex gap-1 flex-wrap mt-0.5">
-                                  {sub.discounts.map(d => (
-                                    <span key={d.ruleId} className="text-xs px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
-                                      {d.name} −{Math.round(d.percentage * 100)}%
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-3 shrink-0 ml-3">

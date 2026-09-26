@@ -297,26 +297,10 @@ export default function StudySubscriptionDetailPage() {
         </div>
 
         <div className="mt-4 space-y-2">
-          {(() => {
-            const fee = subscription.monthlyPrice ?? 0;
-            const gross = subscription.basePrice != null && subscription.basePrice > fee + 0.01 ? subscription.basePrice : null;
-            return (
-              <div className="flex items-baseline gap-1.5 flex-wrap">
-                {gross != null && <span className="text-base text-gray-400 line-through">€{gross.toFixed(2)}</span>}
-                <span className={`text-2xl font-bold ${gross != null ? 'text-green-700' : 'text-gray-900'}`}>€{fee.toFixed(2)}</span>
-                <span className="text-base font-normal text-gray-500">/mês</span>
-              </div>
-            );
-          })()}
-          {(subscription.appliedDiscounts ?? []).length > 0 && (
-            <div className="flex gap-1.5 flex-wrap">
-              {(subscription.appliedDiscounts ?? []).map(d => (
-                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                  {d.name} −{Math.round(d.percentage * 100)}%
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="flex items-baseline gap-1.5 flex-wrap">
+            <span className="text-2xl font-bold text-gray-900">€{(subscription.monthlyPrice ?? 0).toFixed(2)}</span>
+            <span className="text-base font-normal text-gray-500">/mês</span>
+          </div>
         </div>
 
         {!editingSchedule ? (
