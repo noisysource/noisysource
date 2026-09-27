@@ -596,6 +596,29 @@ export const sendBillingNotice = onCall(
   }
 );
 
+// ── Months are paid in order ─────────────────────────────────────────────────
+// A monthly record (id `<familyId>_YYYY-MM`) cannot be paid while an earlier
+// monthly record of the same family is still `pending`. `processing` (a payment
+// already under way, e.g. an issued Multibanco reference) does not block, so
+// paying several months together, oldest first, still works. `failed` does not
+// block either: a parent cannot pay a failed record, so blocking on it would
+// lock them out until an admin intervened. Party/camp records are not monthly
+// and are neither checked nor counted. Mirrors PaymentsPage.tsx.
+const MONTHLY_BILLING_ID = /_\d{4}-\d{2}$/;
+
+async function assertEarlierMonthsPaid(billingId: string, billing: FirebaseFirestore.DocumentData): Promise<void> {
+  if (!MONTHLY_BILLING_ID.test(billingId) || !billing.familyId || !billing.periodStart) return;
+  const snap = await appCol("billing").where("familyId", "==", billing.familyId).get();
+  const earlier = snap.docs
+    .filter(d => d.id !== billingId && MONTHLY_BILLING_ID.test(d.id)
+      && d.data().status === "pending"
+      && d.data().periodStart?.toMillis?.() < billing.periodStart.toMillis())
+    .sort((a, b) => a.data().periodStart.toMillis() - b.data().periodStart.toMillis());
+  if (earlier.length) {
+    throw new HttpsError("failed-precondition", `Pague primeiro ${earlier[0].data().periodLabel}.`);
+  }
+}
+
 // ── Client initiates MBWay payment ───────────────────────────────────────────
 
 export const initiateMbwayPayment = onCall(
@@ -614,6 +637,7 @@ export const initiateMbwayPayment = onCall(
     if (!billing) throw new HttpsError("not-found", "Billing record not found");
     if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
     if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
+    await assertEarlierMonthsPaid(billingId, billing);
     if (!billing.total || billing.total < 0.5) throw new HttpsError("failed-precondition", `Billing total is €${(billing.total ?? 0).toFixed(2)} — minimum is €0.50`);
 
     console.log(`[MBWay] billing ok — total=${billing.total} period=${billing.periodLabel}`);
@@ -657,6 +681,7 @@ export const initiateMultibancoPayment = onCall(
     if (!billing) throw new HttpsError("not-found", "Billing record not found");
     if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
     if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
+    await assertEarlierMonthsPaid(billingId, billing);
 
     const dueDate = billing.dueDate.toDate();
     const expiry = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")} 23:59`;
@@ -699,6 +724,7 @@ export const initiateCardPayment = onCall(
     if (!billing) throw new HttpsError("not-found", "Billing record not found");
     if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
     if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
+    await assertEarlierMonthsPaid(billingId, billing);
 
     const res = await createCardPayment(
       { name: billing.billingName, email: billing.billingEmail },
