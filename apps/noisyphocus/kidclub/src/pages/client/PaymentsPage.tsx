@@ -62,7 +62,10 @@ export default function PaymentsPage() {
         );
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as BillingRecord))
-          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+          // Chronological by the month billed, earliest first — createdAt is
+          // when the record was (re)built, so a recompute would float later
+          // months above the one due now.
+          .sort((a, b) => (a.periodStart?.toMillis?.() ?? 0) - (b.periodStart?.toMillis?.() ?? 0));
         setRecords(data);
       } catch (err) {
         console.error('[PaymentsPage] query failed:', err);
