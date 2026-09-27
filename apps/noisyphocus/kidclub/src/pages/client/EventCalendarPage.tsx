@@ -1,21 +1,23 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { getDocs, query, where, addDoc, Timestamp } from 'firebase/firestore';
+import { getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { col } from '../../lib/db';
-import { Event, EventModification, StudyRoomEntry, TransportationSubscription } from '@shared/models';
+import { callable } from '../../lib/callable';
+import { Event, StudyRoomEntry, TransportationSubscription } from '@shared/models';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isPast, startOfWeek, endOfWeek, addWeeks } from 'date-fns';
 import { eventService } from '../../services/eventService';
+
+type CalendarEvent = Event & { isCancelled?: boolean; groupKey?: string; createdAt?: Date; cancellationReason?: string; reservationEventId?: string };
 
 export default function EventCalendarPage() {
   const { childId } = useParams<{ childId: string }>();
   const user = useUser();
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [events, setEvents] = useState<(Event & { isCancelled?: boolean; groupKey?: string; createdAt?: Date; cancellationReason?: string })[]>([]);
-  const [modifications, setModifications] = useState<EventModification[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [subscriptions, setSubscriptions] = useState<{ study: StudyRoomEntry[]; transport: TransportationSubscription[] }>({ study: [], transport: [] });
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedEvent, setSelectedEvent] = useState<{ event: Event; date: Date } | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<{ event: CalendarEvent; date: Date } | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
 
@@ -57,35 +59,50 @@ export default function EventCalendarPage() {
         ...transportSubscriptions.map(t => t.id)
       ];
       
-      const childEvents = allEvents.filter(e => 
-        childEventIds.includes(e.bookingId) && 
+      const childEvents = allEvents.filter(e =>
+        childEventIds.includes(e.bookingId) &&
         (e.type === 'study' || e.type === 'transport')
-      ) as (Event & { isCancelled?: boolean; groupKey?: string; createdAt?: Date; cancellationReason?: string })[];
-      
-      setEvents(childEvents);
+      ) as CalendarEvent[];
 
-      // Fetch modifications - note: Firestore doesn't support range queries on dates easily
-      // We'll fetch all modifications for the child and filter client-side
-      const modsQuery = query(
-        col('eventModifications'),
-        where('childId', '==', childId)
-      );
-      const modsSnapshot = await getDocs(modsQuery);
-      const allMods = modsSnapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id,
-        date: doc.data().date?.toDate?.() || new Date(doc.data().date),
-        createdAt: doc.data().createdAt?.toDate?.() || new Date(doc.data().createdAt),
-        updatedAt: doc.data().updatedAt?.toDate?.() || new Date(doc.data().updatedAt),
-      } as EventModification));
-      
-      // Filter modifications by month
-      const monthMods = allMods.filter(mod => {
-        const modDate = mod.date;
-        return modDate >= monthStart && modDate <= monthEnd;
+      // Resolve each computed event to its real ReservationEvent doc, keyed by
+      // (subscriptionId, date) for study or (subscriptionId, date, direction)
+      // for transport — this is the actual billing/absence-threshold source
+      // of truth now, so it overrides eventService's own eventModifications-
+      // derived isCancelled rather than just supplementing it.
+      const monthStartIso = format(startOfMonth(currentMonth), 'yyyy-MM-dd');
+      const monthEndIso = format(endOfMonth(currentMonth), 'yyyy-MM-dd');
+      const reservationEventsSnap = childEventIds.length
+        ? await getDocs(query(
+            col('reservationEvents'),
+            where('subscriptionId', 'in', childEventIds.slice(0, 30)),
+            where('date', '>=', monthStartIso),
+            where('date', '<=', monthEndIso),
+          ))
+        : null;
+      const reservationEventByKey = new Map<string, { id: string; status: string }>();
+      reservationEventsSnap?.docs.forEach(d => {
+        const data = d.data();
+        const key = data.subscriptionType === 'transport'
+          ? `${data.subscriptionId}_${data.date}_${data.legIndex ?? 0}`
+          : `${data.subscriptionId}_${data.date}`;
+        reservationEventByKey.set(key, { id: d.id, status: data.status });
       });
-      
-      setModifications(monthMods);
+
+      const resolvedEvents: CalendarEvent[] = childEvents.flatMap((event): CalendarEvent[] => {
+        const dateStr = format((event.start as Timestamp).toDate(), 'yyyy-MM-dd');
+        const key = event.type === 'transport'
+          ? `${event.bookingId}_${dateStr}_${(event as any).booking?.legIndex ?? 0}`
+          : `${event.bookingId}_${dateStr}`;
+        const match = reservationEventByKey.get(key);
+        if (match?.status === 'VOIDED') return []; // subscription no longer covers this date
+        return [{
+          ...event,
+          reservationEventId: match?.id,
+          isCancelled: match ? match.status === 'CANCELLED' : event.isCancelled,
+        }];
+      });
+
+      setEvents(resolvedEvents);
     } catch (error) {
       console.error('Error fetching events:', error);
       alert('Error loading calendar events.');
@@ -96,52 +113,18 @@ export default function EventCalendarPage() {
 
   const handleCancelEvent = async () => {
     if (!selectedEvent || !childId || !user) return;
+    if (!selectedEvent.event.reservationEventId) {
+      alert('No matching occurrence found for this date — it may predate this system or the subscription has since ended.');
+      return;
+    }
 
     try {
-      // Find the subscription this event belongs to
-      const subscription = [...subscriptions.study, ...subscriptions.transport].find(
-        s => s.id === selectedEvent.event.bookingId
-      );
-
-      if (!subscription) {
-        alert('Subscription not found');
-        return;
-      }
-
-      // Find family
-      const familiesQuery = query(
-        col('families'),
-        where('primaryContact.userId', '==', user.uid)
-      );
-      const familiesSnapshot = await getDocs(familiesQuery);
-      if (familiesSnapshot.empty) {
-        alert('Family not found');
-        return;
-      }
-      const family = familiesSnapshot.docs[0];
-
-      // Create modification record
-      const modification: Omit<EventModification, 'id'> = {
-        eventId: selectedEvent.event.id,
-        subscriptionId: selectedEvent.event.bookingId,
-        subscriptionType: selectedEvent.event.type === 'study' ? 'study' : 'transport',
-        familyId: family.id,
-        childId,
-        date: selectedEvent.date,
-        modificationType: 'cancelled',
-        reason: cancelReason || 'Cancelled by parent',
-        affectsPricing: false, // Cancellations don't change subscription price
-        requestedBy: user.uid,
-        requestedByName: user.name || user.email?.split('@')[0] || 'Parent',
-        status: 'approved', // Auto-approve parent cancellations for now
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      await addDoc(col('eventModifications'), modification);
-
-      // Don't modify the original event - Event Sourcing principle: events are immutable
-      // The cancellation is recorded in EventModification, which we'll use when reading events
+      const fn = callable<{ eventId: string; status: 'CANCELLED'; reason?: string }, { ok: boolean }>('setReservationEventStatus');
+      await fn({
+        eventId: selectedEvent.event.reservationEventId,
+        status: 'CANCELLED',
+        ...(cancelReason ? { reason: cancelReason } : {}),
+      });
 
       await fetchData();
       setShowCancelModal(false);
@@ -154,12 +137,11 @@ export default function EventCalendarPage() {
     }
   };
 
-  const isEventCancelled = (event: Event & { isCancelled?: boolean }, date: Date): boolean => {
-    // Event Sourcing: Use isCancelled flag from eventService (already computed from EventModifications)
+  const isEventCancelled = (event: CalendarEvent, date: Date): boolean => {
     return event.isCancelled || false;
   };
 
-  const getEventsForDate = (date: Date): Event[] => {
+  const getEventsForDate = (date: Date): CalendarEvent[] => {
     return events.filter(event => {
       const eventDate = (event.start as Timestamp).toDate();
       return isSameDay(eventDate, date);
@@ -363,8 +345,10 @@ export default function EventCalendarPage() {
                 <strong>Time:</strong> {format((selectedEvent.event.start as Timestamp).toDate(), 'HH:mm')}
               </p>
               <p className="text-xs text-gray-500 mb-4">
-                <strong>Important:</strong> Cancelling this event will notify teachers/drivers. 
-                Your subscription price will remain unchanged - monthly subscription fees are not affected by individual event cancellations.
+                <strong>Important:</strong> Cancelling this event will notify teachers/drivers.
+                Your subscription price is unaffected unless you reach 3 cancellations for this
+                service in the same month — from the 3rd onward, that month's bill is credited
+                for every cancelled occurrence.
               </p>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Reason (optional):

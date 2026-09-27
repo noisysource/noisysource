@@ -178,6 +178,27 @@ service cloud.firestore {
         allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
       }
 
+      // Materialized subscription occurrences (one per date, generated for the whole
+      // school year on subscription create). Read by the client calendar/subscription
+      // pages and the admin billing page; every write goes through
+      // setReservationEventStatus (parents and staff) or the generation triggers in
+      // reservationEvents.ts, both Admin SDK and so bypass these rules entirely — no
+      // direct client write path exists or is needed.
+      // Reads are scoped to staff or the owning family — `isAuthenticated()`
+      // alone let any logged-in parent read every other family's occurrences.
+      // The family link lives at families/{id}.primaryContact.userId (the same
+      // field the families rule above matches on); the cross-document get() is
+      // the same idiom eventModifications uses.
+      match /reservationEvents/{doc} {
+        allow read: if isRainbowAdmin() || isOwner() ||
+          (isAuthenticated()
+            && 'familyId' in resource.data
+            && resource.data.familyId != ''
+            && get(/databases/$(database)/documents/_apps/arcoiris/families/$(resource.data.familyId))
+                 .data.primaryContact.userId == request.auth.uid);
+        allow write: if isRainbowAdmin();
+      }
+
       // Financial events
       match /financialEvents/{doc} {
         allow read, write: if isRainbowAdmin() || isOwner();

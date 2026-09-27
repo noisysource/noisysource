@@ -36,10 +36,9 @@ import FamilyDashboardPage from './pages/client/FamilyDashboardPage';
 import ChildManagementPage from './pages/client/ChildManagementPage';
 import ChildDetailPage from './pages/client/ChildDetailPage';
 import EventCalendarPage from './pages/client/EventCalendarPage';
-import FamilySchedulePage from './pages/client/FamilySchedulePage';
+import FamilyCalendarPage from './pages/client/FamilyCalendarPage';
 import StudySubscriptionDetailPage from './pages/client/StudySubscriptionDetailPage';
 import TransportSubscriptionDetailPage from './pages/client/TransportSubscriptionDetailPage';
-import ClientSchedulePage from './pages/client/ClientSchedulePage';
 import MySubscriptionsPage from './pages/client/MySubscriptionsPage';
 import AccountPage from './pages/client/AccountPage';
 import InvoiceListPage from './pages/client/InvoiceListPage';
@@ -115,6 +114,9 @@ export default function App() {
           <Route path="children/:childId" element={<ChildDetailPage />} />
           <Route path="children/:childId/calendar" element={<EventCalendarPage />} />
 
+          {/* One calendar for every child and both services */}
+          <Route path="calendar" element={<FamilyCalendarPage />} />
+
           {/* Subscriptions */}
           <Route path="subscriptions" element={<MySubscriptionsPage />} />
           <Route path="enroll/study" element={<StudyRoomEnrollPage />} />
@@ -136,9 +138,13 @@ export default function App() {
           {/* Camps */}
           <Route path="camps" element={<ClientCampsPage />} />
 
-          {/* Legacy compat */}
-          <Route path="family/schedule" element={<FamilySchedulePage />} />
-          <Route path="schedule" element={<ClientSchedulePage />} />
+          {/* FamilySchedulePage and ClientSchedulePage were removed: nothing
+              linked to either, they showed overlapping subsets of what the
+              calendar now shows in one place, and FamilySchedulePage's links
+              pointed at routes that do not exist. Both paths redirect so an
+              old bookmark still lands somewhere useful. */}
+          <Route path="family/schedule" element={<Navigate to="/client/calendar" replace />} />
+          <Route path="schedule" element={<Navigate to="/client/calendar" replace />} />
           <Route path="study/:id" element={<StudySubscriptionDetailPage />} />
           <Route path="transport/:id" element={<TransportSubscriptionDetailPage />} />
         </Route>

@@ -1,3 +1,5 @@
+import { assertExternalCallsAllowed } from "../externalGuard";
+
 const BASE_URL = "https://www.vendus.pt/ws/v1.1";
 
 // Stable Vendus product IDs for KidClub services
@@ -23,6 +25,7 @@ function registerId(): number {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  assertExternalCallsAllowed("Vendus");
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers: {

@@ -70,5 +70,6 @@ Functions infrastructure (not code) is managed by Terraform — `lifecycle { ign
 ## Adding a New Function
 1. Create or update the relevant source file under `src/`
 2. Export from `src/index.ts`
-3. Update `firestore.rules` if new collections are involved
-4. Add the function name to `local.callable_functions` in `infra/gcp/terraform/functions.tf` if it's a new callable
+3. Update `firestore.rules` if new collections are involved — **including a rule for any new collection the function reads or writes**. Firestore denies by default, so a collection with no matching rule breaks every client read of it, even though the function's own Admin SDK writes bypass rules and look fine.
+4. Add any composite index the function's queries need to `firestore.indexes.json`. An inequality (range) filter combined with an equality/`in` on a different field always needs one declared explicitly; pure-equality combinations don't.
+5. **Do NOT add a new callable to `local.callable_functions` in `infra/gcp/terraform/functions.tf` in the same PR as its code.** That list creates each function from a dummy placeholder zip with `entry_point = <name>`, and CI runs `terraform apply` *before* `firebase deploy --only functions` — so a brand-new name there fails to create with "Container Healthcheck failed... failed to start and listen on PORT". Ship the code first, let the functions deploy create the function for real, then add it to that list in a follow-up PR if you want Terraform managing its service config.

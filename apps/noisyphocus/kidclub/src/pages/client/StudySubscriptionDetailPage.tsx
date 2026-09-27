@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
+import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
-import { StudyRoomEntry, normalizeStatus } from '@shared/models';
+import { callable } from '../../lib/callable';
+import { Child, Family, StudyRoomEntry, normalizeStatus } from '@shared/models';
+import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
+import { coerceSubscriptionDate } from '../../lib/utils';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
 
@@ -26,7 +29,8 @@ interface UpcomingSession {
   dateStr: string;
   hour: string;
   transport: boolean;
-  cancellationId?: string;
+  reservationEventId?: string; // undefined if no ReservationEvent was ever generated for this date (e.g. subscription created after it, or before this system shipped)
+  cancelled: boolean;
 }
 
 export default function StudySubscriptionDetailPage() {
@@ -34,9 +38,14 @@ export default function StudySubscriptionDetailPage() {
   const navigate = useNavigate();
   const user = useUser();
   const [subscription, setSubscription] = useState<StudyRoomEntry | null>(null);
+  // Child/guardian details are resolved from children/{childId} and
+  // families/{familyId}.primaryContact, not from this subscription's own
+  // denormalized copies — see lib/personalData.ts.
+  const [person, setPerson] = useState<PersonalData | null>(null);
   const [sessions, setSessions] = useState<UpcomingSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [draftDays, setDraftDays] = useState<StudyRoomEntry['days']>([]);
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -60,10 +69,29 @@ export default function StudySubscriptionDetailPage() {
         ...data,
         id: subSnap.id,
         status: normalizeStatus(data),
-        startDate: data.startDate?.toDate?.() ?? (data.startDate ? new Date(data.startDate) : null),
-        endDate: data.endDate?.toDate?.() ?? (data.endDate ? new Date(data.endDate) : null),
+        // Timestamps here today, but a string would hit the same UTC-midnight
+        // off-by-one the transport page did — one coercer for both.
+        startDate: coerceSubscriptionDate(data.startDate, 'start'),
+        endDate: coerceSubscriptionDate(data.endDate, 'end'),
       } as StudyRoomEntry;
       setSubscription(sub);
+
+      // Best-effort: an admin-created child that no parent has claimed yet
+      // carries no userId, so the security rules can deny this read — fall
+      // back to the subscription's own copies rather than failing the page.
+      let child: Child | null = null;
+      let family: Family | null = null;
+      try {
+        const [childSnap, famSnap] = await Promise.all([
+          sub.childId ? getDoc(docRef('children', sub.childId)) : Promise.resolve(null),
+          sub.familyId ? getDoc(docRef('families', sub.familyId)) : Promise.resolve(null),
+        ]);
+        if (childSnap?.exists()) child = { ...childSnap.data(), id: childSnap.id } as Child;
+        if (famSnap?.exists()) family = { ...famSnap.data(), id: famSnap.id } as Family;
+      } catch (err) {
+        console.warn('[StudySubscriptionDetailPage] personal data read failed:', err);
+      }
+      setPerson(resolvePersonalData(child, family, sub));
 
       const calSnap = await getDoc(docRef('config', 'schoolCalendar'));
       const schoolYearEnd: Date | null =
@@ -71,26 +99,26 @@ export default function StudySubscriptionDetailPage() {
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`)
           : null;
 
-      const modsSnap = await getDocs(
-        query(
-          col('eventModifications'),
-          where('subscriptionId', '==', id),
-          where('subscriptionType', '==', 'study'),
-          where('modificationType', '==', 'cancelled'),
-          where('status', '==', 'approved'),
-        ),
-      );
-      const cancelledDates: Record<string, string> = {};
-      modsSnap.docs.forEach(d => {
-        const date = d.data().date?.toDate?.() ?? new Date(d.data().date);
-        cancelledDates[format(date, 'yyyy-MM-dd')] = d.id;
-      });
-
       const today = startOfToday();
       const rangeEnd = addWeeks(today, 4);
       const effectiveEnd = schoolYearEnd
         ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd)
         : rangeEnd;
+
+      const eventsSnap = await getDocs(
+        query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ),
+      );
+      const eventByDate: Record<string, { id: string; status: string }> = {};
+      eventsSnap.docs.forEach(d => {
+        const data = d.data();
+        eventByDate[data.date] = { id: d.id, status: data.status };
+      });
+      const hasAnyEvents = eventsSnap.docs.length > 0;
 
       const upcoming: UpcomingSession[] = [];
       for (const day of eachDayOfInterval({ start: today, end: effectiveEnd })) {
@@ -98,12 +126,18 @@ export default function StudySubscriptionDetailPage() {
         for (const sel of sub.days ?? []) {
           if (sel.day !== dayName) continue;
           const dateStr = format(day, 'yyyy-MM-dd');
+          const ev = eventByDate[dateStr];
+          if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
+          // Off-pattern day of a biweekly subscription — not a service day.
+          // See TransportSubscriptionDetailPage for the full reasoning.
+          if (!ev && hasAnyEvents) continue;
           upcoming.push({
             date: day,
             dateStr,
             hour: sel.hour,
             transport: sel.transport,
-            cancellationId: cancelledDates[dateStr],
+            reservationEventId: ev?.id,
+            cancelled: ev?.status === 'CANCELLED',
           });
         }
       }
@@ -116,24 +150,22 @@ export default function StudySubscriptionDetailPage() {
 
   const toggleDay = async (session: UpcomingSession) => {
     if (!user || !id) return;
+    // No ReservationEvent for this date means nothing can be cancelled — the
+    // occurrence was never generated (subscription predates the occurrences
+    // system, or an admin hasn't run "Gerar ocorrências" yet). Say so instead
+    // of returning silently and leaving a button that looks live but isn't.
+    if (!session.reservationEventId) {
+      setActionError('Este dia ainda não tem ocorrência gerada, por isso não pode ser cancelado. Peça ao Kid Club para gerar as ocorrências desta inscrição.');
+      return;
+    }
     setActionInProgress(session.dateStr);
+    setActionError(null);
     try {
-      if (session.cancellationId) {
-        await deleteDoc(docRef('eventModifications', session.cancellationId));
-      } else {
-        await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'study',
-          date: session.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId: user.uid,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      await fn({ eventId: session.reservationEventId, status: session.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
     }
@@ -244,8 +276,10 @@ export default function StudySubscriptionDetailPage() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-start justify-between">
           <div>
-            <p className="font-semibold text-lg">{subscription.childName}</p>
-            <p className="text-gray-500 text-sm">{subscription.schoolName}</p>
+            <p className="font-semibold text-lg">{person?.childName}</p>
+            <p className="text-gray-500 text-sm">
+              {[person?.schoolName, person?.schoolYear].filter(Boolean).join(' · ')}
+            </p>
           </div>
           <div className="flex flex-col items-end gap-1.5">
             <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusBadge.cls}`}>
@@ -263,26 +297,10 @@ export default function StudySubscriptionDetailPage() {
         </div>
 
         <div className="mt-4 space-y-2">
-          {(() => {
-            const fee = subscription.monthlyPrice ?? 0;
-            const gross = subscription.basePrice != null && subscription.basePrice > fee + 0.01 ? subscription.basePrice : null;
-            return (
-              <div className="flex items-baseline gap-1.5 flex-wrap">
-                {gross != null && <span className="text-base text-gray-400 line-through">€{gross.toFixed(2)}</span>}
-                <span className={`text-2xl font-bold ${gross != null ? 'text-green-700' : 'text-gray-900'}`}>€{fee.toFixed(2)}</span>
-                <span className="text-base font-normal text-gray-500">/mês</span>
-              </div>
-            );
-          })()}
-          {(subscription.appliedDiscounts ?? []).length > 0 && (
-            <div className="flex gap-1.5 flex-wrap">
-              {(subscription.appliedDiscounts ?? []).map(d => (
-                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                  {d.name} −{Math.round(d.percentage * 100)}%
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="flex items-baseline gap-1.5 flex-wrap">
+            <span className="text-2xl font-bold text-gray-900">€{(subscription.monthlyPrice ?? 0).toFixed(2)}</span>
+            <span className="text-base font-normal text-gray-500">/mês</span>
+          </div>
         </div>
 
         {!editingSchedule ? (
@@ -350,7 +368,7 @@ export default function StudySubscriptionDetailPage() {
         <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
           <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
           <p className="text-sm text-purple-700 mb-4">
-            A equipa fez alterações à inscrição na Sala de Estudo de <strong>{subscription.childName}</strong>.
+            A equipa fez alterações à inscrição na Sala de Estudo de <strong>{person?.childName}</strong>.
             Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
           </p>
           <div className="flex gap-3">
@@ -386,6 +404,23 @@ export default function StudySubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele dias específicos (ex: férias). O cancelamento é imediato e pode ser revertido.
             </p>
+            {subscription?.weekPattern && subscription.weekPattern !== 'all' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Esta inscrição é <strong>quinzenal</strong> ({subscription.weekPattern === 'odd' ? '1.ª e 3.ª semanas' : '2.ª e 4.ª semanas'} do mês),
+                por isso só aparecem as semanas em que há serviço.
+              </p>
+            )}
+            {actionError && (
+              <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                {actionError}
+              </p>
+            )}
+            {sessions.length > 0 && sessions.every(s => !s.reservationEventId) && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Esta inscrição ainda não tem ocorrências geradas — os dias abaixo não podem ser
+                cancelados até que isso seja feito.
+              </p>
+            )}
           </div>
           {sessions.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-8">
@@ -394,7 +429,7 @@ export default function StudySubscriptionDetailPage() {
           ) : (
             <div className="divide-y divide-gray-50">
               {sessions.map(session => {
-                const isCancelled = !!session.cancellationId;
+                const isCancelled = session.cancelled;
                 const inProgress = actionInProgress === session.dateStr;
                 return (
                   <div
@@ -412,8 +447,9 @@ export default function StudySubscriptionDetailPage() {
                     </div>
                     <button
                       onClick={() => toggleDay(session)}
-                      disabled={!!actionInProgress}
-                      className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 ${
+                      disabled={!!actionInProgress || !session.reservationEventId}
+                      title={!session.reservationEventId ? 'Sem ocorrência gerada para este dia — não pode ser cancelado' : undefined}
+                      className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                         isCancelled
                           ? 'bg-green-100 text-green-700 hover:bg-green-200'
                           : 'bg-red-50 text-red-600 hover:bg-red-100'
@@ -450,7 +486,7 @@ export default function StudySubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{person?.childName}</strong> e entrará em contacto.
             </p>
             <div className="flex gap-3">
               <button
@@ -476,7 +512,7 @@ export default function StudySubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Cancelar subscrição?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A subscrição de <strong>{subscription.childName}</strong> na Sala de Estudo será
+              A subscrição de <strong>{person?.childName}</strong> na Sala de Estudo será
               cancelada. Esta ação não pode ser desfeita.
             </p>
             <div className="flex gap-3">

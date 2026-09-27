@@ -5,7 +5,7 @@ import { col, docRef } from '../lib/db';
 import { Event } from '@shared/models/Event';
 import { FinancialEvent } from '@shared/models/FinancialEvent';
 import { EventModification, StudyRoomEntry, Booking, TransportationSubscription } from '@shared/models';
-import { startOfMonth, endOfMonth, format, eachDayOfInterval, isSameDay } from 'date-fns';
+import { startOfMonth, endOfMonth, format, eachDayOfInterval, isSameDay, startOfDay } from 'date-fns';
 import { safeDate } from '@shared/lib/dates';
 import { getTransportBooking } from './transportationService';
 import { centsToEuros } from '@shared/lib/money';
@@ -30,8 +30,16 @@ export const schoolCalendarService = {
 };
 
 //<editor-fold desc="Data Fetching">
+// "confirmed" is the legacy spelling of "active" for study room (see
+// normalizeStatus in @shared/models/StudyRoomEntry) — both mean an enrolled,
+// billable subscription. Querying only 'confirmed' silently dropped every
+// study-room sub stored as 'active' from event AND income generation, while
+// the calendar query below already included both. That mismatch meant a
+// subscription could appear on the calendar and contribute nothing to the
+// financial summary. Transport has no equivalent split — it only ever uses
+// 'active'.
 const getConfirmedStudyRoomEntries = async () => {
-  const studyRoomQuery = query(col('studyroom'), where('status', '==', 'confirmed'));
+  const studyRoomQuery = query(col('studyroom'), where('status', 'in', ['confirmed', 'active']));
   const snapshot = await getDocs(studyRoomQuery);
   return snapshot.docs.map(doc => ({ ...doc.data() as StudyRoomEntry, id: doc.id }));
 };
@@ -475,6 +483,30 @@ export const eventService = {
 
       const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
+      // Cancellation state comes from reservationEvents — the collection the
+      // billing pipeline and every client cancel path actually write to.
+      // shouldSkipEvent() below still reads eventModifications, which nothing
+      // writes any more, so on its own the calendar would show every day as
+      // not-cancelled no matter what staff or parents had marked.
+      const resEventsSnap = await getDocs(query(
+        col('reservationEvents'),
+        where('date', '>=', format(start, 'yyyy-MM-dd')),
+        where('date', '<=', format(end, 'yyyy-MM-dd')),
+      ));
+      const resByKey = new Map<string, { id: string; status: string }>();
+      resEventsSnap.docs.forEach(d => {
+        const x = d.data() as any;
+        const key = x.subscriptionType === 'transport'
+          ? `${x.subscriptionId}_${x.date}_${x.legIndex ?? 0}`
+          : `${x.subscriptionId}_${x.date}`;
+        resByKey.set(key, { id: d.id, status: x.status });
+      });
+      const resolveRes = (key: string, fallback: boolean) => {
+        const ev = resByKey.get(key);
+        if (!ev) return { isCancelled: fallback, voided: false, reservationEventId: undefined as string | undefined };
+        return { isCancelled: ev.status === 'CANCELLED', voided: ev.status === 'VOIDED', reservationEventId: ev.id };
+      };
+
       for (const day of eachDayOfInterval({ start, end })) {
         const dayName = DAY_NAMES[day.getDay()];
         const dateStr = format(day, 'yyyy-MM-dd');
@@ -492,7 +524,9 @@ export const eventService = {
           for (const daySel of entry.days) {
             if (daySel.day !== dayName) continue;
             const eventId = `study_${entry.id}_${dateStr}`;
-            const isCancelled = shouldSkipEvent(eventId, entry.id, 'study', day, cancellations);
+            const res = resolveRes(`${entry.id}_${dateStr}`, shouldSkipEvent(eventId, entry.id, 'study', day, cancellations));
+            if (res.voided) continue; // subscription no longer covers this date
+            const isCancelled = res.isCancelled;
             const startDt = new Date(`${dateStr}T${daySel.hour}`);
             computedStudyEvents.push({
               id: eventId,
@@ -515,17 +549,24 @@ export const eventService = {
         }
 
         for (const sub of transportSubs) {
-          const subStart = safeDate(sub.startDate);
+          // safeDate() returns NOW for a missing date, and `day` is midnight,
+          // so a subscription with no startDate (19 of 23 active ones) had
+          // today and every past day skipped — transport simply vanished from
+          // the calendar. A missing startDate means "no start restriction",
+          // not "starts this instant".
+          const subStart = sub.startDate ? startOfDay(safeDate(sub.startDate)) : null;
           const rawSubEnd = sub.endDate ? safeDate(sub.endDate) : null;
           const subEnd = rawSubEnd && schoolYearEnd
             ? (rawSubEnd < schoolYearEnd ? rawSubEnd : schoolYearEnd)
             : (rawSubEnd ?? schoolYearEnd);
-          if (day < subStart || (subEnd && day > subEnd)) continue;
+          if ((subStart && day < subStart) || (subEnd && day > subEnd)) continue;
 
-          for (const sched of sub.schedule || []) {
+          for (const [legIndex, sched] of (sub.schedule || []).entries()) {
             if (sched.dayOfWeek !== dayName) continue;
             const eventId = `transport_sub_${sub.id}_${dateStr}_${sched.pickupTime.replace(':', '')}`;
-            const isCancelled = shouldSkipEvent(eventId, sub.id, 'transport', day, cancellations);
+            const res = resolveRes(`${sub.id}_${dateStr}_${legIndex}`, shouldSkipEvent(eventId, sub.id, 'transport', day, cancellations));
+            if (res.voided) continue; // subscription no longer covers this date
+            const isCancelled = res.isCancelled;
             const startDt = new Date(`${dateStr}T${sched.pickupTime}`);
             computedTransportEvents.push({
               id: eventId,
@@ -543,6 +584,10 @@ export const eventService = {
                 dropoffLocation: sched.dropoffLocation,
                 subscriptionId: sub.id,
                 subscriptionType: 'transport',
+                // Needed to resolve the matching ReservationEvent doc, whose id
+                // is keyed by (date, legIndex) — see reservationEvents.ts.
+                direction: sched.direction ?? 'both',
+                legIndex,
               },
             } as unknown as Event);
           }

@@ -85,6 +85,8 @@ export interface TransportationSubscription {
   returningStudent?: boolean;
   ridesRemaining?: number; // For limited ride subscriptions
   appliedDiscounts?: import('./Discount').AppliedDiscount[];
+  /** Admin overrides of automatic discounts, by rule id. See DiscountOverrides. */
+  discountOverrides?: import('./Discount').DiscountOverrides;
   
   // Schedule
   weekPattern: WeekPattern;

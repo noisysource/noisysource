@@ -5,7 +5,6 @@ import { Child, StudyRoomEntry, TransportationSubscription, Booking, Family } fr
 import { format } from 'date-fns';
 import { calculateAge } from '../../lib/utils';
 import { familyService } from '../../services/familyService';
-import { grossFromAppliedDiscounts } from '../../services/discountService';
 
 export default function ChildDetailPage() {
   const { childId } = useParams<{ childId: string }>();
@@ -347,10 +346,7 @@ export default function ChildDetailPage() {
                       <div>
                         <div className="font-medium text-blue-900">📚 Sala de Estudo</div>
                         <div className="text-sm text-blue-700">
-                          {sub.schoolName && `${sub.schoolName} · `}
-                          {(sub.basePrice ?? 0) > sub.monthlyPrice + 0.01
-                            ? <><span className="line-through text-blue-400 text-xs">€{(sub.basePrice!).toFixed(2)}</span>{' '}<span className="text-green-700 font-medium">€{sub.monthlyPrice.toFixed(2)}</span>/mês</>
-                            : `€${sub.monthlyPrice.toFixed(2)}/mês`}
+                          €{sub.monthlyPrice.toFixed(2)}/mês
                         </div>
                       </div>
                       <span className={`text-xs px-2 py-1 rounded ${
@@ -361,15 +357,6 @@ export default function ChildDetailPage() {
                         {sub.status}
                       </span>
                     </div>
-                    {(sub.appliedDiscounts ?? []).length > 0 && (
-                      <div className="flex gap-1 flex-wrap mt-2">
-                        {(sub.appliedDiscounts ?? []).map(d => (
-                          <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                            {d.name} −{Math.round(d.percentage * 100)}%
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </Link>
                 ))}
                 {transportSubscriptions.map(sub => (
@@ -382,12 +369,7 @@ export default function ChildDetailPage() {
                       <div>
                         <div className="font-medium text-green-900">🚌 Transporte</div>
                         <div className="text-sm text-green-700">
-                          {(() => {
-                            const g = grossFromAppliedDiscounts(sub.monthlyFee, sub.appliedDiscounts);
-                            return g != null && g > sub.monthlyFee + 0.01
-                              ? <><span className="line-through text-green-400 text-xs">€{g.toFixed(2)}</span>{' '}<span className="font-medium">€{sub.monthlyFee.toFixed(2)}</span>/mês</>
-                              : `€${sub.monthlyFee.toFixed(2)}/mês`;
-                          })()}
+                          €{sub.monthlyFee.toFixed(2)}/mês
                         </div>
                       </div>
                       <span className={`text-xs px-2 py-1 rounded ${
@@ -398,15 +380,6 @@ export default function ChildDetailPage() {
                         {sub.status}
                       </span>
                     </div>
-                    {(sub.appliedDiscounts ?? []).length > 0 && (
-                      <div className="flex gap-1 flex-wrap mt-2">
-                        {(sub.appliedDiscounts ?? []).map(d => (
-                          <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                            {d.name} −{Math.round(d.percentage * 100)}%
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </Link>
                 ))}
               </div>

@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getDoc, updateDoc, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
+import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
-import { TransportationSubscription } from '@shared/models';
+import { callable } from '../../lib/callable';
+import { Child, Family, TransportationSubscription } from '@shared/models';
 import { TransportationConfig } from '@shared/models/Transportation';
-import { normalizeSubStatus } from '../../lib/utils';
+import { normalizeSubStatus , coerceSubscriptionDate } from '../../lib/utils';
+import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
@@ -17,13 +19,13 @@ const PT_DAY: Record<string, string> = {
 };
 
 interface UpcomingTrip {
-  eventId: string;
   date: Date;
   dateStr: string;
   pickupTime: string;
   pickupLocation: string;
   dropoffLocation: string;
-  cancellationId?: string;
+  reservationEventId?: string; // undefined if no ReservationEvent was generated for this exact date+leg
+  cancelled: boolean;
 }
 
 interface DayGroup {
@@ -39,10 +41,15 @@ export default function TransportSubscriptionDetailPage() {
   const [subscription, setSubscription] = useState<TransportationSubscription | null>(null);
   const [config, setConfig] = useState<TransportationConfig | null>(null);
   const [siblingRank, setSiblingRank] = useState(1);
-  const [schoolName, setSchoolName] = useState<string | undefined>();
+  // Child/guardian details are resolved from children/{childId} and
+  // families/{familyId}.primaryContact, not from this subscription's own
+  // denormalized copies — see lib/personalData.ts.
+  const [person, setPerson] = useState<PersonalData | null>(null);
+  const schoolName = person?.schoolName;
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -68,15 +75,28 @@ export default function TransportSubscriptionDetailPage() {
 
       if (cfgSnap.exists()) setConfig(cfgSnap.data() as TransportationConfig);
 
-      // Resolve school name: subscription doc first, then children doc
-      let school: string | undefined = sub.schoolName;
-      if (!school && sub.childId) {
-        const childSnap = await getDoc(docRef('children', sub.childId));
-        if (childSnap.exists()) school = childSnap.data().schoolName;
+      // Personal data (name, school, guardian contact) comes from the child
+      // and family documents. Best-effort: an admin-created child that no
+      // parent has claimed yet carries no userId, so the security rules can
+      // deny this read — fall back to the subscription's own copies rather
+      // than failing the whole page.
+      let child: Child | null = null;
+      let family: Family | null = null;
+      try {
+        const [childSnap, famSnap] = await Promise.all([
+          sub.childId ? getDoc(docRef('children', sub.childId)) : Promise.resolve(null),
+          sub.familyId ? getDoc(docRef('families', sub.familyId)) : Promise.resolve(null),
+        ]);
+        if (childSnap?.exists()) child = { ...childSnap.data(), id: childSnap.id } as Child;
+        if (famSnap?.exists()) family = { ...famSnap.data(), id: famSnap.id } as Family;
+      } catch (err) {
+        console.warn('[TransportSubscriptionDetailPage] personal data read failed:', err);
       }
-      setSchoolName(school);
+      setPerson(resolvePersonalData(child, family, sub));
 
-      // Sibling rank: count active transport subs in the same family, sorted by childName
+      // Sibling rank: count active transport subs in the same family, sorted by
+      // childName. Uses the subscriptions' own copies deliberately — this only
+      // needs a stable ordering across siblings, not display-accurate names.
       if (sub.familyId) {
         const famSnap = await getDocs(
           query(col('transportationSubscriptions'), where('familyId', '==', sub.familyId), where('status', '==', 'active'))
@@ -93,30 +113,37 @@ export default function TransportSubscriptionDetailPage() {
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`)
           : null;
 
-      const modsSnap = await getDocs(
-        query(
-          col('eventModifications'),
-          where('subscriptionId', '==', id),
-          where('subscriptionType', '==', 'transport'),
-          where('modificationType', '==', 'cancelled'),
-          where('status', '==', 'approved'),
-        ),
-      );
-      // Key cancellations by eventId for per-trip precision
-      const cancelledByEventId: Record<string, string> = {};
-      modsSnap.docs.forEach(d => {
-        const eventId = d.data().eventId;
-        if (eventId) cancelledByEventId[eventId] = d.id;
-      });
-
       const today = startOfToday();
       const rangeEnd = addWeeks(today, 4);
       const effectiveEnd = schoolYearEnd
         ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd)
         : rangeEnd;
 
-      const subStart = sub.startDate ? new Date(sub.startDate) : today;
-      const subEnd = sub.endDate ? new Date(sub.endDate) : null;
+      // coerceSubscriptionDate, not new Date(): transport stores startDate as a
+      // "YYYY-MM-DD" string, which new Date() reads as UTC midnight — 01:00 in
+      // Lisbon — so `day < subStart` was true for the start day itself and the
+      // subscription's first day never appeared in this list.
+      const subStart = coerceSubscriptionDate(sub.startDate, 'start') ?? today;
+      const subEnd = coerceSubscriptionDate(sub.endDate, 'end');
+
+      // Keyed by "date_legIndex" — matching how reservationEvents.ts ids each
+      // leg. Keying by direction collided: no schedule entry carries one, so
+      // both legs of a day resolved to the same occurrence and cancelling one
+      // cancelled both.
+      const eventsSnap = await getDocs(
+        query(
+          col('reservationEvents'),
+          where('subscriptionId', '==', id),
+          where('date', '>=', format(today, 'yyyy-MM-dd')),
+          where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
+        ),
+      );
+      const eventByDateLeg: Record<string, { id: string; status: string }> = {};
+      eventsSnap.docs.forEach(d => {
+        const data = d.data();
+        eventByDateLeg[`${data.date}_${data.legIndex ?? 0}`] = { id: d.id, status: data.status };
+      });
+      const hasAnyEvents = eventsSnap.docs.length > 0;
 
       const groupMap = new Map<string, DayGroup>();
 
@@ -126,18 +153,27 @@ export default function TransportSubscriptionDetailPage() {
         const dayName = DAY_NAMES[day.getDay()];
         const dateStr = format(day, 'yyyy-MM-dd');
 
-        for (const sched of sub.schedule ?? []) {
+        for (const [legIndex, sched] of (sub.schedule ?? []).entries()) {
           if (sched.dayOfWeek !== dayName) continue;
-          // Match the same eventId format used in eventService.ts
-          const eventId = `transport_sub_${id}_${dateStr}_${sched.pickupTime.replace(':', '')}`;
+          const ev = eventByDateLeg[`${dateStr}_${legIndex}`];
+          if (ev?.status === 'VOIDED') continue; // subscription no longer covers this date
+          // No occurrence for a scheduled weekday means this date isn't a
+          // service day — normal for a biweekly (odd/even) subscription,
+          // where only half the matching weekdays are active. Listing it
+          // anyway produced rows that looked like trips but couldn't be
+          // cancelled. Only skip when SOME occurrences exist: if the
+          // subscription has none at all, keep the rows so the
+          // "no occurrences generated" banner below still has something to
+          // explain rather than showing a misleading empty list.
+          if (!ev && hasAnyEvents) continue;
           const trip: UpcomingTrip = {
-            eventId,
             date: day,
             dateStr,
             pickupTime: sched.pickupTime,
             pickupLocation: sched.pickupLocation,
             dropoffLocation: sched.dropoffLocation,
-            cancellationId: cancelledByEventId[eventId],
+            reservationEventId: ev?.id,
+            cancelled: ev?.status === 'CANCELLED',
           };
           if (!groupMap.has(dateStr)) {
             groupMap.set(dateStr, { dateStr, date: day, trips: [] });
@@ -158,25 +194,20 @@ export default function TransportSubscriptionDetailPage() {
 
   const toggleTrip = async (trip: UpcomingTrip) => {
     if (!user || !id) return;
-    setActionInProgress(trip.eventId);
+    // See StudySubscriptionDetailPage's toggleDay — a missing ReservationEvent
+    // means the occurrence was never generated; say so rather than no-op.
+    if (!trip.reservationEventId) {
+      setActionError('Esta viagem ainda não tem ocorrência gerada, por isso não pode ser cancelada. Peça ao Kid Club para gerar as ocorrências desta inscrição.');
+      return;
+    }
+    setActionInProgress(trip.reservationEventId);
+    setActionError(null);
     try {
-      if (trip.cancellationId) {
-        await deleteDoc(docRef('eventModifications', trip.cancellationId));
-      } else {
-        await addDoc(col('eventModifications'), {
-          subscriptionId: id,
-          subscriptionType: 'transport',
-          eventId: trip.eventId,
-          date: trip.date,
-          modificationType: 'cancelled',
-          status: 'approved',
-          userId: user.uid,
-          reason: 'Cancelado pelo cliente',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-      }
+      const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
+      await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
     }
@@ -323,9 +354,12 @@ export default function TransportSubscriptionDetailPage() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-start justify-between">
           <div>
-            <p className="font-semibold text-lg">{subscription.childName}</p>
-            {subscription.contactEmail && (
-              <p className="text-gray-500 text-sm">{subscription.contactEmail}</p>
+            <p className="font-semibold text-lg">{person?.childName}</p>
+            {person?.schoolName && (
+              <p className="text-gray-500 text-sm">{person.schoolName}</p>
+            )}
+            {person?.contactEmail && (
+              <p className="text-gray-400 text-xs">{person.contactEmail}</p>
             )}
           </div>
           <div className="flex flex-col items-end gap-1.5">
@@ -346,12 +380,9 @@ export default function TransportSubscriptionDetailPage() {
         <div className="mt-4 space-y-2">
           {(() => {
             const fee = subscription.monthlyFee ?? 0;
-            const gross = priceBreakdown?.baseTotal;
-            const hasDiscount = gross != null && gross > fee + 0.01;
             return (
               <div className="flex items-baseline gap-1.5 flex-wrap">
-                {hasDiscount && <span className="text-base text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
-                <span className={`text-2xl font-bold ${hasDiscount ? 'text-green-700' : 'text-gray-900'}`}>€{fee.toFixed(2)}</span>
+                <span className="text-2xl font-bold text-gray-900">€{fee.toFixed(2)}</span>
                 <span className="text-base font-normal text-gray-500">/mês</span>
                 {priceBreakdown && priceBreakdown.vatRate > 0 && (
                   <span className="text-xs text-gray-400">+ €{priceBreakdown.vatAmount.toFixed(2)} IVA</span>
@@ -359,15 +390,6 @@ export default function TransportSubscriptionDetailPage() {
               </div>
             );
           })()}
-          {(subscription.appliedDiscounts ?? []).length > 0 && (
-            <div className="flex gap-1.5 flex-wrap mt-1">
-              {(subscription.appliedDiscounts ?? []).map(d => (
-                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                  {d.name} −{Math.round(d.percentage * 100)}%
-                </span>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
@@ -387,7 +409,7 @@ export default function TransportSubscriptionDetailPage() {
         <div className="bg-purple-50 border border-purple-200 rounded-xl px-5 py-5">
           <h3 className="font-semibold text-purple-900 mb-1">Inscrição alterada</h3>
           <p className="text-sm text-purple-700 mb-4">
-            A equipa fez alterações à inscrição de transporte de <strong>{subscription.childName}</strong>.
+            A equipa fez alterações à inscrição de transporte de <strong>{person?.childName}</strong>.
             Reveja os detalhes acima e confirme, ou recuse se não estiver correto.
           </p>
           <div className="flex gap-3">
@@ -423,6 +445,23 @@ export default function TransportSubscriptionDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               Cancele viagens individualmente. O cancelamento é imediato e pode ser revertido.
             </p>
+            {subscription?.weekPattern && subscription.weekPattern !== 'all' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Esta inscrição é <strong>quinzenal</strong> ({subscription.weekPattern === 'odd' ? '1.ª e 3.ª semanas' : '2.ª e 4.ª semanas'} do mês),
+                por isso só aparecem as semanas em que há serviço.
+              </p>
+            )}
+            {actionError && (
+              <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                {actionError}
+              </p>
+            )}
+            {dayGroups.length > 0 && dayGroups.every(g => g.trips.every(t => !t.reservationEventId)) && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                ⚠️ Esta inscrição ainda não tem ocorrências geradas — as viagens abaixo não podem
+                ser canceladas até que isso seja feito.
+              </p>
+            )}
           </div>
 
           {dayGroups.length === 0 ? (
@@ -441,11 +480,11 @@ export default function TransportSubscriptionDetailPage() {
                   {/* Trips for this day */}
                   <div className="space-y-2 pl-2">
                     {group.trips.map(trip => {
-                      const isCancelled = !!trip.cancellationId;
-                      const inProgress = actionInProgress === trip.eventId;
+                      const isCancelled = trip.cancelled;
+                      const inProgress = actionInProgress === trip.reservationEventId;
                       return (
                         <div
-                          key={trip.eventId}
+                          key={trip.reservationEventId ?? `${trip.dateStr}_${trip.pickupTime}`}
                           className={`flex items-center justify-between rounded-lg px-3 py-2 ${
                             isCancelled ? 'bg-gray-50' : 'bg-green-50'
                           }`}
@@ -458,8 +497,9 @@ export default function TransportSubscriptionDetailPage() {
                           </div>
                           <button
                             onClick={() => toggleTrip(trip)}
-                            disabled={!!actionInProgress}
-                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 ${
+                            disabled={!!actionInProgress || !trip.reservationEventId}
+                            title={!trip.reservationEventId ? 'Sem ocorrência gerada para esta viagem — não pode ser cancelada' : undefined}
+                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                               isCancelled
                                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                 : 'bg-red-50 text-red-600 hover:bg-red-100'
@@ -499,7 +539,7 @@ export default function TransportSubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Recusar alteração?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{subscription.childName}</strong> e entrará em contacto.
+              A equipa será notificada de que não concorda com a alteração feita à inscrição de <strong>{person?.childName}</strong> e entrará em contacto.
             </p>
             <div className="flex gap-3">
               <button
@@ -525,7 +565,7 @@ export default function TransportSubscriptionDetailPage() {
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-2">Cancelar subscrição?</h3>
             <p className="text-gray-600 text-sm mb-6">
-              A subscrição de transporte de <strong>{subscription.childName}</strong> será
+              A subscrição de transporte de <strong>{person?.childName}</strong> será
               cancelada. Esta ação não pode ser desfeita.
             </p>
             <div className="flex gap-3">

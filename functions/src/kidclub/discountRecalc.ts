@@ -1,5 +1,6 @@
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { appCol } from "./db";
+import { resolveSchoolName } from "./reconciliation";
 
 // ── Types (duplicated from @shared/models/Discount to avoid cross-package runtime dep) ──
 
@@ -30,6 +31,32 @@ interface DayLike {
 }
 
 // ── Pure discount logic (mirrors packages/shared/models/discountLogic.ts) ──
+
+/**
+ * Applies the admin's per-rule overrides on top of the automatic result.
+ *
+ * An override is a durable statement of intent that has to survive this
+ * function: `appliedDiscounts` is rewritten from the rules on every
+ * schedule change, so without a separate record an admin's "off" would be
+ * silently restored the next time anyone edited the schedule.
+ */
+function applyOverrides(
+  rules: DiscountRule[],
+  scope: DiscountScope,
+  auto: AppliedDiscount[],
+  overrides: Record<string, boolean> | undefined,
+): AppliedDiscount[] {
+  if (!overrides) return auto;
+  const now = new Date();
+  const kept = auto.filter(a => overrides[a.ruleId] !== false);
+  const forcedOn = rules
+    .filter(r => r.active && r.appliesTo.includes(scope) && r.trigger !== "manual")
+    .filter(r => overrides[r.id] === true && !kept.some(a => a.ruleId === r.id))
+    .map((r): AppliedDiscount => ({
+      ruleId: r.id, name: r.name, percentage: r.percentage, appliedAt: now, appliedBy: "admin",
+    }));
+  return [...kept, ...forcedOn];
+}
 
 function resolveAutoDiscounts(
   rules: DiscountRule[],
@@ -78,6 +105,15 @@ function activeWeeksInPattern(pattern: string): 2 | 4 {
   return pattern === "all" ? 4 : 2;
 }
 
+// Same per-occurrence rate billing.ts uses (studyPerDayRate there), kept
+// identical so a study day costs the same euro amount in the recalc, in the
+// invoice, and in an exclusion deduction. Mirrors transport's flatRatePerTrip.
+function studyPerDayRate(cfg: any): number {
+  if (cfg?.pricePerDayPerWeek != null) return cfg.pricePerDayPerWeek;
+  if (cfg?.monthlyPricePerWeekday != null) return cfg.monthlyPricePerWeekday / (cfg?.weeksPerMonth ?? 4);
+  return 0;
+}
+
 const REGION = "europe-west3";
 const CANCELLED = new Set(["cancelled", "canceled"]);
 
@@ -93,23 +129,65 @@ function triggerFieldsChanged(before: any, after: any): boolean {
     before.status !== after.status ||
     before.childId !== after.childId ||
     before.schoolName !== after.schoolName ||
+    JSON.stringify(before.discountOverrides) !== JSON.stringify(after.discountOverrides) ||
     before.weekPattern !== after.weekPattern ||
     JSON.stringify(before.schedule) !== JSON.stringify(after.schedule) ||
     JSON.stringify(before.days) !== JSON.stringify(after.days)
   );
 }
 
+/**
+ * schoolName for each of a family's children, keyed by child id.
+ *
+ * Fetched by document reference rather than a chunked `documentId() in [...]`
+ * query because a family holds a handful of children at most, and a ref get
+ * cannot silently drop ids past the 30-value `in` limit. A childId pointing at
+ * a document that no longer exists resolves to undefined, which
+ * resolveSchoolName then treats as absent and falls back to the subscription
+ * mirror — one active study subscription in prod is in exactly that state.
+ */
+async function fetchChildSchoolNames(childIds: (string | undefined)[]): Promise<Map<string, string | undefined>> {
+  const out = new Map<string, string | undefined>();
+  const ids = [...new Set(childIds.filter((id): id is string => !!id))];
+  if (!ids.length) return out;
+  const snaps = await Promise.all(ids.map(id => appCol("children").doc(id).get()));
+  for (const snap of snaps) {
+    if (snap.exists) out.set(snap.id, snap.data()?.schoolName ?? undefined);
+  }
+  return out;
+}
+
 async function recalcForFamily(familyId: string): Promise<void> {
-  const [transportConfigSnap, discountRulesSnap, transportSnap, studySnap] = await Promise.all([
+  const [transportConfigSnap, studyConfigSnap, discountRulesSnap, transportSnap, studySnap] = await Promise.all([
     appCol("config").doc("transportation").get(),
+    appCol("config").doc("studyCenter").get(),
     appCol("config").doc("discounts").get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).get(),
     appCol("studyroom").where("familyId", "==", familyId).get(),
   ]);
 
   const tCfg = transportConfigSnap.data() ?? {};
+  const sCfg = studyConfigSnap.data() ?? {};
   const rules: DiscountRule[] = (discountRulesSnap.data()?.rules ?? []) as DiscountRule[];
   const flatRatePerTrip: number = tCfg.flatRatePerTrip ?? 0;
+  const studyRatePerDay: number = studyPerDayRate(sCfg);
+
+  // schoolName is canonical on the child record; the subscription copy is a
+  // mirror that has drifted in prod (5 of 10 dual-service children hold two
+  // different values, 2 of them street addresses). It decides the 20% Colegio
+  // Bissaya Barreto transport discount, so this function — which writes
+  // monthlyFee — must read the same source billing.ts does, through the same
+  // per-FIELD resolveSchoolName contract. A bare `??` is not equivalent:
+  // ClaimSubscriptionsPage writes `schoolName: trim() || null`, so a claimed
+  // subscription can gain a childId while its child record has no school, and
+  // keying the fallback on the record would silently drop the 20%.
+  //
+  // Measured against prod before switching: 0 of 21 active transport
+  // subscriptions change their Bissaya match when sourced from the child
+  // record, so this corrects the source without moving any fee today.
+  const childSchoolById = await fetchChildSchoolNames(
+    [...transportSnap.docs, ...studySnap.docs].map(d => d.data().childId)
+  );
 
   // Unified sibling set: all non-cancelled childIds across both collections
   const allChildIds = new Set<string>();
@@ -145,7 +223,10 @@ async function recalcForFamily(familyId: string): Promise<void> {
       return rule?.trigger === "manual";
     });
 
-    const autoDiscounts = resolveAutoDiscounts(rules, "transport", fakeDays, x.schoolName, siblingCount);
+    const schoolName = resolveSchoolName(childSchoolById.get(x.childId), x.schoolName);
+    const autoDiscounts = applyOverrides(rules, "transport",
+      resolveAutoDiscounts(rules, "transport", fakeDays, schoolName, siblingCount),
+      x.discountOverrides);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
     const scheduleLen: number = x.schedule?.length ?? 0;
@@ -177,10 +258,22 @@ async function recalcForFamily(familyId: string): Promise<void> {
       return rule?.trigger === "manual";
     });
 
-    const autoDiscounts = resolveAutoDiscounts(rules, "study", [], x.schoolName, siblingCount);
+    const schoolName = resolveSchoolName(childSchoolById.get(x.childId), x.schoolName);
+    const autoDiscounts = applyOverrides(rules, "study",
+      resolveAutoDiscounts(rules, "study", [], schoolName, siblingCount),
+      x.discountOverrides);
     const allDiscounts = [...autoDiscounts, ...manualDiscounts];
 
-    const grossFee: number = x.basePrice ?? x.monthlyPrice ?? 0;
+    // Mirror the transport branch above: gross is DERIVED from the current
+    // schedule, never read back from the stored price. Study room used to take
+    // `x.basePrice ?? x.monthlyPrice` here, so editing a subscription's days
+    // silently left the family paying whatever the enrolment form first
+    // computed — 2 days billed at a 5-day price, and vice versa. The two
+    // services use the same per-occurrence rate (6/day/week) and the same
+    // week-pattern multiplier, so the formulas are now identical in shape.
+    const daysLen: number = (x.days ?? []).length;
+    const grossFromDays = daysLen * studyRatePerDay * activeWeeksInPattern(x.weekPattern ?? "all");
+    const grossFee: number = grossFromDays > 0 ? grossFromDays : (x.basePrice ?? x.monthlyPrice ?? 0);
     const newFee = applyDiscounts(grossFee, allDiscounts);
 
     const prevRuleIds = [...(x.appliedDiscounts ?? [])].map((a: any) => a.ruleId).sort().join(",");
@@ -189,7 +282,13 @@ async function recalcForFamily(familyId: string): Promise<void> {
     const discountsChanged = prevRuleIds !== newRuleIds;
 
     if (feeChanged || discountsChanged) {
-      writes.push(d.ref.update({ monthlyPrice: newFee, appliedDiscounts: allDiscounts, updatedAt: new Date() }));
+      // basePrice is written alongside monthlyPrice because billing.ts prices a
+      // study line item from `sub.basePrice ?? sub.monthlyPrice` — leaving a
+      // stale basePrice behind would just move the wrong number downstream.
+      writes.push(d.ref.update({
+        monthlyPrice: newFee, basePrice: grossFee,
+        appliedDiscounts: allDiscounts, updatedAt: new Date(),
+      }));
     }
   }
 

@@ -159,8 +159,8 @@ export default function FamilyDashboardPage() {
                 transport.filter(t => !isCancelled(t.status ?? '')).reduce((s, x) => s + (x.monthlyFee ?? 0), 0);
 
               const allSubs = [
-                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, appliedDiscounts: s.appliedDiscounts ?? [], clientReviewPending: (s as any).clientReviewPending === true })),
-                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, appliedDiscounts: t.appliedDiscounts ?? [], clientReviewPending: (t as any).clientReviewPending === true })),
+                ...study.map(s => ({ id: s.id, subType: 'study' as const, type: 'Sala de Estudo', status: s.status ?? '', price: s.monthlyPrice, clientReviewPending: (s as any).clientReviewPending === true })),
+                ...transport.map(t => ({ id: t.id, subType: 'transport' as const, type: 'Transporte', status: t.status ?? '', price: t.monthlyFee, clientReviewPending: (t as any).clientReviewPending === true })),
               ];
 
               return (
@@ -194,15 +194,6 @@ export default function FamilyDashboardPage() {
                               </span>
                             </div>
                           </div>
-                          {sub.appliedDiscounts.length > 0 && (
-                            <div className="flex gap-1 flex-wrap pl-1">
-                              {sub.appliedDiscounts.map(d => (
-                                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                                  {d.name} −{Math.round(d.percentage * 100)}%
-                                </span>
-                              ))}
-                            </div>
-                          )}
                           {sub.clientReviewPending && (
                             <Link
                               to={`/client/${sub.subType === 'transport' ? 'transport' : 'study'}/${sub.id}`}

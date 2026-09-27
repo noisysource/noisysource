@@ -6,10 +6,13 @@ import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { normalizeSubStatus, SubStatus } from '../../lib/utils';
 
+interface AppliedDiscountLite { ruleId: string; name: string; percentage: number }
+
 interface TransportSub {
   id: string;
   status: SubStatus;
   monthlyFee: number;
+  appliedDiscounts: AppliedDiscountLite[];
   scheduleLength: number;
   familyId: string;
   childName: string;
@@ -20,6 +23,8 @@ interface TransportSub {
 interface StudySub {
   id: string;
   status: SubStatus;
+  monthlyPrice: number;
+  appliedDiscounts: AppliedDiscountLite[];
   daysCount: number;
   familyId: string;
   childName: string;
@@ -182,6 +187,13 @@ export default function FinancialSummaryPage() {
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('both');
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [detailOpen, setDetailOpen] = useState(false);
+  // Discount scenario: ruleId -> simulated percentage (0-1). A rule absent from
+  // the map keeps whatever percentage the subscription actually carries, so an
+  // empty map reproduces today's revenue exactly. Setting a rule to 0 is the
+  // "drop it entirely" case. Nothing here is ever written — it re-prices the
+  // displayed figures so rate changes can be costed without touching a single
+  // subscription.
+  const [rates, setRates] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const load = async () => {
@@ -227,6 +239,7 @@ export default function FinancialSummaryPage() {
           id: d.id,
           status: normalizeSubStatus(x.status),
           monthlyFee: x.monthlyFee ?? 0,
+          appliedDiscounts: (x.appliedDiscounts ?? []) as AppliedDiscountLite[],
           scheduleLength: (x.schedule ?? []).length,
           familyId: x.familyId ?? '',
           childName: x.childName ?? '',
@@ -239,6 +252,8 @@ export default function FinancialSummaryPage() {
         return {
           id: d.id,
           status: normalizeSubStatus(x.status),
+          appliedDiscounts: (x.appliedDiscounts ?? []) as AppliedDiscountLite[],
+          monthlyPrice: x.monthlyPrice ?? 0,
           daysCount: (x.days ?? []).filter((dd: any) => dd.day).length,
           familyId: x.familyId ?? '',
           childName: x.childName ?? '',
@@ -260,9 +275,58 @@ export default function FinancialSummaryPage() {
 
   const sAmountFor = (s: StudySub) => {
     const dayRate = sConfig?.monthlyPricePerWeekday ?? 24;
-    return s.daysCount * dayRate;
+    // Mirrors tAmountFor above: prefer the stored price, which is NET of
+    // sibling / returning-student discounts, and only fall back to the
+    // computed gross when there isn't one. This used to return the gross
+    // unconditionally, so every study-room discount was invisible here and
+    // the page overstated revenue (and therefore profit) by exactly the
+    // discounts it had given away — while transport, right above, had always
+    // reported net.
+    return s.monthlyPrice > 0 ? s.monthlyPrice : s.daysCount * dayRate;
   };
   const sRevenueFor = (subs: StudySub[]) => subs.reduce((sum, s) => sum + sAmountFor(s), 0);
+
+  // ── Discount scenarios ────────────────────────────────────────────────────
+  // Gross is derived from the stored NET and the discounts actually on the
+  // document, rather than recomputed from the schedule. That makes the
+  // baseline exact by construction: with nothing toggled off the scenario
+  // total equals the real total to the cent, even for a subscription whose
+  // stored fee has drifted from what the formula would produce. Recomputing
+  // gross from trips/days would quietly "correct" such a row and the baseline
+  // would no longer match the page above it.
+  const pctOf = (ds: AppliedDiscountLite[], ov: Record<string, number>) =>
+    Math.min(ds.reduce((n, d) => n + (ov[d.ruleId] ?? d.percentage), 0), 1);
+
+  const grossOf = (net: number, ds: AppliedDiscountLite[]) => {
+    const all = pctOf(ds, {});
+    return all > 0 && all < 1 ? net / (1 - all) : net;
+  };
+
+  const scenarioAmount = (net: number, ds: AppliedDiscountLite[], ov: Record<string, number>) =>
+    Math.round(grossOf(net, ds) * (1 - pctOf(ds, ov)) * 100) / 100;
+
+  /** Every discount rule actually in use, with what it currently costs. */
+  const rulesInUse = useMemo(() => {
+    const m = new Map<string, { ruleId: string; name: string; percentage: number; subs: number; worth: number }>();
+    const add = (ds: AppliedDiscountLite[], net: number) => {
+      for (const d of ds) {
+        const e = m.get(d.ruleId) ?? { ruleId: d.ruleId, name: d.name, percentage: d.percentage, subs: 0, worth: 0 };
+        e.subs += 1;
+        // What this one rule gives away on this subscription, holding the others.
+        e.worth += scenarioAmount(net, ds, { [d.ruleId]: 0 }) - net;
+        m.set(d.ruleId, e);
+      }
+    };
+    for (const s of tSubs) if (s.status !== 'cancelled') add(s.appliedDiscounts, tAmountFor(s));
+    for (const s of sSubs) if (s.status !== 'cancelled') add(s.appliedDiscounts, sAmountFor(s));
+    return [...m.values()].sort((a, b) => b.worth - a.worth);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tSubs, sSubs]);
+
+  const setRate = (id: string, pct: number) => setRates(prev => ({ ...prev, [id]: pct }));
+  const clearRate = (id: string) => setRates(prev => { const n = { ...prev }; delete n[id]; return n; });
+  /** Simulated percentage for a rule — its own value until someone moves the slider. */
+  const rateOf = (r: { ruleId: string; percentage: number }) => rates[r.ruleId] ?? r.percentage;
 
   const tByStatus = useMemo(() => {
     const m: Record<string, number> = {};
@@ -302,8 +366,28 @@ export default function FinancialSummaryPage() {
   const showStudy = serviceFilter !== 'transport';
 
   const totalRevenue = (showTransport ? tRevenue : 0) + (showStudy ? sRevenue : 0);
+
+  // Same filtered sets, re-priced at the simulated rates. Equals totalRevenue
+  // exactly while the map is empty.
+  const scenarioRevenue = useMemo(() => {
+    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(tAmountFor(x), x.appliedDiscounts, rates), 0) : 0;
+    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(sAmountFor(x), x.appliedDiscounts, rates), 0) : 0;
+    return Math.round((t + st) * 100) / 100;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tFiltered, sFiltered, rates, showTransport, showStudy, tConfig, sConfig]);
+
+  const scenarioDelta = Math.round((scenarioRevenue - totalRevenue) * 100) / 100;
+  const scenarioOn = rulesInUse.some(r => rateOf(r) !== r.percentage);
   const totalCost = (showTransport ? tCost : 0) + (showStudy ? sCost : 0);
   const totalProfit = totalRevenue - totalCost;
+  // Costs are fixed monthly inputs — van, driver, electricity, teacher, rent —
+  // and none of them move with a discount. So every euro given away in
+  // discounts is a euro straight off profit, and the margin swing is the whole
+  // point of simulating a rate rather than just the revenue line.
+  const scenarioProfit = Math.round((scenarioRevenue - totalCost) * 100) / 100;
+  const scenarioMargin = scenarioRevenue > 0 ? scenarioProfit / scenarioRevenue : 0;
+  /** Revenue needed to cover fixed costs, and what the scenario leaves against it. */
+  const breakEvenGap = Math.round((totalCost - scenarioRevenue) * 100) / 100;
   const deltaVsActive = totalRevenue - activeOnlyRevenue;
   const isActiveOnlyFilter = samePreset(statusFilter, ['active']);
 
@@ -577,6 +661,9 @@ export default function FinancialSummaryPage() {
           {!isActiveOnlyFilter && (
             <ScenarioRow label="Referência: apenas ativos" revenue={activeOnlyRevenue} cost={totalCost} color="text-gray-400" />
           )}
+          {scenarioOn && (
+            <ScenarioRow label="Simulação de descontos" revenue={scenarioRevenue} cost={totalCost} color="text-amber-700" />
+          )}
           {deltaVsActive > 0 && (
             <div className="pt-2 text-xs text-gray-400">
               Face a "apenas ativos": <span className="font-semibold text-gray-600">{eur(deltaVsActive)}</span> de receita adicional incluída pelo filtro
@@ -584,6 +671,133 @@ export default function FinancialSummaryPage() {
           )}
         </div>
       </div>
+
+      {/* Discount scenarios — simulation only, nothing is written */}
+      {rulesInUse.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">Simular descontos</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Ajuste as percentagens para ver o efeito na receita. Zero remove o desconto. Simulação apenas — nenhuma inscrição é alterada.
+              </p>
+            </div>
+            {scenarioOn && (
+              <button
+                onClick={() => setRates({})}
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors"
+              >
+                Repor
+              </button>
+            )}
+          </div>
+
+          <div className="px-5 py-3 grid gap-3 sm:grid-cols-2">
+            {rulesInUse.map(r => {
+              const pct = rateOf(r);
+              const moved = pct !== r.percentage;
+              const gone = pct === 0;
+              return (
+                <div
+                  key={r.ruleId}
+                  className={`rounded-lg border p-3 transition-colors ${
+                    moved ? 'bg-amber-50 border-amber-300' : 'bg-white border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-700">{r.name}</span>
+                    <span className={`font-mono text-sm font-semibold tabular-nums ${
+                      gone ? 'text-red-600' : moved ? 'text-amber-800' : 'text-gray-900'
+                    }`}>
+                      {(pct * 100).toFixed(1)}%
+                    </span>
+                  </div>
+
+                  <input
+                    id={`rate-${r.ruleId}`}
+                    type="range"
+                    min={0}
+                    max={50}
+                    step={2.5}
+                    value={pct * 100}
+                    onChange={e => setRate(r.ruleId, Number(e.target.value) / 100)}
+                    aria-label={`${r.name} — percentagem simulada`}
+                    className="w-full mt-2 accent-indigo-600 cursor-pointer"
+                  />
+
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <span className="text-[11px] text-gray-400">
+                      atual {(r.percentage * 100).toFixed(1)}% · {r.subs} inscriç{r.subs === 1 ? 'ão' : 'ões'} · vale {eur(Math.abs(r.worth))}/mês
+                    </span>
+                    {moved && (
+                      <button
+                        onClick={() => clearRate(r.ruleId)}
+                        className="text-[11px] text-amber-700 hover:underline whitespace-nowrap"
+                      >
+                        repor
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Receita</div>
+                <div className="font-mono text-base font-semibold text-blue-600 tabular-nums">{eur(scenarioRevenue)}</div>
+                {scenarioOn && (
+                  <div className={`font-mono text-[11px] tabular-nums ${scenarioDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {scenarioDelta >= 0 ? '+' : ''}{eur(scenarioDelta)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Custos</div>
+                <div className="font-mono text-base font-semibold text-red-500 tabular-nums">−{eur(totalCost)}</div>
+                <div className="text-[11px] text-gray-400">fixos — não variam</div>
+              </div>
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Lucro</div>
+                <div className={`font-mono text-base font-semibold tabular-nums ${scenarioProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {eur(scenarioProfit)}
+                </div>
+                {scenarioOn && (
+                  <div className={`font-mono text-[11px] tabular-nums ${scenarioDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {scenarioDelta >= 0 ? '+' : ''}{eur(scenarioDelta)} face a {eur(totalProfit)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[11px] text-gray-400 uppercase tracking-wide font-semibold">Margem</div>
+                <div className={`font-mono text-base font-semibold tabular-nums ${scenarioMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {(scenarioMargin * 100).toFixed(1)}%
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  {scenarioOn ? `atual ${(totalRevenue > 0 ? totalProfit / totalRevenue * 100 : 0).toFixed(1)}%` : 'nenhuma alteração'}
+                </div>
+              </div>
+            </div>
+
+            <div className={`mt-3 pt-3 border-t border-gray-200 text-xs ${breakEvenGap > 0 ? 'text-red-700' : 'text-green-700'}`}>
+              {breakEvenGap > 0 ? (
+                <>
+                  <span className="font-semibold">Abaixo do break-even.</span>{' '}
+                  Faltam <span className="font-mono font-semibold">{eur(breakEvenGap)}</span> de receita para cobrir os custos fixos de {eur(totalCost)}.
+                  {' '}Como os custos não variam com descontos, cada euro de desconto é um euro de lucro.
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold">Acima do break-even</span> por{' '}
+                  <span className="font-mono font-semibold">{eur(Math.abs(breakEvenGap))}</span> face aos custos fixos de {eur(totalCost)}.
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Revenue detail — collapsible, line-by-line origin of the "Receita (filtro atual)" figure */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
