@@ -360,7 +360,7 @@ export default function PaymentsPage() {
                       <div className="mt-4">
                         {earlierUnpaid(records, record).length > 0 ? (
                           <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-center">
-                            Pague primeiro {earlierUnpaid(records, record)[0].periodLabel}
+                            As mensalidades são pagas por ordem. Poderá pagar este mês assim que {earlierUnpaid(records, record)[0].periodLabel} estiver pago.
                           </p>
                         ) : activeId !== record.id ? (
                           <button onClick={() => { setActiveId(record.id); setSelected(new Set()); }}
