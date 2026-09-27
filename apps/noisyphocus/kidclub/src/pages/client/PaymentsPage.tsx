@@ -6,15 +6,26 @@ import { useUser } from '@shared/hooks';
 import { BillingRecord } from '@shared/models';
 import { useImpersonation } from '../../contexts/ImpersonationContext';
 
-type FilterTab = 'pending' | 'overdue' | 'history';
-
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
   processing: { label: 'A aguardar pagamento',  className: 'bg-blue-50 border-blue-200 text-blue-800',   icon: '🔄' },
   paid:       { label: 'Pago',                  className: 'bg-green-50 border-green-200 text-green-800',    icon: '✅' },
-  invoiced:   { label: 'Faturado',              className: 'bg-purple-50 border-purple-200 text-purple-800', icon: '🧾' },
+  invoiced:   { label: 'Pago',                  className: 'bg-green-50 border-green-200 text-green-800',    icon: '✅' },
   failed:     { label: 'Falhado',               className: 'bg-red-50 border-red-200 text-red-800',          icon: '❌' },
 };
+const SHOWN_STATUSES = Object.keys(STATUS_META);
+
+/** Small status pill. Overdue wins over the record's own status. */
+function StatusTag({ record }: { record: BillingRecord }) {
+  const overdue = isOverdue(record);
+  const meta = STATUS_META[record.status];
+  const cls = overdue ? 'bg-red-100 text-red-700 border-red-200' : meta?.className ?? 'bg-gray-50 text-gray-600 border-gray-200';
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${cls}`}>
+      {overdue ? '⚠️ Em atraso' : `${meta?.icon ?? ''} ${meta?.label ?? record.status}`}
+    </span>
+  );
+}
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 
@@ -24,12 +35,22 @@ function isOverdue(record: BillingRecord) {
   return due ? due < new Date() : false;
 }
 
+// Months are paid in order: a monthly record (id `<familyId>_YYYY-MM`) waits
+// while an earlier monthly record is still `pending`. Party/camp records are
+// exempt. Mirrors assertEarlierMonthsPaid in functions/src/kidclub/billing.ts,
+// which enforces it — this only explains it before the parent tries.
+const isMonthly = (r: BillingRecord) => /_\d{4}-\d{2}$/.test(r.id);
+const monthMs = (r: BillingRecord) => r.periodStart?.toMillis?.() ?? 0;
+function earlierUnpaid(records: BillingRecord[], record: BillingRecord): BillingRecord[] {
+  if (!isMonthly(record)) return [];
+  return records.filter(r => r.id !== record.id && isMonthly(r) && r.status === 'pending' && monthMs(r) < monthMs(record));
+}
+
 export default function PaymentsPage() {
   const user = useUser();
   const { impersonation } = useImpersonation();
   const [records, setRecords] = useState<BillingRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<FilterTab>('pending');
 
   // Single-item payment panel
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -62,7 +83,10 @@ export default function PaymentsPage() {
         );
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as BillingRecord))
-          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+          // Chronological by the month billed, earliest first — createdAt is
+          // when the record was (re)built, so a recompute would float later
+          // months above the one due now.
+          .sort((a, b) => (a.periodStart?.toMillis?.() ?? 0) - (b.periodStart?.toMillis?.() ?? 0));
         setRecords(data);
       } catch (err) {
         console.error('[PaymentsPage] query failed:', err);
@@ -73,16 +97,11 @@ export default function PaymentsPage() {
     load();
   }, [user, impersonation]);
 
-  const { pending, overdue, history } = useMemo(() => {
-    const actionable = records.filter(r => ['pending', 'processing', 'failed'].includes(r.status));
-    return {
-      overdue:  actionable.filter(r => isOverdue(r)),
-      pending:  actionable.filter(r => !isOverdue(r)),
-      history:  records.filter(r => ['paid', 'invoiced'].includes(r.status)),
-    };
-  }, [records]);
-
-  const tabRecords = activeTab === 'overdue' ? overdue : activeTab === 'history' ? history : pending;
+  // One list, month order (records is sorted), cancelled/dry-run left out.
+  const shown = useMemo(() => records.filter(r => SHOWN_STATUSES.includes(r.status)), [records]);
+  const unpaid = shown.filter(r => r.status === 'pending');
+  const overdueCount = unpaid.filter(isOverdue).length;
+  const unpaidTotal = unpaid.reduce((s, r) => s + r.total, 0);
 
   // Payment handlers
   const payMbway = async (record: BillingRecord, phone: string) => {
@@ -150,10 +169,22 @@ export default function PaymentsPage() {
     setBatchMethod(null);
   };
 
+  // Selecting a month also selects every earlier unpaid month; unselecting one
+  // also unselects the later months that depend on it. The batch then pays
+  // them oldest first (records is sorted by month), which the backend accepts.
   const toggleSelect = (id: string) => {
+    const record = records.find(r => r.id === id);
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+        if (record && isMonthly(record)) {
+          for (const r of records) if (isMonthly(r) && monthMs(r) > monthMs(record)) next.delete(r.id);
+        }
+      } else {
+        next.add(id);
+        if (record) for (const r of earlierUnpaid(records, record)) next.add(r.id);
+      }
       return next;
     });
     setBatchPanel(false);
@@ -166,27 +197,18 @@ export default function PaymentsPage() {
 
   if (loading) return <div className="p-6 text-gray-400 text-sm">A carregar...</div>;
 
-  const tabClass = (tab: FilterTab) =>
-    `px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === tab
-      ? 'bg-indigo-600 text-white'
-      : 'text-gray-600 hover:bg-gray-100'}`;
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-5">
       <h1 className="text-2xl font-bold text-gray-800">Pagamentos</h1>
 
-      {/* Tabs */}
-      <div className="flex gap-2 flex-wrap">
-        <button className={tabClass('pending')} onClick={() => setActiveTab('pending')}>
-          A pagar {pending.length > 0 && <span className="ml-1 bg-indigo-500 text-white text-xs rounded-full px-1.5">{pending.length}</span>}
-        </button>
-        <button className={tabClass('overdue')} onClick={() => setActiveTab('overdue')}>
-          Em atraso {overdue.length > 0 && <span className="ml-1 bg-red-500 text-white text-xs rounded-full px-1.5">{overdue.length}</span>}
-        </button>
-        <button className={tabClass('history')} onClick={() => setActiveTab('history')}>
-          Histórico
-        </button>
-      </div>
+      {/* Summary */}
+      {unpaid.length > 0 && (
+        <p className="text-sm text-gray-600">
+          {unpaid.length} mensalidade{unpaid.length === 1 ? '' : 's'} por pagar · {fmtEur(unpaidTotal)}
+          {overdueCount > 0 && <span className="ml-2 text-red-600 font-medium">· {overdueCount} em atraso</span>}
+        </p>
+      )}
 
       {/* Batch pay bar */}
       {selected.size > 0 && (
@@ -249,14 +271,14 @@ export default function PaymentsPage() {
       )}
 
       {/* Record list */}
-      {tabRecords.length === 0 ? (
+      {shown.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
-          <p className="text-4xl mb-3">{activeTab === 'history' ? '🧾' : '✅'}</p>
-          <p>{activeTab === 'history' ? 'Não tem pagamentos anteriores.' : 'Não tem pagamentos pendentes.'}</p>
+          <p className="text-4xl mb-3">🧾</p>
+          <p>Ainda não tem mensalidades.</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {tabRecords.map(record => {
+          {shown.map(record => {
             const overdueBadge = isOverdue(record);
             const isPending = record.status === 'pending';
             const isSelected = selected.has(record.id);
@@ -272,9 +294,9 @@ export default function PaymentsPage() {
                       {record.paidAt && ` · ${record.paidAt.toDate().toLocaleDateString('pt-PT')}`}
                     </p>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right space-y-1">
                     <p className="font-bold text-gray-800">{fmtEur(record.total)}</p>
-                    <span className="text-xs text-green-600 font-medium">✅ Pago</span>
+                    <StatusTag record={record} />
                   </div>
                 </div>
               );
@@ -295,12 +317,14 @@ export default function PaymentsPage() {
                     <div className="flex justify-between items-start">
                       <div>
                         <p className="font-semibold text-gray-800">{record.periodLabel}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          {STATUS_META[record.status]?.icon} {STATUS_META[record.status]?.label}
-                          {overdueBadge && <span className="ml-2 text-red-600 font-semibold">· Em atraso</span>}
-                          {record.dueDate && !overdueBadge && ` · Vence em ${record.dueDate.toDate().toLocaleDateString('pt-PT')}`}
-                          {record.dueDate && overdueBadge && ` · Venceu em ${record.dueDate.toDate().toLocaleDateString('pt-PT')}`}
-                        </p>
+                        <div className="flex items-center gap-2 flex-wrap mt-1">
+                          <StatusTag record={record} />
+                          {record.dueDate && (
+                            <span className="text-xs text-gray-500">
+                              {overdueBadge ? 'Venceu' : 'Vence'} em {record.dueDate.toDate().toLocaleDateString('pt-PT')}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <p className="text-2xl font-bold text-gray-800 ml-4 shrink-0">{fmtEur(record.total)}</p>
                     </div>
@@ -332,7 +356,11 @@ export default function PaymentsPage() {
                     {/* Single-item pay panel */}
                     {isPending && !isSelected && (
                       <div className="mt-4">
-                        {activeId !== record.id ? (
+                        {earlierUnpaid(records, record).length > 0 ? (
+                          <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-center">
+                            As mensalidades são pagas por ordem. Poderá pagar este mês assim que {earlierUnpaid(records, record)[0].periodLabel} estiver pago.
+                          </p>
+                        ) : activeId !== record.id ? (
                           <button onClick={() => { setActiveId(record.id); setSelected(new Set()); }}
                             className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-semibold hover:bg-indigo-700 transition-colors text-sm">
                             Pagar agora
