@@ -615,7 +615,8 @@ async function assertEarlierMonthsPaid(billingId: string, billing: FirebaseFires
       && d.data().periodStart?.toMillis?.() < billing.periodStart.toMillis())
     .sort((a, b) => a.data().periodStart.toMillis() - b.data().periodStart.toMillis());
   if (earlier.length) {
-    throw new HttpsError("failed-precondition", `Pague primeiro ${earlier[0].data().periodLabel}.`);
+    throw new HttpsError("failed-precondition",
+      `As mensalidades são pagas por ordem. Poderá pagar este mês assim que ${earlier[0].data().periodLabel} estiver pago.`);
   }
 }
 
