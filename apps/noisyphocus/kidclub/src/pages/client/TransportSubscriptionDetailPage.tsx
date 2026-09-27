@@ -380,12 +380,9 @@ export default function TransportSubscriptionDetailPage() {
         <div className="mt-4 space-y-2">
           {(() => {
             const fee = subscription.monthlyFee ?? 0;
-            const gross = priceBreakdown?.baseTotal;
-            const hasDiscount = gross != null && gross > fee + 0.01;
             return (
               <div className="flex items-baseline gap-1.5 flex-wrap">
-                {hasDiscount && <span className="text-base text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
-                <span className={`text-2xl font-bold ${hasDiscount ? 'text-green-700' : 'text-gray-900'}`}>€{fee.toFixed(2)}</span>
+                <span className="text-2xl font-bold text-gray-900">€{fee.toFixed(2)}</span>
                 <span className="text-base font-normal text-gray-500">/mês</span>
                 {priceBreakdown && priceBreakdown.vatRate > 0 && (
                   <span className="text-xs text-gray-400">+ €{priceBreakdown.vatAmount.toFixed(2)} IVA</span>
@@ -393,15 +390,6 @@ export default function TransportSubscriptionDetailPage() {
               </div>
             );
           })()}
-          {(subscription.appliedDiscounts ?? []).length > 0 && (
-            <div className="flex gap-1.5 flex-wrap mt-1">
-              {(subscription.appliedDiscounts ?? []).map(d => (
-                <span key={d.ruleId} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">
-                  {d.name} −{Math.round(d.percentage * 100)}%
-                </span>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">

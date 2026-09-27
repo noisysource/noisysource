@@ -82,6 +82,8 @@ interface Props {
   schoolName?: string;
   /** Number of siblings already with an active transport subscription */
   activeSiblingCount?: number;
+  /** Show gross, each discount and the net. Admin only — parents see the final price alone. */
+  showDiscountBreakdown?: boolean;
 }
 
 function patternLabel(p: WeekPattern) {
@@ -108,6 +110,7 @@ export function computeTransportDiscounts(
 export default function WeekSchedulePicker({
   value, onChange, availableServices, existingTransportCoverage = [],
   studyCenterConfig, transportConfig, discountRules = [], schoolName, activeSiblingCount,
+  showDiscountBreakdown = false,
 }: Props) {
 
   const selectedWeekdays = new Set(value.days.map(d => d.weekday));
@@ -290,17 +293,21 @@ export default function WeekSchedulePicker({
                   <>
                     <div className="flex justify-between">
                       <span>🚌 {totalTrips} viagem(ns) · {value.weekPattern === 'all' ? '4 sem.' : '2 sem.'}</span>
-                      <span className={discounts.length > 0 ? 'line-through text-blue-400' : ''}>
-                        €{transportFeeGross.toFixed(0)}
-                      </span>
+                      {showDiscountBreakdown ? (
+                        <span className={discounts.length > 0 ? 'line-through text-blue-400' : ''}>
+                          €{transportFeeGross.toFixed(0)}
+                        </span>
+                      ) : (
+                        <span>€{transportFeeNet.toFixed(0)}</span>
+                      )}
                     </div>
-                    {discounts.map((d, i) => (
+                    {showDiscountBreakdown && discounts.map((d, i) => (
                       <div key={i} className="flex justify-between text-green-700">
                         <span>✓ {d.label}</span>
                         <span>−€{(transportFeeGross * d.pct).toFixed(0)}</span>
                       </div>
                     ))}
-                    {discounts.length > 0 && (
+                    {showDiscountBreakdown && discounts.length > 0 && (
                       <div className="flex justify-between font-medium text-blue-800 pt-0.5 border-t border-blue-200">
                         <span>Transporte com desconto</span>
                         <span>€{transportFeeNet.toFixed(0)}</span>
