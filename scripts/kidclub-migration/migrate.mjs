@@ -82,14 +82,14 @@ if (ONLY && !STEPS.includes(ONLY)) {
 }
 const runs = (step) => !ONLY || ONLY === step;
 
-// Decision 12: Phase 2 is a dev exercise. There is deliberately no
-// --i-know-this-is-prod escape hatch here (identity.mjs has one because its
-// 25 identity writes DO eventually have to be redone against prod, by hand,
-// under supervision). This script writes thousands of event documents; it
-// does not get a flag that lets a mistyped command do that to production.
-if (APPLY && PROJECT !== DEV) {
-  console.error(`Refusing to --apply against "${PROJECT}".`);
-  console.error(`Phase 2 targets ${DEV} only (decision 12). Prod is Phase 5, and is not run from this script.`);
+// Phase 5 (go-live, approved by Renato 2026-09-27): prod is allowed only with
+// the same explicit gate as identity.mjs and promote-subscriptions.mjs.
+if (APPLY && PROJECT !== DEV && PROJECT !== PROD) {
+  console.error(`Refusing to --apply against unknown project "${PROJECT}".`);
+  process.exit(1);
+}
+if (APPLY && PROJECT === PROD && !flag("--i-know-this-is-prod")) {
+  console.error(`Refusing to --apply against ${PROD} without --i-know-this-is-prod.`);
   process.exit(1);
 }
 
