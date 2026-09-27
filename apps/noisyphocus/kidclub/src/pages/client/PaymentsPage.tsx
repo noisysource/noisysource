@@ -24,6 +24,17 @@ function isOverdue(record: BillingRecord) {
   return due ? due < new Date() : false;
 }
 
+// Months are paid in order: a monthly record (id `<familyId>_YYYY-MM`) waits
+// while an earlier monthly record is still `pending`. Party/camp records are
+// exempt. Mirrors assertEarlierMonthsPaid in functions/src/kidclub/billing.ts,
+// which enforces it — this only explains it before the parent tries.
+const isMonthly = (r: BillingRecord) => /_\d{4}-\d{2}$/.test(r.id);
+const monthMs = (r: BillingRecord) => r.periodStart?.toMillis?.() ?? 0;
+function earlierUnpaid(records: BillingRecord[], record: BillingRecord): BillingRecord[] {
+  if (!isMonthly(record)) return [];
+  return records.filter(r => r.id !== record.id && isMonthly(r) && r.status === 'pending' && monthMs(r) < monthMs(record));
+}
+
 export default function PaymentsPage() {
   const user = useUser();
   const { impersonation } = useImpersonation();
@@ -62,7 +73,10 @@ export default function PaymentsPage() {
         );
         const data = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as BillingRecord))
-          .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+          // Chronological by the month billed, earliest first — createdAt is
+          // when the record was (re)built, so a recompute would float later
+          // months above the one due now.
+          .sort((a, b) => (a.periodStart?.toMillis?.() ?? 0) - (b.periodStart?.toMillis?.() ?? 0));
         setRecords(data);
       } catch (err) {
         console.error('[PaymentsPage] query failed:', err);
@@ -150,10 +164,22 @@ export default function PaymentsPage() {
     setBatchMethod(null);
   };
 
+  // Selecting a month also selects every earlier unpaid month; unselecting one
+  // also unselects the later months that depend on it. The batch then pays
+  // them oldest first (records is sorted by month), which the backend accepts.
   const toggleSelect = (id: string) => {
+    const record = records.find(r => r.id === id);
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+        if (record && isMonthly(record)) {
+          for (const r of records) if (isMonthly(r) && monthMs(r) > monthMs(record)) next.delete(r.id);
+        }
+      } else {
+        next.add(id);
+        if (record) for (const r of earlierUnpaid(records, record)) next.add(r.id);
+      }
       return next;
     });
     setBatchPanel(false);
@@ -332,7 +358,11 @@ export default function PaymentsPage() {
                     {/* Single-item pay panel */}
                     {isPending && !isSelected && (
                       <div className="mt-4">
-                        {activeId !== record.id ? (
+                        {earlierUnpaid(records, record).length > 0 ? (
+                          <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-center">
+                            Pague primeiro {earlierUnpaid(records, record)[0].periodLabel}
+                          </p>
+                        ) : activeId !== record.id ? (
                           <button onClick={() => { setActiveId(record.id); setSelected(new Set()); }}
                             className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-semibold hover:bg-indigo-700 transition-colors text-sm">
                             Pagar agora
