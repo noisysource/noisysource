@@ -86,15 +86,66 @@ The list is in the `migrate.mjs` output. Re-run the dry run to see it.
   blocks; `processing` and `failed` don't. Party and camp payments are exempt.
   **Consequence:** a family whose September bill is wrong can't pay October until it's fixed.
 
-### ▶️ Next session: one admin page for families + subscriptions
+### 🟡 In review: one admin page for families + subscriptions (branch `agent/kidclub-admin-unified`)
 
-Renato wants Famílias and Inscrições merged into **one page** with filtering, editing and
-status changes. It also closes the gap that no admin screen can edit a **NIF or billing address**
-(needed now for Mafalda's invoice), and adds a retry-invoice button.
-**Brief: `HANDOFF-admin-families-subscriptions.md`** (same folder). It ends with 5 questions to
-ask Renato before building.
+Famílias and Inscrições are merged into **one page** at `/admin/subscriptions` ("Famílias e
+inscrições"); `/admin/families` redirects there. Built 2026-09-28 from
+`HANDOFF-admin-families-subscriptions.md`, with Renato's design: no tabs, one list, tags, grouping,
+search over every field, editing in a family side panel. PR into `staging`, **not yet tested on dev,
+not in prod.**
+
+What it does:
+- **List:** one row per subscription. Chips filter by status (default: Pendentes + Ativas), service,
+  and "needs attention" flags (ação do cliente, aguarda encarregado, erro de fatura, NIF inválido,
+  por pagar, não vinculado, rever mensalidade, sem rota, possível duplicado). Grouping: família
+  (default), criança, escola, serviço, estado, none. Pending and client-action rows sort first.
+  "Mostrar famílias sem inscrições" adds families and unclaimed children with no subscription.
+- **Side panel** (`?family=<familyId or email>` in the URL; the Transport Planner's `?highlight=` still
+  works): guardian contact + **NIF + billing address** (NIF checksum-validated), bills with
+  **invoice errors + "Tentar faturar novamente"** (`retryVendusInvoice`), each child with their
+  subscriptions (status, discounts, schedule edit, history), and **"👁 Ver como cliente"**.
+- Status changes now say what they set off (approval/rejection email, close-out, billing) before
+  writing; cancel asks for an optional reason (it goes into the rejection email).
+- Parent pages (A minha conta, first-login profile setup) now reject a NIF that fails the checksum.
+- **Bug fixed on the way:** the old page never read `discountOverrides`, so "Repor automático" never
+  showed after a reload and toggling one auto discount wiped the other overrides.
+- **"Eliminar família"** is back (panel footer), with a confirmation listing every document it deletes.
+  Paid, invoiced and in-flight bills are kept, as are the login account, the Vendus client and past events.
+- **Round 2 fixes (Renato's first look):** "em atraso" counts only bills past their due date (bills exist
+  for the whole year ahead, so the first version flagged everyone). "Confirmado — ativar" shows only on
+  *pending* subs. A parent accepting a change to an active sub is now a quiet "encarregado confirmou" tag,
+  and parent pages no longer raise the admin flag for it.
+- **Open question:** NIF check "via Vendus". Our integration has no validate endpoint, and Vendus rejected
+  Mafalda's NIF on the same checksum we now check client-side. Proposed instead: the same checksum
+  server-side in functions, before any Vendus call. Waiting for Renato.
+
+Code: `src/pages/admin/subscriptions/` — `useAdminData` (reads), `useSubscriptionActions` (writes),
+`listModel.ts` (search/filters/grouping, pure), `FamilyPanel`, `FamilyContactForm`, `FamilyBills`,
+`SubscriptionCard`. Typecheck: 11 errors (baseline 13, minus 2 that lived in the deleted Famílias page).
+
+**Can't be verified on dev:** the Vendus side. `syncVendusClient` skips `kidclub-dev`, and real Vendus
+calls are blocked from dev, so the retry button will fail there with the guard's error. Dev can only
+show that the form writes the right fields and that errors display. **Next step:** Renato tests on
+the dev preview → merge → `staging`→`main` → in prod, fix Mafalda's NIF in her panel and click retry
+on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 
 ### 🔴 Open — in priority order
+
+0. **Payments are MB WAY only (hotfix PR #53, `hotfix/mbway-only` → `main`, 2026-09-28).** Card fails at Easypay
+   with "does not have a POS associated": no card terminal is configured in the Easypay account (an
+   Easypay setting, not our code). Multibanco is hidden with it. To restore both: fix the Easypay
+   account, then re-add the two buttons in `PaymentsPage.tsx`.
+   **Still open (needs a functions change, not done):**
+   - A payment that fails or expires (e.g. an MB WAY request not approved in time) leaves the bill
+     `failed`. The page shows no pay button for it, and `initiate*Payment` only accepts `pending`, so
+     that month and every later one are stuck until someone resets it by hand in Firestore.
+   - A card or Multibanco attempt left `processing` has no way back for the parent.
+   - Fix: make `failed` payable (page + `initiateMbwayPayment`), count `failed` as unpaid in
+     `assertEarlierMonthsPaid`, and refuse Multibanco/card server-side while they're off.
+   - What happened: Marisa Sofia's September (`8pPhu4JCvGUrpBxsaOeY_2026-09`) was stuck `processing` on
+     a dead card link. Renato reset it to `pending` by hand, removing `easypayId`/`paymentLink`.
+   - **Duplicate family records on first login** (race in `getOrCreateFamily`): found on Carla Silva
+     (cssilva09@hotmail.com, 3 records in dev). Fix proposed, not started; prod not checked yet.
 
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
    `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
@@ -104,8 +155,8 @@ ask Renato before building.
      Mind the org policy that blocks service-account keys (see memory "Pi bridge auth").
    - The go-live announcement was sent by hand from Gmail (BCC) because of this.
 2. **Mafalda Raposo Duarte: paid September (€146.70, MB, 25 Sep) but has no invoice.** Vendus rejected
-   NIF 284463244, which fails the checksum. Get the correct NIF, fix the family, then call
-   `retryVendusInvoice`. **No admin UI calls it and none shows `invoiceError`**; a small UI is worth adding.
+   NIF 284463244, which fails the checksum. Renato has the correct NIF. Once the new admin page is in
+   prod (see above): open her family, fix the NIF, click "Tentar faturar novamente".
 3. **Edson:** study room still `confirmed`, billing €72/month. Renato said it should be cancelled.
    Confirm, and cancel in admin.
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
