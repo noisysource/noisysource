@@ -109,7 +109,15 @@ What it does:
 - Parent pages (A minha conta, first-login profile setup) now reject a NIF that fails the checksum.
 - **Bug fixed on the way:** the old page never read `discountOverrides`, so "Repor automático" never
   showed after a reload and toggling one auto discount wiped the other overrides.
-- **Dropped on purpose:** Famílias' "Eliminar família" (it deleted billing records too). Say if it's needed.
+- **"Eliminar família"** is back (panel footer), with a confirmation listing every document it deletes.
+  Paid, invoiced and in-flight bills are kept, as are the login account, the Vendus client and past events.
+- **Round 2 fixes (Renato's first look):** "em atraso" counts only bills past their due date (bills exist
+  for the whole year ahead, so the first version flagged everyone). "Confirmado — ativar" shows only on
+  *pending* subs. A parent accepting a change to an active sub is now a quiet "encarregado confirmou" tag,
+  and parent pages no longer raise the admin flag for it.
+- **Open question:** NIF check "via Vendus". Our integration has no validate endpoint, and Vendus rejected
+  Mafalda's NIF on the same checksum we now check client-side. Proposed instead: the same checksum
+  server-side in functions, before any Vendus call. Waiting for Renato.
 
 Code: `src/pages/admin/subscriptions/` — `useAdminData` (reads), `useSubscriptionActions` (writes),
 `listModel.ts` (search/filters/grouping, pure), `FamilyPanel`, `FamilyContactForm`, `FamilyBills`,
