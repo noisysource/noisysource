@@ -12,6 +12,10 @@ const SA_PRIVATE_KEY = process.env.SA_PRIVATE_KEY;
 
 const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"];
 
+// Max emails actually sent in any 24h window. ~40 families; a full campaign
+// plus the day's automatic notices fits several times over.
+const DAILY_SEND_CAP = 300;
+
 // Define a type for the data structure in emailOutbox for better type safety
 interface EmailOutboxData {
   to: string;
@@ -106,6 +110,18 @@ export const sendEmailFromOutbox = onDocumentCreated(
 
       if (globals.emailsEnabled === false) {
         await snap.ref.update({ status: "error", error: "Email sending is globally disabled." });
+        return;
+      }
+
+      // Rolling 24h cap, whatever wrote to the outbox (a runaway loop, a
+      // mistaken campaign). Well under Workspace's own ~2000/day. Over the cap
+      // the email fails visibly and can be resent from the admin history.
+      const since = admin.firestore.Timestamp.fromMillis(Date.now() - 24 * 60 * 60 * 1000);
+      const sentLastDay = (await db.collection("_apps/arcoiris/emailOutbox")
+        .where("sentAt", ">=", since).count().get()).data().count;
+      if (sentLastDay >= DAILY_SEND_CAP) {
+        await snap.ref.update({ status: "error", error: `Daily cap reached (${DAILY_SEND_CAP} emails in 24h). Resend later.` });
+        console.error(`[sendEmailFromOutbox] daily cap reached (${sentLastDay}), not sending ${snap.id}`);
         return;
       }
 

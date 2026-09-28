@@ -171,6 +171,24 @@ WhatsApp proposal, and the duplicate-family race fix.
      (cssilva09@hotmail.com, 3 records). Renato deleted the prod duplicates and fixed her name on
      2026-09-28. The code fix isn't done; see the handoff.
 
+**Email composer (branch `agent/kidclub-email-composer`, pushed, no PR yet, 2026-09-28).** Replaces the old
+Email Center (`/admin/email-center`, now "Emails"). Tabs:
+- **Compor**: TipTap editor with variables as tags (click or drag from the palette). Subject line takes `{{key}}`.
+  Variables: guardian (name, email, phone, billing address, NIF), children (names, school, year, home address),
+  subscriptions (services, monthly total), payments (overdue amount/months, next bill). Audience: the families
+  page's chips (status, service, overdue / invoice error / invalid NIF / waiting on parent) plus school and
+  search. **One email per family.** Child and subscription variables use only the subscriptions that matched.
+  Before sending you get a preview for any recipient, "Enviar teste para mim", and a warning about empty
+  variables. Saved templates live in `emailTemplates`. Max 200 recipients per send.
+- **Histórico**: each campaign, the latest attempt per family with its status, the exact email as sent,
+  "Reenviar" (one, or every failed), "Ignorar", and "Duplicar" (back to the composer with current data).
+- Sender: a new **24h cap of 300** actually-sent emails in `SendEmailFromOutbox.ts`.
+- **Merge order** (every PR into `staging` does a full functions deploy to the shared kidclub-dev): #57 first,
+  then rebase this branch on `staging` and open its PR, then `agent/billing-sandbox`.
+- **Sending itself is still broken in prod** (item 1). Nothing reaches parents until that's fixed, and the
+  ~116 stale failures get marked `skipped` before re-enabling. Gmail stays blocked on dev, so on dev the outbox
+  docs (`_apps/arcoiris/emailOutbox`) show exactly what would be sent.
+
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
    `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
    have received **no** app emails for two months (approvals, payment notices).
