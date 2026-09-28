@@ -1,5 +1,8 @@
 # HANDOFF — one admin page for families and subscriptions
 
+> **Built** on `agent/kidclub-admin-unified` (2026-09-28). See STATUS.md → "In review: one admin page".
+> Kept for its "Things that will bite you" list, which still applies to the page.
+
 Written 2026-09-28 for the next session. Read `STATUS.md` → "LIVE IN PROD SINCE 2026-09-27"
 first (5 minutes). It explains what is live and what must not be touched.
 

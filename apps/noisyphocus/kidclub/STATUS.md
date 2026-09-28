@@ -86,13 +86,40 @@ The list is in the `migrate.mjs` output. Re-run the dry run to see it.
   blocks; `processing` and `failed` don't. Party and camp payments are exempt.
   **Consequence:** a family whose September bill is wrong can't pay October until it's fixed.
 
-### ▶️ Next session: one admin page for families + subscriptions
+### 🟡 In review: one admin page for families + subscriptions (branch `agent/kidclub-admin-unified`)
 
-Renato wants Famílias and Inscrições merged into **one page** with filtering, editing and
-status changes. It also closes the gap that no admin screen can edit a **NIF or billing address**
-(needed now for Mafalda's invoice), and adds a retry-invoice button.
-**Brief: `HANDOFF-admin-families-subscriptions.md`** (same folder). It ends with 5 questions to
-ask Renato before building.
+Famílias and Inscrições are merged into **one page** at `/admin/subscriptions` ("Famílias e
+inscrições"); `/admin/families` redirects there. Built 2026-09-28 from
+`HANDOFF-admin-families-subscriptions.md`, with Renato's design: no tabs, one list, tags, grouping,
+search over every field, editing in a family side panel. PR into `staging`, **not yet tested on dev,
+not in prod.**
+
+What it does:
+- **List:** one row per subscription. Chips filter by status (default: Pendentes + Ativas), service,
+  and "needs attention" flags (ação do cliente, aguarda encarregado, erro de fatura, NIF inválido,
+  por pagar, não vinculado, rever mensalidade, sem rota, possível duplicado). Grouping: família
+  (default), criança, escola, serviço, estado, none. Pending and client-action rows sort first.
+  "Mostrar famílias sem inscrições" adds families and unclaimed children with no subscription.
+- **Side panel** (`?family=<familyId or email>` in the URL; the Transport Planner's `?highlight=` still
+  works): guardian contact + **NIF + billing address** (NIF checksum-validated), bills with
+  **invoice errors + "Tentar faturar novamente"** (`retryVendusInvoice`), each child with their
+  subscriptions (status, discounts, schedule edit, history), and **"👁 Ver como cliente"**.
+- Status changes now say what they set off (approval/rejection email, close-out, billing) before
+  writing; cancel asks for an optional reason (it goes into the rejection email).
+- Parent pages (A minha conta, first-login profile setup) now reject a NIF that fails the checksum.
+- **Bug fixed on the way:** the old page never read `discountOverrides`, so "Repor automático" never
+  showed after a reload and toggling one auto discount wiped the other overrides.
+- **Dropped on purpose:** Famílias' "Eliminar família" (it deleted billing records too). Say if it's needed.
+
+Code: `src/pages/admin/subscriptions/` — `useAdminData` (reads), `useSubscriptionActions` (writes),
+`listModel.ts` (search/filters/grouping, pure), `FamilyPanel`, `FamilyContactForm`, `FamilyBills`,
+`SubscriptionCard`. Typecheck: 11 errors (baseline 13, minus 2 that lived in the deleted Famílias page).
+
+**Can't be verified on dev:** the Vendus side. `syncVendusClient` skips `kidclub-dev`, and real Vendus
+calls are blocked from dev, so the retry button will fail there with the guard's error. Dev can only
+show that the form writes the right fields and that errors display. **Next step:** Renato tests on
+the dev preview → merge → `staging`→`main` → in prod, fix Mafalda's NIF in her panel and click retry
+on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 
 ### 🔴 Open — in priority order
 
@@ -104,8 +131,8 @@ ask Renato before building.
      Mind the org policy that blocks service-account keys (see memory "Pi bridge auth").
    - The go-live announcement was sent by hand from Gmail (BCC) because of this.
 2. **Mafalda Raposo Duarte: paid September (€146.70, MB, 25 Sep) but has no invoice.** Vendus rejected
-   NIF 284463244, which fails the checksum. Get the correct NIF, fix the family, then call
-   `retryVendusInvoice`. **No admin UI calls it and none shows `invoiceError`**; a small UI is worth adding.
+   NIF 284463244, which fails the checksum. Renato has the correct NIF. Once the new admin page is in
+   prod (see above): open her family, fix the NIF, click "Tentar faturar novamente".
 3. **Edson:** study room still `confirmed`, billing €72/month. Renato said it should be cancelled.
    Confirm, and cancel in admin.
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
