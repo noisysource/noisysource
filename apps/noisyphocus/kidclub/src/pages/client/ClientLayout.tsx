@@ -96,7 +96,11 @@ export default function ClientLayout() {
         <div className="bg-amber-400 text-amber-900 text-sm font-medium px-4 py-2 flex items-center justify-between shrink-0 z-50">
           <span>👁 A ver como <strong>{impersonation.contactName}</strong></span>
           <button
-            onClick={() => { stopImpersonation(); navigate('/admin/families'); }}
+            onClick={() => {
+              const familyId = impersonation.familyId;
+              stopImpersonation();
+              navigate(`/admin/subscriptions?family=${encodeURIComponent(familyId)}`);
+            }}
             className="ml-4 px-3 py-0.5 bg-amber-900 text-amber-50 rounded-lg text-xs font-semibold hover:bg-amber-800 transition-colors"
           >
             Sair

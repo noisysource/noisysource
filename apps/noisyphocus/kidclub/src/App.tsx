@@ -26,7 +26,6 @@ import SubscriptionsAdminPage from './pages/admin/SubscriptionsAdminPage';
 import TransportPlannerPage from './pages/admin/TransportPlannerPage';
 import StudyRoomPlannerPage from './pages/admin/StudyRoomPlannerPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
-import FamiliesAdminPage from './pages/admin/FamiliesAdminPage';
 import DiscountsAdminPage from './pages/admin/DiscountsAdminPage';
 import PaymentsPage from './pages/client/PaymentsPage';
 
@@ -83,7 +82,7 @@ export default function App() {
           <Route path="camp" element={<CampAdminPage />} />
           <Route path="camps" element={<CampsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
-          <Route path="families" element={<FamiliesAdminPage />} />
+          <Route path="families" element={<Navigate to="/admin/subscriptions" replace />} />
           <Route path="config/descontos" element={<DiscountsAdminPage />} />
           {/* Legacy redirects */}
           <Route path="study-room-planner" element={<StudyRoomPlannerPage />} />
