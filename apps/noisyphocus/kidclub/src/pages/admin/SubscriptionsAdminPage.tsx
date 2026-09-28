@@ -29,13 +29,13 @@ const FLAG_CHIPS: { key: FlagFilter; label: string; on: string; title?: string }
   { key: 'clientReview', label: '⏳ Aguarda encarregado', on: 'bg-purple-600 border-purple-600' },
   { key: 'invoiceError', label: '🧾 Erro de fatura', on: 'bg-red-600 border-red-600' },
   { key: 'nifInvalid', label: 'NIF inválido', on: 'bg-red-600 border-red-600' },
-  { key: 'unpaid', label: '€ Por pagar', on: 'bg-yellow-600 border-yellow-600' },
+  { key: 'overdue', label: '⏰ Em atraso', on: 'bg-red-600 border-red-600', title: 'Mensalidades por pagar depois da data de vencimento' },
   { key: 'unlinked', label: '🔗 Não vinculado', on: 'bg-orange-500 border-orange-500' },
   { key: 'feeReview', label: '⚠ Rever mensalidade', on: 'bg-amber-500 border-amber-500' },
   { key: 'noRoute', label: '🗺 Sem rota', on: 'bg-teal-600 border-teal-600' },
   { key: 'duplicate', label: '⚠ Possível duplicado', on: 'bg-orange-500 border-orange-500' },
 ];
-const FAMILY_LEVEL_FLAGS: FlagFilter[] = ['invoiceError', 'unpaid', 'nifInvalid', 'duplicate'];
+const FAMILY_LEVEL_FLAGS: FlagFilter[] = ['invoiceError', 'overdue', 'nifInvalid', 'duplicate'];
 const GROUP_OPTIONS: { key: GroupBy; label: string }[] = [
   { key: 'family', label: 'Família' },
   { key: 'child', label: 'Criança' },

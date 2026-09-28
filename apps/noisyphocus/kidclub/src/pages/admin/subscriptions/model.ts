@@ -56,6 +56,15 @@ export type LastClientAction = 'confirmed' | 'cancelRequested' | 'edited' | 'rej
 
 export const toDate = (v: any): Date => v?.toDate?.() ?? new Date(v ?? 0);
 
+/**
+ * The parent did something the admin has to act on. A parent confirming an
+ * admin change to a subscription that is already active (or cancelled) also
+ * sets adminReviewPending — older parent pages did that for every
+ * confirmation — but there is nothing to do, so it doesn't count.
+ */
+export const needsAdminReview = (i: Pick<SubItem, 'adminReviewPending' | 'lastClientAction' | 'status'>) =>
+  !!i.adminReviewPending && !(i.lastClientAction === 'confirmed' && i.status !== 'pending');
+
 /** Not yet tied to a family account, or to a child record inside one. */
 export const isUnlinked = (i: Pick<SubItem, 'source' | 'familyId' | 'childId'>) =>
   (i.source === 'manual' && !i.familyId) || (!!i.familyId && !i.childId);
@@ -111,8 +120,12 @@ export interface BillRow {
   invoiceNumber?: string;
 }
 
-/** Unpaid = still owed by the parent. `processing` is a payment already in flight. */
-export const isUnpaid = (b: BillRow) => b.status === 'pending' || b.status === 'failed';
+/**
+ * Not paid yet. Bills exist in advance for every month of the school year
+ * (each due on the 8th), so most unpaid bills are simply not due yet.
+ */
+export const isUnpaid = (b: BillRow) => ['pending', 'processing', 'failed'].includes(b.status);
+/** Unpaid and past its due date — same rule as the parent's Payments page. */
 export const isOverdue = (b: BillRow, now = new Date()) => isUnpaid(b) && !!b.dueDate && b.dueDate < now;
 export const locationStr = (v: any): string => {
   if (!v) return '';

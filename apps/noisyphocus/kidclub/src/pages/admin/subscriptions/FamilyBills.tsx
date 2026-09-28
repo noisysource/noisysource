@@ -31,8 +31,12 @@ export default function FamilyBills({ bills, onChanged }: {
 
   const errors = bills.filter(b => b.invoiceError);
   const newestFirst = bills.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey));
-  // Unpaid and errored months always show; paid history only on request.
-  const visible = showAll ? newestFirst : newestFirst.filter(b => isUnpaid(b) || b.invoiceError);
+  // Bills exist ahead of time for the whole school year. By default show what
+  // matters now: overdue months, invoice errors, and the next month to pay.
+  const nextDue = bills
+    .filter(b => isUnpaid(b) && !isOverdue(b))
+    .sort((a, b) => a.periodKey.localeCompare(b.periodKey))[0];
+  const visible = showAll ? newestFirst : newestFirst.filter(b => isOverdue(b) || b.invoiceError || b === nextDue);
 
   // One call per click, button disabled while it runs: this creates a real
   // invoice in the live Vendus account (prod) and emails it to the parent.
@@ -89,6 +93,9 @@ export default function FamilyBills({ bills, onChanged }: {
                     <span className="text-gray-700 flex-1">{b.periodLabel}</span>
                     {b.invoiceNumber && <span className="text-xs text-gray-400">{b.invoiceNumber}</span>}
                     {overdue && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">em atraso</span>}
+                    {!overdue && isUnpaid(b) && b.dueDate && (
+                      <span className="text-xs text-gray-400">vence {b.dueDate.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short' })}</span>
+                    )}
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${tag.cls}`}>{tag.label}</span>
                     <span className="text-gray-800 font-medium w-20 text-right">€{b.total.toFixed(2)}</span>
                   </div>
@@ -97,10 +104,10 @@ export default function FamilyBills({ bills, onChanged }: {
             </div>
           )}
           <div className="flex items-center gap-3 text-xs">
-            {visible.length === 0 && <span className="text-gray-400">Nada por pagar.</span>}
+            {visible.length === 0 && <span className="text-gray-400">Nada em atraso.</span>}
             {newestFirst.length > visible.length || showAll ? (
               <button onClick={() => setShowAll(v => !v)} className="text-blue-600 hover:underline">
-                {showAll ? 'Mostrar só o que está por pagar' : `Ver todas (${newestFirst.length})`}
+                {showAll ? 'Mostrar só o que importa agora' : `Ver todas (${newestFirst.length})`}
               </button>
             ) : null}
             <Link to="/admin/billing" className="text-blue-600 hover:underline ml-auto">Abrir Cobranças ↗</Link>

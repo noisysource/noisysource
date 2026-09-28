@@ -2,7 +2,7 @@ import { normalizeName, SubStatus } from '../../../lib/utils';
 import { isValidNif } from '../../../lib/nif';
 import {
   SubItem, FamilyDoc, ChildDoc, BillRow, FamilyGroup, ChildGroup,
-  familyKeyOf, locationStr, isUnpaid, isOverdue, isUnlinked,
+  familyKeyOf, locationStr, isOverdue, isUnlinked, needsAdminReview,
 } from './model';
 
 // ─── What the list is built from ─────────────────────────────────────────────
@@ -28,8 +28,8 @@ export interface FamilyInfo {
   contactPhone?: string;
   bills: BillRow[];
   invoiceErrors: BillRow[];
-  unpaid: BillRow[];
-  overdue: boolean;
+  /** Unpaid bills past their due date. Future months don't count. */
+  overdue: BillRow[];
   /** Another families/ doc has the same guardian email. */
   duplicate: boolean;
   /** A NIF is on file and fails the checksum — Vendus will refuse its invoices. */
@@ -81,8 +81,7 @@ export function buildFamilyIndex(src: ListSource): Map<string, FamilyInfo> {
       contactPhone: family?.primaryContact?.phone || fallback?.contactPhone,
       bills,
       invoiceErrors: bills.filter(b => b.invoiceError),
-      unpaid: bills.filter(isUnpaid),
-      overdue: bills.some(b => isOverdue(b)),
+      overdue: bills.filter(b => isOverdue(b)),
       duplicate: !!family && (emailCount.get(email?.toLowerCase() ?? '') ?? 0) > 1,
       nifInvalid: !!family?.nif && !isValidNif(family.nif),
     };
@@ -163,7 +162,7 @@ export function buildRows(src: ListSource, index: Map<string, FamilyInfo>): Row[
     if (c.familyId && src.families.has(c.familyId)) continue;
     const key = `child:${c.id}`;
     const fam: FamilyInfo = {
-      key, bills: [], invoiceErrors: [], unpaid: [], overdue: false, duplicate: false, nifInvalid: false,
+      key, bills: [], invoiceErrors: [], overdue: [], duplicate: false, nifInvalid: false,
     };
     index.set(key, fam);
     const name = `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim() || '—';
@@ -180,7 +179,7 @@ export function buildRows(src: ListSource, index: Map<string, FamilyInfo>): Row[
 export type ServiceFilter = 'transport' | 'study';
 export type FlagFilter =
   | 'adminReview' | 'clientReview' | 'unlinked' | 'feeReview' | 'noRoute'
-  | 'invoiceError' | 'unpaid' | 'nifInvalid' | 'duplicate';
+  | 'invoiceError' | 'overdue' | 'nifInvalid' | 'duplicate';
 
 export interface Filters {
   statuses: SubStatus[];
@@ -199,13 +198,13 @@ export const DEFAULT_FILTERS: Filters = {
 };
 
 export const FLAG_TEST: Record<FlagFilter, (r: Row) => boolean> = {
-  adminReview: r => !!r.item?.adminReviewPending,
+  adminReview: r => !!r.item && needsAdminReview(r.item),
   clientReview: r => !!r.item?.clientReviewPending,
   unlinked: r => !!r.item && isUnlinked(r.item),
   feeReview: r => !!r.item?.feeReviewRequired,
   noRoute: r => r.item?._type === 'transport' && r.item.status !== 'cancelled' && !r.item.routeAssigned,
   invoiceError: r => r.fam.invoiceErrors.length > 0,
-  unpaid: r => r.fam.unpaid.length > 0,
+  overdue: r => r.fam.overdue.length > 0,
   nifInvalid: r => r.fam.nifInvalid,
   duplicate: r => r.fam.duplicate,
 };
@@ -244,7 +243,7 @@ const STATUS_GROUP_LABEL: Record<SubStatus, string> = { pending: 'Pendentes', ac
 
 /** Needs a decision from the admin: a pending request or a client action to review. */
 export const needsAttention = (r: Row) =>
-  !!r.item && (r.item.status === 'pending' || !!r.item.adminReviewPending);
+  !!r.item && (r.item.status === 'pending' || needsAdminReview(r.item));
 
 const rowOrder = (a: Row, b: Row) =>
   Number(needsAttention(b)) - Number(needsAttention(a))
