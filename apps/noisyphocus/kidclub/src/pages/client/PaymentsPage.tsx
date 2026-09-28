@@ -35,6 +35,10 @@ function isOverdue(record: BillingRecord) {
   return due ? due < new Date() : false;
 }
 
+// Can be paid now. Only `pending`: the payment functions refuse anything else
+// (a `failed` attempt can't be retried yet — see STATUS.md).
+const isPayable = (r: BillingRecord) => r.status === 'pending';
+
 // Months are paid in order: a monthly record (id `<familyId>_YYYY-MM`) waits
 // while an earlier monthly record is still `pending`. Party/camp records are
 // exempt. Mirrors assertEarlierMonthsPaid in functions/src/kidclub/billing.ts,
@@ -43,7 +47,7 @@ const isMonthly = (r: BillingRecord) => /_\d{4}-\d{2}$/.test(r.id);
 const monthMs = (r: BillingRecord) => r.periodStart?.toMillis?.() ?? 0;
 function earlierUnpaid(records: BillingRecord[], record: BillingRecord): BillingRecord[] {
   if (!isMonthly(record)) return [];
-  return records.filter(r => r.id !== record.id && isMonthly(r) && r.status === 'pending' && monthMs(r) < monthMs(record));
+  return records.filter(r => r.id !== record.id && isMonthly(r) && isPayable(r) && monthMs(r) < monthMs(record));
 }
 
 export default function PaymentsPage() {
@@ -99,7 +103,7 @@ export default function PaymentsPage() {
 
   // One list, month order (records is sorted), cancelled/dry-run left out.
   const shown = useMemo(() => records.filter(r => SHOWN_STATUSES.includes(r.status)), [records]);
-  const unpaid = shown.filter(r => r.status === 'pending');
+  const unpaid = shown.filter(isPayable);
   const overdueCount = unpaid.filter(isOverdue).length;
   const unpaidTotal = unpaid.reduce((s, r) => s + r.total, 0);
 
@@ -148,7 +152,7 @@ export default function PaymentsPage() {
     if (batchMethod === 'mbway' && !batchPhone.trim()) { setBatchPhoneError('Introduza o número de telemóvel MB WAY.'); return; }
     setBatchPhoneError('');
 
-    const targets = records.filter(r => selected.has(r.id) && r.status === 'pending');
+    const targets = records.filter(r => selected.has(r.id) && isPayable(r));
     setBatchActing(true);
     setBatchResults([]);
 
@@ -220,7 +224,7 @@ export default function PaymentsPage() {
             <div className="flex gap-2">
               <button onClick={() => { setSelected(new Set()); setBatchPanel(false); setBatchResults([]); }}
                 className="text-xs text-indigo-500 hover:underline">Cancelar</button>
-              <button onClick={() => { setBatchPanel(p => !p); setBatchMethod(null); setBatchResults([]); }}
+              <button onClick={() => { setBatchPanel(p => !p); setBatchMethod('mbway'); setBatchResults([]); }}
                 className="bg-indigo-600 text-white text-sm px-4 py-1.5 rounded-lg hover:bg-indigo-700">
                 Pagar selecionados
               </button>
@@ -229,16 +233,9 @@ export default function PaymentsPage() {
 
           {batchPanel && !batchActing && batchResults.length === 0 && (
             <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-700">Método de pagamento:</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {(['mbway', 'multibanco', 'card'] as const).map(m => (
-                  <button key={m}
-                    onClick={() => setBatchMethod(m)}
-                    className={`py-2 rounded-lg border text-sm font-medium transition-colors ${batchMethod === m ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-gray-200 hover:bg-gray-50'}`}>
-                    {m === 'mbway' ? '📱 MB WAY' : m === 'multibanco' ? '🏧 Multibanco' : '💳 Cartão'}
-                  </button>
-                ))}
-              </div>
+              {/* MB WAY only for now: card has no Easypay POS configured, and
+                  Multibanco is off until that's sorted too. */}
+              <p className="text-sm font-medium text-gray-700">📱 Pagar com MB WAY</p>
               {batchMethod === 'mbway' && (
                 <>
                   <input type="tel" placeholder="9XXXXXXXX" value={batchPhone}
@@ -280,7 +277,7 @@ export default function PaymentsPage() {
         <div className="space-y-3">
           {shown.map(record => {
             const overdueBadge = isOverdue(record);
-            const isPending = record.status === 'pending';
+            const isPending = isPayable(record);
             const isSelected = selected.has(record.id);
             const isDone = ['paid', 'invoiced'].includes(record.status);
 
@@ -380,16 +377,6 @@ export default function PaymentsPage() {
                                 {acting ? 'A processar...' : 'Pagar com MB WAY'}
                               </button>
                             </div>
-
-                            <button onClick={() => handleSinglePay(record, 'multibanco')} disabled={acting}
-                              className="w-full border border-gray-300 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
-                              🏧 Gerar referência Multibanco
-                            </button>
-
-                            <button onClick={() => handleSinglePay(record, 'card')} disabled={acting}
-                              className="w-full border border-gray-300 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
-                              💳 Pagar com Cartão
-                            </button>
 
                             <button onClick={() => setActiveId(null)} className="w-full text-xs text-gray-400 py-1">Cancelar</button>
                           </div>
