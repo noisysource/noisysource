@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-28 (evening)
 
 ## ✅ LIVE IN PROD SINCE 2026-09-27 — read this section first
 
@@ -86,13 +86,13 @@ The list is in the `migrate.mjs` output. Re-run the dry run to see it.
   blocks; `processing` and `failed` don't. Party and camp payments are exempt.
   **Consequence:** a family whose September bill is wrong can't pay October until it's fixed.
 
-### 🟡 In review: one admin page for families + subscriptions (branch `agent/kidclub-admin-unified`)
+### ✅ Live: one admin page for families + subscriptions (#52, in prod via #55 on 2026-09-28)
 
 Famílias and Inscrições are merged into **one page** at `/admin/subscriptions` ("Famílias e
 inscrições"); `/admin/families` redirects there. Built 2026-09-28 from
 `HANDOFF-admin-families-subscriptions.md`, with Renato's design: no tabs, one list, tags, grouping,
-search over every field, editing in a family side panel. PR into `staging`, **not yet tested on dev,
-not in prod.**
+search over every field, editing in a family side panel. Merged and **live in prod**. Renato used it in prod to fix Mafalda's NIF and retry
+her invoice (worked), and to delete Carla Silva's duplicate family records.
 
 What it does:
 - **List:** one row per subscription. Chips filter by status (default: Pendentes + Ativas), service,
@@ -131,6 +131,9 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 
 ### 🔴 Open — in priority order
 
+**Next session: `HANDOFF-payments-email-whatsapp.md`** (same folder). It covers items 0 and 1 below, a
+WhatsApp proposal, and the duplicate-family race fix.
+
 0. **Payments are MB WAY only (hotfix PR #53, `hotfix/mbway-only` → `main`, 2026-09-28).** Card fails at Easypay
    with "does not have a POS associated": no card terminal is configured in the Easypay account (an
    Easypay setting, not our code). Multibanco is hidden with it. To restore both: fix the Easypay
@@ -145,7 +148,8 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
    - What happened: Marisa Sofia's September (`8pPhu4JCvGUrpBxsaOeY_2026-09`) was stuck `processing` on
      a dead card link. Renato reset it to `pending` by hand, removing `easypayId`/`paymentLink`.
    - **Duplicate family records on first login** (race in `getOrCreateFamily`): found on Carla Silva
-     (cssilva09@hotmail.com, 3 records in dev). Fix proposed, not started; prod not checked yet.
+     (cssilva09@hotmail.com, 3 records). Renato deleted the prod duplicates and fixed her name on
+     2026-09-28. The code fix isn't done; see the handoff.
 
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
    `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
@@ -154,17 +158,16 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
    - Check the Workspace delegation for that service account, and whether the key is still valid.
      Mind the org policy that blocks service-account keys (see memory "Pi bridge auth").
    - The go-live announcement was sent by hand from Gmail (BCC) because of this.
-2. **Mafalda Raposo Duarte: paid September (€146.70, MB, 25 Sep) but has no invoice.** Vendus rejected
-   NIF 284463244, which fails the checksum. Renato has the correct NIF. Once the new admin page is in
-   prod (see above): open her family, fix the NIF, click "Tentar faturar novamente".
-3. **Edson:** study room still `confirmed`, billing €72/month. Renato said it should be cancelled.
-   Confirm, and cancel in admin.
+2. ~~Mafalda Raposo Duarte's missing invoice~~ **Done 2026-09-28:** NIF fixed and invoice retried from the new admin page.
+3. ~~Edson's study room~~ **Resolved:** prod already has the right value (Renato, 2026-09-28).
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
    charged, because the fee is keyed by child. Create the child in admin and link both subs.
+   In the new admin page: his family → "✏️ Dados da criança" → Guardar creates the record and links both subs.
 5. **Mary Pratas' mis-paid period** (paid 2027-08 instead of 2026-09, Vendus FR 01P2026/195) needs a
    credit note. Unchanged. The new pay-in-order rule stops it happening again.
 6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
-   She'd see nothing if she logged in with that email.
+   She'd see nothing if she logged in with that email. In the new admin page: tick "Mostrar famílias sem
+   inscrições", open it, "Eliminar família".
 7. **Cost inputs differ between projects:** prod has driver €1,400 / electricity €200, dev has €1,200 / €150.
    Renato to say which is real. This decides whether the loss is €417 or ~€670/month.
 8. **Pricing/discount decision (GO-LIVE.md §4):** still open. Note that the billing engine is already marginal;
