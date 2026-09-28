@@ -10,6 +10,7 @@ import ChildDetailsForm from './ChildDetailsForm';
 import SubscriptionCard from './SubscriptionCard';
 import FamilyBills from './FamilyBills';
 import VersionHistoryModal from './VersionHistoryModal';
+import DeleteFamilyModal from './DeleteFamilyModal';
 import { FamilyTags } from './tags';
 
 const PAYMENT_LABEL: Record<string, string> = {
@@ -36,6 +37,7 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
   const [editingFamily, setEditingFamily] = useState(false);
   const [editChildKey, setEditChildKey] = useState<string | null>(null);
   const [historyItem, setHistoryItem] = useState<SubItem | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const highlightRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -53,10 +55,10 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
   }, [highlightId, group.key]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !historyItem) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !historyItem && !confirmDelete) onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, historyItem]);
+  }, [onClose, historyItem, confirmDelete]);
 
   const family = group.family;
   const address = family?.billingAddress;
@@ -200,13 +202,27 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
           </section>
 
           {group.familyId && (
-            <p className="text-[11px] text-gray-300 pt-2">families/{group.familyId}</p>
+            <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+              <p className="text-[11px] text-gray-300">families/{group.familyId}</p>
+              <button onClick={() => setConfirmDelete(true)}
+                className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50">
+                Eliminar família…
+              </button>
+            </div>
           )}
         </div>
       </aside>
 
       {historyItem && (
         <VersionHistoryModal item={historyItem} onClose={() => setHistoryItem(null)} />
+      )}
+      {confirmDelete && group.familyId && (
+        <DeleteFamilyModal
+          group={group}
+          allChildren={data.children}
+          onClose={() => setConfirmDelete(false)}
+          onDeleted={() => { setConfirmDelete(false); onClose(); data.reload(); }}
+        />
       )}
     </>
   );
