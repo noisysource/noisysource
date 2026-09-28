@@ -4,7 +4,7 @@ import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { DiscountRule } from '@shared/models/Discount';
 import { grossFromAppliedDiscounts } from '../../../services/discountService';
 import { SubStatus } from '../../../lib/utils';
-import { SubItem, isUnlinked } from './model';
+import { SubItem, isUnlinked, needsAdminReview } from './model';
 import { StatusBadge, CLIENT_ACTION_BADGE } from './badges';
 import { SubscriptionActions, statusChangeEffects } from './useSubscriptionActions';
 import EditForm from './EditForm';
@@ -50,11 +50,18 @@ const SubscriptionCard = forwardRef<HTMLDivElement, {
               {item.feeReviewRequired && (
                 <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">⚠ rever mensalidade</span>
               )}
-              {item.adminReviewPending && (
+              {needsAdminReview(item) && (
                 <button onClick={() => actions.resolveClientAction(item)} disabled={busy}
                   className={`text-xs px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].cls : 'bg-pink-100 text-pink-800 hover:bg-pink-200'}`}
                   title={item.lastClientAction === 'confirmed' ? 'Clique para ativar a inscrição' : 'Clique para marcar como revisto'}>
                   {item.lastClientAction ? CLIENT_ACTION_BADGE[item.lastClientAction].label : '🔔 alteração do cliente'}
+                </button>
+              )}
+              {item.adminReviewPending && !needsAdminReview(item) && (
+                <button onClick={() => actions.resolveClientAction(item)} disabled={busy}
+                  className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-400 disabled:opacity-60"
+                  title="O encarregado aceitou a última alteração. Nada a fazer — clique para limpar.">
+                  ✓ encarregado confirmou
                 </button>
               )}
               {item.clientReviewPending && (

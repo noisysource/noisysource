@@ -112,7 +112,7 @@ export function useSubscriptionActions(data: Pick<AdminData, 'setItems' | 'reloa
     } finally { setProcessing(null); }
   };
 
-  // When the client's last action was "confirmed", actually activates the
+  // When the client confirmed a PENDING subscription, actually activates the
   // subscription (via setStatus, which also clears the review flags for
   // this exact case — see its own comment) — the badge for that case reads
   // "✅ Confirmado — ativar", so it has to do what it says. Every other
@@ -120,7 +120,9 @@ export function useSubscriptionActions(data: Pick<AdminData, 'setItems' | 'reloa
   // flag, since those need the admin to act elsewhere (cancel it, review
   // the edit) rather than a status flip.
   const resolveClientAction = async (item: SubItem) => {
-    if (item.lastClientAction === 'confirmed' && item.status !== 'active') {
+    // Only from pending: a confirmation on a cancelled subscription must not
+    // quietly reactivate it.
+    if (item.lastClientAction === 'confirmed' && item.status === 'pending') {
       await setStatus(item, 'active');
       return;
     }

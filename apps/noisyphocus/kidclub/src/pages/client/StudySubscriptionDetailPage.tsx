@@ -6,7 +6,7 @@ import { callable } from '../../lib/callable';
 import { Child, Family, StudyRoomEntry, normalizeStatus } from '@shared/models';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
-import { coerceSubscriptionDate } from '../../lib/utils';
+import { coerceSubscriptionDate, normalizeSubStatus } from '../../lib/utils';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
 
@@ -215,9 +215,11 @@ export default function StudySubscriptionDetailPage() {
     try {
       await updateDoc(docRef('studyroom', id), {
         clientReviewPending: false, clientReviewedAt: new Date(),
-        // Lets admin see "parent confirmed, ready to activate" rather than
-        // just a generic review flag once they act on this.
-        adminReviewPending: true, lastClientAction: 'confirmed',
+        // A confirmed PENDING request is ready to activate, so it goes back to
+        // the admin. Confirming a change to an already-active subscription is
+        // just the parent acknowledging it: recorded, but nothing to act on.
+        adminReviewPending: normalizeSubStatus(subscription?.status) === 'pending',
+        lastClientAction: 'confirmed',
         updatedAt: new Date(),
       });
       setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
