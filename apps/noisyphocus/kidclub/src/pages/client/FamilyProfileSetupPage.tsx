@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useUser } from '@shared/hooks';
 import { Family } from '@shared/models';
 import { familyService } from '../../services/familyService';
+import { isValidNif, normalizeNif } from '../../lib/nif';
 
 interface SetupForm {
   name: string;
@@ -30,8 +31,13 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
   const set = (field: keyof SetupForm, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
 
+  // Vendus refuses an invoice for a NIF that fails the checksum, and the bill
+  // then sits paid-but-uninvoiced until an admin fixes it — catch it here.
+  const nifError = form.nif.trim() && !isValidNif(form.nif) ? 'NIF inválido — confirme os 9 dígitos.' : '';
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (nifError) { setError(nifError); return; }
     setSaving(true);
     setError('');
     try {
@@ -41,7 +47,7 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
           name: form.name,
           phone: form.phone,
         },
-        nif: form.nif || undefined,
+        nif: normalizeNif(form.nif) || undefined,
         billingAddress: form.street
           ? { street: form.street, city: form.city, postalCode: form.postalCode, country: 'PT' }
           : undefined,
@@ -117,6 +123,7 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
                   maxLength={9}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 />
+                {nifError && <p className="text-sm text-red-600 mt-1">{nifError}</p>}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Morada</label>

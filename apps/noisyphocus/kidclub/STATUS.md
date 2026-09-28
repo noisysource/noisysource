@@ -2,9 +2,177 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-23
+**Last updated:** 2026-09-28
 
-## WHERE THINGS STAND
+## ✅ LIVE IN PROD SINCE 2026-09-27 — read this section first
+
+The event-sourced billing rewrite, the September reconciliation and the price changes
+are **live on kidclub.pt**. Everything further down this file under "Before go-live" is
+history: useful for the *why*, not the current state.
+
+**From now on prod is the source of truth for everything.** Dev was the source of truth for
+subscription content only for the one-time promotion. Renato has already changed prod
+directly since then (Maria Vicente's 15% "Aluno do ano anterior", re-added in admin), so
+**never re-run `promote-subscriptions.mjs`**: it would overwrite live changes with stale dev data.
+
+### What happened at the cutover (2026-09-27, ~21:48–23:05 UTC)
+
+| Step | Result |
+|---|---|
+| Full prod backup | `gs://rainbow-prod-2454b-exports/golive-2026-09-27-pre-cutover`, 624 docs. **This is the rollback point.** |
+| App emails paused | `settings/globals.emailsEnabled=false`. Suppressed only the two Brito "Inscrição aprovada" emails. Back on at the end. |
+| Code (#46, staging→main) | Rules, indexes, functions and hosting all deployed. The first attempt failed; see "Deploy lessons" below. |
+| `identity.mjs --apply` | 24 writes: 5 duplicate children merged (retired, not deleted), 3 families created (Afonso, Lourenço, Camila), Leonor linked |
+| `normalize-emails.mjs --apply` | 2 writes (Leonor: email lowercased, linked to her mother's prod uid) |
+| `migrate.mjs --only dates / events / absences` | 7 endDates cleared, 4,785 + 80 events, 52 absences carried. **Step `billing-status` deliberately skipped**: it would have re-opened 24 cancelled bills for two families whose subs are all cancelled (Renato Lopes/Diniz, João Lopes). |
+| `promote-subscriptions.mjs --apply` | 31 subs updated from dev, 5 prod-only subs deleted (filhas da tatiana ×2, Filho do Rui, Filhas da Catarina, test). Re-run afterwards: 0 diffs. |
+| Audits | Both price audits: 0 mismatches on 36 subs. All 6 paid/invoiced bills unchanged, compared field-by-field with the pre-deploy state. |
+
+**Monthly total after go-live:** €3,196.80 (transport 2,260.80 + study 936.00), then €3,160.80
+after Renato re-added Maria Vicente's 15%. Fixed costs are still €3,400–3,650. **Still a loss.**
+The pricing question in GO-LIVE.md §4 is deferred, not solved.
+
+**The rule that governed the promotion** (Renato, 2026-09-24/27, recorded for the audit trail):
+- **Dev wins** on every subscription field it has: prices, discounts, `discountOverrides`, status, dates.
+- **Prod keeps:**
+  - identity (familyId, childId, userId, contact fields);
+  - `enrollmentFeeBilled`, because it points at billing records and those never travel;
+  - any field dev lacked.
+- **Paid and invoiced bills** are never touched.
+- **Only fees actually paid** in prod count as paid. Everyone else is charged the €35 + €25 on their next bill.
+
+### ⚠️ What went wrong, and how it was fixed
+
+**31 recorded absences dropped off bills mid-migration.** This is the gate-1 hazard below,
+and it did happen. The identity and endDate writes ran under the *new* code before the absence
+step. That made the billing triggers rebuild four families' September bills, and the rebuild
+drops the old `excludedDates`. The four families: Manel Oliveira, Diogo + Bernardo Mogo, José Eduardo.
+- **Recovered with Firestore's 1-hour point-in-time read.** A `runQuery` with `readTime` =
+  pre-deploy (21:55Z) returned the original 75 absence dates. Now: 44.
+- **Of the 31 missing:**
+  - 16 had already been carried as events;
+  - 3 were Sundays (unmatchable);
+  - **12 (all Mogo, 1–10 Sep) were restored by hand** as `CANCELLED`/`staff`/"migrated from excludedDate".
+- **Julia Brito's 22 Sep absence** was also recorded by hand. She was `pending` at migration time, so no events existed yet.
+- **Lesson for any future data migration:** snapshot every source the migration reads
+  *before* the new code deploys, or read it via `readTime`. The 1-hour window is real and short.
+
+**29 historical absences were not migrated, deliberately.** They're on cancelled subs, or on days the
+child isn't served (the pre-eb905ed off-by-one). None can reach the ≥3 credit threshold.
+The list is in the `migrate.mjs` output. Re-run the dry run to see it.
+
+### Deploy lessons (fix before the next functions change)
+
+1. **The deploy aborts if a function was removed from the source.** `setBillingLineItemExcludedDays`
+   (the old "Dias sem serviço" day-picker) had to be deleted by hand:
+   `gcloud functions delete … --region europe-west3`. The next removed function will fail the
+   same way. Either delete it by hand first, or add `--force` to the CI functions deploy.
+2. **The CI service account can't set `run.invoker` on a NEW callable in prod.** The deploy creates
+   the function but leaves it uncallable. `setReservationEventStatus` and
+   `backfillReservationEvents` were fixed by hand (`allUsers` → `roles/run.invoker`, same as
+   every other callable). **Fix properly:** give the CI SA `run.services.setIamPolicy`
+   (e.g. `roles/run.admin` scoped, or a custom role) in `infra/gcp/terraform/iam.tf`.
+3. **A PR merged while commits are still being pushed strands the later commits.** It happened
+   with #47 → #48. Open a new PR for follow-up work instead of pushing to a PR's branch.
+
+### Shipped the same night (#44, #47, #48 → prod via #46/#49)
+
+- **Parents see the final price only.** No discount chips, strikethrough or "discounted" colouring on any client page.
+  The admin schedule picker keeps the full breakdown (`showDiscountBreakdown`).
+- **Pagamentos is one list** in month order, earliest first. Each month has a tag: Em atraso / Por pagar /
+  A aguardar pagamento / Pago. The tabs are gone.
+- **Months must be paid in order**, enforced in the MB WAY, Multibanco and card payment functions
+  (`assertEarlierMonthsPaid`): "As mensalidades são pagas por ordem…". Only `pending`
+  blocks; `processing` and `failed` don't. Party and camp payments are exempt.
+  **Consequence:** a family whose September bill is wrong can't pay October until it's fixed.
+
+### 🟡 In review: one admin page for families + subscriptions (branch `agent/kidclub-admin-unified`)
+
+Famílias and Inscrições are merged into **one page** at `/admin/subscriptions` ("Famílias e
+inscrições"); `/admin/families` redirects there. Built 2026-09-28 from
+`HANDOFF-admin-families-subscriptions.md`, with Renato's design: no tabs, one list, tags, grouping,
+search over every field, editing in a family side panel. PR into `staging`, **not yet tested on dev,
+not in prod.**
+
+What it does:
+- **List:** one row per subscription. Chips filter by status (default: Pendentes + Ativas), service,
+  and "needs attention" flags (ação do cliente, aguarda encarregado, erro de fatura, NIF inválido,
+  por pagar, não vinculado, rever mensalidade, sem rota, possível duplicado). Grouping: família
+  (default), criança, escola, serviço, estado, none. Pending and client-action rows sort first.
+  "Mostrar famílias sem inscrições" adds families and unclaimed children with no subscription.
+- **Side panel** (`?family=<familyId or email>` in the URL; the Transport Planner's `?highlight=` still
+  works): guardian contact + **NIF + billing address** (NIF checksum-validated), bills with
+  **invoice errors + "Tentar faturar novamente"** (`retryVendusInvoice`), each child with their
+  subscriptions (status, discounts, schedule edit, history), and **"👁 Ver como cliente"**.
+- Status changes now say what they set off (approval/rejection email, close-out, billing) before
+  writing; cancel asks for an optional reason (it goes into the rejection email).
+- Parent pages (A minha conta, first-login profile setup) now reject a NIF that fails the checksum.
+- **Bug fixed on the way:** the old page never read `discountOverrides`, so "Repor automático" never
+  showed after a reload and toggling one auto discount wiped the other overrides.
+- **"Eliminar família"** is back (panel footer), with a confirmation listing every document it deletes.
+  Paid, invoiced and in-flight bills are kept, as are the login account, the Vendus client and past events.
+- **Round 2 fixes (Renato's first look):** "em atraso" counts only bills past their due date (bills exist
+  for the whole year ahead, so the first version flagged everyone). "Confirmado — ativar" shows only on
+  *pending* subs. A parent accepting a change to an active sub is now a quiet "encarregado confirmou" tag,
+  and parent pages no longer raise the admin flag for it.
+- **Open question:** NIF check "via Vendus". Our integration has no validate endpoint, and Vendus rejected
+  Mafalda's NIF on the same checksum we now check client-side. Proposed instead: the same checksum
+  server-side in functions, before any Vendus call. Waiting for Renato.
+
+Code: `src/pages/admin/subscriptions/` — `useAdminData` (reads), `useSubscriptionActions` (writes),
+`listModel.ts` (search/filters/grouping, pure), `FamilyPanel`, `FamilyContactForm`, `FamilyBills`,
+`SubscriptionCard`. Typecheck: 11 errors (baseline 13, minus 2 that lived in the deleted Famílias page).
+
+**Can't be verified on dev:** the Vendus side. `syncVendusClient` skips `kidclub-dev`, and real Vendus
+calls are blocked from dev, so the retry button will fail there with the guard's error. Dev can only
+show that the form writes the right fields and that errors display. **Next step:** Renato tests on
+the dev preview → merge → `staging`→`main` → in prod, fix Mafalda's NIF in her panel and click retry
+on `JlqSRknVxyzaJfYP2WiM_2026-09`.
+
+### 🔴 Open — in priority order
+
+0. **Payments are MB WAY only (hotfix PR #53, `hotfix/mbway-only` → `main`, 2026-09-28).** Card fails at Easypay
+   with "does not have a POS associated": no card terminal is configured in the Easypay account (an
+   Easypay setting, not our code). Multibanco is hidden with it. To restore both: fix the Easypay
+   account, then re-add the two buttons in `PaymentsPage.tsx`.
+   **Still open (needs a functions change, not done):**
+   - A payment that fails or expires (e.g. an MB WAY request not approved in time) leaves the bill
+     `failed`. The page shows no pay button for it, and `initiate*Payment` only accepts `pending`, so
+     that month and every later one are stuck until someone resets it by hand in Firestore.
+   - A card or Multibanco attempt left `processing` has no way back for the parent.
+   - Fix: make `failed` payable (page + `initiateMbwayPayment`), count `failed` as unpaid in
+     `assertEarlierMonthsPaid`, and refuse Multibanco/card server-side while they're off.
+   - What happened: Marisa Sofia's September (`8pPhu4JCvGUrpBxsaOeY_2026-09`) was stuck `processing` on
+     a dead card link. Renato reset it to `pending` by hand, removing `easypayId`/`paymentLink`.
+   - **Duplicate family records on first login** (race in `getOrCreateFamily`): found on Carla Silva
+     (cssilva09@hotmail.com, 3 records in dev). Fix proposed, not started; prod not checked yet.
+
+1. **App email has been broken since 2026-08-01.** Every outbox email fails with
+   `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
+   have received **no** app emails for two months (approvals, payment notices).
+   - The sender impersonates `admin@kidclub.pt` via domain-wide delegation, using `SA_CLIENT_EMAIL`/`SA_PRIVATE_KEY`.
+   - Check the Workspace delegation for that service account, and whether the key is still valid.
+     Mind the org policy that blocks service-account keys (see memory "Pi bridge auth").
+   - The go-live announcement was sent by hand from Gmail (BCC) because of this.
+2. **Mafalda Raposo Duarte: paid September (€146.70, MB, 25 Sep) but has no invoice.** Vendus rejected
+   NIF 284463244, which fails the checksum. Renato has the correct NIF. Once the new admin page is in
+   prod (see above): open her family, fix the NIF, click "Tentar faturar novamente".
+3. **Edson:** study room still `confirmed`, billing €72/month. Renato said it should be cancelled.
+   Confirm, and cancel in admin.
+4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
+   charged, because the fee is keyed by child. Create the child in admin and link both subs.
+5. **Mary Pratas' mis-paid period** (paid 2027-08 instead of 2026-09, Vendus FR 01P2026/195) needs a
+   credit note. Unchanged. The new pay-in-order rule stops it happening again.
+6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
+   She'd see nothing if she logged in with that email.
+7. **Cost inputs differ between projects:** prod has driver €1,400 / electricity €200, dev has €1,200 / €150.
+   Renato to say which is real. This decides whether the loss is €417 or ~€670/month.
+8. **Pricing/discount decision (GO-LIVE.md §4):** still open. Note that the billing engine is already marginal;
+   only the stored `monthlyFee`/simulator are flat.
+
+---
+
+## Before go-live (2026-09-23) — historical
 
 **Dev is migrated and validated. Prod is untouched and still on the old model.**
 

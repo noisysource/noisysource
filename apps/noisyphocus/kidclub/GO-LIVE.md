@@ -1,5 +1,17 @@
 # GO-LIVE — handoff for the prod promotion session
 
+> ✅ **DONE: live in prod since 2026-09-27.** This file is now a historical record of the plan.
+> What actually ran, what went wrong (31 absences dropped off bills and were recovered),
+> the backup location and the open items are all in `STATUS.md` → "LIVE IN PROD SINCE 2026-09-27".
+> Do **not** re-run any step below. Prod is now the source of truth, and `promote-subscriptions.mjs`
+> would overwrite live changes with stale dev data.
+>
+> Two statements below turned out wrong:
+> - **"`applyDiscounts` is flat, the marginal design is not implemented"** (§4) is only half true. The
+>   *billing engine* (`reconciliation.ts`) was already marginal; only the stored `monthlyFee`, the admin UI and the
+>   simulator use the flat sum.
+> - **§6's order is incomplete.** It omits the code deploy and `migrate.mjs`, both of which prod needed.
+
 Written 2026-09-24, at the end of the September reconciliation session, for the
 session that will plan and execute the move to prod. Read this before touching
 anything; it exists so you don't have to reconstruct the reasoning.

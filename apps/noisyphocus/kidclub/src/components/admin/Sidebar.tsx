@@ -28,7 +28,7 @@ export default function Sidebar() {
       </div>
       <nav className="space-y-4">
         <SidebarSection title="📋 Inscrições" defaultOpen>
-          <SidebarNavLink to="/admin/subscriptions">📋 Todas as inscrições</SidebarNavLink>
+          <SidebarNavLink to="/admin/subscriptions">👨‍👩‍👧 Famílias e inscrições</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="🎉 Festas">
@@ -56,10 +56,6 @@ export default function Sidebar() {
         <SidebarSection title="👥 Recursos Humanos">
           <SidebarNavLink to="/admin/hr">👥 Colaboradores</SidebarNavLink>
           <SidebarNavLink to="/admin/timesheets">⏰ Registo de Horas</SidebarNavLink>
-        </SidebarSection>
-
-        <SidebarSection title="👨‍👩‍👧 Famílias">
-          <SidebarNavLink to="/admin/families">👨‍👩‍👧 Famílias e Crianças</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="🛠️ Admin">

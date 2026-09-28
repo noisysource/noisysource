@@ -219,9 +219,11 @@ export default function TransportSubscriptionDetailPage() {
     try {
       await updateDoc(docRef('transportationSubscriptions', id), {
         clientReviewPending: false, clientReviewedAt: new Date(),
-        // Lets admin see "parent confirmed, ready to activate" rather than
-        // just a generic review flag once they act on this.
-        adminReviewPending: true, lastClientAction: 'confirmed',
+        // A confirmed PENDING request is ready to activate, so it goes back to
+        // the admin. Confirming a change to an already-active subscription is
+        // just the parent acknowledging it: recorded, but nothing to act on.
+        adminReviewPending: normalizeSubStatus(subscription?.status) === 'pending',
+        lastClientAction: 'confirmed',
         updatedAt: new Date(),
       });
       setSubscription(prev => prev ? { ...prev, clientReviewPending: false } : prev);
