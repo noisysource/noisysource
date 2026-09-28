@@ -131,6 +131,22 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 
 ### 🔴 Open — in priority order
 
+0. **Payments are MB WAY only (hotfix PR #53, `hotfix/mbway-only` → `main`, 2026-09-28).** Card fails at Easypay
+   with "does not have a POS associated": no card terminal is configured in the Easypay account (an
+   Easypay setting, not our code). Multibanco is hidden with it. To restore both: fix the Easypay
+   account, then re-add the two buttons in `PaymentsPage.tsx`.
+   **Still open (needs a functions change, not done):**
+   - A payment that fails or expires (e.g. an MB WAY request not approved in time) leaves the bill
+     `failed`. The page shows no pay button for it, and `initiate*Payment` only accepts `pending`, so
+     that month and every later one are stuck until someone resets it by hand in Firestore.
+   - A card or Multibanco attempt left `processing` has no way back for the parent.
+   - Fix: make `failed` payable (page + `initiateMbwayPayment`), count `failed` as unpaid in
+     `assertEarlierMonthsPaid`, and refuse Multibanco/card server-side while they're off.
+   - What happened: Marisa Sofia's September (`8pPhu4JCvGUrpBxsaOeY_2026-09`) was stuck `processing` on
+     a dead card link. Renato reset it to `pending` by hand, removing `easypayId`/`paymentLink`.
+   - **Duplicate family records on first login** (race in `getOrCreateFamily`): found on Carla Silva
+     (cssilva09@hotmail.com, 3 records in dev). Fix proposed, not started; prod not checked yet.
+
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
    `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
    have received **no** app emails for two months (approvals, payment notices).
