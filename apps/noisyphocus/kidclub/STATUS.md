@@ -134,6 +134,26 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 **Next session: `HANDOFF-payments-email-whatsapp.md`** (same folder). It covers items 0 and 1 below, a
 WhatsApp proposal, and the duplicate-family race fix.
 
+**In flight (2026-09-28, late): payment retry + billing sandbox.**
+- **PR #57** `agent/kidclub-payment-retry` → `staging`: `failed` bills are payable again and block later months.
+  The webhook also matches earlier attempts (`previousEasypayIds`), so a late payment is recorded, and a
+  payment on an already-paid bill is flagged (`duplicatePaymentEasypayIds`, red warning in the family panel).
+  Adds the admin "Repor para pendente" (`resetStuckPayment`) for `processing` bills. Multibanco/card are
+  refused server-side. Test steps are in the PR body. **Renato: test on dev, then merge.**
+- **`agent/billing-sandbox`** (pushed, **no PR yet**, stacked on #57): `EASYPAY_SANDBOX=true` for
+  kidclub-dev via `functions/.env.kidclub-dev`, and `externalGuard` lets dev reach Easypay only with that flag
+  (and refuses the flag on prod). Open its PR into `staging` **after #57 merges**: both deploy functions to
+  the shared kidclub-dev, so opening it earlier makes one overwrite the other or fail its deploy.
+- **Dev's `EASYPAY_ACCOUNT_ID`/`EASYPAY_API_KEY` secrets now hold the Easypay sandbox account's keys**
+  (version 2; version 1 = live keys copied from prod). Disable version 1 once dev has redeployed with
+  version 2. The sandbox's notification URL points at dev's `easypayWebhook`.
+- **Vendus sandbox: waiting on Renato.** Choose between a separate Vendus account for dev (recommended; the
+  product/payment-method IDs in `vendus.ts` would then become settings per project) and the same account
+  with `mode: "tests"` forced on every document. Until then, Vendus stays blocked on dev.
+- Not done, follow-up: the Easypay webhook doesn't verify its caller.
+- Next after that: prod audit (read-only) of bills that are `failed` or have been `processing` for more
+  than a day, then workstream 2 (email).
+
 0. **Payments are MB WAY only (hotfix PR #53, `hotfix/mbway-only` → `main`, 2026-09-28).** Card fails at Easypay
    with "does not have a POS associated": no card terminal is configured in the Easypay account (an
    Easypay setting, not our code). Multibanco is hidden with it. To restore both: fix the Easypay
