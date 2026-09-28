@@ -86,6 +86,14 @@ The list is in the `migrate.mjs` output. Re-run the dry run to see it.
   blocks; `processing` and `failed` don't. Party and camp payments are exempt.
   **Consequence:** a family whose September bill is wrong can't pay October until it's fixed.
 
+### ▶️ Next session: one admin page for families + subscriptions
+
+Renato wants Famílias and Inscrições merged into **one page** with filtering, editing and
+status changes. It also closes the gap that no admin screen can edit a **NIF or billing address**
+(needed now for Mafalda's invoice), and adds a retry-invoice button.
+**Brief: `HANDOFF-admin-families-subscriptions.md`** (same folder). It ends with 5 questions to
+ask Renato before building.
+
 ### 🔴 Open — in priority order
 
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
