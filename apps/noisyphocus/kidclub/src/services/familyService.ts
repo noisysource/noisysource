@@ -62,6 +62,18 @@ export const familyService = {
     return { ...newFamily, id: ref.id };
   },
 
+  /**
+   * The Firebase Auth uid that owns a family ('' when nobody has claimed it yet).
+   * Every child/subscription linked to a family must carry this as `userId`:
+   * the client portal queries and the Firestore rules match on userId, not
+   * familyId, so a doc linked by familyId alone is invisible to the parent.
+   */
+  async getFamilyOwnerUid(familyId: string): Promise<string> {
+    if (!familyId) return '';
+    const snap = await getDoc(docRef('families', familyId));
+    return (snap.data()?.primaryContact?.userId as string | undefined) ?? '';
+  },
+
   async updateFamily(familyId: string, updates: Partial<Omit<Family, 'id' | 'createdAt'>>): Promise<void> {
     const clean: any = { ...updates, updatedAt: new Date() };
     Object.keys(clean).forEach(k => clean[k] === undefined && delete clean[k]);
