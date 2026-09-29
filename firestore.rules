@@ -144,6 +144,11 @@ service cloud.firestore {
         allow read, write: if isRainbowAdmin() || isOwner();
       }
 
+      // Saved email templates (admin email composer)
+      match /emailTemplates/{doc} {
+        allow read, write: if isRainbowAdmin() || isOwner();
+      }
+
       // Events calendar
       match /events/{doc} {
         allow read: if isAuthenticated();
