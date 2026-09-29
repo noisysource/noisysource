@@ -205,3 +205,30 @@ export async function createInvoice(
     ...(notes ? { notes } : {}),
   });
 }
+
+/**
+ * Download a document's PDF. Documented in the Vendus v1.1 spec
+ * (https://www.vendus.pt/ws/v1.1/api.jsonapi, GET /documents/{id}): "To obtain
+ * a pdf version, just add .pdf extension to the document's id" — the API's
+ * general "append the format to the endpoint name" convention.
+ *
+ * One attempt, hard timeout, no retry: callers cache the result (see
+ * invoicePdf.ts) so each invoice is fetched from Vendus once.
+ */
+export async function getDocumentPdf(id: number, timeoutMs = 15000): Promise<Buffer> {
+  assertExternalCallsAllowed("Vendus");
+  const path = `/documents/${id}.pdf`;
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "GET",
+    headers: { "Authorization": `Bearer ${apiKey()}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (!res.ok) {
+    throw new Error(`Vendus GET ${path} failed (${res.status}): ${buf.toString("utf8", 0, 300)}`);
+  }
+  if (buf.subarray(0, 5).toString("latin1") !== "%PDF-") {
+    throw new Error(`Vendus GET ${path} did not return a PDF (content-type=${res.headers.get("content-type")}): ${buf.toString("utf8", 0, 300)}`);
+  }
+  return buf;
+}
