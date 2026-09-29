@@ -129,6 +129,28 @@ show that the form writes the right fields and that errors display. **Next step:
 the dev preview → merge → `staging`→`main` → in prod, fix Mafalda's NIF in her panel and click retry
 on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 
+### 🟡 In review: Faturas page dropped, "Descarregar fatura" in Pagamentos (2026-09-29)
+
+Branch `agent/kidclub-invoice-download`, PR → `staging`. Why: a parent saw "no billing" because the
+dashboard's finance tile opened **Faturas**, which read the legacy `invoices` collection (empty for
+every family). Renato's call: drop Faturas; each invoiced month in **Pagamentos** gets a download link.
+- **Client:** `InvoiceListPage`/`InvoiceDetailPage` deleted, sidebar link gone, dashboard tile now
+  "Pagamentos"; `/client/invoices/*` redirects to `/client/payments`. The `invoices` collection and
+  its rules are untouched (admin DataManagementPage still lists it).
+- **New callable `getInvoicePdf({ billingId })`** (`functions/src/kidclub/invoicePdf.ts`): access =
+  bill's `userId`, family `primaryContact.userId`, or owner/rainbowAdmin (impersonation). Fetches
+  `GET /documents/{vendusId}.pdf` from Vendus (documented in the v1.1 spec), single attempt, 15s
+  timeout, no retry. **Cached** in Firestore `_apps/arcoiris/invoicePdfs/{vendusId}` (Bytes, server-only,
+  no rule matches it) so each invoice hits Vendus once ever. **Cap:** 100 Vendus PDF fetches/day
+  across all users, counted in `_apps/arcoiris/rateLimits/invoicePdf_{YYYY-MM-DD}`
+  (`DAILY_VENDUS_PDF_CAP` in `invoicePdfLogic.ts`). No provider-side cap exists for Vendus reads.
+- **Can't be verified on dev:** real Vendus calls are blocked outside prod (external guard; Vendus
+  has no sandbox flag), so the button will show "Não foi possível obter a fatura" there. To see the
+  UI path end-to-end on dev, seed an `invoicePdfs/{vendusId}` doc by hand for a dev bill.
+- ⚠️ **Prod deploy step:** new callable → after the prod deploy, `allUsers` → `roles/run.invoker`
+  on `getinvoicepdf` by hand (Deploy lessons #2); same on dev if the button errors with a 403.
+  Then test once in prod on a real invoiced month (first click = 1 live Vendus read).
+
 ### 🔴 Open — in priority order
 
 **Next session: `HANDOFF-payments-email-whatsapp.md`** (same folder). It covers items 0 and 1 below, a
