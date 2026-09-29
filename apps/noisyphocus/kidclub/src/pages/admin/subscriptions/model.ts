@@ -118,6 +118,10 @@ export interface BillRow {
   dueDate?: Date;
   invoiceError?: string;
   invoiceNumber?: string;
+  /** Current Easypay payment id, if an attempt was started. */
+  easypayId?: string;
+  /** Easypay payments that landed on an already-paid bill — need a refund. */
+  duplicatePaymentEasypayIds?: string[];
 }
 
 /**

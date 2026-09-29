@@ -35,9 +35,10 @@ function isOverdue(record: BillingRecord) {
   return due ? due < new Date() : false;
 }
 
-// Can be paid now. Only `pending`: the payment functions refuse anything else
-// (a `failed` attempt can't be retried yet — see STATUS.md).
-const isPayable = (r: BillingRecord) => r.status === 'pending';
+// Can be paid now: `pending`, or `failed` (an attempt that didn't complete, e.g.
+// an MB WAY request not approved in time — the parent tries again). Mirrors
+// UNPAID_STATUSES in functions/src/kidclub/billing.ts.
+const isPayable = (r: BillingRecord) => r.status === 'pending' || r.status === 'failed';
 
 // Months are paid in order: a monthly record (id `<familyId>_YYYY-MM`) waits
 // while an earlier monthly record is still `pending`. Party/camp records are
@@ -335,6 +336,12 @@ export default function PaymentsPage() {
                         </div>
                       ))}
                     </div>
+
+                    {record.status === 'failed' && (
+                      <p className="mt-3 text-sm text-red-800 bg-white rounded-lg px-3 py-2 border border-red-200">
+                        O pagamento anterior não foi concluído. Pode tentar de novo.
+                      </p>
+                    )}
 
                     {/* Multibanco reference */}
                     {record.status === 'processing' && record.multibancoEntity && (

@@ -29,14 +29,19 @@ export default function FamilyBills({ bills, onChanged }: {
   const [retryError, setRetryError] = useState<Record<string, string>>({});
   const [showAll, setShowAll] = useState(false);
 
+  const [resetting, setResetting] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<Record<string, string>>({});
+
   const errors = bills.filter(b => b.invoiceError);
+  const duplicates = bills.filter(b => b.duplicatePaymentEasypayIds);
   const newestFirst = bills.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey));
   // Bills exist ahead of time for the whole school year. By default show what
   // matters now: overdue months, invoice errors, and the next month to pay.
   const nextDue = bills
     .filter(b => isUnpaid(b) && !isOverdue(b))
     .sort((a, b) => a.periodKey.localeCompare(b.periodKey))[0];
-  const visible = showAll ? newestFirst : newestFirst.filter(b => isOverdue(b) || b.invoiceError || b === nextDue);
+  const visible = showAll ? newestFirst : newestFirst.filter(b =>
+    isOverdue(b) || b.invoiceError || b.status === 'processing' || b.duplicatePaymentEasypayIds || b === nextDue);
 
   // One call per click, button disabled while it runs: this creates a real
   // invoice in the live Vendus account (prod) and emails it to the parent.
@@ -59,8 +64,39 @@ export default function FamilyBills({ bills, onChanged }: {
     }
   };
 
+  // A bill stuck in `processing` (a card link or Multibanco reference that won't
+  // be used) blocks the parent. Back to `pending` so they can pay again — only
+  // after checking Easypay that the old payment wasn't made. If it lands anyway,
+  // the webhook still records it, or flags a duplicate here.
+  const resetPayment = async (b: BillRow) => {
+    if (!window.confirm(
+      `Repor ${b.periodLabel} (€${b.total.toFixed(2)}) para "Por pagar"?\n\n`
+      + `Confirme primeiro no backoffice Easypay que o pagamento ${b.easypayId ?? '(sem id)'} NÃO foi pago. `
+      + 'Depois disto o encarregado pode pagar de novo.'
+    )) return;
+    setResetting(b.id);
+    setResetError(prev => { const n = { ...prev }; delete n[b.id]; return n; });
+    try {
+      await callable<{ billingId: string }, { ok: boolean }>('resetStuckPayment')({ billingId: b.id });
+    } catch (err: any) {
+      setResetError(prev => ({ ...prev, [b.id]: err?.message ?? 'erro desconhecido' }));
+    } finally {
+      await onChanged();
+      setResetting(null);
+    }
+  };
+
   return (
     <div className="space-y-2">
+      {duplicates.map(b => (
+        <div key={b.id} className="bg-red-50 border border-red-200 rounded-lg p-3">
+          <p className="text-sm font-semibold text-red-800">Pagamento em duplicado — {b.periodLabel}</p>
+          <p className="text-xs text-red-700 mt-0.5 break-words">
+            Já estava paga e entrou outro pagamento Easypay ({b.duplicatePaymentEasypayIds!.join(', ')}). Devolver ao encarregado.
+          </p>
+        </div>
+      ))}
+
       {errors.map(b => (
         <div key={b.id} className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
           <div className="flex items-start justify-between gap-3">
@@ -89,15 +125,23 @@ export default function FamilyBills({ bills, onChanged }: {
                 const tag = STATUS_TAG[b.status] ?? { label: b.status, cls: 'bg-gray-100 text-gray-600' };
                 const overdue = isOverdue(b);
                 return (
-                  <div key={b.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <div key={b.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
                     <span className="text-gray-700 flex-1">{b.periodLabel}</span>
                     {b.invoiceNumber && <span className="text-xs text-gray-400">{b.invoiceNumber}</span>}
                     {overdue && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">em atraso</span>}
                     {!overdue && isUnpaid(b) && b.dueDate && (
                       <span className="text-xs text-gray-400">vence {b.dueDate.toLocaleDateString('pt-PT', { day: 'numeric', month: 'short' })}</span>
                     )}
+                    {b.status === 'processing' && (
+                      <button onClick={() => resetPayment(b)} disabled={resetting !== null}
+                        title="O pagamento ficou em processamento e o encarregado não consegue pagar de novo"
+                        className="text-xs text-blue-600 hover:underline disabled:opacity-60">
+                        {resetting === b.id ? 'A repor…' : 'Repor para pendente'}
+                      </button>
+                    )}
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${tag.cls}`}>{tag.label}</span>
                     <span className="text-gray-800 font-medium w-20 text-right">€{b.total.toFixed(2)}</span>
+                    {resetError[b.id] && <span className="basis-full text-xs text-red-700">Não foi possível repor: {resetError[b.id]}</span>}
                   </div>
                 );
               })}
