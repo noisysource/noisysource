@@ -3,6 +3,7 @@ import { col, docRef } from '../lib/db';
 import { Family, Child, StudyRoomEntry, TransportationSubscription, Booking } from '@shared/models';
 import { calculateAge, normalizeName, normalizeSubStatus, normalizeEmail } from '../lib/utils';
 import type { ImpersonationState } from '../contexts/ImpersonationContext';
+import { callable } from '../lib/callable';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
@@ -31,6 +32,27 @@ const mapFamily = (id: string, data: any): Family => ({
   updatedAt: toDate(data.updatedAt),
 });
 
+/**
+ * Server-side claim (functions/src/kidclub/claimFamily.ts): links owner-less
+ * families matching the caller's verified email to the caller and backfills
+ * userId on their children/subscriptions/billing. Returns null when there was
+ * nothing to claim. Fails open (null) on error so a broken function degrades
+ * to the old create-a-family behaviour instead of blocking every first login.
+ */
+async function claimFamilyByEmail(userEmail: string): Promise<Family | null> {
+  if (!userEmail) return null;
+  try {
+    const res = await callable<void, { familyId: string | null; claimed: number }>('claimFamilyByEmail')();
+    const familyId = res.data?.familyId;
+    if (!familyId) return null;
+    const snap = await getDoc(docRef('families', familyId));
+    return snap.exists() ? mapFamily(snap.id, snap.data()) : null;
+  } catch (err) {
+    console.error('claimFamilyByEmail failed; falling back to creating a family:', err);
+    return null;
+  }
+}
+
 export const familyService = {
   async getOrCreateFamily(userId: string, userName: string, userEmail: string): Promise<Family> {
     if (_impersonation) {
@@ -50,6 +72,13 @@ export const familyService = {
       });
       return mapFamily(sorted[0].id, sorted[0].data());
     }
+
+    // No family owned by this uid. Before creating one, claim an owner-less
+    // family with this (verified) email — created by the migration or an
+    // admin, waiting for its parent's first login. Creating a new one here
+    // is what left real parents with an empty duplicate family.
+    const claimed = await claimFamilyByEmail(userEmail);
+    if (claimed) return claimed;
 
     const newFamily: Omit<Family, 'id'> = {
       primaryContact: { name: userName, email: normalizeEmail(userEmail), phone: '', userId },
