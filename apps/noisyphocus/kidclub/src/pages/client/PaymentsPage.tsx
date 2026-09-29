@@ -29,6 +29,22 @@ function StatusTag({ record }: { record: BillingRecord }) {
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 
+/** Save a base64 PDF via a blob link: a real download on desktop and Android,
+ *  the PDF viewer (with share/save) on iOS Safari. */
+function saveBase64Pdf(base64: string, filename: string) {
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Give the browser time to start reading the blob before revoking it.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function isOverdue(record: BillingRecord) {
   if (!['pending', 'processing', 'failed'].includes(record.status)) return false;
   const due = record.dueDate?.toDate?.();
@@ -72,6 +88,10 @@ export default function PaymentsPage() {
   const [batchResults, setBatchResults] = useState<{ id: string; ok: boolean; msg: string }[]>([]);
   const [mbwayPhoneError, setMbwayPhoneError] = useState('');
   const [batchPhoneError, setBatchPhoneError] = useState('');
+
+  // Invoice PDF download (getInvoicePdf): one in flight at a time.
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!user) return;
@@ -172,6 +192,21 @@ export default function PaymentsPage() {
     setBatchActing(false);
     setSelected(new Set());
     setBatchMethod(null);
+  };
+
+  const downloadInvoice = async (record: BillingRecord) => {
+    if (downloadingId) return;
+    setDownloadingId(record.id);
+    setDownloadError(prev => ({ ...prev, [record.id]: '' }));
+    try {
+      const res = await callable<{ billingId: string }, { filename: string; base64: string }>('getInvoicePdf')({ billingId: record.id });
+      saveBase64Pdf(res.data.base64, res.data.filename);
+    } catch (err: any) {
+      console.error('[PaymentsPage] getInvoicePdf failed:', err);
+      setDownloadError(prev => ({ ...prev, [record.id]: err?.message || 'Não foi possível descarregar a fatura.' }));
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   // Selecting a month also selects every earlier unpaid month; unselecting one
@@ -284,18 +319,36 @@ export default function PaymentsPage() {
 
             if (isDone) {
               return (
-                <div key={record.id} className="border border-gray-100 rounded-xl p-4 bg-white flex justify-between items-center">
-                  <div>
-                    <p className="font-medium text-gray-700">{record.periodLabel}</p>
-                    <p className="text-xs text-gray-400">
-                      {record.invoiceNumber ? `Fatura ${record.invoiceNumber}` : 'Pago'}
-                      {record.paidAt && ` · ${record.paidAt.toDate().toLocaleDateString('pt-PT')}`}
-                    </p>
+                <div key={record.id} className="border border-gray-100 rounded-xl p-4 bg-white">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-gray-700">{record.periodLabel}</p>
+                      <p className="text-xs text-gray-400">
+                        {record.invoiceNumber ? `Fatura ${record.invoiceNumber}` : 'Pago'}
+                        {record.paidAt && ` · ${record.paidAt.toDate().toLocaleDateString('pt-PT')}`}
+                      </p>
+                    </div>
+                    <div className="text-right space-y-1">
+                      <p className="font-bold text-gray-800">{fmtEur(record.total)}</p>
+                      <StatusTag record={record} />
+                    </div>
                   </div>
-                  <div className="text-right space-y-1">
-                    <p className="font-bold text-gray-800">{fmtEur(record.total)}</p>
-                    <StatusTag record={record} />
-                  </div>
+                  {record.status === 'invoiced' && record.vendusId && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={() => downloadInvoice(record)}
+                        disabled={downloadingId !== null}
+                        className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-800 hover:underline disabled:opacity-50 disabled:no-underline"
+                      >
+                        <span aria-hidden>⬇️</span>
+                        {downloadingId === record.id ? 'A descarregar...' : 'Descarregar fatura'}
+                      </button>
+                      {downloadError[record.id] && (
+                        <p className="mt-1 text-xs text-red-600">{downloadError[record.id]}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             }
