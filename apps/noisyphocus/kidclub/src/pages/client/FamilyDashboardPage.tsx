@@ -230,10 +230,10 @@ export default function FamilyDashboardPage() {
           <div className="font-semibold text-sm">As minhas crianças</div>
           <div className="text-xs text-gray-500 mt-1">Crianças e inscrições</div>
         </Link>
-        <Link to="/client/invoices" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-          <div className="text-2xl mb-2">🧾</div>
-          <div className="font-semibold text-sm">Faturas</div>
-          <div className="text-xs text-gray-500 mt-1">Consultar faturas e pagamentos</div>
+        <Link to="/client/payments" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+          <div className="text-2xl mb-2">💳</div>
+          <div className="font-semibold text-sm">Pagamentos</div>
+          <div className="text-xs text-gray-500 mt-1">Mensalidades, pagamentos e faturas</div>
         </Link>
         <Link to="/client/account" className="bg-white p-5 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
           <div className="text-2xl mb-2">👤</div>

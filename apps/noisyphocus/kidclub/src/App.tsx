@@ -40,8 +40,6 @@ import StudySubscriptionDetailPage from './pages/client/StudySubscriptionDetailP
 import TransportSubscriptionDetailPage from './pages/client/TransportSubscriptionDetailPage';
 import MySubscriptionsPage from './pages/client/MySubscriptionsPage';
 import AccountPage from './pages/client/AccountPage';
-import InvoiceListPage from './pages/client/InvoiceListPage';
-import InvoiceDetailPage from './pages/client/InvoiceDetailPage';
 import StudyRoomEnrollPage from './pages/client/enrollment/StudyRoomEnrollPage';
 import TransportEnrollPage from './pages/client/enrollment/TransportEnrollPage';
 import PartyListPage from './pages/client/parties/PartyListPage';
@@ -121,10 +119,11 @@ export default function App() {
           <Route path="enroll/study" element={<StudyRoomEnrollPage />} />
           <Route path="enroll/transport" element={<TransportEnrollPage />} />
 
-          {/* Invoices & payments */}
-          <Route path="invoices" element={<InvoiceListPage />} />
-          <Route path="invoices/:id" element={<InvoiceDetailPage />} />
+          {/* Payments. Each invoiced month has its Vendus PDF ("Descarregar
+              fatura"). The old Faturas pages read the legacy `invoices`
+              collection, which no family has data in; old links redirect. */}
           <Route path="payments" element={<PaymentsPage />} />
+          <Route path="invoices/*" element={<Navigate to="/client/payments" replace />} />
 
           {/* Account */}
           <Route path="account" element={<AccountPage />} />
