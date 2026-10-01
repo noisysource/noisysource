@@ -64,6 +64,23 @@ async function getActiveSubs() {
   return Object.values(byFamily);
 }
 
+// Who owns a family's billing records. families/{id}.primaryContact.userId is
+// the single source of truth: billing.userId used to be copied from whichever
+// subscription triggered the write, and admin-created subscriptions often have
+// no userId, so records were written with "" and the parent could neither see
+// (rules match on billing.userId) nor pay (callables check billing.userId) them.
+async function familyOwnerUid(familyId: string): Promise<string> {
+  const snap = await appCol("families").doc(familyId).get();
+  return snap.data()?.primaryContact?.userId ?? "";
+}
+
+// Fields to merge into an update of an existing billing record so its owner
+// self-heals on every recompute. Empty when the family has no owner yet, so an
+// owner-less family never blanks out a record's existing userId.
+function ownerUpdate(ownerUid: string): { userId?: string } {
+  return ownerUid ? { userId: ownerUid } : {};
+}
+
 // Firestore 'in' queries accept at most 30 comparison values.
 function chunk<T>(arr: T[], size = 30): T[][] {
   const out: T[][] = [];
@@ -503,13 +520,16 @@ async function buildBillingRecord(
   configs: BillingConfigs,
   opts: { docId?: string; sendEmail?: boolean } = {},
 ): Promise<{ id: string; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } | undefined> {
-  const { familyId, userId, study, transport } = group;
+  const { familyId, study, transport } = group;
   const { docId, sendEmail = !dryRun } = opts;
 
   const famSnap = await appCol("families").doc(familyId).get();
   if (!famSnap.exists) { console.warn(`Family ${familyId} not found`); return; }
   const fam = famSnap.data()!;
   const contact = fam.primaryContact ?? {};
+  // Owner comes from the family, never from group.userId (a subscription's
+  // possibly-empty userId) — see familyOwnerUid().
+  const userId: string = contact.userId ?? "";
   const billingName: string = contact.name ?? "Família";
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
@@ -597,13 +617,31 @@ export const sendBillingNotice = onCall(
 );
 
 // ── Months are paid in order ─────────────────────────────────────────────────
+// A record the parent can (still) pay. `failed` is an attempt that didn't
+// complete (e.g. an MB WAY request not approved in time); the parent retries it.
+const UNPAID_STATUSES = new Set(["pending", "failed"]);
+
+// Card and Multibanco are off until the Easypay account has a card POS (#53
+// hid the buttons; this stops a page loaded before that from starting one).
+// Flip together with re-adding the buttons in PaymentsPage.tsx.
+const CARD_AND_MULTIBANCO_ENABLED = false;
+const MBWAY_ONLY_MESSAGE = "Pagamento temporariamente disponível apenas por MB WAY";
+
+// Starting a new Easypay payment replaces `easypayId`. The old id is kept in
+// `previousEasypayIds` so a late webhook for that attempt still finds the bill
+// (money arrived → it must be recorded, or flagged if the bill is already paid).
+function replaceEasypayIdFields(billing: FirebaseFirestore.DocumentData): Record<string, unknown> {
+  return billing.easypayId
+    ? { previousEasypayIds: admin.firestore.FieldValue.arrayUnion(billing.easypayId) }
+    : {};
+}
+
 // A monthly record (id `<familyId>_YYYY-MM`) cannot be paid while an earlier
-// monthly record of the same family is still `pending`. `processing` (a payment
-// already under way, e.g. an issued Multibanco reference) does not block, so
-// paying several months together, oldest first, still works. `failed` does not
-// block either: a parent cannot pay a failed record, so blocking on it would
-// lock them out until an admin intervened. Party/camp records are not monthly
-// and are neither checked nor counted. Mirrors PaymentsPage.tsx.
+// monthly record of the same family is still unpaid (`pending` or `failed`).
+// `processing` (a payment already under way, e.g. an issued Multibanco
+// reference) does not block, so paying several months together, oldest first,
+// still works. Party/camp records are not monthly and are neither checked nor
+// counted. Mirrors PaymentsPage.tsx.
 const MONTHLY_BILLING_ID = /_\d{4}-\d{2}$/;
 
 async function assertEarlierMonthsPaid(billingId: string, billing: FirebaseFirestore.DocumentData): Promise<void> {
@@ -611,7 +649,7 @@ async function assertEarlierMonthsPaid(billingId: string, billing: FirebaseFires
   const snap = await appCol("billing").where("familyId", "==", billing.familyId).get();
   const earlier = snap.docs
     .filter(d => d.id !== billingId && MONTHLY_BILLING_ID.test(d.id)
-      && d.data().status === "pending"
+      && UNPAID_STATUSES.has(d.data().status)
       && d.data().periodStart?.toMillis?.() < billing.periodStart.toMillis())
     .sort((a, b) => a.data().periodStart.toMillis() - b.data().periodStart.toMillis());
   if (earlier.length) {
@@ -637,7 +675,7 @@ export const initiateMbwayPayment = onCall(
     const billing = (await billingRef.get()).data();
     if (!billing) throw new HttpsError("not-found", "Billing record not found");
     if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
-    if (billing.status !== "pending") throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
+    if (!UNPAID_STATUSES.has(billing.status)) throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
     await assertEarlierMonthsPaid(billingId, billing);
     if (!billing.total || billing.total < 0.5) throw new HttpsError("failed-precondition", `Billing total is €${(billing.total ?? 0).toFixed(2)} — minimum is €0.50`);
 
@@ -657,6 +695,7 @@ export const initiateMbwayPayment = onCall(
     }
 
     await billingRef.update({
+      ...replaceEasypayIdFields(billing),
       status: "processing",
       easypayId: res.id,
       mbwayPhone: phone,
@@ -675,6 +714,7 @@ export const initiateMultibancoPayment = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
+    if (!CARD_AND_MULTIBANCO_ENABLED) throw new HttpsError("failed-precondition", MBWAY_ONLY_MESSAGE);
 
     const { billingId } = request.data ?? {};
     const billingRef = appCol("billing").doc(billingId);
@@ -718,6 +758,7 @@ export const initiateCardPayment = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
+    if (!CARD_AND_MULTIBANCO_ENABLED) throw new HttpsError("failed-precondition", MBWAY_ONLY_MESSAGE);
 
     const { billingId } = request.data ?? {};
     const billingRef = appCol("billing").doc(billingId);
@@ -776,10 +817,12 @@ export const easypayWebhook = onRequest(
     if (isSuccess) {
       console.log(`[Webhook] success easypayId=${paymentId}`);
 
-      const snap = await appCol("billing")
-        .where("easypayId", "==", paymentId)
-        .limit(1)
-        .get();
+      // The bill's current attempt, or — after a retry or an admin reset — an
+      // earlier one. Money for an earlier attempt still has to be recorded.
+      let snap = await appCol("billing").where("easypayId", "==", paymentId).limit(1).get();
+      if (snap.empty) {
+        snap = await appCol("billing").where("previousEasypayIds", "array-contains", paymentId).limit(1).get();
+      }
 
       if (snap.empty) {
         console.warn(`[Webhook] no billing record found for easypayId=${paymentId}`);
@@ -790,6 +833,24 @@ export const easypayWebhook = onRequest(
       const billingDoc = snap.docs[0];
       const billingData = billingDoc.data();
       const currentStatus = billingData.status;
+      const alreadyPaid = currentStatus === "paid" || currentStatus === "invoiced";
+
+      // Paid, and by a different Easypay payment than this one: the parent paid
+      // twice (an old attempt landed after a retry). Never invoice it again;
+      // flag it for an admin to refund. Bills paid before `paidEasypayId`
+      // existed have none, and are treated as paid by this payment.
+      if (alreadyPaid && billingData.paidEasypayId && billingData.paidEasypayId !== paymentId) {
+        const known: string[] = billingData.duplicatePaymentEasypayIds ?? [];
+        if (!known.includes(paymentId)) {
+          console.error(`[Webhook] DUPLICATE PAYMENT billing ${billingDoc.id}: easypayId=${paymentId}, already paid by ${billingData.paidEasypayId}`);
+          await billingDoc.ref.update({
+            duplicatePaymentEasypayIds: admin.firestore.FieldValue.arrayUnion(paymentId),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+        res.status(200).send("ok");
+        return;
+      }
 
       // Retry invoice creation if paid but invoice failed previously
       if (currentStatus === "paid" && billingData.invoiceError) {
@@ -807,15 +868,19 @@ export const easypayWebhook = onRequest(
       }
 
       // Idempotent: EasyPay sends two webhook calls per payment
-      if (currentStatus !== "processing") {
-        console.log(`[Webhook] billing ${billingDoc.id} already processed (status=${currentStatus})`);
+      if (alreadyPaid || currentStatus === "cancelled") {
+        if (currentStatus === "cancelled") console.error(`[Webhook] PAYMENT ON CANCELLED billing ${billingDoc.id}: easypayId=${paymentId} — needs a refund or reinstating`);
+        else console.log(`[Webhook] billing ${billingDoc.id} already processed (status=${currentStatus})`);
         res.status(200).send("ok");
         return;
       }
 
-      console.log(`[Webhook] matched billing ${billingDoc.id} — marking paid`);
+      // `processing` is the normal case. `pending`/`failed` happen when this is
+      // an earlier attempt landing after a failure or an admin reset.
+      console.log(`[Webhook] matched billing ${billingDoc.id} (status=${currentStatus}) — marking paid`);
       await billingDoc.ref.update({
         status: "paid",
+        paidEasypayId: paymentId,
         paidAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -836,6 +901,8 @@ export const easypayWebhook = onRequest(
     if (isFailure) {
       console.log(`[Webhook] failure easypayId=${paymentId} status=${payload.status}`);
 
+      // Only the current attempt: a failure for an earlier one must not mark a
+      // newer attempt, still under way, as failed.
       const snap = await appCol("billing")
         .where("easypayId", "==", paymentId)
         .limit(1)
@@ -851,7 +918,7 @@ export const easypayWebhook = onRequest(
           console.log(`[Webhook] billing ${snap.docs[0].id} → failed`);
         }
       } else {
-        console.warn(`[Webhook] no billing found for easypayId=${paymentId}`);
+        console.warn(`[Webhook] no current billing for easypayId=${paymentId} (earlier attempt or unknown)`);
       }
     }
 
@@ -970,6 +1037,52 @@ export const retryVendusInvoice = onCall(
   }
 );
 
+// ── Admin: reset a payment stuck in `processing` ─────────────────────────────
+// A card link or Multibanco reference that will never be used leaves the bill
+// `processing`, and the parent has no way back. The admin checks in Easypay
+// that the old payment was not paid, then resets the bill to `pending`. The old
+// id moves to `previousEasypayIds`, so if it does land after all, the webhook
+// still records it (or flags a duplicate). Transaction: never reset a bill the
+// webhook has just marked paid.
+
+export const resetStuckPayment = onCall(
+  { region: "europe-west3", invoker: "public" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
+    const userDoc = await db.collection("users").doc(uid).get();
+    const roles = userDoc.data()?.roles ?? {};
+    if (!roles.owner && !roles.rainbowAdmin) throw new HttpsError("permission-denied", "Unauthorized");
+
+    const { billingId } = request.data ?? {};
+    if (!billingId) throw new HttpsError("invalid-argument", "billingId required");
+
+    const billingRef = appCol("billing").doc(billingId);
+    await db.runTransaction(async (tx) => {
+      const billing = (await tx.get(billingRef)).data();
+      if (!billing) throw new HttpsError("not-found", "Billing record not found");
+      if (billing.status !== "processing") {
+        throw new HttpsError("failed-precondition", `Only a bill in processing can be reset (status=${billing.status})`);
+      }
+      tx.update(billingRef, {
+        ...replaceEasypayIdFields(billing),
+        status: "pending",
+        easypayId: admin.firestore.FieldValue.delete(),
+        paymentLink: admin.firestore.FieldValue.delete(),
+        multibancoEntity: admin.firestore.FieldValue.delete(),
+        multibancoReference: admin.firestore.FieldValue.delete(),
+        multibancoExpiry: admin.firestore.FieldValue.delete(),
+        paymentResetAt: admin.firestore.FieldValue.serverTimestamp(),
+        paymentResetBy: uid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    console.log(`[resetStuckPayment] billing ${billingId} → pending by ${uid}`);
+    return { ok: true };
+  }
+);
+
 // ── Set family payment method ─────────────────────────────────────────────────
 
 export const setPaymentMethod = onCall(
@@ -1007,11 +1120,12 @@ function isRecomputable(data: any): boolean {
   return data?.status === "pending" || (data?.status === "cancelled" && data?.autoCancelled === true);
 }
 
-async function autoCreateBillingSchedule(familyId: string, userId: string): Promise<void> {
-  const [studySnap, transportSnap, configs] = await Promise.all([
+async function autoCreateBillingSchedule(familyId: string): Promise<void> {
+  const [studySnap, transportSnap, configs, userId] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
     loadBillingConfigs(),
+    familyOwnerUid(familyId),
   ]);
 
   const group: { familyId: string; userId: string; study: any[]; transport: any[] } = {
@@ -1048,7 +1162,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
           // cancellation — see isRecomputable's comment for why that matters.
           if (existing.data()?.status !== "cancelled") {
             await appCol("billing").doc(docId).update({
-              status: "cancelled", autoCancelled: true,
+              status: "cancelled", autoCancelled: true, ...ownerUpdate(userId),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
             cancelled++;
@@ -1056,7 +1170,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
         } else {
           await appCol("billing").doc(docId).update({
             status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
-            lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lineItems, total, ...ownerUpdate(userId), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
           updated++;
@@ -1115,6 +1229,9 @@ export const backfillBillingSchedules = onCall(
     // Recalculate / create billing records for families with active subscriptions
     for (const group of groups) {
       try {
+        // getActiveSubs() took userId off an arbitrary subscription; replace it
+        // with the family's owner (see familyOwnerUid()).
+        group.userId = await familyOwnerUid(group.familyId);
         // Same in-memory-staleness guard as autoCreateBillingSchedule.
         const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
           for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
@@ -1130,7 +1247,7 @@ export const backfillBillingSchedules = onCall(
             if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
                 if (existing.data()?.status !== "cancelled") {
-                  await existing.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                  await existing.ref.update({ status: "cancelled", autoCancelled: true, ...ownerUpdate(group.userId), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
                   cancelled++;
                 } else {
                   skipped++;
@@ -1138,7 +1255,7 @@ export const backfillBillingSchedules = onCall(
               } else {
                 await existing.ref.update({
                   status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
-                  lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  lineItems, total, ...ownerUpdate(group.userId), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
                 if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
                 updated++;
@@ -1185,7 +1302,7 @@ export const onStudyroomBillingSync = onDocumentWritten(
     if (!after) return; // deleted
     const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
+    await autoCreateBillingSchedule(familyId);
   }
 );
 
@@ -1196,7 +1313,7 @@ export const onTransportBillingSync = onDocumentWritten(
     if (!after) return; // deleted
     const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
+    await autoCreateBillingSchedule(familyId);
   }
 );
 
@@ -1222,7 +1339,7 @@ export const onReservationEventBillingSync = onDocumentWritten(
     if (before.status === after.status) return;
     const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after.changedBy ?? "");
+    await autoCreateBillingSchedule(familyId);
   }
 );
 

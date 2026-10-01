@@ -80,8 +80,12 @@ export default function ChildDetailsForm({ group, onSaved, onCancel }: {
         // familyId: '' placeholder ManualEnrollForm uses for an admin-created
         // child awaiting claim — the claim flow links to it rather than
         // duplicating it (see PendingChild.existingChild).
+        // userId from the family owner, or the parent never sees this child
+        // (portal queries and rules match on userId, not familyId).
+        const ownerUid = group.familyId ? await familyService.getFamilyOwnerUid(group.familyId) : '';
         const ref = await addDoc(col('children'), {
-          ...childDoc, familyId: group.familyId ?? '', status: 'active', createdAt: new Date(),
+          ...childDoc, familyId: group.familyId ?? '', ...(ownerUid ? { userId: ownerUid } : {}),
+          status: 'active', createdAt: new Date(),
         });
         childId = ref.id;
       }

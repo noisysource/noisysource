@@ -46,9 +46,6 @@ export default function ClientSidebar({ open, onClose }: ClientSidebarProps) {
       <div className="pt-3 pb-1">
         <p className="text-xs text-gray-500 uppercase tracking-wider px-3">Financeiro</p>
       </div>
-      <Link to="/client/invoices" onClick={onClick} className={linkClass('/client/invoices')}>
-        <span>🧾</span> Faturas
-      </Link>
       <Link to="/client/payments" onClick={onClick} className={linkClass('/client/payments')}>
         <span>💳</span> Pagamentos
       </Link>

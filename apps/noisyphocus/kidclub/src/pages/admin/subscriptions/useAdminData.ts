@@ -67,6 +67,8 @@ export function useAdminData() {
           dueDate: x.dueDate ? toDate(x.dueDate) : undefined,
           invoiceError: x.invoiceError || undefined,
           invoiceNumber: x.invoiceNumber || undefined,
+          easypayId: x.easypayId || undefined,
+          duplicatePaymentEasypayIds: x.duplicatePaymentEasypayIds?.length ? x.duplicatePaymentEasypayIds : undefined,
         };
       }));
 

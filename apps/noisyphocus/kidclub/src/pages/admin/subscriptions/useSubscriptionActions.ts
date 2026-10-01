@@ -7,6 +7,7 @@ import { applyDiscounts } from '../../../services/discountService';
 import { SubStatus, normalizeEmail } from '../../../lib/utils';
 import { SubItem, subCollection } from './model';
 import { AdminData } from './useAdminData';
+import { familyService } from '../../../services/familyService';
 
 const STATUS_LABEL: Record<SubStatus, string> = { pending: 'Pendente', active: 'Ativa', cancelled: 'Cancelada' };
 
@@ -70,7 +71,13 @@ export function useSubscriptionActions(data: Pick<AdminData, 'setItems' | 'reloa
       // by contact email if not yet linked. Doesn't gate the status change.
       if (!item.familyId && item.contactEmail) {
         const famSnap = await getDocs(query(col('families'), where('primaryContact.email', '==', normalizeEmail(item.contactEmail))));
-        if (!famSnap.empty) patch.familyId = famSnap.docs[0].id;
+        if (!famSnap.empty) {
+          patch.familyId = famSnap.docs[0].id;
+          // Linking by familyId alone leaves the sub invisible to the parent
+          // (portal + rules match on userId) — carry the family owner over.
+          const ownerUid = famSnap.docs[0].data().primaryContact?.userId;
+          if (ownerUid) patch.userId = ownerUid;
+        }
       }
 
       // Already linked to a family — flag this change for the parent to review
@@ -254,8 +261,16 @@ export function useSubscriptionActions(data: Pick<AdminData, 'setItems' | 'reloa
 
       const updates: Record<string, unknown> = { familyId, updatedAt: new Date() };
       if (matches.length === 1) updates.childId = matches[0].id;
+      // The parent only sees docs whose userId is theirs (portal queries and
+      // rules match on userId, not familyId). Set it from the family owner,
+      // and fix the matched child too if it was never given one.
+      const ownerUid = await familyService.getFamilyOwnerUid(familyId);
+      if (ownerUid) updates.userId = ownerUid;
 
       await updateDoc(docRef(subCollection(item), item.id), updates);
+      if (ownerUid && matches.length === 1 && !matches[0].data().userId) {
+        await updateDoc(docRef('children', matches[0].id), { userId: ownerUid, updatedAt: new Date() });
+      }
       patchItem(item.id, { familyId, ...(matches.length === 1 ? { childId: matches[0].id } : {}) });
       return familyId;
     } finally { setProcessing(null); }

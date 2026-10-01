@@ -2,9 +2,9 @@
 // Docs: https://api.prod.easypay.pt/docs
 // Credentials come from Firebase secrets: EASYPAY_ACCOUNT_ID, EASYPAY_API_KEY
 
-import { assertExternalCallsAllowed } from "../externalGuard";
+import { assertExternalCallsAllowed, isSandbox } from "../externalGuard";
 
-const EASYPAY_BASE = process.env.EASYPAY_SANDBOX === "true"
+const EASYPAY_BASE = isSandbox("EasyPay")
   ? "https://api.test.easypay.pt/2.0"
   : "https://api.prod.easypay.pt/2.0";
 

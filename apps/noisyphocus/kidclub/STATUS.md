@@ -2,7 +2,49 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-29
+
+## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
+
+**Symptom.** Real parents log in and see no children, subscriptions or bills (and can't pay), while
+admin impersonation shows everything. **Cause:** the client pages and the Firestore rules match on
+`userId`, impersonation queries by `familyId`. Docs got a familyId with no/empty userId via:
+1. admin linking (SubscriptionsAdminPage: status-change auto-link, "Vincular", child details form)
+   set `familyId` without `userId`;
+2. `billing.ts` copied `userId` from whichever subscription triggered the write (or from
+   `ReservationEvent.changedBy`), and never corrected it on recompute; the payment callables
+   check `billing.userId`, so affected parents can't pay either;
+3. `getOrCreateFamily` looked families up by uid only, so a parent logging in with another account,
+   or whose family was created owner-less by `identity.mjs`, silently got a new empty duplicate family.
+
+**Read-only prod audit (2026-09-29), families affected:**
+- **Sandra Abreu** — logged in with a second (gmail) account, got an empty duplicate family (same
+  NIF/Vendus client); Bernardo's transport sub + 3 billing months hidden. The code fix does NOT
+  handle this case (her original family is owned by her other uid) — needs a data fix/decision.
+- **maria joão mariano** — everything hidden.
+- **Maria Teresa Azevedo** — all billing hidden.
+- **Mary Pratas** — Manuel Oliveira's study sub hidden.
+- **3 owner-less migration families** (Anabela Gonçalves, sofia_valdeira@hotmail.com,
+  palexandra@sapo.pt) — would get an empty duplicate on first login; with this PR they claim
+  their family instead.
+- **Maria Clara** — study sub points to a non-existent family `H4hFhb2GcFVV0IGEH5Gs`, so likely
+  **not billed at all**. ⚠️ Needs Renato's decision (relink to the right family, or recreate it).
+
+**Data:** a human-approved `userId` backfill script for prod is being run separately (not in this PR).
+
+**Code fix:** branch `agent/kidclub-family-userid-link`, PR → `staging`:
+- billing `userId` now always comes from `families/{id}.primaryContact.userId`, on create and on
+  every recompute/backfill update (self-heals `""` on recomputable, i.e. pending/auto-cancelled,
+  records; paid/invoiced ones are not touched by recompute);
+- admin link paths set `userId` from the family owner whenever they set a non-empty `familyId`;
+- new callable `claimFamilyByEmail` (Admin SDK): on a login with no uid-owned family, links owner-less
+  families with the caller's **verified** email and backfills `userId` on their children/subs/billing;
+  a new family is only created when nothing is claimable. No Firestore rule changes.
+- ⚠️ **Prod deploy step:** `claimFamilyByEmail` is a NEW callable — per "Deploy lessons" #2 the CI SA
+  can't grant `run.invoker`, so after the prod deploy add `allUsers` → `roles/run.invoker` by hand
+  (check dev too). Until then the client fails open to the old create-a-family behaviour.
+- Also noticed, not fixed: `setPaymentMethod` looks families up by top-level `userId` (the field is
+  `primaryContact.userId`), so it would always throw "Family not found"; no client calls it today.
 
 ## ✅ LIVE IN PROD SINCE 2026-09-27 — read this section first
 
@@ -86,13 +128,13 @@ The list is in the `migrate.mjs` output. Re-run the dry run to see it.
   blocks; `processing` and `failed` don't. Party and camp payments are exempt.
   **Consequence:** a family whose September bill is wrong can't pay October until it's fixed.
 
-### 🟡 In review: one admin page for families + subscriptions (branch `agent/kidclub-admin-unified`)
+### ✅ Live: one admin page for families + subscriptions (#52, in prod via #55 on 2026-09-28)
 
 Famílias and Inscrições are merged into **one page** at `/admin/subscriptions` ("Famílias e
 inscrições"); `/admin/families` redirects there. Built 2026-09-28 from
 `HANDOFF-admin-families-subscriptions.md`, with Renato's design: no tabs, one list, tags, grouping,
-search over every field, editing in a family side panel. PR into `staging`, **not yet tested on dev,
-not in prod.**
+search over every field, editing in a family side panel. Merged and **live in prod**. Renato used it in prod to fix Mafalda's NIF and retry
+her invoice (worked), and to delete Carla Silva's duplicate family records.
 
 What it does:
 - **List:** one row per subscription. Chips filter by status (default: Pendentes + Ativas), service,
@@ -129,7 +171,52 @@ show that the form writes the right fields and that errors display. **Next step:
 the dev preview → merge → `staging`→`main` → in prod, fix Mafalda's NIF in her panel and click retry
 on `JlqSRknVxyzaJfYP2WiM_2026-09`.
 
+### 🟡 In review: Faturas page dropped, "Descarregar fatura" in Pagamentos (2026-09-29)
+
+Branch `agent/kidclub-invoice-download`, PR → `staging`. Why: a parent saw "no billing" because the
+dashboard's finance tile opened **Faturas**, which read the legacy `invoices` collection (empty for
+every family). Renato's call: drop Faturas; each invoiced month in **Pagamentos** gets a download link.
+- **Client:** `InvoiceListPage`/`InvoiceDetailPage` deleted, sidebar link gone, dashboard tile now
+  "Pagamentos"; `/client/invoices/*` redirects to `/client/payments`. The `invoices` collection and
+  its rules are untouched (admin DataManagementPage still lists it).
+- **New callable `getInvoicePdf({ billingId })`** (`functions/src/kidclub/invoicePdf.ts`): access =
+  bill's `userId`, family `primaryContact.userId`, or owner/rainbowAdmin (impersonation). Fetches
+  `GET /documents/{vendusId}.pdf` from Vendus (documented in the v1.1 spec), single attempt, 15s
+  timeout, no retry. **Cached** in Firestore `_apps/arcoiris/invoicePdfs/{vendusId}` (Bytes, server-only,
+  no rule matches it) so each invoice hits Vendus once ever. **Cap:** 100 Vendus PDF fetches/day
+  across all users, counted in `_apps/arcoiris/rateLimits/invoicePdf_{YYYY-MM-DD}`
+  (`DAILY_VENDUS_PDF_CAP` in `invoicePdfLogic.ts`). No provider-side cap exists for Vendus reads.
+- **Can't be verified on dev:** real Vendus calls are blocked outside prod (external guard; Vendus
+  has no sandbox flag), so the button will show "Não foi possível obter a fatura" there. To see the
+  UI path end-to-end on dev, seed an `invoicePdfs/{vendusId}` doc by hand for a dev bill.
+- ⚠️ **Prod deploy step:** new callable → after the prod deploy, `allUsers` → `roles/run.invoker`
+  on `getinvoicepdf` by hand (Deploy lessons #2); same on dev if the button errors with a 403.
+  Then test once in prod on a real invoiced month (first click = 1 live Vendus read).
+
 ### 🔴 Open — in priority order
+
+**Next session: `HANDOFF-payments-email-whatsapp.md`** (same folder). It covers items 0 and 1 below, a
+WhatsApp proposal, and the duplicate-family race fix.
+
+**In flight (2026-09-28, late): payment retry + billing sandbox.**
+- **PR #57** `agent/kidclub-payment-retry` → `staging`: `failed` bills are payable again and block later months.
+  The webhook also matches earlier attempts (`previousEasypayIds`), so a late payment is recorded, and a
+  payment on an already-paid bill is flagged (`duplicatePaymentEasypayIds`, red warning in the family panel).
+  Adds the admin "Repor para pendente" (`resetStuckPayment`) for `processing` bills. Multibanco/card are
+  refused server-side. Test steps are in the PR body. **Renato: test on dev, then merge.**
+- **`agent/billing-sandbox`** (pushed, **no PR yet**, stacked on #57): `EASYPAY_SANDBOX=true` for
+  kidclub-dev via `functions/.env.kidclub-dev`, and `externalGuard` lets dev reach Easypay only with that flag
+  (and refuses the flag on prod). Open its PR into `staging` **after #57 merges**: both deploy functions to
+  the shared kidclub-dev, so opening it earlier makes one overwrite the other or fail its deploy.
+- **Dev's `EASYPAY_ACCOUNT_ID`/`EASYPAY_API_KEY` secrets now hold the Easypay sandbox account's keys**
+  (version 2; version 1 = live keys copied from prod). Disable version 1 once dev has redeployed with
+  version 2. The sandbox's notification URL points at dev's `easypayWebhook`.
+- **Vendus sandbox: waiting on Renato.** Choose between a separate Vendus account for dev (recommended; the
+  product/payment-method IDs in `vendus.ts` would then become settings per project) and the same account
+  with `mode: "tests"` forced on every document. Until then, Vendus stays blocked on dev.
+- Not done, follow-up: the Easypay webhook doesn't verify its caller.
+- Next after that: prod audit (read-only) of bills that are `failed` or have been `processing` for more
+  than a day, then workstream 2 (email).
 
 0. **Payments are MB WAY only (hotfix PR #53, `hotfix/mbway-only` → `main`, 2026-09-28).** Card fails at Easypay
    with "does not have a POS associated": no card terminal is configured in the Easypay account (an
@@ -145,7 +232,26 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
    - What happened: Marisa Sofia's September (`8pPhu4JCvGUrpBxsaOeY_2026-09`) was stuck `processing` on
      a dead card link. Renato reset it to `pending` by hand, removing `easypayId`/`paymentLink`.
    - **Duplicate family records on first login** (race in `getOrCreateFamily`): found on Carla Silva
-     (cssilva09@hotmail.com, 3 records in dev). Fix proposed, not started; prod not checked yet.
+     (cssilva09@hotmail.com, 3 records). Renato deleted the prod duplicates and fixed her name on
+     2026-09-28. The code fix isn't done; see the handoff.
+
+**Email composer (branch `agent/kidclub-email-composer`, pushed, no PR yet, 2026-09-28).** Replaces the old
+Email Center (`/admin/email-center`, now "Emails"). Tabs:
+- **Compor**: TipTap editor with variables as tags (click or drag from the palette). Subject line takes `{{key}}`.
+  Variables: guardian (name, email, phone, billing address, NIF), children (names, school, year, home address),
+  subscriptions (services, monthly total), payments (overdue amount/months, next bill). Audience: the families
+  page's chips (status, service, overdue / invoice error / invalid NIF / waiting on parent) plus school and
+  search. **One email per family.** Child and subscription variables use only the subscriptions that matched.
+  Before sending you get a preview for any recipient, "Enviar teste para mim", and a warning about empty
+  variables. Saved templates live in `emailTemplates`. Max 200 recipients per send.
+- **Histórico**: each campaign, the latest attempt per family with its status, the exact email as sent,
+  "Reenviar" (one, or every failed), "Ignorar", and "Duplicar" (back to the composer with current data).
+- Sender: a new **24h cap of 300** actually-sent emails in `SendEmailFromOutbox.ts`.
+- **Merge order** (every PR into `staging` does a full functions deploy to the shared kidclub-dev): #57 first,
+  then rebase this branch on `staging` and open its PR, then `agent/billing-sandbox`.
+- **Sending itself is still broken in prod** (item 1). Nothing reaches parents until that's fixed, and the
+  ~116 stale failures get marked `skipped` before re-enabling. Gmail stays blocked on dev, so on dev the outbox
+  docs (`_apps/arcoiris/emailOutbox`) show exactly what would be sent.
 
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
    `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
@@ -154,17 +260,16 @@ on `JlqSRknVxyzaJfYP2WiM_2026-09`.
    - Check the Workspace delegation for that service account, and whether the key is still valid.
      Mind the org policy that blocks service-account keys (see memory "Pi bridge auth").
    - The go-live announcement was sent by hand from Gmail (BCC) because of this.
-2. **Mafalda Raposo Duarte: paid September (€146.70, MB, 25 Sep) but has no invoice.** Vendus rejected
-   NIF 284463244, which fails the checksum. Renato has the correct NIF. Once the new admin page is in
-   prod (see above): open her family, fix the NIF, click "Tentar faturar novamente".
-3. **Edson:** study room still `confirmed`, billing €72/month. Renato said it should be cancelled.
-   Confirm, and cancel in admin.
+2. ~~Mafalda Raposo Duarte's missing invoice~~ **Done 2026-09-28:** NIF fixed and invoice retried from the new admin page.
+3. ~~Edson's study room~~ **Resolved:** prod already has the right value (Renato, 2026-09-28).
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
    charged, because the fee is keyed by child. Create the child in admin and link both subs.
+   In the new admin page: his family → "✏️ Dados da criança" → Guardar creates the record and links both subs.
 5. **Mary Pratas' mis-paid period** (paid 2027-08 instead of 2026-09, Vendus FR 01P2026/195) needs a
    credit note. Unchanged. The new pay-in-order rule stops it happening again.
 6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
-   She'd see nothing if she logged in with that email.
+   She'd see nothing if she logged in with that email. In the new admin page: tick "Mostrar famílias sem
+   inscrições", open it, "Eliminar família".
 7. **Cost inputs differ between projects:** prod has driver €1,400 / electricity €200, dev has €1,200 / €150.
    Renato to say which is real. This decides whether the loss is €417 or ~€670/month.
 8. **Pricing/discount decision (GO-LIVE.md §4):** still open. Note that the billing engine is already marginal;
