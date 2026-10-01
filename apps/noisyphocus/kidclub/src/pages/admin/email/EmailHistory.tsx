@@ -16,6 +16,12 @@ const Tag = ({ status }: { status: string }) => {
 };
 const fmt = (d?: Date) => d ? d.toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : '';
 
+// Queued/processing for over 10 min means the sender died mid-flight (e.g. the
+// 2026-10-01 out-of-memory crash) and nothing will move it on, so allow a resend.
+const STUCK_MS = 10 * 60 * 1000;
+const isStuck = (e: OutboxEmail) =>
+  ['queued', 'processing'].includes(e.status) && !!e.createdAt && Date.now() - e.createdAt.getTime() > STUCK_MS;
+
 function CampaignEmails({ campaign, onDuplicate }: { campaign: Campaign; onDuplicate: (d: Draft) => void }) {
   const me = useUser()?.email ?? '';
   const [emails, setEmails] = useState<OutboxEmail[] | null>(null);
@@ -58,9 +64,10 @@ function CampaignEmails({ campaign, onDuplicate }: { campaign: Campaign; onDupli
                 </button>
                 <span className="text-xs text-gray-400 hidden sm:inline">{fmt(e.sentAt ?? e.createdAt)}</span>
                 <Tag status={e.status} />
-                {e.status !== 'queued' && e.status !== 'processing' && (
+                {(!['queued', 'processing'].includes(e.status) || isStuck(e)) && (
                   <button disabled={busy} onClick={() => {
-                    if (window.confirm(`Reenviar para ${e.to}?`)) act(() => resend([e], me));
+                    const warn = isStuck(e) ? '\n\nEste email ficou preso a enviar. Pode já ter chegado: confirme primeiro na pasta Enviados do Gmail.' : '';
+                    if (window.confirm(`Reenviar para ${e.to}?${warn}`)) act(() => resend([e], me));
                   }} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Reenviar</button>
                 )}
                 {e.status === 'error' && (
