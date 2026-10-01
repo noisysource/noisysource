@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-29
+**Last updated:** 2026-10-01
 
 ## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
 
@@ -256,9 +256,20 @@ Email Center (`/admin/email-center`, now "Emails"). Tabs:
 1. **App email has been broken since 2026-08-01.** Every outbox email fails with
    `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
    have received **no** app emails for two months (approvals, payment notices).
-   - The sender impersonates `admin@kidclub.pt` via domain-wide delegation, using `SA_CLIENT_EMAIL`/`SA_PRIVATE_KEY`.
-   - Check the Workspace delegation for that service account, and whether the key is still valid.
-     Mind the org policy that blocks service-account keys (see memory "Pi bridge auth").
+   - **Root cause found 2026-10-01:** on 2026-07-28 a manual `gcloud secrets create` batch recreated
+     prod's `SA_CLIENT_EMAIL`/`SA_PRIVATE_KEY` with the old project's account
+     (`gmail-sender-dev@rainbow-78314`, project gone). `settings/globals.senderEmail` is fine.
+   - **Fix: PR #63 (`hotfix/email-keyless-dwd` → `main`)**: no key. The function has IAM sign the
+     delegation JWT as `GMAIL_SENDER_SA` (`functions/.env.<projectId>`; prod = `gmail-sender-prod`).
+     Deploys **on merge**. Before merging, on prod: grant the runtime account
+     `237627939595-compute@` `roles/iam.serviceAccountTokenCreator` on `gmail-sender-prod`, and confirm
+     Google Admin domain-wide delegation lists client ID `107515553880267592560` with `gmail.send`.
+     Commands are in the PR body. After merge, send a test from the composer.
+   - The 116 old failures don't need marking `skipped`: the trigger is on-create only and the composer's
+     resend is scoped by `campaignId`, which they don't have.
+   - Follow-up (Terraform PR): codify the TokenCreator binding, drop the two secrets from
+     `secrets.tf`/`functions.tf`, delete them and the 3 old `gmail-sender-prod` keys. Also: `.firebaserc`
+     `default` is still `rainbow-78314`, so a bare `firebase deploy` targets the dead project.
    - The go-live announcement was sent by hand from Gmail (BCC) because of this.
 2. ~~Mafalda Raposo Duarte's missing invoice~~ **Done 2026-09-28:** NIF fixed and invoice retried from the new admin page.
 3. ~~Edson's study room~~ **Resolved:** prod already has the right value (Renato, 2026-09-28).
