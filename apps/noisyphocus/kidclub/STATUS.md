@@ -4,6 +4,21 @@
 
 **Last updated:** 2026-10-01
 
+## Where things stand (2026-10-01, end of session)
+
+- **Shipped to prod today:** release #62 (payment retry, Easypay sandbox on dev, email composer, portal
+  `userId` fix #60, "Descarregar fatura" #61), plus email hotfixes #63/#64. Email works again.
+  `claimfamilybyemail`, `getinvoicepdf`, `resetstuckpayment` got `allUsers` invoker by hand.
+- **Not confirmed:** whether the prod `userId` backfill for the empty-portal families (below) ever ran.
+  #60 fixes it going forward only. Check before assuming those parents can see their data.
+- **Being checked/fixed 2026-10-01:** userId backfill status, Sandra Abreu's duplicate family, Maria Clara's
+  sub (belongs to elisacostafelix@gmail.com's family), Afonso Santos's missing child record, any other
+  empty duplicate families (Cláudia Faustino's looks already gone).
+- **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case).
+- **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
+- **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
+  real, pricing model (GO-LIVE §4), re-enabling card/Multibanco (needs an Easypay POS).
+
 ## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
 
 **Symptom.** Real parents log in and see no children, subscriptions or bills (and can't pay), while
@@ -253,24 +268,19 @@ Email Center (`/admin/email-center`, now "Emails"). Tabs:
   ~116 stale failures get marked `skipped` before re-enabling. Gmail stays blocked on dev, so on dev the outbox
   docs (`_apps/arcoiris/emailOutbox`) show exactly what would be sent.
 
-1. **App email has been broken since 2026-08-01.** Every outbox email fails with
-   `invalid_grant: Not a valid email or user ID`: 116 failures, the last success on 1 Aug. Parents
-   have received **no** app emails for two months (approvals, payment notices).
-   - **Root cause found 2026-10-01:** on 2026-07-28 a manual `gcloud secrets create` batch recreated
-     prod's `SA_CLIENT_EMAIL`/`SA_PRIVATE_KEY` with the old project's account
-     (`gmail-sender-dev@rainbow-78314`, project gone). `settings/globals.senderEmail` is fine.
-   - **Fix: PR #63 (`hotfix/email-keyless-dwd` → `main`)**: no key. The function has IAM sign the
-     delegation JWT as `GMAIL_SENDER_SA` (`functions/.env.<projectId>`; prod = `gmail-sender-prod`).
-     Deploys **on merge**. Before merging, on prod: grant the runtime account
-     `237627939595-compute@` `roles/iam.serviceAccountTokenCreator` on `gmail-sender-prod`, and confirm
-     Google Admin domain-wide delegation lists client ID `107515553880267592560` with `gmail.send`.
-     Commands are in the PR body. After merge, send a test from the composer.
-   - The 116 old failures don't need marking `skipped`: the trigger is on-create only and the composer's
-     resend is scoped by `campaignId`, which they don't have.
-   - Follow-up (Terraform PR): codify the TokenCreator binding, drop the two secrets from
-     `secrets.tf`/`functions.tf`, delete them and the 3 old `gmail-sender-prod` keys. Also: `.firebaserc`
-     `default` is still `rainbow-78314`, so a bare `firebase deploy` targets the dead project.
-   - The go-live announcement was sent by hand from Gmail (BCC) because of this.
+1. ~~App email broken since 2026-08-01~~ **FIXED and verified 2026-10-01.**
+   - Cause: on 2026-07-28 a manual `gcloud secrets create` batch filled prod's `SA_CLIENT_EMAIL`/`SA_PRIVATE_KEY`
+     with the old project's account (`gmail-sender-dev@rainbow-78314`, project gone) → `invalid_grant`.
+   - #63: keyless delegation. IAM signs the JWT as `GMAIL_SENDER_SA` (`functions/.env.<projectId>`; prod =
+     `gmail-sender-prod`). Renato granted the compute SA `serviceAccountTokenCreator` on it by hand.
+   - #64: the first campaign OOM-killed the sender (256 MiB, many emails per instance) and left emails stuck
+     in `processing`. Now 512 MiB, `concurrency: 1`; Histórico allows "Reenviar" on emails stuck > 10 min.
+   - The "welcome to the new portal" campaign went out 2026-10-01; stuck ones were resent after checking
+     Gmail Sent. The 116 pre-fix failures were left as-is (on-create trigger, not resendable by campaign).
+   - **Still to do (Terraform session):** codify the TokenCreator binding; give the prod CI SA
+     `roles/run.admin` so new callables stop failing the deploy at "set invoker" (hit on #62); drop
+     `SA_CLIENT_EMAIL`/`SA_PRIVATE_KEY` from `secrets.tf`/`functions.tf`, then delete them and the 3 old
+     `gmail-sender-prod` keys; change `.firebaserc` `default` away from the dead `rainbow-78314`.
 2. ~~Mafalda Raposo Duarte's missing invoice~~ **Done 2026-09-28:** NIF fixed and invoice retried from the new admin page.
 3. ~~Edson's study room~~ **Resolved:** prod already has the right value (Renato, 2026-09-28).
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
