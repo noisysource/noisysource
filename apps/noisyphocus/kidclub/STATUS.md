@@ -11,9 +11,13 @@
   `claimfamilybyemail`, `getinvoicepdf`, `resetstuckpayment` got `allUsers` invoker by hand.
 - **Not confirmed:** whether the prod `userId` backfill for the empty-portal families (below) ever ran.
   #60 fixes it going forward only. Check before assuming those parents can see their data.
-- **Needs Renato's decision:** Sandra Abreu's duplicate family, Maria Clara's sub pointing at a missing family
-  (likely unbilled), Vendus sandbox approach, which driver/electricity costs are real, pricing (GO-LIVE §4).
-- **Next session:** Terraform cleanup (see open item 1 below).
+- **Being checked/fixed 2026-10-01:** userId backfill status, Sandra Abreu's duplicate family, Maria Clara's
+  sub (belongs to elisacostafelix@gmail.com's family), Afonso Santos's missing child record, any other
+  empty duplicate families (Cláudia Faustino's looks already gone).
+- **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case).
+- **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
+- **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
+  real, pricing model (GO-LIVE §4), re-enabling card/Multibanco (needs an Easypay POS).
 
 ## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
 
