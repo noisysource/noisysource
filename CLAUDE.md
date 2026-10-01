@@ -105,6 +105,20 @@ These rules exist because an uncapped, unrelated Google API (Routes API) once ge
 - **Never hardcode a live API token/secret into a command, a settings file, or an "always allow" permission rule.** Reference secrets via environment variables or `firebase functions:secrets`, never inline in a shell command that Claude Code then remembers as auto-approved.
 - **A repeated/looping call to a metered API is the single biggest cost risk in this codebase** (it's what caused the €500 incident, and it's the same class of bug already seen in the domotics bridge retry logic). Any new integration with an external API should have an explicit max-retry/backoff and, where feasible, a per-run or per-day call cap in code, not just at the provider.
 
+## Everyday Workflow
+
+Renato works this repo solo, alongside a full-time job elsewhere, switching between dev work and company management (finances, admin, vendor stuff) in short, fragmented sittings. The mental model is **three containers, not "one chat per thing":**
+
+1. **Looking** (data checks, prod reads, "is this live/correct right now") — no worktree, no branch. It's read-only, so just work in the regular main-checkout session. For prod specifically, add the needed access to your own gitignored `.claude/settings.local.json` for that session and remove it after (see Cost & Production Safety) — never make prod access standing.
+2. **Building** (a feature or bugfix — any actual code change) — always its own git worktree + branch, per "One task, one git worktree, one branch" below. This holds regardless of how small the fix is; the point of the rule is to keep code edits out of the main checkout, not to size-gate it.
+3. **Managing** (finances/admin, non-code) — same as Looking, no worktree, but see "Session & token discipline" below for when this should split into its own session.
+
+**The boundary that matters is "does this need a worktree," not "is this a new chat."** Staying in one chat for several small related things in the same app is fine. What forces a split is starting to edit code (→ container 2) or switching domains for anything non-trivial (→ see below).
+
+**Found a bug or feature idea mid data-check?** Don't turn the investigation session into an editing session. Instead:
+- **Small/quick fix** — ask for it to be handed off to the right scoped agent (`domotics-feature`, `kidclub-feature`, `finances-app`, etc.). It creates its own worktree/branch, does the fix, opens a PR, and reports back, while the investigation session stays uninterrupted.
+- **Bigger feature** — don't build it inline. Note it (the relevant app's `STATUS.md` "Next step," or just say "remember this") and start a dedicated session for it later: a fresh terminal `cd`'d into a new `git worktree add`, or ask the current session to open one.
+
 ## Agent Workflow (branching, worktrees, commits, deploys)
 
 This is a monorepo with several Claude Code sessions potentially running in parallel. To keep that safe and legible:
@@ -138,6 +152,16 @@ Renato works on this solo, alongside a full-time job elsewhere, switching betwee
 - Each app (`apps/noisyphocus/kidclub`, `apps/noisysource/finances`, `apps/noisysource/domotics`) has a `STATUS.md`. Read it at the start of any session on that app. Update it before ending one — including mid-task, including when interrupted — with: what's currently in progress, what was last completed, the concrete next step, any open question that needs Renato's decision, and anything risky left in flight (a prod-touching change, an unreviewed PR, a new metered API call).
 - Write `STATUS.md` for someone with zero memory of the session, because that's usually exactly who reads it next — Renato after a context switch, or a fresh agent with no prior context.
 - A cross-app data/feature dependency (e.g. "KidClub now produces a field FinHub needs") goes in the "Cross-App Data Contracts" section below, not just in one app's STATUS.md, so the other app's agent finds it without being told where to look.
+
+### Session & token discipline
+
+Renato is one person covering both the dev cycle and company management (finances, admin, vendor stuff), often in the same sitting, and sessions can run long. Long, topic-mixed sessions are the main token cost here — not parallel agents, which are already scoped by the worktree rules above.
+
+- **Flag domain drift.** If a session that started as dev work (code, a bug, a feature) drifts into company-management territory (billing, vendor decisions, admin) — or vice versa — and it looks like that new thread will run for a while, ask once whether to continue in this session or start a fresh one. Don't decide unilaterally either way; it's a one-line check-in, not a hard rule.
+- **Checkpoint at topic switches, not just at the end.** Treat a domain switch as a STATUS.md moment too, the same as ending a session — update the relevant app's STATUS.md before moving on, so nothing in flight gets lost when the topic changes.
+- **Scope worktree agents narrowly.** When running multiple agents in parallel (2-3 is normal here), keep each one's task to one app/one file-area rather than needing the full cross-app picture — that's what keeps those sessions short, more than any model/effort tuning would.
+- **Watch for drift continuously, not just at domain switches.** Any time a session starts running long, loses focus (several unrelated things stacked in one thread), or is clearly heading toward real spend, say so — don't wait to be asked and don't just push through. Name the specific signal ("this has drifted from the bug into an unrelated refactor," "this is the third topic in one session," "this is getting long/expensive") and suggest a concrete next step: write the open thread to the relevant `STATUS.md` and drop it, hand it off to a scoped worktree agent, or start a fresh session for it. Keep the flag itself to one or two lines — it's a nudge with a suggested action, not a report, and Renato decides, not the agent.
+- **End-of-session nudge.** Before wrapping up a session (explicit "done for now," or a natural stopping point), check in briefly: run `/cost` to note the session's spend, confirm whether the relevant STATUS.md is current, and flag anything risky left in flight (per the ritual above). Keep this to one or two lines — it's a habit-forming nudge, not a report.
 
 ## Cross-App Data Contracts
 
