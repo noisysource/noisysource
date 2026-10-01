@@ -14,6 +14,34 @@
 - **Being checked/fixed 2026-10-01:** userId backfill status, Sandra Abreu's duplicate family, Maria Clara's
   sub (belongs to elisacostafelix@gmail.com's family), Afonso Santos's missing child record, any other
   empty duplicate families (Cláudia Faustino's looks already gone).
+- **Billing fixes, later the same day:**
+  - **#66 (hotfix, in prod):** recompute started at the current month, so from Oct 1 every change to an unpaid
+    September bill was ignored. Now unpaid earlier months are recomputed too (update only, never created,
+    left as-is if a subscription on them is no longer active). Days of a paid/invoiced/processing month are
+    locked (server refuses, admin calendar read-only). Verified: Ana Braga's Sept €156 → €108 (10 absences).
+  - **#67 (old pricing, deployed to prod via #68, #68 open/unmerged at time of writing):** the engine bills
+    per-trip (marginal multi-trip/sibling) but cards, `monthlyFee` and the 2026-10-01 email showed the flat
+    model; 5 subs were billed €94.37/month more than shown. Renato's call: grandfather. Subs created before
+    2026-10-01 (Lisbon) are billed flat (gross − summed `appliedDiscounts`) until school-year end; new subs use
+    per-trip. Per-sub admin switch "🔒 Tarifário antigo / Tarifário novo" (`legacyPricing`) on the card.
+    "Recalcular tudo" was run after (25 families, 274 updated). **Confirm Maria Manon Oct = €117.60**; if not,
+    run "Recalcular tudo" again (it may have run before #68's deploy finished), then merge #68.
+- **Next small tasks (Renato, 2026-10-01):**
+  - **Financial Summary must account for both pricing models.** `FinancialSummaryPage.tsx` sums each sub's
+    stored `monthlyFee`/`monthlyPrice`, which is the flat figure — wrong for new-pricing subs with multi-trip
+    or sibling. Take each sub's standard monthly amount from its billing line instead (current or next pending
+    month: `amount + absenceCreditAmount` = net before absences, which the engine computes with the right model;
+    fall back to `monthlyFee` only when there's no bill). Also add, per month: **Faturado** (sum of that
+    month's bill totals, after absences, incl. fees) and **Recebido** (bills `paid`/`invoiced`). Read-only.
+    The "Simulação de descontos" scenario would need the same per-model treatment.
+  - **Move the two maintenance buttons off the billing page** into a "Manutenção" section (admin settings/
+    config page — Renato to confirm which). "Recalcular tudo" (`backfillBillingSchedules`) stays: needed after
+    price/rule changes or billing fixes. "Gerar ocorrências" (`backfillReservationEvents`) is repair-only now:
+    events regenerate automatically on every subscription write.
+  - Low priority: transport `schedule[]` entries have no `direction` (0 of 23 active subs), so line items and
+    events say "both" for single-trip days. Amounts are unaffected (gross counts schedule entries); only labels.
+  - The subscription card's price for **new-pricing** subs is still the flat `monthlyFee` and can differ from
+    the bill (only once a new sub has multi-trip/sibling). Fix together with the Financial Summary task.
 - **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case).
 - **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
 - **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
