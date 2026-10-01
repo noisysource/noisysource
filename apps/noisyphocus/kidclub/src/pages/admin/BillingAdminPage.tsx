@@ -91,7 +91,7 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           {!!lineItem.multiTripDiscountAmount && <p>Desconto multi-viagem (só a 2ª+ viagem/dia): −{fmtEur(lineItem.multiTripDiscountAmount)}</p>}
           {!!lineItem.siblingDiscountAmount && <p>Desconto de irmãos: −{fmtEur(lineItem.siblingDiscountAmount)}</p>}
           {!!lineItem.institutionalDiscountAmount && (
-            <p>Desconto escola/aluno repetente{lineItem.institutionalDiscountPct ? ` (${Math.round(lineItem.institutionalDiscountPct * 100)}%)` : ''}: −{fmtEur(lineItem.institutionalDiscountAmount)}</p>
+            <p>{lineItem.legacyPricing ? 'Tarifário antigo (descontos somados)' : 'Desconto escola/aluno repetente'}{lineItem.institutionalDiscountPct ? ` (${Math.round(lineItem.institutionalDiscountPct * 100)}%)` : ''}: −{fmtEur(lineItem.institutionalDiscountAmount)}</p>
           )}
         </div>
       )}

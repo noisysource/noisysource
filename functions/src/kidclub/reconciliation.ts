@@ -74,6 +74,14 @@ export interface SubscriptionForReconciliation {
    * monthly price applies. See the note on runsThisPeriod in reconcileService.
    */
   coversPeriod: boolean;
+  /**
+   * "Old pricing" (grandfathered, Renato 2026-10-01): when set, the
+   * subscription is billed the way its admin card and stored monthlyFee show
+   * it — one flat percentage (the sum of its appliedDiscounts, as
+   * discountRecalc computes it) off gross — instead of marginal multi-trip /
+   * marginal sibling / institutional. Absence credit is unchanged.
+   */
+  legacyFlatPct?: number;
 }
 
 export interface ReconciliationConfig {
@@ -266,7 +274,8 @@ export function reconcileService(
     // forced on. Applying both would be the same double-count that the
     // appliedBy label already caused once.
     const multiTripOverridden = overrideFor(sub, cfg.multiTripRuleId) !== undefined;
-    const discountEligibleCents = runsThisPeriod && !multiTripOverridden
+    const legacy = sub.legacyFlatPct !== undefined;
+    const discountEligibleCents = runsThisPeriod && !multiTripOverridden && !legacy
       ? eligibleSlots * weeks * sub.ratePerOccurrenceCents : 0;
     const multiTripDiscountCents = Math.round(discountEligibleCents * cfg.multiTripDiscountPct);
 
@@ -292,13 +301,18 @@ export function reconcileService(
     // it is still one of the family's subscriptions, and removing it would
     // change which sibling counts as child #1.
     const siblingOverridden = overrideFor(item.sub, cfg.siblingRuleId) !== undefined;
-    const siblingDiscountCents = (idx === 0 || siblingOverridden)
+    const siblingDiscountCents = (idx === 0 || siblingOverridden || item.sub.legacyFlatPct !== undefined)
       ? 0 : Math.round(item.subtotal * cfg.siblingDiscountPct);
     return { ...item, siblingDiscountCents, subtotal: item.subtotal - siblingDiscountCents };
   });
 
   // ── Step 3: institutional discount (school + returning/manual), summed ──
   const step3 = step2.map(item => {
+    if (item.sub.legacyFlatPct !== undefined) {
+      const institutionalDiscountPct = Math.min(Math.max(item.sub.legacyFlatPct, 0), 1);
+      const institutionalDiscountCents = Math.round(item.subtotal * institutionalDiscountPct);
+      return { ...item, institutionalDiscountPct, institutionalDiscountCents, netBeforeAbsence: item.subtotal - institutionalDiscountCents };
+    }
     // School is already a flat percentage, so an override only decides whether
     // it applies at all — forced on, it applies without a name match.
     const schoolRule = cfg.schoolDiscounts.find(sd => matchesSchool(item.sub.schoolName, sd.schoolName));
