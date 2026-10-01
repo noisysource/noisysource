@@ -4,7 +4,10 @@ import { Link } from 'react-router-dom';
 import { col, docRef } from '../../lib/db';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
+import { DiscountRule } from '@shared/models/Discount';
 import { normalizeSubStatus, SubStatus } from '../../lib/utils';
+import { getDiscountRules } from '../../services/discountService';
+import { BillLine, toBillLines, lineNet, billPeriodKey, indexLinesBySub, standardLine, monthKey } from '../../lib/billingLines';
 
 interface AppliedDiscountLite { ruleId: string; name: string; percentage: number }
 
@@ -33,6 +36,16 @@ interface StudySub {
 }
 
 type ServiceFilter = 'both' | 'transport' | 'study';
+
+interface Bill {
+  periodKey: string;
+  status: string;
+  total: number;
+  lines: BillLine[];
+}
+
+// Received = settled in Easypay; 'invoiced' is paid and already has its Vendus invoice.
+const RECEIVED_STATUSES = ['paid', 'invoiced'];
 
 type CostFieldKey =
   | 'transport.vanMonthlyCost'
@@ -168,6 +181,8 @@ export default function FinancialSummaryPage() {
   const [tSubs, setTSubs] = useState<TransportSub[]>([]);
   const [sSubs, setSSubs] = useState<StudySub[]>([]);
   const [families, setFamilies] = useState<Record<string, string>>({});
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [rules, setRules] = useState<DiscountRule[]>([]);
   const [loading, setLoading] = useState(true);
   // Fixed-cost inputs — edited directly here, not derived from a planned
   // route snapshot. Keyed the same as CostFieldKey so one generic save
@@ -198,13 +213,20 @@ export default function FinancialSummaryPage() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      const [tCfgSnap, sCfgSnap, tSnap, sSnap, familiesSnap] = await Promise.all([
+      const [tCfgSnap, sCfgSnap, tSnap, sSnap, familiesSnap, billingSnap, discountRules] = await Promise.all([
         getDoc(docRef('config', 'transportation')),
         getDoc(docRef('config', 'studyCenter')),
         getDocs(col('transportationSubscriptions')),
         getDocs(col('studyroom')),
         getDocs(col('families')),
+        getDocs(col('billing')),
+        getDiscountRules(),
       ]);
+      setRules(discountRules ?? []);
+      setBills(billingSnap.docs.map(d => {
+        const x = d.data();
+        return { periodKey: billPeriodKey(d.id, x.periodStart), status: x.status ?? '', total: x.total ?? 0, lines: toBillLines(x.lineItems) };
+      }));
 
       let cfg: TransportationConfig | null = null;
       let sCfg: StudyCenterConfig | null = null;
@@ -266,7 +288,19 @@ export default function FinancialSummaryPage() {
     load();
   }, []);
 
+  // Each subscription's monthly amount comes from its billing line — the
+  // selected month's, or (for "all periods") the current/next billed month's
+  // — as amount + absenceCreditAmount: net of discounts, before absences.
+  // That is what the engine charges under the subscription's own pricing
+  // model. The stored monthlyFee/monthlyPrice is the flat (old-pricing)
+  // figure and is only a fallback for a subscription with no bill yet
+  // (e.g. still pending).
+  const linesBySub = useMemo(() => indexLinesBySub(bills), [bills]);
+  const lineFor = (id: string) => standardLine(linesBySub.get(id), monthFilter === 'all' ? undefined : monthFilter);
+
   const tAmountFor = (s: TransportSub) => {
+    const line = lineFor(s.id);
+    if (line) return lineNet(line);
     const flatRate = tConfig?.flatRatePerTrip ?? 0;
     const weeks = tConfig?.weeksPerMonth ?? 4.33;
     return s.monthlyFee > 0 ? s.monthlyFee : s.scheduleLength * flatRate * weeks;
@@ -274,26 +308,29 @@ export default function FinancialSummaryPage() {
   const tRevenueFor = (subs: TransportSub[]) => subs.reduce((sum, s) => sum + tAmountFor(s), 0);
 
   const sAmountFor = (s: StudySub) => {
+    const line = lineFor(s.id);
+    if (line) return lineNet(line);
     const dayRate = sConfig?.monthlyPricePerWeekday ?? 24;
-    // Mirrors tAmountFor above: prefer the stored price, which is NET of
-    // sibling / returning-student discounts, and only fall back to the
-    // computed gross when there isn't one. This used to return the gross
-    // unconditionally, so every study-room discount was invisible here and
-    // the page overstated revenue (and therefore profit) by exactly the
-    // discounts it had given away — while transport, right above, had always
-    // reported net.
+    // Prefer the stored price, which is NET of discounts, and only fall back
+    // to the computed gross when there isn't one.
     return s.monthlyPrice > 0 ? s.monthlyPrice : s.daysCount * dayRate;
   };
   const sRevenueFor = (subs: StudySub[]) => subs.reduce((sum, s) => sum + sAmountFor(s), 0);
 
   // ── Discount scenarios ────────────────────────────────────────────────────
-  // Gross is derived from the stored NET and the discounts actually on the
-  // document, rather than recomputed from the schedule. That makes the
-  // baseline exact by construction: with nothing toggled off the scenario
-  // total equals the real total to the cent, even for a subscription whose
-  // stored fee has drifted from what the formula would produce. Recomputing
-  // gross from trips/days would quietly "correct" such a row and the baseline
-  // would no longer match the page above it.
+  // Every simulated figure is the real monthly amount plus the change the
+  // simulated rates make, so with nothing moved the scenario equals the page
+  // above it to the cent, whatever rounding the engine did.
+  //
+  // Old pricing (and subs with no bill yet) is the flat model: gross − the
+  // summed appliedDiscounts. Gross is derived from the net and those
+  // discounts, so it is exact by construction.
+  //
+  // New pricing mirrors the engine's pipeline from the bill line's own
+  // breakdown: multi-trip (scales with its rate) → sibling (on what multi-trip
+  // leaves) → institutional % (school + manual/returning). Multi-trip and
+  // sibling are structural there, so they come from the discount rules config,
+  // not from appliedDiscounts.
   const pctOf = (ds: AppliedDiscountLite[], ov: Record<string, number>) =>
     Math.min(ds.reduce((n, d) => n + (ov[d.ruleId] ?? d.percentage), 0), 1);
 
@@ -302,26 +339,63 @@ export default function FinancialSummaryPage() {
     return all > 0 && all < 1 ? net / (1 - all) : net;
   };
 
-  const scenarioAmount = (net: number, ds: AppliedDiscountLite[], ov: Record<string, number>) =>
-    Math.round(grossOf(net, ds) * (1 - pctOf(ds, ov)) * 100) / 100;
+  const flatAmount = (net: number, ds: AppliedDiscountLite[], ov: Record<string, number>) =>
+    grossOf(net, ds) * (1 - pctOf(ds, ov));
+
+  const structuralRule = (kind: 'transport' | 'study', trigger: 'auto_multitrip' | 'auto_sibling') =>
+    rules.find(r => r.active && r.trigger === trigger && r.appliesTo?.includes(kind));
+
+  const perTripAmount = (line: BillLine, ds: AppliedDiscountLite[], kind: 'transport' | 'study', ov: Record<string, number>) => {
+    const multi = structuralRule(kind, 'auto_multitrip');
+    const sibling = structuralRule(kind, 'auto_sibling');
+    const mt = multi && multi.percentage > 0
+      ? line.multiTripDiscountAmount * (ov[multi.id] ?? multi.percentage) / multi.percentage
+      : line.multiTripDiscountAmount;
+    const sib = sibling && line.siblingDiscountAmount > 0
+      ? (line.grossAmount - mt) * (ov[sibling.id] ?? sibling.percentage)
+      : line.siblingDiscountAmount;
+    const structuralIds = new Set([multi?.id, sibling?.id]);
+    const instDelta = ds.filter(d => !structuralIds.has(d.ruleId))
+      .reduce((n, d) => n + (ov[d.ruleId] ?? d.percentage) - d.percentage, 0);
+    const inst = Math.min(Math.max(line.institutionalDiscountPct + instDelta, 0), 1);
+    return (line.grossAmount - mt - sib) * (1 - inst);
+  };
+
+  const scenarioAmount = (id: string, net: number, ds: AppliedDiscountLite[], kind: 'transport' | 'study', ov: Record<string, number>) => {
+    const line = lineFor(id);
+    const price = line && !line.legacyPricing
+      ? (o: Record<string, number>) => perTripAmount(line, ds, kind, o)
+      : (o: Record<string, number>) => flatAmount(net, ds, o);
+    return Math.round((net + price(ov) - price({})) * 100) / 100;
+  };
 
   /** Every discount rule actually in use, with what it currently costs. */
   const rulesInUse = useMemo(() => {
     const m = new Map<string, { ruleId: string; name: string; percentage: number; subs: number; worth: number }>();
-    const add = (ds: AppliedDiscountLite[], net: number) => {
-      for (const d of ds) {
+    const add = (id: string, ds: AppliedDiscountLite[], net: number, kind: 'transport' | 'study') => {
+      const line = lineFor(id);
+      const used: { ruleId: string; name: string; percentage: number }[] = [...ds];
+      if (line && !line.legacyPricing) {
+        const multi = structuralRule(kind, 'auto_multitrip');
+        const sibling = structuralRule(kind, 'auto_sibling');
+        if (multi && line.multiTripDiscountAmount > 0 && !used.some(d => d.ruleId === multi.id)) used.push({ ruleId: multi.id, name: multi.name, percentage: multi.percentage });
+        if (sibling && line.siblingDiscountAmount > 0 && !used.some(d => d.ruleId === sibling.id)) used.push({ ruleId: sibling.id, name: sibling.name, percentage: sibling.percentage });
+      }
+      for (const d of used) {
         const e = m.get(d.ruleId) ?? { ruleId: d.ruleId, name: d.name, percentage: d.percentage, subs: 0, worth: 0 };
-        e.subs += 1;
         // What this one rule gives away on this subscription, holding the others.
-        e.worth += scenarioAmount(net, ds, { [d.ruleId]: 0 }) - net;
+        const worth = scenarioAmount(id, net, ds, kind, { [d.ruleId]: 0 }) - net;
+        if (Math.abs(worth) < 0.005) continue;
+        e.subs += 1;
+        e.worth += worth;
         m.set(d.ruleId, e);
       }
     };
-    for (const s of tSubs) if (s.status !== 'cancelled') add(s.appliedDiscounts, tAmountFor(s));
-    for (const s of sSubs) if (s.status !== 'cancelled') add(s.appliedDiscounts, sAmountFor(s));
+    for (const s of tSubs) if (s.status !== 'cancelled') add(s.id, s.appliedDiscounts, tAmountFor(s), 'transport');
+    for (const s of sSubs) if (s.status !== 'cancelled') add(s.id, s.appliedDiscounts, sAmountFor(s), 'study');
     return [...m.values()].sort((a, b) => b.worth - a.worth);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tSubs, sSubs]);
+  }, [tSubs, sSubs, linesBySub, rules, monthFilter]);
 
   const setRate = (id: string, pct: number) => setRates(prev => ({ ...prev, [id]: pct }));
   const clearRate = (id: string) => setRates(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -360,7 +434,7 @@ export default function FinancialSummaryPage() {
 
     return { tFiltered, sFiltered, tRevenue, sRevenue, activeOnlyRevenue, tCost, sCost, vanCost, driverCost, electricityCost };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tSubs, sSubs, tConfig, sConfig, statusFilter, monthFilter]);
+  }, [tSubs, sSubs, tConfig, sConfig, statusFilter, monthFilter, linesBySub]);
 
   const showTransport = serviceFilter !== 'study';
   const showStudy = serviceFilter !== 'transport';
@@ -370,11 +444,11 @@ export default function FinancialSummaryPage() {
   // Same filtered sets, re-priced at the simulated rates. Equals totalRevenue
   // exactly while the map is empty.
   const scenarioRevenue = useMemo(() => {
-    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(tAmountFor(x), x.appliedDiscounts, rates), 0) : 0;
-    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(sAmountFor(x), x.appliedDiscounts, rates), 0) : 0;
+    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(x.id, tAmountFor(x), x.appliedDiscounts, 'transport', rates), 0) : 0;
+    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(x.id, sAmountFor(x), x.appliedDiscounts, 'study', rates), 0) : 0;
     return Math.round((t + st) * 100) / 100;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tFiltered, sFiltered, rates, showTransport, showStudy, tConfig, sConfig]);
+  }, [tFiltered, sFiltered, rates, showTransport, showStudy, tConfig, sConfig, linesBySub, rules, monthFilter]);
 
   const scenarioDelta = Math.round((scenarioRevenue - totalRevenue) * 100) / 100;
   const scenarioOn = rulesInUse.some(r => rateOf(r) !== r.percentage);
@@ -431,7 +505,33 @@ export default function FinancialSummaryPage() {
     }
     return rows.sort((a, b) => b.amount - a.amount);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tFiltered, sFiltered, families, showTransport, showStudy]);
+  }, [tFiltered, sFiltered, families, showTransport, showStudy, linesBySub]);
+
+  // Faturado / Recebido per month, straight from the bills: totals after
+  // absences, enrollment fees included. Independent of the status filter
+  // (a bill is a fact, not a subscription state); the service filter keeps
+  // only that service's lines, so enrollment fees count under "Ambos" only.
+  const billingByMonth = useMemo(() => {
+    const m = new Map<string, { billed: number; received: number; count: number }>();
+    for (const b of bills) {
+      if (b.status === 'cancelled' || !b.periodKey) continue;
+      const amount = serviceFilter === 'both'
+        ? b.total
+        : b.lines.filter(l => l.type === serviceFilter).reduce((n, l) => n + l.amount, 0);
+      if (amount === 0 && serviceFilter !== 'both') continue;
+      const e = m.get(b.periodKey) ?? { billed: 0, received: 0, count: 0 };
+      e.billed += amount;
+      if (RECEIVED_STATUSES.includes(b.status)) e.received += amount;
+      e.count += 1;
+      m.set(b.periodKey, e);
+    }
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, v]) => ({ month, ...v }));
+  }, [bills, serviceFilter]);
+
+  const monthLabel = (key: string) => {
+    const [y, mo] = key.split('-').map(Number);
+    return new Date(y, mo - 1, 1).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
+  };
 
   function toggleStatus(s: SubStatus) {
     setStatusFilter(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
@@ -647,7 +747,7 @@ export default function FinancialSummaryPage() {
         <div className="px-5 py-3 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-700">Demonstração de resultados</h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            Nota: receita é calculada a partir do estado das inscrições (não confirma pagamento efetuado).
+            Nota: receita é o valor mensal de cada inscrição na sua fatura (antes de faltas), segundo o tarifário de cada uma; não confirma pagamento — ver Faturação por mês.
           </p>
         </div>
         <div className="px-5 py-3">
@@ -670,6 +770,53 @@ export default function FinancialSummaryPage() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Billed vs received, per month — from the bills themselves */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100">
+          <h2 className="text-sm font-semibold text-gray-700">Faturação por mês</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Faturado: total das faturas do mês (após faltas, com taxas de inscrição). Recebido: faturas pagas. Não depende do filtro de estado.
+          </p>
+        </div>
+        {billingByMonth.length === 0 ? (
+          <div className="px-5 py-6 text-center text-sm text-gray-400">Sem faturas.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-200">
+                  <th className="text-left px-5 py-2">Mês</th>
+                  <th className="text-right px-5 py-2">Faturas</th>
+                  <th className="text-right px-5 py-2">Faturado</th>
+                  <th className="text-right px-5 py-2">Recebido</th>
+                  <th className="text-right px-5 py-2">Por receber</th>
+                </tr>
+              </thead>
+              <tbody>
+                {billingByMonth.map(r => {
+                  const selected = r.month === monthFilter;
+                  const current = r.month === monthKey();
+                  return (
+                    <tr key={r.month} className={`border-b border-gray-50 last:border-0 ${selected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
+                      <td className="px-5 py-1.5 text-gray-700 capitalize">
+                        <button onClick={() => setMonthFilter(r.month)} className="hover:underline capitalize">{monthLabel(r.month)}</button>
+                        {current && <span className="ml-2 text-[10px] text-indigo-600 font-semibold uppercase">atual</span>}
+                      </td>
+                      <td className="px-5 py-1.5 text-right text-gray-400 tabular-nums">{r.count}</td>
+                      <td className="px-5 py-1.5 text-right font-mono text-blue-600 tabular-nums">{eur(r.billed)}</td>
+                      <td className="px-5 py-1.5 text-right font-mono text-green-600 tabular-nums">{eur(r.received)}</td>
+                      <td className={`px-5 py-1.5 text-right font-mono tabular-nums ${r.billed - r.received > 0.005 ? 'text-amber-700' : 'text-gray-300'}`}>
+                        {eur(r.billed - r.received)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Discount scenarios — simulation only, nothing is written */}

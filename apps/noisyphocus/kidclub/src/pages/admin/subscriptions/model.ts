@@ -1,5 +1,6 @@
 import { SubStatus } from '../../../lib/utils';
 import { AppliedDiscount } from '@shared/models/Discount';
+import { BillLine } from '../../../lib/billingLines';
 
 export interface SubItem {
   id: string;
@@ -124,6 +125,8 @@ export interface BillRow {
   easypayId?: string;
   /** Easypay payments that landed on an already-paid bill — need a refund. */
   duplicatePaymentEasypayIds?: string[];
+  /** The engine's line items — the real per-subscription amounts. */
+  lines: BillLine[];
 }
 
 /**
