@@ -105,6 +105,7 @@ export interface ChildDoc {
   schoolName?: string;
   schoolYear?: string;
   status?: string;
+  /** Legacy: no longer written (2026-10-01); still read by admin search for old docs. */
   homeAddress?: { street?: string; city?: string; postalCode?: string };
 }
 

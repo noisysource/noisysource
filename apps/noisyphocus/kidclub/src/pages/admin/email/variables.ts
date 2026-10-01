@@ -23,13 +23,14 @@ export const VARIABLES: VariableDef[] = [
   { key: 'email', label: 'Email', group: 'Encarregado', example: 'maria@exemplo.pt' },
   { key: 'telefone', label: 'Telefone', group: 'Encarregado', example: '912 345 678' },
   { key: 'morada', label: 'Morada de faturação', group: 'Encarregado', example: 'Rua A 1, 3000-000 Coimbra' },
+  // Same value as `morada` now (family billing address); key kept so saved templates work.
+  { key: 'moradaCasa', label: 'Morada de casa', group: 'Encarregado', example: 'Rua A 1, 3000-000 Coimbra' },
   { key: 'nif', label: 'NIF', group: 'Encarregado', example: '123456789' },
 
   { key: 'criancas', label: 'Nome das crianças', group: 'Crianças', example: 'Ana Silva e Rui Silva' },
   { key: 'criancasPrimeiroNome', label: 'Primeiro nome das crianças', group: 'Crianças', example: 'Ana e Rui' },
   { key: 'escolas', label: 'Escola', group: 'Crianças', example: 'Escola Quinta das Flores' },
   { key: 'anosEscolares', label: 'Ano escolar', group: 'Crianças', example: '3.º ano' },
-  { key: 'moradaCasa', label: 'Morada de casa', group: 'Crianças', example: 'Rua B 2, Coimbra' },
 
   { key: 'servicos', label: 'Serviços', group: 'Inscrições', example: 'Sala de Estudo e Transporte' },
   { key: 'mensalidadeTotal', label: 'Mensalidade total', group: 'Inscrições', example: '€150.00' },
@@ -66,7 +67,6 @@ const addr = (a?: { street?: string; postalCode?: string; city?: string }) =>
 export function familyValues(
   g: FamilyGroup,
   matchedItemKeys: Set<string>,
-  homeAddressOf: (childId: string) => { street?: string; postalCode?: string; city?: string } | undefined,
 ): VariableValues {
   const itemKey = (i: { _type: string; id: string }) => `${i._type}-${i.id}`;
   const kids = g.children
@@ -94,7 +94,9 @@ export function familyValues(
     criancasPrimeiroNome: joinPt(children.map(c => firstWord(c.childName))),
     escolas: joinPt(children.map(c => c.schoolName)),
     anosEscolares: joinPt(children.map(c => c.schoolYear)),
-    moradaCasa: joinPt(children.map(c => (c.childId ? addr(homeAddressOf(c.childId)) : ''))),
+    // Kept for saved templates; children no longer carry their own home address
+    // (2026-10-01), so this is the family's billing address — same as `morada`.
+    moradaCasa: addr(g.family?.billingAddress),
     servicos: joinPt([hasStudy ? 'Sala de Estudo' : '', hasTransport ? 'Transporte' : '']),
     mensalidadeTotal: items.length ? eur(fee) : '',
     valorEmDivida: overdue.length ? eur(overdue.reduce((s, b) => s + b.total, 0)) : '',
