@@ -587,6 +587,15 @@ export const setReservationEventStatus = onCall(
     if (data.status === "VOIDED") {
       throw new HttpsError("failed-precondition", "This subscription has ended — this occurrence can no longer be changed");
     }
+    // A month whose bill is paid (or being paid, or invoiced) is closed: its
+    // days can't change, or the amount charged and the days served would
+    // disagree. Corrections to a paid month go through a credit note instead.
+    if (data.familyId && typeof data.date === "string") {
+      const bill = await appCol("billing").doc(`${data.familyId}_${data.date.slice(0, 7)}`).get();
+      if (["paid", "invoiced", "processing"].includes(bill.data()?.status)) {
+        throw new HttpsError("failed-precondition", "Este mês já está pago — os dias já não podem ser alterados.");
+      }
+    }
     // A boundary-month day the system cancelled is outside the contract: the
     // child is not enrolled on that date. Marking it EXPECTED again would put
     // a child on a run they aren't signed up for (and quietly raise the bill

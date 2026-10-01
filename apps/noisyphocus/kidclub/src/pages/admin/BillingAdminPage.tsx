@@ -156,11 +156,12 @@ function childNameOf(li: BillingLineItem): string | null {
   return name || null;
 }
 
-function ServiceCalendar({ li, events, onToggle, savingId }: {
+function ServiceCalendar({ li, events, onToggle, savingId, locked }: {
   li: BillingLineItem;
   events: ReservationEventDoc[];
   onToggle: (ev: ReservationEventDoc) => void;
   savingId: string | null;
+  locked: boolean;
 }) {
   const meta = SERVICE_META[li.type!];
   const accent = ACCENT_CLASSES[meta.accent];
@@ -201,10 +202,10 @@ function ServiceCalendar({ li, events, onToggle, savingId }: {
                     <button
                       key={ev.id}
                       type="button"
-                      disabled={savingId === ev.id}
+                      disabled={locked || savingId === ev.id}
                       onClick={() => onToggle(ev)}
                       title={`${dateLabel}${legLabel} — ${isMarked ? 'marcado como falta, clicar para restaurar' : 'clicar para marcar falta'}`}
-                      className={`text-[11px] px-2 py-1 transition-colors disabled:opacity-50 ${isMarked ? accent.marked : accent.idle}`}
+                      className={`text-[11px] px-2 py-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isMarked ? accent.marked : accent.idle}`}
                     >
                       {dateLabel}{ev.direction === 'pickup' ? ' M' : ev.direction === 'dropoff' ? ' T' : ''}
                     </button>
@@ -246,6 +247,8 @@ function DayEditor({ record, onRefreshNeeded }: {
   const [error, setError] = useState<string | null>(null);
   const [changed, setChanged] = useState(false);
 
+  // Paid / being paid / invoiced: the month is closed (the server refuses too).
+  const locked = ['paid', 'invoiced', 'processing'].includes(record.status);
   const periodStart = toIsoDate(record.periodStart.toDate());
   const periodEnd = toIsoDate(record.periodEnd.toDate());
 
@@ -334,8 +337,10 @@ function DayEditor({ record, onRefreshNeeded }: {
               events={eventsBySub.get(li.subscriptionId!) ?? []}
               onToggle={handleToggle}
               savingId={savingId}
+              locked={locked}
             />
           ))}
+        {locked && <p className="text-xs text-gray-600">Este mês já está pago — os dias não podem ser alterados.</p>}
         {error && <p className="text-xs text-red-600">{error}</p>}
         <div className="flex items-center justify-between gap-3 pt-1">
           <p className="text-[11px] text-gray-500">

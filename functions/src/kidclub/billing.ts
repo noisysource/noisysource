@@ -1120,6 +1120,38 @@ function isRecomputable(data: any): boolean {
   return data?.status === "pending" || (data?.status === "cancelled" && data?.autoCancelled === true);
 }
 
+// Months to recompute for a family: every month from the current one to the
+// school-year end (as before), PLUS any earlier month whose bill is still
+// recomputable. Without the earlier ones, from the 1st of a month every change
+// to last month's still-unpaid bill (an absence marked late, a schedule fix)
+// was silently ignored (found 2026-10-01: September absences never reached
+// September's bill). Past months are only ever updated, never created — a past
+// month with no bill had nothing billable — and paid/invoiced ones are left
+// alone by isRecomputable.
+async function periodsToRecompute(familyId: string) {
+  const now = new Date();
+  const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const open = await appCol("billing").where("familyId", "==", familyId).where("status", "in", ["pending", "cancelled"]).get();
+  const pastMonths = new Map<string, Date>();
+  for (const d of open.docs) {
+    if (!isRecomputable(d.data())) continue;
+    const start: Date | undefined = d.data().periodStart?.toDate?.();
+    if (start && start < startOfCurrentMonth) pastMonths.set(d.id, start);
+  }
+  const past = [...pastMonths.values()].sort((a, b) => a.getTime() - b.getTime()).map(d => periodForDate(d));
+  return { periods: [...past, ...periodsUntilSchoolYearEnd(now)], startOfCurrentMonth };
+}
+
+// A past month's bill may only be recomputed when the recompute still covers
+// every subscription already on it. computeLineItems only sees subscriptions
+// that are active NOW, so a family that cancelled in October would otherwise
+// lose (or auto-cancel) September charges it really owes.
+function pastMonthSafe(existing: BillingLineItem[], next: BillingLineItem[]): boolean {
+  const ids = (items: BillingLineItem[]) => new Set(items.filter(li => li.type === "study" || li.type === "transport").map(li => li.subscriptionId));
+  const after = ids(next);
+  return next.length > 0 && [...ids(existing)].every(id => after.has(id));
+}
+
 async function autoCreateBillingSchedule(familyId: string): Promise<void> {
   const [studySnap, transportSnap, configs, userId] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
@@ -1135,7 +1167,7 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
     transport: transportSnap.docs.map(d => ({ id: d.id, ...d.data() })),
   };
 
-  const periods = periodsUntilSchoolYearEnd(new Date());
+  const { periods, startOfCurrentMonth } = await periodsToRecompute(familyId);
   let created = 0, updated = 0, cancelled = 0;
 
   // group.study/group.transport are fetched once and reused across every
@@ -1155,6 +1187,10 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
     const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
+      if (period.start < startOfCurrentMonth && !pastMonthSafe(existingLineItems, lineItems)) {
+        console.warn(`[billing] ${docId}: past month left as-is, a subscription on it is no longer active`);
+        continue;
+      }
       if (isRecomputable(existing.data())) {
         if (lineItems.length === 0 || total === 0) {
           // All subscriptions for this family are now cancelled/inactive.
@@ -1179,6 +1215,7 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
       continue;
     }
 
+    if (period.start < startOfCurrentMonth) continue; // past months: update only, never create
     if (lineItems.length > 0 && total > 0) {
       const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
       if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
@@ -1237,13 +1274,18 @@ export const backfillBillingSchedules = onCall(
           for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
         };
 
-        const periods = periodsUntilSchoolYearEnd(new Date());
+        const { periods, startOfCurrentMonth: monthStart } = await periodsToRecompute(group.familyId);
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
           const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
+            if (period.start < monthStart && !pastMonthSafe(existingLineItems, lineItems)) {
+              console.warn(`[backfill] ${docId}: past month left as-is, a subscription on it is no longer active`);
+              skipped++;
+              continue;
+            }
             if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
                 if (existing.data()?.status !== "cancelled") {
@@ -1265,6 +1307,7 @@ export const backfillBillingSchedules = onCall(
             }
             continue;
           }
+          if (period.start < monthStart) continue; // past months: update only, never create
           if (lineItems.length > 0 && total > 0) {
             const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
             if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
