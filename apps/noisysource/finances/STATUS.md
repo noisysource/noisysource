@@ -53,8 +53,8 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
 (2026-09-29).
 
 ## Next step
-1. **Test locally:** `pnpm dev:finances` in the worktree (uses `.env.development` →
-   `kidclub-dev`). Check:
+1. **Test on https://kidclub-dev-finhub.web.app** (this branch was deployed there 2026-10-01;
+   `pnpm dev:finances` in the worktree also works). Check:
    - `/noisyphocus/recurring` → "+ Nova entrada": the Fixo/Comissão toggle is visible. This was
      the unresolved bug on 2026-09-21. If it shows locally, the old problem was the hosting site
      or cache, not the code.
@@ -83,7 +83,10 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- `kidclub-dev-finhub.web.app` may still be serving a build deployed by hand from the closed PR
-  #20 branch on 2026-09-21. Don't trust it until it's redeployed from `staging`.
+- **`kidclub-dev-finhub.web.app` is serving this unmerged branch** (`agent/finhub-cost-model`
+  @ bc7813d): deployed by hand on 2026-10-01 with `build:staging` +
+  `firebase deploy --only hosting:finances --project=kidclub-dev`. Hosting only, no rules or
+  functions. It replaces the stale PR #20 build that was there. Checked: bundle has
+  `projectId:"kidclub-dev"`, and `/` and client routes serve `cache-control: no-cache`.
 - A PR into `main` deploys to prod the moment it's opened. This branch goes to `staging` first.
 - No new metered API calls. Reads only existing Firestore collections.
