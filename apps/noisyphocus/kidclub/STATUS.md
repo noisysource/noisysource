@@ -2,7 +2,49 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-28 (evening)
+**Last updated:** 2026-09-29
+
+## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
+
+**Symptom.** Real parents log in and see no children, subscriptions or bills (and can't pay), while
+admin impersonation shows everything. **Cause:** the client pages and the Firestore rules match on
+`userId`, impersonation queries by `familyId`. Docs got a familyId with no/empty userId via:
+1. admin linking (SubscriptionsAdminPage: status-change auto-link, "Vincular", child details form)
+   set `familyId` without `userId`;
+2. `billing.ts` copied `userId` from whichever subscription triggered the write (or from
+   `ReservationEvent.changedBy`), and never corrected it on recompute; the payment callables
+   check `billing.userId`, so affected parents can't pay either;
+3. `getOrCreateFamily` looked families up by uid only, so a parent logging in with another account,
+   or whose family was created owner-less by `identity.mjs`, silently got a new empty duplicate family.
+
+**Read-only prod audit (2026-09-29), families affected:**
+- **Sandra Abreu** — logged in with a second (gmail) account, got an empty duplicate family (same
+  NIF/Vendus client); Bernardo's transport sub + 3 billing months hidden. The code fix does NOT
+  handle this case (her original family is owned by her other uid) — needs a data fix/decision.
+- **maria joão mariano** — everything hidden.
+- **Maria Teresa Azevedo** — all billing hidden.
+- **Mary Pratas** — Manuel Oliveira's study sub hidden.
+- **3 owner-less migration families** (Anabela Gonçalves, sofia_valdeira@hotmail.com,
+  palexandra@sapo.pt) — would get an empty duplicate on first login; with this PR they claim
+  their family instead.
+- **Maria Clara** — study sub points to a non-existent family `H4hFhb2GcFVV0IGEH5Gs`, so likely
+  **not billed at all**. ⚠️ Needs Renato's decision (relink to the right family, or recreate it).
+
+**Data:** a human-approved `userId` backfill script for prod is being run separately (not in this PR).
+
+**Code fix:** branch `agent/kidclub-family-userid-link`, PR → `staging`:
+- billing `userId` now always comes from `families/{id}.primaryContact.userId`, on create and on
+  every recompute/backfill update (self-heals `""` on recomputable, i.e. pending/auto-cancelled,
+  records; paid/invoiced ones are not touched by recompute);
+- admin link paths set `userId` from the family owner whenever they set a non-empty `familyId`;
+- new callable `claimFamilyByEmail` (Admin SDK): on a login with no uid-owned family, links owner-less
+  families with the caller's **verified** email and backfills `userId` on their children/subs/billing;
+  a new family is only created when nothing is claimable. No Firestore rule changes.
+- ⚠️ **Prod deploy step:** `claimFamilyByEmail` is a NEW callable — per "Deploy lessons" #2 the CI SA
+  can't grant `run.invoker`, so after the prod deploy add `allUsers` → `roles/run.invoker` by hand
+  (check dev too). Until then the client fails open to the old create-a-family behaviour.
+- Also noticed, not fixed: `setPaymentMethod` looks families up by top-level `userId` (the field is
+  `primaryContact.userId`), so it would always throw "Family not found"; no client calls it today.
 
 ## ✅ LIVE IN PROD SINCE 2026-09-27 — read this section first
 

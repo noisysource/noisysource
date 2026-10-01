@@ -64,6 +64,23 @@ async function getActiveSubs() {
   return Object.values(byFamily);
 }
 
+// Who owns a family's billing records. families/{id}.primaryContact.userId is
+// the single source of truth: billing.userId used to be copied from whichever
+// subscription triggered the write, and admin-created subscriptions often have
+// no userId, so records were written with "" and the parent could neither see
+// (rules match on billing.userId) nor pay (callables check billing.userId) them.
+async function familyOwnerUid(familyId: string): Promise<string> {
+  const snap = await appCol("families").doc(familyId).get();
+  return snap.data()?.primaryContact?.userId ?? "";
+}
+
+// Fields to merge into an update of an existing billing record so its owner
+// self-heals on every recompute. Empty when the family has no owner yet, so an
+// owner-less family never blanks out a record's existing userId.
+function ownerUpdate(ownerUid: string): { userId?: string } {
+  return ownerUid ? { userId: ownerUid } : {};
+}
+
 // Firestore 'in' queries accept at most 30 comparison values.
 function chunk<T>(arr: T[], size = 30): T[][] {
   const out: T[][] = [];
@@ -503,13 +520,16 @@ async function buildBillingRecord(
   configs: BillingConfigs,
   opts: { docId?: string; sendEmail?: boolean } = {},
 ): Promise<{ id: string; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } | undefined> {
-  const { familyId, userId, study, transport } = group;
+  const { familyId, study, transport } = group;
   const { docId, sendEmail = !dryRun } = opts;
 
   const famSnap = await appCol("families").doc(familyId).get();
   if (!famSnap.exists) { console.warn(`Family ${familyId} not found`); return; }
   const fam = famSnap.data()!;
   const contact = fam.primaryContact ?? {};
+  // Owner comes from the family, never from group.userId (a subscription's
+  // possibly-empty userId) — see familyOwnerUid().
+  const userId: string = contact.userId ?? "";
   const billingName: string = contact.name ?? "Família";
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = fam.paymentMethod ?? "mbway";
@@ -1100,11 +1120,12 @@ function isRecomputable(data: any): boolean {
   return data?.status === "pending" || (data?.status === "cancelled" && data?.autoCancelled === true);
 }
 
-async function autoCreateBillingSchedule(familyId: string, userId: string): Promise<void> {
-  const [studySnap, transportSnap, configs] = await Promise.all([
+async function autoCreateBillingSchedule(familyId: string): Promise<void> {
+  const [studySnap, transportSnap, configs, userId] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
     loadBillingConfigs(),
+    familyOwnerUid(familyId),
   ]);
 
   const group: { familyId: string; userId: string; study: any[]; transport: any[] } = {
@@ -1141,7 +1162,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
           // cancellation — see isRecomputable's comment for why that matters.
           if (existing.data()?.status !== "cancelled") {
             await appCol("billing").doc(docId).update({
-              status: "cancelled", autoCancelled: true,
+              status: "cancelled", autoCancelled: true, ...ownerUpdate(userId),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
             cancelled++;
@@ -1149,7 +1170,7 @@ async function autoCreateBillingSchedule(familyId: string, userId: string): Prom
         } else {
           await appCol("billing").doc(docId).update({
             status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
-            lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lineItems, total, ...ownerUpdate(userId), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
           updated++;
@@ -1208,6 +1229,9 @@ export const backfillBillingSchedules = onCall(
     // Recalculate / create billing records for families with active subscriptions
     for (const group of groups) {
       try {
+        // getActiveSubs() took userId off an arbitrary subscription; replace it
+        // with the family's owner (see familyOwnerUid()).
+        group.userId = await familyOwnerUid(group.familyId);
         // Same in-memory-staleness guard as autoCreateBillingSchedule.
         const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
           for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
@@ -1223,7 +1247,7 @@ export const backfillBillingSchedules = onCall(
             if (isRecomputable(existing.data())) {
               if (lineItems.length === 0 || total === 0) {
                 if (existing.data()?.status !== "cancelled") {
-                  await existing.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                  await existing.ref.update({ status: "cancelled", autoCancelled: true, ...ownerUpdate(group.userId), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
                   cancelled++;
                 } else {
                   skipped++;
@@ -1231,7 +1255,7 @@ export const backfillBillingSchedules = onCall(
               } else {
                 await existing.ref.update({
                   status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
-                  lineItems, total, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  lineItems, total, ...ownerUpdate(group.userId), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
                 if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
                 updated++;
@@ -1278,7 +1302,7 @@ export const onStudyroomBillingSync = onDocumentWritten(
     if (!after) return; // deleted
     const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
+    await autoCreateBillingSchedule(familyId);
   }
 );
 
@@ -1289,7 +1313,7 @@ export const onTransportBillingSync = onDocumentWritten(
     if (!after) return; // deleted
     const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after.userId ?? "");
+    await autoCreateBillingSchedule(familyId);
   }
 );
 
@@ -1315,7 +1339,7 @@ export const onReservationEventBillingSync = onDocumentWritten(
     if (before.status === after.status) return;
     const familyId: string = after.familyId;
     if (!familyId) return;
-    await autoCreateBillingSchedule(familyId, after.changedBy ?? "");
+    await autoCreateBillingSchedule(familyId);
   }
 );
 
