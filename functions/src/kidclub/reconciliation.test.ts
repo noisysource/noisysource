@@ -717,3 +717,57 @@ describe("admin overrides beat the automatic discount", () => {
     expect(r.finalCents).toBe(16800);
   });
 });
+
+// ── Old pricing (grandfathered, Renato 2026-10-01) ─────────────────────────────
+
+describe("old pricing: legacyFlatPct bills the flat model the subscription card shows", () => {
+  // Maria Manon, prod 2026-10: Mon 1, Tue 2, Wed 2, Thu 1, Fri 1 legs = 7/week at €6
+  // -> €168 gross. School 20% + multi-trip 10%.
+  const MANON_WEEKDAYS = ["monday", "tuesday", "tuesday", "wednesday", "wednesday", "thursday", "friday"];
+  const CFG: ReconciliationConfig = {
+    multiTripDiscountPct: 0.1,
+    minTripsPerDay: 2,
+    siblingDiscountPct: 0.1,
+    schoolDiscounts: [{ schoolName: "Colégio Bissaya Barreto", discountPercentage: 0.2 }],
+    returningStudentDiscountPct: 0,
+  } as ReconciliationConfig;
+
+  it("without the flag: marginal multi-trip then school — the €130.56 actually billed", () => {
+    const s = sub({ id: "m", scheduleWeekdays: MANON_WEEKDAYS, schoolName: "Colégio Bissaya Barreto" });
+    const [r] = reconcileService([s], new Map([["m", occurrences(20)]]), CFG);
+    expect(r.grossCents).toBe(16800);
+    expect(r.finalCents).toBe(13056);
+  });
+
+  it("with the flag: one flat 30% off gross — the €117.60 on the card", () => {
+    const s = sub({ id: "m", scheduleWeekdays: MANON_WEEKDAYS, schoolName: "Colégio Bissaya Barreto", legacyFlatPct: 0.3 });
+    const [r] = reconcileService([s], new Map([["m", occurrences(20)]]), CFG);
+    expect(r.multiTripDiscountCents).toBe(0);
+    expect(r.institutionalDiscountPct).toBe(0.3);
+    expect(r.finalCents).toBe(11760);
+  });
+
+  it("skips the marginal sibling discount (it's already in the flat percentage)", () => {
+    const a = sub({ id: "a", legacyFlatPct: 0.1 });
+    const b = sub({ id: "b", legacyFlatPct: 0.1, enrollmentDate: new Date("2026-09-05") });
+    const res = reconcileService([a, b], new Map([["a", occurrences(20)], ["b", occurrences(20)]]), CFG);
+    for (const r of res) {
+      expect(r.siblingDiscountCents).toBe(0);
+      expect(r.finalCents).toBe(10800); // 120 x 0.9
+    }
+  });
+
+  it("still credits absences, on the flat net", () => {
+    const s = sub({ id: "s", legacyFlatPct: 0.2 });
+    const [r] = reconcileService([s], new Map([["s", [...occurrences(16), ...cancelledOn(4)]]]), CFG);
+    // net 96, notional 20 -> 4.80 per absence x 4
+    expect(r.absenceCreditCents).toBe(1920);
+    expect(r.finalCents).toBe(7680);
+  });
+
+  it("caps the flat percentage at 100%", () => {
+    const s = sub({ id: "s", legacyFlatPct: 1.4 });
+    const [r] = reconcileService([s], new Map([["s", occurrences(20)]]), CFG);
+    expect(r.finalCents).toBe(0);
+  });
+});
