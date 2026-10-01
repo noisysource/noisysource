@@ -5,7 +5,7 @@ import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import { DiscountRule, AppliedDiscount } from '@shared/models/Discount';
 import { applyDiscounts } from '../../../services/discountService';
 import { SubStatus, normalizeEmail } from '../../../lib/utils';
-import { SubItem, subCollection } from './model';
+import { SubItem, subCollection, isLegacyPricing } from './model';
 import { AdminData } from './useAdminData';
 import { familyService } from '../../../services/familyService';
 
@@ -116,6 +116,22 @@ export function useSubscriptionActions(data: Pick<AdminData, 'setItems' | 'reloa
       const next = !item.routeAssigned;
       await updateDoc(docRef('transportationSubscriptions', item.id), { routeAssigned: next, updatedAt: new Date() });
       patchItem(item.id, { routeAssigned: next });
+    } finally { setProcessing(null); }
+  };
+
+  // Old pricing on/off for one subscription. Writing it triggers the billing
+  // recompute (onTransportBillingSync / onStudyroomBillingSync), so unpaid
+  // bills follow straight away; paid ones are never touched.
+  const toggleLegacyPricing = async (item: SubItem) => {
+    const next = !isLegacyPricing(item);
+    const msg = next
+      ? 'Passar para o tarifário antigo?\n\nA mensalidade passa a ser a mostrada neste cartão (descontos somados), até ao fim do ano letivo. As faturas por pagar são recalculadas.'
+      : 'Passar para o tarifário novo (desconto multi-viagem e de irmão por viagem/criança)?\n\nAs faturas por pagar são recalculadas e o valor pode subir.';
+    if (!window.confirm(msg)) return;
+    setProcessing(item.id);
+    try {
+      await updateDoc(docRef(subCollection(item), item.id), { legacyPricing: next, updatedAt: new Date() });
+      patchItem(item.id, { legacyPricing: next });
     } finally { setProcessing(null); }
   };
 
@@ -278,7 +294,7 @@ export function useSubscriptionActions(data: Pick<AdminData, 'setItems' | 'reloa
 
   return {
     processing, patchItem,
-    setStatus, toggleRouteAssigned, resolveClientAction, hardDelete,
+    setStatus, toggleRouteAssigned, toggleLegacyPricing, resolveClientAction, hardDelete,
     toggleManualDiscount, resetDiscountsToAuto, clearFeeReview, linkToFamily,
   };
 }

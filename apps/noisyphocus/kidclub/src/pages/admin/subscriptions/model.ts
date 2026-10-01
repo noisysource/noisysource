@@ -37,6 +37,8 @@ export interface SubItem {
   statusReason?: string;
   note?: string;
   createdAt: Date;
+  // Old pricing switch (see isLegacyPricing). undefined = decided by createdAt.
+  legacyPricing?: boolean;
   cancelRequested?: boolean;
   feeReviewRequired?: boolean;
   // Two-way in-app review flags (no email for this). clientReviewPending: set
@@ -167,3 +169,10 @@ export interface FamilyGroup {
   family?: FamilyDoc;
   bills: BillRow[];
 }
+
+// Old pricing (grandfathered, Renato 2026-10-01): subscriptions created before
+// this cutoff are billed on the flat model their card shows, for the rest of
+// the school year. Must match LEGACY_PRICING_CUTOFF in functions/src/kidclub/billing.ts.
+export const LEGACY_PRICING_CUTOFF = new Date('2026-10-01T00:00:00+01:00');
+export const isLegacyPricing = (item: Pick<SubItem, 'legacyPricing' | 'createdAt'>): boolean =>
+  item.legacyPricing ?? item.createdAt < LEGACY_PRICING_CUTOFF;

@@ -271,6 +271,7 @@ export interface BillingLineItem {
   type: "study" | "transport" | "enrollment";
   appliedDiscounts: AppliedDiscount[]; // kept for type compatibility; study/transport line items no longer populate this — see multiTripDiscountAmount etc. below
   scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI show real service days
+  legacyPricing?: boolean;       // billed on the grandfathered flat model (institutionalDiscountPct = sum of the sub's discounts)
   tripsByDay?: Record<string, ("pickup" | "dropoff" | "both")[]>; // transport only — which trip(s) run on each scheduled weekday
   multiTripDiscountAmount?: number;    // marginal — only trip #2+ on a multi-trip day
   siblingDiscountAmount?: number;      // marginal — only applies if this isn't the family's highest-value subscription for this service
@@ -294,6 +295,9 @@ interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules
 // needed: a mid-month cancellation voids future events, not past ones, so
 // this period's already-elapsed events are billed correctly without any
 // special-casing here).
+// See legacyFlatPctFor in computeLineItems. Midnight Lisbon time.
+const LEGACY_PRICING_CUTOFF = new Date("2026-10-01T00:00:00+01:00");
+
 async function computeLineItems(
   group: { study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
@@ -396,6 +400,18 @@ async function computeLineItems(
     return raw ? new Date(raw) : new Date(0);
   };
 
+  // Old pricing (grandfathered, Renato 2026-10-01): subscriptions created
+  // before the cutoff keep the flat model their card and monthlyFee show
+  // (gross minus the sum of appliedDiscounts) for the rest of the school year
+  // — next year's enrollments are new subscription docs. An explicit
+  // `legacyPricing` on the subscription (admin switch on the card) wins over
+  // the date, in either direction.
+  const legacyFlatPctFor = (sub: any): number | undefined => {
+    const legacy: boolean = sub.legacyPricing ?? enrollmentDateOf(sub) < LEGACY_PRICING_CUTOFF;
+    if (!legacy) return undefined;
+    return Math.min((sub.appliedDiscounts ?? []).reduce((n: number, d: any) => n + (d.percentage ?? 0), 0), 1);
+  };
+
   const asDate = (raw: any): Date | null => {
     if (!raw) return null;
     const d = raw.toDate ? raw.toDate() : new Date(raw);
@@ -422,6 +438,7 @@ async function computeLineItems(
       ratePerOccurrenceCents: Math.round(studyRate * 100),
       discountOverrides: sub.discountOverrides,
       coversPeriod: coversPeriodOf(sub),
+      legacyFlatPct: legacyFlatPctFor(sub),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
       const sub = group.study.find(s => s.id === r.subscriptionId)!;
@@ -435,6 +452,7 @@ async function computeLineItems(
         siblingDiscountAmount: r.siblingDiscountCents / 100,
         institutionalDiscountAmount: r.institutionalDiscountCents / 100,
         institutionalDiscountPct: r.institutionalDiscountPct,
+        ...(legacyFlatPctFor(sub) !== undefined ? { legacyPricing: true } : {}),
         absenceCount: r.absenceCount,
         ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
@@ -460,6 +478,7 @@ async function computeLineItems(
       ratePerOccurrenceCents: Math.round(tripRate * 100),
       discountOverrides: sub.discountOverrides,
       coversPeriod: coversPeriodOf(sub),
+      legacyFlatPct: legacyFlatPctFor(sub),
     }));
     for (const r of reconcileService(subsForRecon, eventsBySub, cfg)) {
       const sub = group.transport.find(s => s.id === r.subscriptionId)!;
@@ -475,6 +494,7 @@ async function computeLineItems(
         siblingDiscountAmount: r.siblingDiscountCents / 100,
         institutionalDiscountAmount: r.institutionalDiscountCents / 100,
         institutionalDiscountPct: r.institutionalDiscountPct,
+        ...(legacyFlatPctFor(sub) !== undefined ? { legacyPricing: true } : {}),
         absenceCount: r.absenceCount,
         ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,

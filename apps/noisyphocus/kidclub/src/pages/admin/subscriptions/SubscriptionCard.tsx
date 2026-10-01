@@ -4,7 +4,7 @@ import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { DiscountRule } from '@shared/models/Discount';
 import { grossFromAppliedDiscounts } from '../../../services/discountService';
 import { SubStatus } from '../../../lib/utils';
-import { SubItem, isUnlinked, needsAdminReview } from './model';
+import { SubItem, isUnlinked, needsAdminReview, isLegacyPricing } from './model';
 import { StatusBadge, CLIENT_ACTION_BADGE } from './badges';
 import { SubscriptionActions, statusChangeEffects } from './useSubscriptionActions';
 import EditForm from './EditForm';
@@ -84,8 +84,13 @@ const SubscriptionCard = forwardRef<HTMLDivElement, {
 
             {item.note && <p className="text-xs text-gray-500 mt-1 italic">"{item.note}"</p>}
             {item.statusReason && item.status === 'cancelled' && <p className="text-xs text-red-600 mt-1">Motivo: {item.statusReason}</p>}
-            <p className="text-xs text-gray-400 mt-1.5">
-              Criada a {item.createdAt.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })}
+            <p className="text-xs text-gray-400 mt-1.5 flex flex-wrap items-center gap-2">
+              <span>Criada a {item.createdAt.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+              <button onClick={() => actions.toggleLegacyPricing(item)} disabled={busy}
+                className={`px-2 py-0.5 rounded-full font-medium disabled:opacity-60 ${isLegacyPricing(item) ? 'bg-amber-100 text-amber-800 hover:bg-amber-50' : 'bg-gray-50 text-gray-500 border border-gray-200 hover:border-gray-400'}`}
+                title="Tarifário antigo: a fatura cobra o valor deste cartão (descontos somados) até ao fim do ano letivo. Tarifário novo: multi-viagem e irmão aplicados por viagem/criança.">
+                {isLegacyPricing(item) ? '🔒 Tarifário antigo' : 'Tarifário novo'}
+              </button>
             </p>
           </div>
         </div>

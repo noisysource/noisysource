@@ -26,6 +26,8 @@ export interface BillingLineItem {
   siblingDiscountAmount?: number;       // marginal — 0 if this is the family's highest-value subscription for this service
   institutionalDiscountAmount?: number; // school + returning-student + manual admin overrides, summed
   institutionalDiscountPct?: number;
+  /** Billed on the grandfathered flat model: institutionalDiscountPct is then the sum of all the subscription's discounts. */
+  legacyPricing?: boolean;
   absenceCount?: number;                // CANCELLED ReservationEvents this period, this subscription
   absenceCreditAmount?: number;
   absenceDates?: string[];              // "yyyy-mm-dd" — every CANCELLED date this period, credited or not
