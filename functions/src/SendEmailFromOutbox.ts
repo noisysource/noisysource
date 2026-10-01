@@ -101,7 +101,10 @@ function encodeRFC822({
 }
 
 export const sendEmailFromOutbox = onDocumentCreated(
-  { document: "_apps/arcoiris/emailOutbox/{id}", region: "europe-west3" },
+  // One email per instance: a campaign creates all its outbox docs at once, and
+  // at the default concurrency they piled into 256 MiB instances and were
+  // OOM-killed mid-send (2026-10-01), leaving emails stuck in "processing".
+  { document: "_apps/arcoiris/emailOutbox/{id}", region: "europe-west3", memory: "512MiB", concurrency: 1 },
   async (event) => {
     const snap = event.data;
     if (!snap) return;
