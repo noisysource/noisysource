@@ -82,12 +82,6 @@ export default function TransportEnrollPage() {
         age: calculateAge(dob),
         schoolName: newChildDetails.schoolName.trim() || undefined,
         schoolYear: newChildDetails.schoolYear.trim() || undefined,
-        homeAddress: {
-          street: newChildDetails.homeAddress.street.trim(),
-          city: newChildDetails.homeAddress.city.trim(),
-          postalCode: newChildDetails.homeAddress.postalCode.trim(),
-          country: newChildDetails.homeAddress.country.trim() || undefined,
-        },
         status: 'active',
       });
       navigate(`/client/enroll/transport?childId=${newChildId}`, { replace: true });
