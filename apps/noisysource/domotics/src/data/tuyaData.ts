@@ -1,4 +1,5 @@
 import type { Device } from '@shared/models/Device';
+import { decodeFaults } from './heatpumpFaults';
 
 /**
  * Maps the Tuya (SmartLife) device list onto our Device model.
@@ -10,7 +11,7 @@ import type { Device } from '@shared/models/Device';
  *
  * Tuya categories seen on this account:
  *   wk   — TR01-WF radiator thermostat
- *   znrb — MTATWHP-5C heat pump
+ *   znrb — Zantia Vancouver 13 heat pump (Tuya "HY Multifunctional Heat Pump")
  */
 
 export interface TuyaDevice {
@@ -74,11 +75,23 @@ export function buildTuyaDevices(raw: TuyaDevice[]): Device[] {
       out.push({
         ...base,
         type: 'heatpump',
+        // The Tuya codes on this unit are generic names the vendor reused and
+        // mostly mean something else entirely (`temp_current` is compressor Hz,
+        // `temp_top` is outdoor temperature). The real meanings come from the
+        // device's Tuya thing model — see apps/noisysource/domotics-bridge/README.md.
         state: {
           on: s.get('switch') === true,
-          tankTop: degrees(s.get('temp_top')),
-          tankBottom: degrees(s.get('temp_bottom')),
-          power: num(s.get('power_consumption')),
+          mode: typeof s.get('mode') === 'string' ? s.get('mode') as string : undefined,
+          compressorHz: num(s.get('temp_current')),
+          outdoor: degrees(s.get('temp_top')),
+          waterIn: degrees(s.get('coiler_temp')),
+          waterOut: degrees(s.get('venting_temp')),
+          dhwTank: degrees(s.get('effluent_temp')),
+          // Setpoints are whole degrees (scale 0), unlike the probes.
+          heatingSetpoint: num(s.get('p02_heating')),
+          coolingSetpoint: num(s.get('p03_cooling')),
+          dhwSetpoint: num(s.get('p04_dhw')),
+          faults: decodeFaults(code => s.get(code)),
         },
       });
       continue;
@@ -89,6 +102,20 @@ export function buildTuyaDevices(raw: TuyaDevice[]): Device[] {
   }
 
   return out;
+}
+
+const HEATPUMP_MODES: Record<string, string> = {
+  hot: 'AQS',
+  heating: 'Aquecimento',
+  hot_heating: 'AQS + aquecimento',
+  cooling: 'Arrefecimento',
+  hot_cooling: 'AQS + arrefecimento',
+};
+
+/** Portuguese label for the heat pump's raw Tuya mode; unknown values pass through. */
+export function heatPumpModeLabel(mode: string | undefined): string | undefined {
+  if (!mode) return undefined;
+  return HEATPUMP_MODES[mode.toLowerCase()] ?? mode;
 }
 
 /** Degrees -> the tenths Tuya expects on the wire. */
