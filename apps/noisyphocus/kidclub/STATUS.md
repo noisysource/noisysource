@@ -57,8 +57,9 @@
     fall back to `monthlyFee` only when there's no bill). Also add, per month: **Faturado** (sum of that
     month's bill totals, after absences, incl. fees) and **Recebido** (bills `paid`/`invoiced`). Read-only.
     The "Simulação de descontos" scenario would need the same per-model treatment.
-  - **Move the two maintenance buttons off the billing page** into a "Manutenção" section (admin settings/
-    config page — Renato to confirm which). "Recalcular tudo" (`backfillBillingSchedules`) stays: needed after
+  - ✅ **PR open → staging (`agent/kidclub-maintenance-buttons`):** maintenance buttons moved to a
+    "Manutenção" panel at the top of Gestão de Dados (`/admin/data-management`, Renato's pick 2026-10-02).
+    Original: **Move the two maintenance buttons off the billing page** into a "Manutenção" section. "Recalcular tudo" (`backfillBillingSchedules`) stays: needed after
     price/rule changes or billing fixes. "Gerar ocorrências" (`backfillReservationEvents`) is repair-only now:
     events regenerate automatically on every subscription write.
   - Low priority: transport `schedule[]` entries have no `direction` (0 of 23 active subs), so line items and
