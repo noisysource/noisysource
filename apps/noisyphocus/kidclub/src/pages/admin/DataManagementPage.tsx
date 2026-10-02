@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import MaintenancePanel from './MaintenancePanel';
 
 const FRESH_START_COLLECTIONS = [
   'families',
@@ -310,6 +311,8 @@ export default function DataManagementPage() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-6">Gestão de Dados</h1>
+
+      <MaintenancePanel />
 
       <FreshStartPanel />
 
