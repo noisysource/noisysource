@@ -9,7 +9,7 @@ Nothing in progress beyond the open PR below (branch `agent/heatpump-faults`, ta
 
 ## Last completed
 Heat pump fault codes + corrected heat pump readings (PR from `agent/heatpump-faults` → `staging`, not merged yet as of writing):
-- The heat pump is a **Zantia Vancouver 13 (single-phase, R32)**, Zantia code 2301-0273 (label reads 2301-8273), manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. It is **not** an "MTATWHP-5C" — that name was wrong and has been removed from code/docs (except `CLAUDE.md`, which still needs a pass; not touched in this PR).
+- The heat pump is a **Zantia Vancouver 13 (single-phase, R32)**, Zantia code 2301-0273 (label reads 2301-8273), manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. It is **not** an "MTATWHP-5C" — that name was wrong and has been removed from code and docs.
 - Bridge `domotics-bridge/src/dpmap.ts` now maps the full set of heat pump datapoints, taken from the device's Tuya cloud thing model (table in `domotics-bridge/README.md` → "Heat pump"). The Tuya `code` names are vendor-reused and misleading (e.g. `temp_top` = outdoor temp, `temp_current` = compressor Hz).
 - App: `HeatPumpState` (`packages/shared/models/Device.ts`) replaced the mislabeled `tankTop`/`tankBottom`/`power` with `mode`, `compressorHz`, `outdoor`, `waterIn`, `waterOut`, `dhwTank`, the three setpoints, and `faults: string[]`. Fault bitmaps are decoded in `src/data/heatpumpFaults.ts` (bit tables + PT meanings from manual §5.3.2-8). Active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
