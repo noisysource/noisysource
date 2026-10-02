@@ -15,10 +15,12 @@
   - **userId backfill DID run.** Only mismatches left are the 2 owner-less families (Anabela Gonçalves
     `GdTXkg9zO0lM93zRVSSE`, palexandra@sapo.pt `dJVtUfA3oDiCJsU2B7LF`) — expected; `claimFamilyByEmail`
     fixes them on first login.
-  - **Sandra Abreu:** duplicate family is gone; real family `nnBmdqT7MEL3tNeTQqbM` fully linked, Sept+Oct
-    paid. Risk: a login with her gmail account would create a new empty family (claim matches by email) —
-    tell her to log in with smpabreu@hotmail.com.
-  - **Maria Clara — NOT BILLED.** Study sub `Y0E8cYlZ3P0y1csUphCP` (confirmed, from 2026-10-01, €120) and
+  - ✅ **Sandra Abreu — done (2026-10-02):** duplicate gone, real family `nnBmdqT7MEL3tNeTQqbM` fully linked;
+    she knows to log in with smpabreu@hotmail.com (gmail login would create a new empty family).
+  - **Maria Clara — relinked 2026-10-02 (Renato ran the PATCH; both subs now in family `LhptHMtIfnl2pjr9ETgv`,
+    `childId: ""`).** She hasn't started yet → Renato to set her study sub to **Pendente** (no email; Oct–Aug
+    bills auto-cancel). When she starts: "Dados da criança" → Guardar FIRST (creates the child so the €60 fee
+    bills), then **Ativo** (emails "Inscrição aprovada", revives the bills). Original finding: **NOT BILLED.** Study sub `Y0E8cYlZ3P0y1csUphCP` (confirmed, from 2026-10-01, €120) and
     cancelled `etKDNsgJGkJHnWHIT9il` point to missing family `H4hFhb2GcFVV0IGEH5Gs` and missing child
     `fOtkoEpZCSU3kVBO8Cra`. Elisa Félix's family is `LhptHMtIfnl2pjr9ETgv` (no NIF/Vendus client yet).
     UI can't relink (both ids set → not "não vinculado"). Fix: Renato runs a reviewed REST PATCH setting
@@ -27,10 +29,10 @@
   - **Afonso Santos:** confirmed no child record (transport `childId` missing, study `""`), no €60 fee.
     Fix: Admin → Anabela Gonçalves → Afonso Santos → ✏️ Dados da criança → Guardar; fee lands on the
     pending Sept bill.
-  - **Empty families:** Gil Figueiredo `D8nxhqN5waTzC0gKrY4k` (Gil is enrolled under Ana Braga — duplicate)
-    and "ooooooooo" `IWCDm2eOj1P9Kqgpzmr3` (junk, one cancelled sub) are deletable; Anabela Marques has
+  - ✅ **Empty families:** Gil Figueiredo and "ooooooooo"/Leonardo Marques **deleted by Renato 2026-10-02**; Anabela Marques has
     nothing; Ana Coelho, Ana Bento, Miriam Inácio signed up but never enrolled; Geral ArcoIris is staff.
-  - Whether Renato applied the Maria Clara / Afonso fixes: **unknown at time of writing — check.**
+  - ✅ Maria Manon Oct = €117.60 confirmed (2026-10-02). **Afonso Santos's "Dados da criança" still to do** —
+    after #70 reaches prod (no address needed then).
 - **Child `homeAddress` removed from forms (2026-10-01, Renato):** duplicated the family billingAddress,
   insurance doesn't need it, transport has per-trip pickup/dropoff. Handed to a kidclub-feature agent,
   branch `agent/kidclub-child-address`, PR → staging. Existing data kept.
@@ -47,9 +49,10 @@
     "Recalcular tudo" was run after (25 families, 274 updated). **Confirm Maria Manon Oct = €117.60**; if not,
     run "Recalcular tudo" again (it may have run before #68's deploy finished), then merge #68.
 - **Next small tasks (Renato, 2026-10-01):**
-  - ✅ **PR open → staging (`agent/kidclub-financial-summary`), awaiting Renato's test on dev:** summary
-    amounts from bill lines, Faturado/Recebido per month, per-model discount simulation, card shows the
-    billed amount on new-pricing subs (stored fee shown alongside when it differs). Original spec:
+  - ✅ **PR #71 → staging (`agent/kidclub-financial-summary`), in test on dev:** summary amounts from bill
+    lines, Faturado/Recebido per month, per-model discount simulation, card shows the billed amount on
+    new-pricing subs. 2026-10-02 rework (Renato): filters on top, totals right below; new "Receita:
+    Recebido / Previsto" toggles drive every total; "Ano letivo" sums all billed months with costs × months. Original spec:
     **Financial Summary must account for both pricing models.** `FinancialSummaryPage.tsx` sums each sub's
     stored `monthlyFee`/`monthlyPrice`, which is the flat figure — wrong for new-pricing subs with multi-trip
     or sibling. Take each sub's standard monthly amount from its billing line instead (current or next pending

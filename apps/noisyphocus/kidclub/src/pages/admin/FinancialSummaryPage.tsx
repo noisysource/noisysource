@@ -38,6 +38,8 @@ interface StudySub {
 type ServiceFilter = 'both' | 'transport' | 'study';
 
 interface Bill {
+  id: string;
+  familyId: string;
   periodKey: string;
   status: string;
   total: number;
@@ -46,6 +48,30 @@ interface Bill {
 
 // Received = settled in Easypay; 'invoiced' is paid and already has its Vendus invoice.
 const RECEIVED_STATUSES = ['paid', 'invoiced'];
+
+type EntryKind = 'transport' | 'study' | 'enrollment';
+
+/** One month of income from one subscription (or one enrollment-fee line). */
+interface Entry {
+  key: string;
+  subId?: string;
+  kind: EntryKind;
+  month: string;
+  familyId: string;
+  childName: string;
+  /** What the bill charges, after absences — or the estimate when there is no bill. */
+  amount: number;
+  received: boolean;
+  /** No bill line this month; amount is the subscription's monthly estimate. */
+  estimated: boolean;
+  line?: BillLine;
+}
+
+const SERVICE_LABEL: Record<EntryKind, string> = {
+  transport: 'Transporte',
+  study: 'Sala de Estudo',
+  enrollment: 'Inscrição',
+};
 
 type CostFieldKey =
   | 'transport.vanMonthlyCost'
@@ -201,6 +227,9 @@ export default function FinancialSummaryPage() {
   const [statusFilter, setStatusFilter] = useState<SubStatus[]>(['active', 'pending']);
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('both');
   const [monthFilter, setMonthFilter] = useState<string>('all');
+  // Which income counts in the totals: money already received, money still
+  // expected (unpaid bills + estimates for unbilled subscriptions), or both.
+  const [basis, setBasis] = useState({ received: true, forecast: true });
   const [detailOpen, setDetailOpen] = useState(false);
   // Discount scenario: ruleId -> simulated percentage (0-1). A rule absent from
   // the map keeps whatever percentage the subscription actually carries, so an
@@ -225,7 +254,7 @@ export default function FinancialSummaryPage() {
       setRules(discountRules ?? []);
       setBills(billingSnap.docs.map(d => {
         const x = d.data();
-        return { periodKey: billPeriodKey(d.id, x.periodStart), status: x.status ?? '', total: x.total ?? 0, lines: toBillLines(x.lineItems) };
+        return { id: d.id, familyId: x.familyId ?? '', periodKey: billPeriodKey(d.id, x.periodStart), status: x.status ?? '', total: x.total ?? 0, lines: toBillLines(x.lineItems) };
       }));
 
       let cfg: TransportationConfig | null = null;
@@ -305,7 +334,6 @@ export default function FinancialSummaryPage() {
     const weeks = tConfig?.weeksPerMonth ?? 4.33;
     return s.monthlyFee > 0 ? s.monthlyFee : s.scheduleLength * flatRate * weeks;
   };
-  const tRevenueFor = (subs: TransportSub[]) => subs.reduce((sum, s) => sum + tAmountFor(s), 0);
 
   const sAmountFor = (s: StudySub) => {
     const line = lineFor(s.id);
@@ -315,7 +343,6 @@ export default function FinancialSummaryPage() {
     // to the computed gross when there isn't one.
     return s.monthlyPrice > 0 ? s.monthlyPrice : s.daysCount * dayRate;
   };
-  const sRevenueFor = (subs: StudySub[]) => subs.reduce((sum, s) => sum + sAmountFor(s), 0);
 
   // ── Discount scenarios ────────────────────────────────────────────────────
   // Every simulated figure is the real monthly amount plus the change the
@@ -413,42 +440,112 @@ export default function FinancialSummaryPage() {
     return m;
   }, [sSubs]);
 
-  const {
-    tFiltered, sFiltered, tRevenue, sRevenue, activeOnlyRevenue,
-    tCost, sCost, vanCost, driverCost, electricityCost,
-  } = useMemo(() => {
-    const tFiltered = tSubs.filter(s => statusFilter.includes(s.status) && overlapsMonth(s.startDate, s.endDate, monthFilter));
-    const sFiltered = sSubs.filter(s => statusFilter.includes(s.status) && overlapsMonth(s.startDate, s.endDate, monthFilter));
-    const tRevenue = tRevenueFor(tFiltered);
-    const sRevenue = sRevenueFor(sFiltered);
-
-    const activeOnlyRevenue =
-      tRevenueFor(tSubs.filter(s => s.status === 'active' && overlapsMonth(s.startDate, s.endDate, monthFilter))) +
-      sRevenueFor(sSubs.filter(s => s.status === 'active' && overlapsMonth(s.startDate, s.endDate, monthFilter)));
-
-    const vanCost = tConfig?.vanMonthlyCost ?? 0;
-    const driverCost = tConfig?.driverMonthlyCost ?? 0;
-    const electricityCost = tConfig?.electricityMonthlyCost ?? 0;
-    const tCost = vanCost + driverCost + electricityCost;
-    const sCost = (sConfig?.teacherMonthlyCost ?? 0) + (sConfig?.rentMonthlyCost ?? 0);
-
-    return { tFiltered, sFiltered, tRevenue, sRevenue, activeOnlyRevenue, tCost, sCost, vanCost, driverCost, electricityCost };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tSubs, sSubs, tConfig, sConfig, statusFilter, monthFilter, linesBySub]);
-
   const showTransport = serviceFilter !== 'study';
   const showStudy = serviceFilter !== 'transport';
 
-  const totalRevenue = (showTransport ? tRevenue : 0) + (showStudy ? sRevenue : 0);
+  // ── Income entries ────────────────────────────────────────────────────────
+  // One entry per subscription per month (plus enrollment-fee lines), each
+  // either RECEIVED (its bill is paid/invoiced) or FORESEEN (an unpaid bill,
+  // or — for a subscription with no bill that month, e.g. still pending — its
+  // monthly amount as an estimate). Amounts are what the bill charges, after
+  // absences. Every total, the discount simulation and the detail table are
+  // sums over these, so the Recebido/Previsto toggles move all of them.
 
-  // Same filtered sets, re-priced at the simulated rates. Equals totalRevenue
-  // exactly while the map is empty.
-  const scenarioRevenue = useMemo(() => {
-    const t = showTransport ? tFiltered.reduce((n, x) => n + scenarioAmount(x.id, tAmountFor(x), x.appliedDiscounts, 'transport', rates), 0) : 0;
-    const st = showStudy ? sFiltered.reduce((n, x) => n + scenarioAmount(x.id, sAmountFor(x), x.appliedDiscounts, 'study', rates), 0) : 0;
-    return Math.round((t + st) * 100) / 100;
+  // The months the totals cover: one month, or every month that has a bill
+  // (the school year). Fixed costs are monthly, so they scale with this.
+  const monthsInScope = useMemo(() => monthFilter !== 'all'
+    ? [monthFilter]
+    : [...new Set(bills.filter(b => b.status !== 'cancelled' && b.periodKey).map(b => b.periodKey))].sort(),
+  [bills, monthFilter]);
+  const monthsCount = Math.max(1, monthsInScope.length);
+
+  const subsById = useMemo(() => {
+    const m = new Map<string, { kind: 'transport' | 'study'; sub: TransportSub | StudySub }>();
+    for (const sub of tSubs) m.set(sub.id, { kind: 'transport', sub });
+    for (const sub of sSubs) m.set(sub.id, { kind: 'study', sub });
+    return m;
+  }, [tSubs, sSubs]);
+
+  const buildEntries = (statuses: SubStatus[]): Entry[] => {
+    const out: Entry[] = [];
+    const wanted = (kind: EntryKind) => kind === 'enrollment' ? serviceFilter === 'both' : kind === 'transport' ? showTransport : showStudy;
+    for (const month of monthsInScope) {
+      const billed = new Set<string>();
+      for (const b of bills) {
+        if (b.periodKey !== month || b.status === 'cancelled') continue;
+        const received = RECEIVED_STATUSES.includes(b.status);
+        b.lines.forEach((l, i) => {
+          if (l.subscriptionId) billed.add(l.subscriptionId);
+          const kind: EntryKind | null = l.type === 'enrollment' || l.type === 'study' || l.type === 'transport' ? l.type : null;
+          if (!kind || !wanted(kind)) return;
+          const owner = kind === 'enrollment' ? undefined : subsById.get(l.subscriptionId)?.sub;
+          // Money received is a fact; the status filter only shapes what is still expected.
+          if (!received && owner && !statuses.includes(owner.status)) return;
+          out.push({
+            key: `${b.id}#${i}`, subId: owner?.id, kind, month, familyId: b.familyId,
+            childName: owner?.childName || l.title || '', amount: l.amount, received, estimated: false, line: l,
+          });
+        });
+      }
+      for (const { kind, sub } of subsById.values()) {
+        if (!wanted(kind) || !statuses.includes(sub.status) || billed.has(sub.id)) continue;
+        if (!overlapsMonth(sub.startDate, sub.endDate, month)) continue;
+        const amount = kind === 'transport' ? tAmountFor(sub as TransportSub) : sAmountFor(sub as StudySub);
+        if (amount <= 0) continue;
+        out.push({
+          key: `est-${sub.id}-${month}`, subId: sub.id, kind, month, familyId: sub.familyId,
+          childName: sub.childName, amount, received: false, estimated: true, line: lineFor(sub.id),
+        });
+      }
+    }
+    return out;
+  };
+
+  const entries = useMemo(() => buildEntries(statusFilter),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tFiltered, sFiltered, rates, showTransport, showStudy, tConfig, sConfig, linesBySub, rules, monthFilter]);
+  [bills, subsById, statusFilter, monthsInScope, serviceFilter, linesBySub, tConfig, sConfig]);
+  const activeEntries = useMemo(() => buildEntries(['active']),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [bills, subsById, monthsInScope, serviceFilter, linesBySub, tConfig, sConfig]);
+
+  const counts = (e: Entry) => e.received ? basis.received : basis.forecast;
+  const sumOf = (es: Entry[], pred: (e: Entry) => boolean = () => true) =>
+    Math.round(es.filter(e => counts(e) && pred(e)).reduce((n, e) => n + e.amount, 0) * 100) / 100;
+
+  const totalRevenue = sumOf(entries);
+  const receivedRevenue = sumOf(entries, e => e.received);
+  const forecastRevenue = sumOf(entries, e => !e.received);
+  const tRevenue = sumOf(entries, e => e.kind === 'transport');
+  const sRevenue = sumOf(entries, e => e.kind === 'study');
+  const activeOnlyRevenue = sumOf(activeEntries);
+  const subsCounted = (kind: EntryKind) => new Set(entries.filter(e => counts(e) && e.kind === kind).map(e => e.subId)).size;
+
+  const vanCost = (tConfig?.vanMonthlyCost ?? 0) * monthsCount;
+  const driverCost = (tConfig?.driverMonthlyCost ?? 0) * monthsCount;
+  const electricityCost = (tConfig?.electricityMonthlyCost ?? 0) * monthsCount;
+  const tCost = vanCost + driverCost + electricityCost;
+  const teacherCost = (sConfig?.teacherMonthlyCost ?? 0) * monthsCount;
+  const rentCost = (sConfig?.rentMonthlyCost ?? 0) * monthsCount;
+  const sCost = teacherCost + rentCost;
+
+  // Each entry re-priced at the simulated rates, as a factor on what it
+  // actually charges (so absences scale with it). Exactly 1 with nothing moved.
+  const scenarioFactor = (e: Entry, ov: Record<string, number>) => {
+    const owner = e.subId ? subsById.get(e.subId) : undefined;
+    if (!owner) return 1;
+    const ds = owner.sub.appliedDiscounts;
+    if (e.line && !e.line.legacyPricing) {
+      const base = perTripAmount(e.line, ds, owner.kind, {});
+      return base > 0 ? perTripAmount(e.line, ds, owner.kind, ov) / base : 1;
+    }
+    const base = 1 - pctOf(ds, {});
+    return base > 0 ? (1 - pctOf(ds, ov)) / base : 1;
+  };
+
+  const scenarioRevenue = useMemo(() =>
+    Math.round(entries.filter(counts).reduce((n, e) => n + e.amount * scenarioFactor(e, rates), 0) * 100) / 100,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [entries, rates, basis, rules]);
 
   const scenarioDelta = Math.round((scenarioRevenue - totalRevenue) * 100) / 100;
   const scenarioOn = rulesInUse.some(r => rateOf(r) !== r.percentage);
@@ -469,43 +566,36 @@ export default function FinancialSummaryPage() {
     ? 'nenhum estado selecionado'
     : statusFilter.map(s => STATUS_LABEL[s]).join(' + ');
 
+  const basisLabel = basis.received && basis.forecast ? 'recebido + previsto'
+    : basis.received ? 'só recebido' : basis.forecast ? 'só previsto' : 'nada selecionado';
+
   const periodLabel = monthFilter === 'all'
-    ? 'todos os períodos'
+    ? `ano letivo (${monthsInScope.length} meses)`
     : new Date(Number(monthFilter.split('-')[0]), Number(monthFilter.split('-')[1]) - 1, 1)
         .toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
 
   interface DetailRow {
-    key: string; parent: string; child: string; service: string; status: SubStatus; amount: number;
+    key: string; parent: string; child: string; service: string; status?: SubStatus;
+    received: number; forecast: number; estimated: boolean;
   }
   const detailRows = useMemo(() => {
-    const rows: DetailRow[] = [];
-    if (showTransport) {
-      for (const s of tFiltered) {
-        rows.push({
-          key: `t-${s.id}`,
-          parent: families[s.familyId] ?? '—',
-          child: s.childName || '—',
-          service: 'Transporte',
-          status: s.status,
-          amount: tAmountFor(s),
-        });
-      }
+    const m = new Map<string, DetailRow>();
+    for (const e of entries) {
+      if (!counts(e)) continue;
+      const key = e.kind === 'enrollment' ? `fee-${e.familyId}` : e.subId ?? e.key;
+      const owner = e.subId ? subsById.get(e.subId)?.sub : undefined;
+      const row = m.get(key) ?? {
+        key, parent: families[e.familyId] ?? '—',
+        child: e.kind === 'enrollment' ? 'Taxas de inscrição' : (owner?.childName || e.childName || '—'),
+        service: SERVICE_LABEL[e.kind], status: owner?.status, received: 0, forecast: 0, estimated: false,
+      };
+      if (e.received) row.received += e.amount; else row.forecast += e.amount;
+      if (e.estimated) row.estimated = true;
+      m.set(key, row);
     }
-    if (showStudy) {
-      for (const s of sFiltered) {
-        rows.push({
-          key: `s-${s.id}`,
-          parent: families[s.familyId] ?? '—',
-          child: s.childName || '—',
-          service: 'Sala de Estudo',
-          status: s.status,
-          amount: sAmountFor(s),
-        });
-      }
-    }
-    return rows.sort((a, b) => b.amount - a.amount);
+    return [...m.values()].sort((a, b) => (b.received + b.forecast) - (a.received + a.forecast));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tFiltered, sFiltered, families, showTransport, showStudy, linesBySub]);
+  }, [entries, families, basis, subsById]);
 
   // Faturado / Recebido per month, straight from the bills: totals after
   // absences, enrollment fees included. Independent of the status filter
@@ -638,7 +728,7 @@ export default function FinancialSummaryPage() {
                     : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
                 }`}
               >
-                Todos os períodos
+                Ano letivo
               </button>
               <button
                 onClick={() => setMonthFilter(currentMonthStr())}
@@ -658,78 +748,46 @@ export default function FinancialSummaryPage() {
               />
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Fixed costs — edited here directly, independent of the Transport Planner.
-          The planner only estimates cost while planning a route; it never feeds
-          these numbers, so the P&L stays correct even with no route ever saved. */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-100">
-          <h2 className="text-sm font-semibold text-gray-700">Custos Fixos</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Editar diretamente aqui — não depende do planeador de rotas.</p>
-        </div>
-        <div className="px-5 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y sm:divide-y-0 divide-gray-100">
-          <div className="divide-y divide-gray-100">
-            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">🚌 Transporte</div>
-            <EditableCostRow
-              label="Van"
-              value={costInputs['transport.vanMonthlyCost']}
-              saving={savingCostField === 'transport.vanMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.vanMonthlyCost': v }))}
-              onSave={() => saveCostField('transport.vanMonthlyCost')}
-            />
-            <EditableCostRow
-              label="Motorista"
-              value={costInputs['transport.driverMonthlyCost']}
-              saving={savingCostField === 'transport.driverMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.driverMonthlyCost': v }))}
-              onSave={() => saveCostField('transport.driverMonthlyCost')}
-            />
-            <EditableCostRow
-              label="Eletricidade"
-              value={costInputs['transport.electricityMonthlyCost']}
-              saving={savingCostField === 'transport.electricityMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.electricityMonthlyCost': v }))}
-              onSave={() => saveCostField('transport.electricityMonthlyCost')}
-            />
-          </div>
-          <div className="divide-y divide-gray-100">
-            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">📚 Sala de Estudo</div>
-            <EditableCostRow
-              label="Professora"
-              value={costInputs['study.teacherMonthlyCost']}
-              saving={savingCostField === 'study.teacherMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'study.teacherMonthlyCost': v }))}
-              onSave={() => saveCostField('study.teacherMonthlyCost')}
-            />
-            <EditableCostRow
-              label="Renda"
-              value={costInputs['study.rentMonthlyCost']}
-              saving={savingCostField === 'study.rentMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'study.rentMonthlyCost': v }))}
-              onSave={() => saveCostField('study.rentMonthlyCost')}
-            />
+          <div>
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Receita</div>
+            <div className="flex gap-1.5">
+              {([['received', 'Recebido', 'bg-green-100 text-green-700'], ['forecast', 'Previsto', 'bg-blue-100 text-blue-700']] as const).map(([k, label, on]) => (
+                <button
+                  key={k}
+                  onClick={() => setBasis(prev => ({ ...prev, [k]: !prev[k] }))}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+                    basis[k] ? on + ' border-transparent' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
+        <p className="text-[11px] text-gray-400">
+          Recebido: faturas pagas. Previsto: faturas por pagar + inscrições ainda sem fatura (estimativa).
+          O estado das inscrições só filtra o previsto — o recebido conta sempre.
+        </p>
       </div>
 
       {/* Combined KPIs — all driven by the filter above */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KPI
-          label="Receita (filtro atual)"
+          label="Receita"
           value={eur(totalRevenue)}
-          sub={`${filterLabel} · ${periodLabel}`}
+          sub={`${eur(receivedRevenue)} recebido · ${eur(forecastRevenue)} previsto — ${periodLabel}`}
           color="text-blue-600"
         />
         <KPI
           label="Custos fixos"
           value={eur(totalCost)}
-          sub="van + motorista + eletricidade + professora + renda"
+          sub={monthsCount > 1 ? `${eur(totalCost / monthsCount)}/mês × ${monthsCount} meses` : 'van + motorista + eletricidade + professora + renda'}
           color="text-red-600"
         />
         <KPI
-          label="Lucro (filtro atual)"
+          label="Lucro"
           value={`${sign(totalProfit)}${eur(Math.abs(totalProfit))}`}
           sub={totalRevenue > 0 ? (totalProfit >= 0 ? `${Math.round(totalProfit / totalRevenue * 100)}% margem` : 'deficit') : '—'}
           color={totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}
@@ -747,7 +805,7 @@ export default function FinancialSummaryPage() {
         <div className="px-5 py-3 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-700">Demonstração de resultados</h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            Nota: receita é o valor mensal de cada inscrição na sua fatura (antes de faltas), segundo o tarifário de cada uma; não confirma pagamento — ver Faturação por mês.
+            Receita {basisLabel} · {filterLabel} · {periodLabel}. Valores das faturas (após faltas, com o tarifário de cada inscrição); inscrições sem fatura entram como estimativa.
           </p>
         </div>
         <div className="px-5 py-3">
@@ -757,7 +815,7 @@ export default function FinancialSummaryPage() {
             <span className="w-20 text-right">Custos</span>
             <span className="w-24 text-right">Lucro</span>
           </div>
-          <ScenarioRow label={`Filtro atual (${filterLabel})`} revenue={totalRevenue} cost={totalCost} color="text-blue-600" />
+          <ScenarioRow label={`Filtro atual (${basisLabel})`} revenue={totalRevenue} cost={totalCost} color="text-blue-600" />
           {!isActiveOnlyFilter && (
             <ScenarioRow label="Referência: apenas ativos" revenue={activeOnlyRevenue} cost={totalCost} color="text-gray-400" />
           )}
@@ -946,7 +1004,7 @@ export default function FinancialSummaryPage() {
         </div>
       )}
 
-      {/* Revenue detail — collapsible, line-by-line origin of the "Receita (filtro atual)" figure */}
+      {/* Revenue detail — collapsible, line-by-line origin of the "Receita" figure */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <button
           onClick={() => setDetailOpen(o => !o)}
@@ -954,7 +1012,7 @@ export default function FinancialSummaryPage() {
         >
           <div>
             <h2 className="text-sm font-semibold text-gray-700">Detalhe da receita</h2>
-            <p className="text-xs text-gray-400 mt-0.5">{detailRows.length} inscrições — {filterLabel} · {periodLabel}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{detailRows.length} linhas — {basisLabel} · {filterLabel} · {periodLabel}</p>
           </div>
           <span className={`text-gray-400 transition-transform ${detailOpen ? 'rotate-180' : ''}`}>▾</span>
         </button>
@@ -970,7 +1028,9 @@ export default function FinancialSummaryPage() {
                     <th className="text-left px-5 py-2">Criança</th>
                     <th className="text-left px-5 py-2">Serviço</th>
                     <th className="text-left px-5 py-2">Estado</th>
-                    <th className="text-right px-5 py-2">Valor</th>
+                    <th className="text-right px-5 py-2">Recebido</th>
+                    <th className="text-right px-5 py-2">Previsto</th>
+                    <th className="text-right px-5 py-2">Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -980,18 +1040,27 @@ export default function FinancialSummaryPage() {
                       <td className="px-5 py-2 text-gray-500">{row.child}</td>
                       <td className="px-5 py-2 text-gray-500">{row.service}</td>
                       <td className="px-5 py-2">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_PILL_CLASS[row.status]}`}>
-                          {STATUS_LABEL[row.status]}
-                        </span>
+                        {row.status && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_PILL_CLASS[row.status]}`}>
+                            {STATUS_LABEL[row.status]}
+                          </span>
+                        )}
                       </td>
-                      <td className="px-5 py-2 text-right font-mono text-blue-600">{eur(row.amount)}</td>
+                      <td className="px-5 py-2 text-right font-mono text-green-600">{row.received ? eur(row.received) : '—'}</td>
+                      <td className="px-5 py-2 text-right font-mono text-blue-600"
+                        title={row.estimated ? 'Inclui estimativa (inscrição sem fatura neste mês)' : undefined}>
+                        {row.forecast ? `${row.estimated ? '≈ ' : ''}${eur(row.forecast)}` : '—'}
+                      </td>
+                      <td className="px-5 py-2 text-right font-mono text-gray-800">{eur(row.received + row.forecast)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t border-gray-200 font-semibold">
                     <td className="px-5 py-2 text-gray-700" colSpan={4}>Total</td>
-                    <td className="px-5 py-2 text-right font-mono text-blue-600">{eur(totalRevenue)}</td>
+                    <td className="px-5 py-2 text-right font-mono text-green-600">{eur(receivedRevenue)}</td>
+                    <td className="px-5 py-2 text-right font-mono text-blue-600">{eur(forecastRevenue)}</td>
+                    <td className="px-5 py-2 text-right font-mono text-gray-800">{eur(totalRevenue)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -1013,7 +1082,7 @@ export default function FinancialSummaryPage() {
             <div>
               <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Receita (filtro atual)</div>
               <div className="text-xl font-bold text-blue-600">{eur(tRevenue)}</div>
-              <div className="text-xs text-gray-400">{tFiltered.length} inscrições — {filterLabel}</div>
+              <div className="text-xs text-gray-400">{subsCounted('transport')} inscrições — {basisLabel}</div>
             </div>
 
             {/* Status pills */}
@@ -1065,7 +1134,7 @@ export default function FinancialSummaryPage() {
             <div>
               <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Receita (filtro atual)</div>
               <div className="text-xl font-bold text-blue-600">{eur(sRevenue)}</div>
-              <div className="text-xs text-gray-400">{sFiltered.length} inscrições — {filterLabel}</div>
+              <div className="text-xs text-gray-400">{subsCounted('study')} inscrições — {basisLabel}</div>
             </div>
 
             {/* Status pills */}
@@ -1081,11 +1150,11 @@ export default function FinancialSummaryPage() {
             <div className="pt-2 border-t border-gray-100 text-xs text-gray-500 space-y-1">
               <div className="flex justify-between">
                 <span>Professora</span>
-                <span className="font-mono text-red-500">{eur(sConfig?.teacherMonthlyCost ?? 0)}</span>
+                <span className="font-mono text-red-500">{eur(teacherCost)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Renda</span>
-                <span className="font-mono text-red-500">{eur(sConfig?.rentMonthlyCost ?? 0)}</span>
+                <span className="font-mono text-red-500">{eur(rentCost)}</span>
               </div>
               <div className="flex justify-between font-semibold border-t border-gray-100 pt-1 mt-1">
                 <span>Total sala</span>
@@ -1102,6 +1171,59 @@ export default function FinancialSummaryPage() {
         </div>
         )}
       </div>
+      {/* Fixed costs — edited here directly, independent of the Transport Planner.
+          The planner only estimates cost while planning a route; it never feeds
+          these numbers, so the P&L stays correct even with no route ever saved. */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100">
+          <h2 className="text-sm font-semibold text-gray-700">Custos Fixos (por mês)</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Editar diretamente aqui — não depende do planeador de rotas. Os totais acima multiplicam pelo número de meses do período.</p>
+        </div>
+        <div className="px-5 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y sm:divide-y-0 divide-gray-100">
+          <div className="divide-y divide-gray-100">
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">🚌 Transporte</div>
+            <EditableCostRow
+              label="Van"
+              value={costInputs['transport.vanMonthlyCost']}
+              saving={savingCostField === 'transport.vanMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.vanMonthlyCost': v }))}
+              onSave={() => saveCostField('transport.vanMonthlyCost')}
+            />
+            <EditableCostRow
+              label="Motorista"
+              value={costInputs['transport.driverMonthlyCost']}
+              saving={savingCostField === 'transport.driverMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.driverMonthlyCost': v }))}
+              onSave={() => saveCostField('transport.driverMonthlyCost')}
+            />
+            <EditableCostRow
+              label="Eletricidade"
+              value={costInputs['transport.electricityMonthlyCost']}
+              saving={savingCostField === 'transport.electricityMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.electricityMonthlyCost': v }))}
+              onSave={() => saveCostField('transport.electricityMonthlyCost')}
+            />
+          </div>
+          <div className="divide-y divide-gray-100">
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">📚 Sala de Estudo</div>
+            <EditableCostRow
+              label="Professora"
+              value={costInputs['study.teacherMonthlyCost']}
+              saving={savingCostField === 'study.teacherMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'study.teacherMonthlyCost': v }))}
+              onSave={() => saveCostField('study.teacherMonthlyCost')}
+            />
+            <EditableCostRow
+              label="Renda"
+              value={costInputs['study.rentMonthlyCost']}
+              saving={savingCostField === 'study.rentMonthlyCost'}
+              onChange={v => setCostInputs(prev => ({ ...prev, 'study.rentMonthlyCost': v }))}
+              onSave={() => saveCostField('study.rentMonthlyCost')}
+            />
+          </div>
+        </div>
+      </div>
+
     </div>
   );
 }

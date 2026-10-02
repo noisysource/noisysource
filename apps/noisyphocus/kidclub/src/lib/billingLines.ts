@@ -9,6 +9,7 @@
 export interface BillLine {
   subscriptionId: string;
   type?: string;
+  title?: string;
   amount: number;
   absenceCreditAmount: number;
   grossAmount: number;
@@ -22,6 +23,7 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
   (raw ?? []).map(l => ({
     subscriptionId: l.subscriptionId ?? '',
     type: l.type,
+    title: l.title,
     amount: l.amount ?? 0,
     absenceCreditAmount: l.absenceCreditAmount ?? 0,
     grossAmount: l.grossAmount ?? l.amount ?? 0,
