@@ -22,7 +22,6 @@ import IncomeSourcesPage from './pages/IncomeSourcesPage';
 import RecurringPage from './pages/RecurringPage';
 import CreditsPage from './pages/CreditsPage';
 import ForecastPage from './pages/ForecastPage';
-import CashFlowPage from './pages/CashFlowPage';
 import IRSPage from './pages/IRSPage';
 import CategoriesPage from './pages/CategoriesPage';
 import PayrollPage from './pages/PayrollPage';
@@ -79,7 +78,8 @@ export default function App() {
               <Route path="credits"     element={<CreditsPage />} />
               <Route path="insurances"  element={<InsurancesPage />} />
               <Route path="forecast"     element={<ForecastPage />} />
-              <Route path="cashflow"     element={<CashFlowPage />} />
+              {/* Cash Flow was folded into Contas (balances are edited in the account form) */}
+              <Route path="cashflow"     element={<Navigate to="../accounts" replace />} />
               <Route path="categories"   element={<CategoriesPage />} />
             </Route>
 
@@ -103,7 +103,7 @@ export default function App() {
             <Route path="irs"                element={<Navigate to="/private/irs" replace />} />
             <Route path="recurring"          element={<Navigate to="/noisysource/recurring" replace />} />
             <Route path="forecast"           element={<Navigate to="/noisysource/forecast" replace />} />
-            <Route path="cashflow"           element={<Navigate to="/noisysource/cashflow" replace />} />
+            <Route path="cashflow"           element={<Navigate to="/noisysource/accounts" replace />} />
             <Route path="categories"         element={<Navigate to="/noisysource/categories" replace />} />
             <Route path="revenue"            element={<Navigate to="/noisysource/ec-contracts" replace />} />
             <Route path="payroll"            element={<Navigate to="/noisysource/payroll" replace />} />

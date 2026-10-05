@@ -222,7 +222,7 @@ export default function EcContractsPage() {
       <div className="space-y-4">
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold">EC Contracts — Revenue</h2>
+            <h2 className="text-xl font-semibold">Clientes</h2>
             {rows.length > 0 && (
               <div className="text-sm text-zinc-400 mt-1">
                 Active estimated monthly:{" "}

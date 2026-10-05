@@ -21,7 +21,7 @@ const GROUPS: { type: RecurringType; label: string; sign: string; color: string 
   { type: 'transfer', label: 'Transferências', sign: '⇄', color: 'text-blue-400' },
 ];
 const ENTITY_TABS = [
-  { id: 'private',     label: 'Private',     emoji: '🏠' },
+  { id: 'private',     label: 'Casa',        emoji: '🏠' },
   { id: 'noisysource', label: 'NoisySource',  emoji: '🏢' },
   { id: 'noisyphocus', label: 'NoisyPhocus',  emoji: '📸' },
 ];

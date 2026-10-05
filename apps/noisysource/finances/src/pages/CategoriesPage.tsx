@@ -128,7 +128,7 @@ export default function CategoriesPage() {
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-6">
       <div className="space-y-4">
         <div className="flex items-end justify-between gap-4 flex-wrap">
-          <h2 className="text-xl font-semibold">Categories</h2>
+          <h2 className="text-xl font-semibold">Categorias</h2>
           <div className="flex gap-2 items-center flex-wrap">
             <Button onClick={startCreate} disabled={busy}>New Category</Button>
             <Input
