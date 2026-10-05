@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-09-29
+**Last updated:** 2026-10-05
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -15,7 +15,35 @@ The finances half never depended on the old KidClub billing code, so it was cher
 cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 `.claude/worktrees/finhub-cost-model`).
 
-## Currently working on
+## Redesign plan (agreed 2026-10-05)
+Companies share one structure; only the income source differs. Steps, each its own branch + dev
+deploy:
+1. **Cost model** — `agent/finhub-cost-model` (described below). Test, then PR → `staging`.
+2. **Navigation** — `agent/finhub-nav` (worktree `.claude/worktrees/finhub-nav`), **stacked on
+   `agent/finhub-cost-model`** because both touch the sidebar and routes. Done, commit a855d6c:
+   - one "A ver" picker (Casa / NoisySource / NoisyPhocus); one menu config in
+     `src/components/layout/nav.ts`, grouped Receitas / Equipa / Despesas / Dinheiro /
+     Impostos, showing only items that apply to the picked entity;
+   - Visão geral, Previsão, Créditos above the picker (they already show every entity);
+   - Cash Flow removed (`/:entity/cashflow` → Contas): balances are edited in the account form,
+     and its projection read `forecastEvents`, which nothing writes;
+   - "Private" shown as "Casa"; English headings translated.
+   - "Clientes" (today's EC page) is NoisySource-only until step 3: Forecast/Dashboard treat the
+     first active `ecContract` found as *the* EC contract.
+3. **Clientes** — reuse `ecContracts`, add a billing type (`por dia` timesheet / `mensal fixo` /
+   `avulso` / `kidclub`; existing docs default to `por dia`, no data move). One "Folha de horas"
+   per client per month replaces editing days off in two places (EC form + Dashboard calendar).
+   Ad hoc invoices as a list under the client. Then show Clientes for NoisyPhocus too.
+4. **Equipa** — merge Contratos + Salários into one page; implement hourly pay (the model has
+   `paymentType: 'hourly'` + `hourlyRateCents`, but nothing calculates it).
+5. **Resumo do mês** — generalise `/noisyphocus/costs` to every company (income − team − fixed
+   costs − taxes).
+
+Known bugs to fix along the way: Dashboard + Forecast load employment contracts from NoisySource
+only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one shared global that
+the Dashboard flips while loading (pass the entity explicitly instead).
+
+## Currently working on (step 1)
 Testing `agent/finhub-cost-model` locally against `kidclub-dev` before opening a PR into
 `staging`. The branch contains:
 
@@ -53,21 +81,26 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
 (2026-09-29).
 
 ## Next step
-1. **Test on https://kidclub-dev-finhub.web.app** (this branch was deployed there 2026-10-01;
-   `pnpm dev:finances` in the worktree also works). Check:
-   - `/noisyphocus/recurring` → "+ Nova entrada": the Fixo/Comissão toggle is visible. This was
-     the unresolved bug on 2026-09-21. If it shows locally, the old problem was the hosting site
-     or cache, not the code.
-   - Entity switch → NoisyPhocus → Payroll shows only NoisyPhocus contracts, and NoisySource
-     still shows Renato/Marisa.
-   - `/noisyphocus/contracts`: a green-receipt contract hides the SS fields and Benefits.
+0. **Deploy `agent/finhub-nav` to dev** (it includes step 1). The 2026-10-05 attempt failed on
+   an expired Firebase CLI login; after `firebase login --reauth`, from the finhub-nav worktree:
+   `pnpm --filter finances build:staging && firebase deploy --only hosting:finances --project=kidclub-dev`.
+1. **Test on https://kidclub-dev-finhub.web.app** (`pnpm dev:finances` in the worktree also
+   works). Check:
+   - The "A ver" picker: switching keeps you on the same page when the new entity has it; Casa
+     shows no Equipa/IVA, companies show no Rendimento/IRS/Empréstimos.
+   - NoisyPhocus → Despesas → Recorrentes → "+ Nova entrada": the Fixo/Comissão toggle is
+     visible. This was the unresolved bug on 2026-09-21.
+   - NoisyPhocus → Equipa → Salários shows only NoisyPhocus contracts; NoisySource still shows
+     Renato/Marisa.
+   - NoisyPhocus → Equipa → Contratos: a green-receipt contract hides the SS fields and Benefits.
    - Existing NoisySource recurring entries and the VAT page still show the same numbers as
      before (they have no `costModel`, so they're treated as `fixed`).
 2. **Enter NoisyPhocus's real numbers on dev** (nothing is seeded):
    - the driver (employee contract) and the teacher (green receipt);
    - Vendus (fixed, real IVA) and EasyPay (commission %, real IVA) as recurring expenses.
    Then open `/noisyphocus/costs` and check the current month looks right.
-3. **Open a PR `agent/finhub-cost-model` → `staging`.** FinHub hosting isn't in the automatic dev
+3. **Open a PR `agent/finhub-cost-model` → `staging`**, then `agent/finhub-nav` → `staging` once
+   the first is merged (the nav branch is stacked on it). FinHub hosting isn't in the automatic dev
    pipeline: after merging to staging, run `deploy-finances.yml` by hand (workflow_dispatch on
    `staging`) to put it on `kidclub-dev-finhub.web.app`.
 4. **Later, a separate KidClub-scoped task:** rebuild `financialEvents` and make Resumo
@@ -83,10 +116,12 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **`kidclub-dev-finhub.web.app` is serving this unmerged branch** (`agent/finhub-cost-model`
-  @ bc7813d): deployed by hand on 2026-10-01 with `build:staging` +
+- **`kidclub-dev-finhub.web.app` is serving the unmerged `agent/finhub-cost-model`**
+  (@ bc7813d; the `agent/finhub-nav` deploy on 2026-10-05 failed on expired Firebase login): deployed by hand on 2026-10-01 with `build:staging` +
   `firebase deploy --only hosting:finances --project=kidclub-dev`. Hosting only, no rules or
   functions. It replaces the stale PR #20 build that was there. Checked: bundle has
   `projectId:"kidclub-dev"`, and `/` and client routes serve `cache-control: no-cache`.
 - A PR into `main` deploys to prod the moment it's opened. This branch goes to `staging` first.
+- Two stacked, unpushed branches: `agent/finhub-cost-model` and `agent/finhub-nav` (on top of it).
+  Neither is pushed yet.
 - No new metered API calls. Reads only existing Firestore collections.
