@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-01
+**Last updated:** 2026-10-05
 
 ## Where things stand (2026-10-01, end of session)
 
@@ -18,6 +18,23 @@
 - **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
 - **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
   real, pricing model (GO-LIVE §4), re-enabling card/Multibanco (needs an Easypay POS).
+
+## 🔴 Prod bug (2026-10-05): duplicate Vendus invoices for one EasyPay payment — hotfix pushed, PR NOT opened
+
+**Symptom.** One EasyPay payment produced two real Fatura-Recibo in Vendus. Prod logs: 8 extra invoices
+since 2026-09-18, latest 2026-10-05 (e.g. Sandra Abreu, billing `nnBmdqT7MEL3tNeTQqbM_2026-10` →
+FR 01P2026/209 and /210, "marking paid" logged twice 7ms apart).
+**Cause.** EasyPay sends two webhook calls per payment, concurrently. `easypayWebhook` did read → check
+status → separate `update(status: "paid")`, and `createVendusInvoiceForBilling` did read → check
+`invoiced` → Vendus POST; both calls passed both checks. Same race on the "paid + invoiceError → retry" branch.
+**Fix:** branch `hotfix/vendus-duplicate-invoices` (off `origin/main`, pushed, **no PR yet** — a PR to `main`
+deploys to prod immediately; Renato opens it):
+- webhook decides + marks paid in a `db.runTransaction`; only the call that performed the transition invoices;
+- `createVendusInvoiceForBilling` claims the bill atomically (`invoiceClaimedAt`, transaction) before any
+  Vendus call; a Vendus error releases the claim together with `invoiceError`; success clears it with
+  `status: "invoiced"`. A stale claim (run died after Vendus succeeded) is never auto-expired — it blocks
+  retries; `retryVendusInvoice` (admin) clears it as the explicit override.
+**Data cleanup:** Renato is cancelling the 8 extra invoices manually in Vendus with credit notes.
 
 ## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
 
