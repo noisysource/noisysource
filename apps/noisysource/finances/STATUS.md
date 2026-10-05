@@ -81,9 +81,7 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
 (2026-09-29).
 
 ## Next step
-0. **Deploy `agent/finhub-nav` to dev** (it includes step 1). The 2026-10-05 attempt failed on
-   an expired Firebase CLI login; after `firebase login --reauth`, from the finhub-nav worktree:
-   `pnpm --filter finances build:staging && firebase deploy --only hosting:finances --project=kidclub-dev`.
+0. Done 2026-10-05: `agent/finhub-nav` @ a855d6c deployed to dev (includes step 1).
 1. **Test on https://kidclub-dev-finhub.web.app** (`pnpm dev:finances` in the worktree also
    works). Check:
    - The "A ver" picker: switching keeps you on the same page when the new entity has it; Casa
@@ -116,11 +114,11 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **`kidclub-dev-finhub.web.app` is serving the unmerged `agent/finhub-cost-model`**
-  (@ bc7813d; the `agent/finhub-nav` deploy on 2026-10-05 failed on expired Firebase login): deployed by hand on 2026-10-01 with `build:staging` +
+- **`kidclub-dev-finhub.web.app` is serving the unmerged `agent/finhub-nav`** (@ a855d6c, which
+  includes `agent/finhub-cost-model`), deployed by hand 2026-10-05 with `build:staging` +
   `firebase deploy --only hosting:finances --project=kidclub-dev`. Hosting only, no rules or
-  functions. It replaces the stale PR #20 build that was there. Checked: bundle has
-  `projectId:"kidclub-dev"`, and `/` and client routes serve `cache-control: no-cache`.
+  functions. Checked: bundle has `projectId:"kidclub-dev"`; `/` and client routes serve
+  `cache-control: no-cache`.
 - A PR into `main` deploys to prod the moment it's opened. This branch goes to `staging` first.
 - Two stacked, unpushed branches: `agent/finhub-cost-model` and `agent/finhub-nav` (on top of it).
   Neither is pushed yet.
