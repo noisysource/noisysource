@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-05
+**Last updated:** 2026-10-06
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -14,6 +14,12 @@ couldn't be rebased. None of its work reached `main`. The old commits are still 
 The finances half never depended on the old KidClub billing code, so it was cherry-picked
 cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 `.claude/worktrees/finhub-cost-model`).
+
+## Next feature: emails → expenses → invoices (decided 2026-10-06)
+Takes priority over redesign steps 3–5 below. **Read `HANDOFF-email-expenses.md` (same folder)
+before starting.** It has the design, the traps already found (e.g. confirmed events would
+double-count balances) and the questions Renato must answer first. Start it in a fresh session,
+on a new `agent/` branch, once #75 and #76 are merged.
 
 ## Redesign plan (agreed 2026-10-05)
 Companies share one structure; only the income source differs. Steps, each its own branch + dev
@@ -97,8 +103,9 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
    - the driver (employee contract) and the teacher (green receipt);
    - Vendus (fixed, real IVA) and EasyPay (commission %, real IVA) as recurring expenses.
    Then open `/noisyphocus/costs` and check the current month looks right.
-3. **Open a PR `agent/finhub-cost-model` → `staging`**, then `agent/finhub-nav` → `staging` once
-   the first is merged (the nav branch is stacked on it). FinHub hosting isn't in the automatic dev
+3. **PRs open (2026-10-06):** #75 `agent/finhub-cost-model` → `staging`, and #76
+   `agent/finhub-nav`, stacked with base `agent/finhub-cost-model`. Merge #75 first, then
+   retarget #76 to `staging` and merge it. FinHub hosting isn't in the automatic dev
    pipeline: after merging to staging, run `deploy-finances.yml` by hand (workflow_dispatch on
    `staging`) to put it on `kidclub-dev-finhub.web.app`.
 4. **Later, a separate KidClub-scoped task:** rebuild `financialEvents` and make Resumo
@@ -120,6 +127,7 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
   functions. Checked: bundle has `projectId:"kidclub-dev"`; `/` and client routes serve
   `cache-control: no-cache`.
 - A PR into `main` deploys to prod the moment it's opened. This branch goes to `staging` first.
-- Two stacked, unpushed branches: `agent/finhub-cost-model` and `agent/finhub-nav` (on top of it).
-  Neither is pushed yet.
+- Two open, unmerged PRs: #75 and #76 (stacked). Opening #75 ran `deploy-dev.yml` against the
+  shared `kidclub-dev`. It changes no KidClub code, but it can overwrite another open PR's KidClub
+  deploy there.
 - No new metered API calls. Reads only existing Firestore collections.
