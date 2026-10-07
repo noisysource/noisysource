@@ -7,6 +7,7 @@ import { BillingRecord, BillingStatus, BillingPaymentMethod, BillingLineItem } f
 import MarkPaidModal from './billing/MarkPaidModal';
 import BankDetailsPanel from './billing/BankDetailsPanel';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
+import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
 
 // Bills a payment can still be recorded on (markBillingPaid accepts these).
 const OPEN_STATUSES: BillingStatus[] = ['pending', 'processing', 'failed'];
@@ -501,16 +502,18 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                           Pagamento em duplicado: já estava paga e entrou outro pagamento Easypay ({r.duplicatePaymentEasypayIds.join(', ')}). Devolver ao encarregado.
                         </p>
                       )}
-                      <div className="mt-2 pt-2 border-t border-gray-200 space-y-1.5">
-                        <p className="text-xs font-medium text-gray-600">
-                          Comprovativos{r.proofSubmittedAt ? ` · último em ${fmtDateTime(r.proofSubmittedAt)}` : ''}
-                        </p>
-                        {hasProof(r)
-                          ? <PaymentProofList proofs={r.paymentProofs} showUploader />
-                          : <p className="text-xs text-gray-400">Nenhum.</p>}
-                        <PaymentProofUpload billingId={r.id} onUploaded={onRefreshNeeded} label="Adicionar comprovativo"
-                          className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline disabled:opacity-50" />
-                      </div>
+                      {(PAYMENT_PROOFS_ENABLED || hasProof(r)) && (
+                        <div className="mt-2 pt-2 border-t border-gray-200 space-y-1.5">
+                          <p className="text-xs font-medium text-gray-600">
+                            Comprovativos{r.proofSubmittedAt ? ` · último em ${fmtDateTime(r.proofSubmittedAt)}` : ''}
+                          </p>
+                          {hasProof(r)
+                            ? <PaymentProofList proofs={r.paymentProofs} showUploader />
+                            : <p className="text-xs text-gray-400">Nenhum.</p>}
+                          <PaymentProofUpload billingId={r.id} onUploaded={onRefreshNeeded} label="Adicionar comprovativo"
+                            className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline disabled:opacity-50" />
+                        </div>
+                      )}
                       {/* Only a pending record is editable. An invoiced one backs
                           an issued fiscal document and is frozen (decision 5). */}
                       {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && (li.type === 'study' || li.type === 'transport')) && (
@@ -667,10 +670,12 @@ export default function BillingAdminPage() {
           <option value="all">Todos os estados</option>
           {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
-        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
-          <input type="checkbox" checked={onlyProofs} onChange={e => setOnlyProofs(e.target.checked)} className="accent-teal-600" />
-          📎 Só com comprovativo
-        </label>
+        {PAYMENT_PROOFS_ENABLED && (
+          <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+            <input type="checkbox" checked={onlyProofs} onChange={e => setOnlyProofs(e.target.checked)} className="accent-teal-600" />
+            📎 Só com comprovativo
+          </label>
+        )}
         <span className="text-sm text-gray-400">{filtered.length} resultado(s)</span>
       </div>
 

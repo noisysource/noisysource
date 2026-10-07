@@ -9,6 +9,13 @@ import { callable } from './callable';
  * billing docs are not client-writable. Uploading never marks a bill paid.
  */
 
+/**
+ * Off unless VITE_PAYMENT_PROOFS=true (only .env.staging sets it). Firebase
+ * Storage isn't active on prod yet, so the prod build hides every upload
+ * entry point; already-uploaded proofs (dev only) still display.
+ */
+export const PAYMENT_PROOFS_ENABLED = import.meta.env.VITE_PAYMENT_PROOFS === 'true';
+
 export const PROOF_MAX_BYTES = 10 * 1024 * 1024;
 export const PROOF_ACCEPT = 'application/pdf,image/jpeg,image/png,image/heic,image/heif,.pdf,.jpg,.jpeg,.png,.heic,.heif';
 

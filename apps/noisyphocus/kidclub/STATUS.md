@@ -6,7 +6,8 @@
 
 ## 🆕 Bank transfer payments (2026-10-07) — branch `agent/kidclub-bank-transfer`, PR → `staging`, NOT in prod
 
-**What it does.** Parents can pay by bank transfer, optionally upload a proof, and an admin marks the bill
+**What it does.** Parents can pay by bank transfer, optionally upload a proof (dev only for now — see
+below), and an admin marks the bill
 paid by hand, which issues the Vendus invoice exactly like an Easypay payment does.
 - **Payment-method bug fixed.** Profile pages saved `families.defaultPaymentMethod`, billing read
   `families.paymentMethod`, so every bill said "mbway". Now one field, `paymentMethod`: profile pages write
@@ -49,16 +50,31 @@ paid by hand, which issues the Vendus invoice exactly like an Easypay payment do
   so many families have `defaultPaymentMethod: bank_transfer` without having really chosen it; after deploy
   their Pagamentos shows the IBAN box first (MB WAY one click below). Decide whether that's wanted, or
   check the counts first (read-only: families by `defaultPaymentMethod`).
-- **Firebase Storage on prod:** uploads need Storage active on `rainbow-prod-2454b` plus `storage.rules`
-  deployed there. CI only deploys storage rules to dev (`deploy_storage_rules` input, off for prod) because
-  it's unknown whether prod Storage is active (`storage.tf` errored on prod). Steps: activate Storage in the
-  console if needed → grant `roles/firebaserules.firestoreServiceAgent` to
-  `service-<prod project number>@gcp-sa-firebasestorage.iam.gserviceaccount.com` → `firebase deploy --only
-  storage --project=rainbow-prod-2454b` (check the currently deployed prod storage rules first — this
-  replaces them) → then set `deploy_storage_rules: true` in deploy-prod.yml. Without this, mark-as-paid and
-  the IBAN box still work; only proof uploads fail.
-- **New callables** `markBillingPaid`, `attachPaymentProof`: per "Deploy lessons" #2, add `allUsers` →
-  `roles/run.invoker` by hand after the prod deploy (check dev too).
+- **No manual invoker step.** Checked 2026-10-07: prod's CI SA already has `roles/run.admin` (granted by
+  hand, not yet recorded in `iam.tf`), and on dev both new callables got `allUsers` automatically. Spot-check
+  `gcloud run services get-iam-policy markbillingpaid --region europe-west3 --project rainbow-prod-2454b`
+  after the prod deploy anyway.
+
+**Proof uploads ship hidden on prod (Renato, 2026-10-07: "remove the upload, we'll do it later").**
+`VITE_PAYMENT_PROOFS=true` is set only in `.env.staging`, so dev keeps uploads and the prod build hides every
+upload entry point (`PAYMENT_PROOFS_ENABLED` in `src/lib/paymentProof.ts`). Backend (`attachPaymentProof`,
+`storage.rules`, dev-only storage-rules CI step) stays in place. To turn it on later, as its own PR:
+1. Activate Firebase Storage on prod — checked 2026-10-07: **never activated** (no bucket,
+   `firebasestorage.googleapis.com` disabled, no storage rules release). Bucket location is permanent;
+   recommendation `europe-west3` (EU residency for parents' bank receipts, cents/month) over the free-tier
+   `us-east1` that dev uses.
+2. Grant `roles/firebaserules.firestoreServiceAgent` to
+   `service-237627939595@gcp-sa-firebasestorage.iam.gserviceaccount.com` (only exists after step 1 — a
+   `google.prod` Terraform resource for it pushed before step 1 breaks every dev apply). Also record
+   `prod_ci_run_admin` in `iam.tf`. These IaC edits are blocked for agents by Claude Code's auto-mode
+   classifier — Renato makes them or allows them.
+3. **Tighten `storage.rules` first:** `finances/{entityId}/insurances/**` allows any signed-in user, which on
+   the shared prod project means any KidClub parent. Change to the `finhubAdmin` role (same as
+   `finances_entities` in firestore.rules) before storage rules ever deploy to prod.
+4. `deploy_storage_rules: true` in deploy-prod.yml (nothing deployed there yet, so nothing gets replaced),
+   then `VITE_PAYMENT_PROOFS=true` in `.env.production`.
+Side effect of Storage being off on prod: FinHub insurance uploads can't work on prod either (Finances is
+manual-deploy, so likely unnoticed). `studyRoomService.uploadFile` is dead code — no rule needed.
 
 **Open questions for Renato:** IBAN + account holder value; is `admin@kidclub.pt` the right inbox for proof
 notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default

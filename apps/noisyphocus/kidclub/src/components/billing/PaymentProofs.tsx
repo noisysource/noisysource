@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { PaymentProof } from '@shared/models';
-import { PROOF_ACCEPT, proofFileError, uploadPaymentProof, openPaymentProof } from '../../lib/paymentProof';
+import { PAYMENT_PROOFS_ENABLED, PROOF_ACCEPT, proofFileError, uploadPaymentProof, openPaymentProof } from '../../lib/paymentProof';
 
 function fmtDate(ts: any): string {
   const d = ts?.toDate?.() ?? (ts ? new Date(ts) : null);
@@ -63,6 +63,8 @@ export function PaymentProofUpload({ billingId, onUploaded, label = 'Enviar comp
       if (input.current) input.current.value = '';
     }
   };
+
+  if (!PAYMENT_PROOFS_ENABLED) return null;
 
   return (
     <div className="space-y-1">

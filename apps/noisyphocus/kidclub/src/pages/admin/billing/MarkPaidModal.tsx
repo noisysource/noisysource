@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { BillingRecord } from '@shared/models';
 import { callable } from '../../../lib/callable';
 import { PaymentProofList, PaymentProofUpload } from '../../../components/billing/PaymentProofs';
+import { PAYMENT_PROOFS_ENABLED } from '../../../lib/paymentProof';
 
 function localIsoDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -81,13 +82,15 @@ export default function MarkPaidModal({ record, onClose, onChanged }: {
           </>
         )}
 
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-gray-700">Comprovativos</p>
-          {record.paymentProofs?.length
-            ? <PaymentProofList proofs={record.paymentProofs} showUploader />
-            : <p className="text-xs text-gray-400">Nenhum comprovativo enviado.</p>}
-          <PaymentProofUpload billingId={record.id} onUploaded={() => onChanged()} label="Adicionar comprovativo (opcional)" />
-        </div>
+        {(PAYMENT_PROOFS_ENABLED || !!record.paymentProofs?.length) && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-gray-700">Comprovativos</p>
+            {record.paymentProofs?.length
+              ? <PaymentProofList proofs={record.paymentProofs} showUploader />
+              : <p className="text-xs text-gray-400">Nenhum comprovativo enviado.</p>}
+            <PaymentProofUpload billingId={record.id} onUploaded={() => onChanged()} label="Adicionar comprovativo (opcional)" />
+          </div>
+        )}
 
         {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
 

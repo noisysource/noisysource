@@ -8,6 +8,7 @@ import { useImpersonation } from '../../contexts/ImpersonationContext';
 import { familyPaymentMethod } from '../../lib/paymentMethod';
 import { useBankTransferConfig, formatIban, transferDescription, BankTransferConfig } from '../../lib/bankTransfer';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
+import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
 
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
@@ -86,8 +87,8 @@ function BankTransferBox({ record, bank }: { record: BillingRecord; bank: BankTr
             <CopyButton text={description} />
           </div>
           <p className="text-[11px] text-gray-400 pt-1">
-            Depois de transferir, envie o comprovativo abaixo para confirmarmos mais depressa. A fatura é emitida quando
-            confirmarmos a transferência.
+            {PAYMENT_PROOFS_ENABLED && 'Depois de transferir, envie o comprovativo abaixo para confirmarmos mais depressa. '}
+            A fatura é emitida quando confirmarmos a transferência.
           </p>
         </div>
       )}
@@ -555,7 +556,7 @@ export default function PaymentsPage() {
                     )}
 
                     {/* Proof of payment — optional, any method. Never marks the bill paid by itself. */}
-                    {(isPending || record.status === 'processing') && (
+                    {(isPending || record.status === 'processing') && (PAYMENT_PROOFS_ENABLED || !!record.paymentProofs?.length) && (
                       <div className="mt-3 pt-3 border-t border-black/5 space-y-1.5">
                         <PaymentProofList proofs={record.paymentProofs} />
                         <PaymentProofUpload billingId={record.id} onUploaded={reload}
