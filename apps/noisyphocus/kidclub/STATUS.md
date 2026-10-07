@@ -44,12 +44,14 @@ paid by hand, which issues the Vendus invoice exactly like an Easypay payment do
 4. Try "Marcar como pago" again → refused (failed-precondition).
 
 **⚠️ Before this goes to prod (staging → main):**
-- **Fill in the IBAN** (Cobranças → Dados para transferência) right after the prod deploy. Until then
-  bank-transfer parents see "dados ainda não disponíveis — contacte-nos ou pague por MB WAY".
-- **Most families will switch to the IBAN view.** The profile form defaulted to "Transferência bancária",
-  so many families have `defaultPaymentMethod: bank_transfer` without having really chosen it; after deploy
-  their Pagamentos shows the IBAN box first (MB WAY one click below). Decide whether that's wanted, or
-  check the counts first (read-only: families by `defaultPaymentMethod`).
+- **Fill in the IBAN** (Cobranças → Dados para transferência) right after the prod deploy — and on dev now
+  for testing. Value (Renato, 2026-10-07; checksum verified): IBAN `PT50 0010 0000 6456 3890 0018 3`,
+  titular `NoisyPhocus, Lda.`. `config/billing` doesn't exist on prod yet; until it's filled in,
+  bank-transfer parents see "dados ainda não disponíveis — contacte-nos ou pague por MB WAY". (An agent
+  write of this doc to dev/prod Firestore was blocked by the auto-mode classifier — use the panel.)
+- **Then "Recalcular tudo"** so pending bills pick up each family's method. Renato OK'd updating them
+  (2026-10-07). Prod counts (read-only, 2026-10-07, 41 families): 18 `bank_transfer` → IBAN view first,
+  18 `mbway`, 5 with no method (→ billed as mbway). None have the new `paymentMethod` field yet.
 - **No manual invoker step.** Checked 2026-10-07: prod's CI SA already has `roles/run.admin` (granted by
   hand, not yet recorded in `iam.tf`), and on dev both new callables got `allUsers` automatically. Spot-check
   `gcloud run services get-iam-policy markbillingpaid --region europe-west3 --project rainbow-prod-2454b`
