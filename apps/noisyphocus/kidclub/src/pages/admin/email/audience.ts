@@ -59,7 +59,6 @@ export function buildAudience(src: AudienceSource, f: AudienceFilters): Recipien
     matched.set(row.familyKey, keys);
   }
 
-  const homeAddressOf = (childId: string) => src.children.get(childId)?.homeAddress;
   const out: Recipient[] = [];
   for (const [familyKey, itemKeys] of matched) {
     const group = buildFamilyGroup(familyKey, src, src.index) as FamilyGroup | null;
@@ -69,7 +68,7 @@ export function buildAudience(src: AudienceSource, f: AudienceFilters): Recipien
       familyId: group.familyId,
       label: familyLabel(src.index.get(familyKey)!),
       email: group.contactEmail?.trim() || undefined,
-      values: familyValues(group, itemKeys, homeAddressOf),
+      values: familyValues(group, itemKeys),
     });
   }
   return out.sort((a, b) => a.label.localeCompare(b.label, 'pt'));

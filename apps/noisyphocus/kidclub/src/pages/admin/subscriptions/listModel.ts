@@ -107,6 +107,7 @@ export function buildRows(src: ListSource, index: Map<string, FamilyInfo>): Row[
   ];
   const childText = (c: ChildDoc | undefined) => [
     c?.firstName, c?.lastName, c?.schoolName, c?.schoolYear,
+    // Legacy child address (no longer written); family billingAddress is in famText.
     c?.homeAddress?.street, c?.homeAddress?.city, c?.homeAddress?.postalCode,
   ];
 

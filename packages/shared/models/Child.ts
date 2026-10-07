@@ -17,7 +17,9 @@ export interface Child {
   schoolYear?: string;
   schoolGrade?: string;
 
-  // Home address — shaped like Family.billingAddress, but not assumed to match it
+  // LEGACY — no longer collected or written (decision 2026-10-01): it duplicated
+  // Family.billingAddress, insurance doesn't need it, and transport uses per-trip
+  // pickup/dropoff locations. Kept optional only so existing docs still type-check.
   homeAddress?: {
     street: string;
     city: string;
