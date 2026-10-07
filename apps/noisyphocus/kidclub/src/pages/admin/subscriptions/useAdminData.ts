@@ -9,6 +9,7 @@ import { DiscountRule } from '@shared/models/Discount';
 import { Child, Family } from '@shared/models';
 import { resolvePersonalData } from '../../../lib/personalData';
 import { normalizeSubStatus } from '../../../lib/utils';
+import { toBillLines } from '../../../lib/billingLines';
 import { SubItem, FamilyDoc, ChildDoc, BillRow, toDate } from './model';
 
 /**
@@ -69,6 +70,7 @@ export function useAdminData() {
           invoiceNumber: x.invoiceNumber || undefined,
           easypayId: x.easypayId || undefined,
           duplicatePaymentEasypayIds: x.duplicatePaymentEasypayIds?.length ? x.duplicatePaymentEasypayIds : undefined,
+          lines: toBillLines(x.lineItems),
         };
       }));
 

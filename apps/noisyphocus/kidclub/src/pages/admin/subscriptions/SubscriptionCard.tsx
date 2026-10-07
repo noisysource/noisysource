@@ -5,6 +5,7 @@ import { DiscountRule } from '@shared/models/Discount';
 import { grossFromAppliedDiscounts } from '../../../services/discountService';
 import { SubStatus } from '../../../lib/utils';
 import { SubItem, isUnlinked, needsAdminReview, isLegacyPricing } from './model';
+import { BillLine, lineNet } from '../../../lib/billingLines';
 import { StatusBadge, CLIENT_ACTION_BADGE } from './badges';
 import { SubscriptionActions, statusChangeEffects } from './useSubscriptionActions';
 import EditForm from './EditForm';
@@ -23,6 +24,8 @@ const STATUS_OPTIONS: { key: SubStatus; label: string }[] = [
  */
 const SubscriptionCard = forwardRef<HTMLDivElement, {
   item: SubItem;
+  /** This subscription's line on its current (or next) bill, if it has one. */
+  billLine?: BillLine;
   highlighted?: boolean;
   actions: SubscriptionActions;
   transportConfig: TransportationConfig | null;
@@ -30,7 +33,7 @@ const SubscriptionCard = forwardRef<HTMLDivElement, {
   discountRules: DiscountRule[];
   onShowHistory: (item: SubItem) => void;
   onLinked: (familyId: string) => void;
-}>(function SubscriptionCard({ item, highlighted, actions, transportConfig, studyConfig, discountRules, onShowHistory, onLinked }, ref) {
+}>(function SubscriptionCard({ item, billLine, highlighted, actions, transportConfig, studyConfig, discountRules, onShowHistory, onLinked }, ref) {
   const [editing, setEditing] = useState(false);
   const busy = actions.processing === item.id;
 
@@ -80,7 +83,7 @@ const SubscriptionCard = forwardRef<HTMLDivElement, {
             </div>
 
             <MiniWeekCalendar item={item} />
-            <DiscountRow item={item} discountRules={discountRules} actions={actions} busy={busy} />
+            <DiscountRow item={item} billLine={billLine} discountRules={discountRules} actions={actions} busy={busy} />
 
             {item.note && <p className="text-xs text-gray-500 mt-1 italic">"{item.note}"</p>}
             {item.statusReason && item.status === 'cancelled' && <p className="text-xs text-red-600 mt-1">Motivo: {item.statusReason}</p>}
@@ -161,13 +164,20 @@ const SubscriptionCard = forwardRef<HTMLDivElement, {
 
 export default SubscriptionCard;
 
-function DiscountRow({ item, discountRules, actions, busy }: {
+function DiscountRow({ item, billLine, discountRules, actions, busy }: {
   item: SubItem;
+  billLine?: BillLine;
   discountRules: DiscountRule[];
   actions: SubscriptionActions;
   busy: boolean;
 }) {
-  const fee = item._type === 'transport' ? (item.monthlyFee ?? 0) : (item.monthlyPrice ?? 0);
+  const storedFee = item._type === 'transport' ? (item.monthlyFee ?? 0) : (item.monthlyPrice ?? 0);
+  // New pricing bills multi-trip/sibling per trip/child, so the stored fee
+  // (the flat model) can differ from what the bill charges — show the bill's
+  // amount (net of discounts, before absences). Old pricing bills the stored
+  // fee, so the card keeps it.
+  const billed = billLine && !isLegacyPricing(item) ? lineNet(billLine) : undefined;
+  const fee = billed ?? storedFee;
   const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
   const applied = item.appliedDiscounts ?? [];
   const autoApplied = applied.filter(d => d.appliedBy === 'auto');
@@ -184,16 +194,24 @@ function DiscountRow({ item, discountRules, actions, busy }: {
 
   if (fee === 0 && applied.length === 0 && availableRules.length === 0) return null;
 
-  const gross = item._type === 'study'
-    ? (item.basePrice != null && item.basePrice > fee + 0.01 ? item.basePrice : null)
-    : grossFromAppliedDiscounts(fee, applied);
+  const gross = billed != null
+    ? billLine!.grossAmount
+    : item._type === 'study'
+      ? (item.basePrice != null && item.basePrice > fee + 0.01 ? item.basePrice : null)
+      : grossFromAppliedDiscounts(fee, applied);
   const hasDiscount = gross != null && gross > fee + 0.01;
 
   return (
     <div className="mt-1.5 space-y-1.5">
       <div className="flex items-baseline gap-1.5">
         {hasDiscount && <span className="text-xs text-gray-400 line-through">€{gross!.toFixed(2)}</span>}
-        <span className={`text-xs font-semibold ${hasDiscount ? 'text-green-700' : 'text-gray-800'}`}>€{fee.toFixed(2)}/mês</span>
+        <span className={`text-xs font-semibold ${hasDiscount ? 'text-green-700' : 'text-gray-800'}`}
+          title={billed != null ? 'Valor da fatura (tarifário novo), antes de faltas' : undefined}>€{fee.toFixed(2)}/mês</span>
+        {billed != null && Math.abs(billed - storedFee) > 0.005 && (
+          <span className="text-[11px] text-gray-400" title="Valor guardado na inscrição (modelo antigo); a fatura usa o tarifário novo">
+            (inscrição: €{storedFee.toFixed(2)})
+          </span>
+        )}
       </div>
 
       {/* Applied auto discounts — clickable to override off */}

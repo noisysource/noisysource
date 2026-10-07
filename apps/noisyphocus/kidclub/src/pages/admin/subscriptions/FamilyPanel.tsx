@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useImpersonation } from '../../../contexts/ImpersonationContext';
 import { FamilyGroup, SubItem, FamilyDoc } from './model';
@@ -12,6 +12,7 @@ import FamilyBills from './FamilyBills';
 import VersionHistoryModal from './VersionHistoryModal';
 import DeleteFamilyModal from './DeleteFamilyModal';
 import { FamilyTags } from './tags';
+import { indexLinesBySub, standardLine } from '../../../lib/billingLines';
 
 const PAYMENT_LABEL: Record<string, string> = {
   mbway: 'MB WAY', multibanco: 'Multibanco', card: 'Cartão', subscription: 'Débito', bank_transfer: 'Transferência',
@@ -38,6 +39,7 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
   const [editChildKey, setEditChildKey] = useState<string | null>(null);
   const [historyItem, setHistoryItem] = useState<SubItem | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const linesBySub = useMemo(() => indexLinesBySub(group.bills), [group.bills]);
   const highlightRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -189,6 +191,7 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
                     ref={item.id === highlightId ? highlightRef : undefined}
                     highlighted={item.id === highlightId}
                     item={item}
+                    billLine={standardLine(linesBySub.get(item.id))}
                     actions={actions}
                     transportConfig={data.transportConfig}
                     studyConfig={data.studyConfig}
