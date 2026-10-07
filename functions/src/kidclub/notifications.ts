@@ -5,7 +5,7 @@ import { appCol } from "./db";
 if (!admin.apps.length) admin.initializeApp();
 
 const COMPANY_NAME = "Arco-Íris da Pequenada";
-const ADMIN_EMAIL = "admin@kidclub.pt";
+export const ADMIN_EMAIL = "admin@kidclub.pt";
 const APP_URL = "https://kidclub.pt";
 
 const DAY_PT: Record<string, string> = {

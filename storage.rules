@@ -4,5 +4,52 @@ service firebase.storage {
     match /finances/{entityId}/insurances/{insuranceId}/{allPaths=**} {
       allow read, write: if request.auth != null;
     }
+
+    // ── KidClub ────────────────────────────────────────────────────────────
+    // Cross-service lookups into Firestore (firestore.get) need the Storage
+    // service agent to hold roles/firebaserules.firestoreServiceAgent — see
+    // infra/gcp/terraform/storage.tf.
+
+    // Same roles as isOwner()/isRainbowAdmin() in firestore.rules. Callers
+    // check request.auth != null first. At most two distinct documents are
+    // read per request (users/{uid} and billing/{id}), repeated gets of the
+    // same document are deduplicated.
+    function kidclubRoles() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get('roles', {});
+    }
+
+    function isKidclubAdmin() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && (kidclubRoles().get('owner', false) == true || kidclubRoles().get('rainbowAdmin', false) == true);
+    }
+
+    function billingDoc(billingId) {
+      return firestore.get(/databases/(default)/documents/_apps/arcoiris/billing/$(billingId)).data;
+    }
+
+    // Ownership is billing.userId, exactly as the Firestore rule for
+    // billing/{id} reads it (kept in sync with the family owner by billing.ts).
+    function ownsBilling(billingId) {
+      return request.auth != null && billingDoc(billingId).userId == request.auth.uid;
+    }
+
+    // Proof of payment (bank transfer receipt), optional. Uploaded by the
+    // parent or an admin, then recorded on the bill by the attachPaymentProof
+    // callable (billing docs are not client-writable). Parents can add files
+    // only while the bill is unpaid, and can never change or remove one.
+    match /_apps/arcoiris/billing/{billingId}/proofs/{fileName} {
+      allow read: if isKidclubAdmin() || ownsBilling(billingId);
+      // resource == null: a new object only, never an overwrite of an
+      // existing proof (the emulator treats a same-name upload as create).
+      allow create: if request.auth != null
+        && resource == null
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/jpeg|image/png|image/heic|image/heif')
+        && (isKidclubAdmin()
+            || (ownsBilling(billingId)
+                && billingDoc(billingId).status in ['pending', 'processing', 'failed']));
+      allow update, delete: if isKidclubAdmin();
+    }
   }
 }

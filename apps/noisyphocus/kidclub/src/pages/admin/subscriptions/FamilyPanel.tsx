@@ -132,7 +132,7 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
                     <Field label="NIF" value={family?.nif} warn={fam.nifInvalid ? 'inválido' : undefined} />
                     <Field label="Morada de faturação" wide
                       value={address ? [address.street, [address.postalCode, address.city].filter(Boolean).join(' ')].filter(Boolean).join(', ') : undefined} />
-                    <Field label="Pagamento" value={family?.paymentMethod ? PAYMENT_LABEL[family.paymentMethod] ?? family.paymentMethod : undefined} />
+                    <Field label="Pagamento" value={(() => { const m = family?.paymentMethod ?? family?.defaultPaymentMethod; return m ? PAYMENT_LABEL[m] ?? m : undefined; })()} />
                     <Field label="Perfil completo" value={family?.profileComplete ? 'Sim' : 'Não'} />
                   </>
                 ) : (
