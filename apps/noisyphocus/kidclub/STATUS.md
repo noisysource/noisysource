@@ -2,7 +2,67 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-05
+**Last updated:** 2026-10-07
+
+## 🆕 Bank transfer payments (2026-10-07) — branch `agent/kidclub-bank-transfer`, PR → `staging`, NOT in prod
+
+**What it does.** Parents can pay by bank transfer, optionally upload a proof, and an admin marks the bill
+paid by hand, which issues the Vendus invoice exactly like an Easypay payment does.
+- **Payment-method bug fixed.** Profile pages saved `families.defaultPaymentMethod`, billing read
+  `families.paymentMethod`, so every bill said "mbway". Now one field, `paymentMethod`: profile pages write
+  it (and delete the old one); billing reads `paymentMethod ?? defaultPaymentMethod`. The recompute (any
+  subscription/absence change, or "Recalcular tudo") copies it onto still-pending bills, so **no data
+  migration is needed** — "Recalcular tudo" after the prod deploy fixes every pending bill at once.
+  `setPaymentMethod` (unused callable) also fixed: it looked families up by a non-existent top-level `userId`.
+- **`markBillingPaid`** (admin): pending/processing/failed → `paid` in a transaction (double-click safe,
+  tested: 3 concurrent calls → 1 succeeds), stores `paidAt` (date the transfer arrived), `paymentMethod:
+  bank_transfer`, `manualPayment {by, at, note}`, then `createVendusInvoiceForBilling`. A Vendus failure
+  lands in `invoiceError`; the existing "Tentar faturar novamente" covers it.
+- **`attachPaymentProof`** (parent or admin): files go to Storage
+  `_apps/arcoiris/billing/{billingId}/proofs/{timestamp}-{name}`; the callable checks ownership + that the
+  object exists and records `paymentProofs[]` + `proofSubmittedAt` on the bill. **Never changes status** —
+  no new BillingStatus. A parent upload queues an email to `admin@kidclub.pt` (`ADMIN_EMAIL` in
+  notifications.ts).
+- **Webhook:** an Easypay success on a bill already paid by manual transfer is now flagged in
+  `duplicatePaymentEasypayIds` (the existing "Pagamento em duplicado — devolver" alert) instead of being
+  silently ignored. `initiateMbwayPayment` no longer moves a bill paid meanwhile back to `processing`.
+- **UI.** Cobranças: "Marcar como pago" modal, "📎 Comprovativo recebido" badge, "Só com comprovativo"
+  filter + banner, duplicate/invoice-error badges, "Dados para transferência" panel (edits `config/billing`).
+  Pagamentos: bank-transfer bills show IBAN + amount + suggested description ("<nome> — <mês>") with MB WAY
+  still one click away; "Enviar comprovativo" on any unpaid bill; "A aguardar confirmação da transferência".
+
+**How to test on dev (kidclub-dev, after the PR's deploy is green):**
+1. Cobranças → "Dados para transferência" → Editar → put any test IBAN → Guardar.
+2. As a parent (or impersonating one): Conta → Método de pagamento → Transferência bancária → Guardar.
+   Pagamentos → an unpaid month shows the IBAN box. "Enviar comprovativo" → pick a PDF/JPEG → the month shows
+   "A aguardar confirmação"; an email doc appears in `emailOutbox` (dev never actually sends).
+3. As admin: Cobranças → banner "1 mensalidade com comprovativo" → Ver → "Marcar como pago" → confirm.
+   **On dev the bill goes to `paid` with `invoiceError` "Vendus invoicing is disabled on kidclub-dev"** —
+   expected: dev has no Vendus sandbox and the code refuses to create real invoices from dev. The invoice
+   step itself is unchanged code (same function the webhook uses).
+4. Try "Marcar como pago" again → refused (failed-precondition).
+
+**⚠️ Before this goes to prod (staging → main):**
+- **Fill in the IBAN** (Cobranças → Dados para transferência) right after the prod deploy. Until then
+  bank-transfer parents see "dados ainda não disponíveis — contacte-nos ou pague por MB WAY".
+- **Most families will switch to the IBAN view.** The profile form defaulted to "Transferência bancária",
+  so many families have `defaultPaymentMethod: bank_transfer` without having really chosen it; after deploy
+  their Pagamentos shows the IBAN box first (MB WAY one click below). Decide whether that's wanted, or
+  check the counts first (read-only: families by `defaultPaymentMethod`).
+- **Firebase Storage on prod:** uploads need Storage active on `rainbow-prod-2454b` plus `storage.rules`
+  deployed there. CI only deploys storage rules to dev (`deploy_storage_rules` input, off for prod) because
+  it's unknown whether prod Storage is active (`storage.tf` errored on prod). Steps: activate Storage in the
+  console if needed → grant `roles/firebaserules.firestoreServiceAgent` to
+  `service-<prod project number>@gcp-sa-firebasestorage.iam.gserviceaccount.com` → `firebase deploy --only
+  storage --project=rainbow-prod-2454b` (check the currently deployed prod storage rules first — this
+  replaces them) → then set `deploy_storage_rules: true` in deploy-prod.yml. Without this, mark-as-paid and
+  the IBAN box still work; only proof uploads fail.
+- **New callables** `markBillingPaid`, `attachPaymentProof`: per "Deploy lessons" #2, add `allUsers` →
+  `roles/run.invoker` by hand after the prod deploy (check dev too).
+
+**Open questions for Renato:** IBAN + account holder value; is `admin@kidclub.pt` the right inbox for proof
+notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default
+stay for families that never actively chose.
 
 ## Where things stand (2026-10-01, end of session)
 
