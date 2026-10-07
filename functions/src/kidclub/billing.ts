@@ -5,6 +5,7 @@ import { createInvoice, createOrUpdateClient, VendusDocument, VendusLineItem, Ve
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
+import { partyDepositAmount } from "./partyDepositLogic";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -1073,7 +1074,8 @@ export const createPartyDeposit = onCall(
       return { billingId: existing.docs[0].id };
     }
 
-    const depositAmount = Math.round(booking.total * 0.5 * 100) / 100;
+    // booking.total is before IVA; the deposit line is billed IVA-inclusive.
+    const depositAmount = partyDepositAmount(booking.total);
     const partyDate = new Date(booking.date);
     const dateStr = partyDate.toLocaleDateString("pt-PT");
     const now = admin.firestore.Timestamp.now();
