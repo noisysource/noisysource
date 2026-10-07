@@ -1,4 +1,4 @@
-import { Booking } from "@shared/models";
+import { Booking, extraQty, partyVatBreakdown } from "@shared/models";
 import { AppUser } from "@shared/models/AppUser";
 import React, { useState } from "react";
 
@@ -95,7 +95,7 @@ export default function PartyBookingCard({
                 <p><strong>Tema:</strong> {(booking as any).theme}</p>
               </div>
               <div>
-                <p><strong>Total:</strong> €{booking.total.toFixed(2)}</p>
+                <p><strong>Total:</strong> €{partyVatBreakdown(booking.total).total.toFixed(2)} <span className="text-gray-500">(€{partyVatBreakdown(booking.total).subtotal.toFixed(2)} + IVA)</span></p>
               </div>
             </div>
           )}
@@ -111,7 +111,7 @@ export default function PartyBookingCard({
               {booking.extras && booking.extras.length > 0 ? (
                 <ul className="list-disc list-inside">
                   {booking.extras.map((extra) => (
-                    <li key={extra}>{extra}</li>
+                    <li key={extra}>{extraQty(booking, extra) > 1 ? `${extraQty(booking, extra)} × ${extra}` : extra}</li>
                   ))}
                 </ul>
               ) : (

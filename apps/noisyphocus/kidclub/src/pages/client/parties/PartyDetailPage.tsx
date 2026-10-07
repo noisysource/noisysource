@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { Booking } from '@shared/models';
+import { Booking, extraQty, partyVatBreakdown, PARTY_VAT_RATE } from '@shared/models';
 import { partyService } from '../../../services/partyService';
 import { callable } from '../../../lib/callable';
 
@@ -96,7 +96,8 @@ export default function PartyDetailPage() {
   );
 
   const s = STATUS[booking.status] ?? STATUS.pending;
-  const deposit = booking.total * 0.5;
+  const price = partyVatBreakdown(booking.total);
+  const deposit = price.deposit;
   const isConfirmed = booking.status === 'confirmed';
 
   return (
@@ -136,12 +137,25 @@ export default function PartyDetailPage() {
         {booking.extras && booking.extras.length > 0 && (
           <div className="flex justify-between">
             <span className="text-gray-500">Extras</span>
-            <span className="font-medium text-gray-800 text-right">{booking.extras.join(', ')}</span>
+            <span className="font-medium text-gray-800 text-right">
+              {booking.extras.map(name => {
+                const q = extraQty(booking, name);
+                return q > 1 ? `${q} × ${name}` : name;
+              }).join(', ')}
+            </span>
           </div>
         )}
         <div className="border-t pt-3 flex justify-between">
+          <span className="text-gray-500">Subtotal (sem IVA)</span>
+          <span className="font-medium text-gray-800">{fmtEur(price.subtotal)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">IVA ({Math.round(PARTY_VAT_RATE * 100)}%)</span>
+          <span className="font-medium text-gray-800">{fmtEur(price.vat)}</span>
+        </div>
+        <div className="flex justify-between">
           <span className="font-semibold text-gray-700">Total</span>
-          <span className="font-bold text-gray-900">{fmtEur(booking.total)}</span>
+          <span className="font-bold text-gray-900">{fmtEur(price.total)}</span>
         </div>
       </div>
 

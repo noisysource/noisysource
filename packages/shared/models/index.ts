@@ -2,6 +2,7 @@ export * from './weekPattern';
 export * from './Booking';
 export * from './StudyRoomEntry';
 export * from './PartyConfig';
+export * from './partyPricing';
 export * from './StudyCenterConfig';
 export * from './Entities';
 export * from './AppUser';

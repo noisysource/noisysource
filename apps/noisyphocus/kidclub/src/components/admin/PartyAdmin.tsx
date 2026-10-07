@@ -224,7 +224,7 @@ export default function PartyAdminPanel() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
           <p className="text-sm text-gray-500">Receita estimada</p>
           <p className="text-2xl font-semibold text-indigo-600">{currencyFormatter.format(summary.upcomingRevenue)}</p>
-          <p className="text-xs text-gray-400 mt-1">Confirmadas e futuras</p>
+          <p className="text-xs text-gray-400 mt-1">Confirmadas e futuras, sem IVA</p>
         </div>
       </div>
 

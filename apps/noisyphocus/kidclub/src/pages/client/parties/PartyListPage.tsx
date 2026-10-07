@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
-import { Booking } from '@shared/models';
+import { Booking, partyVatBreakdown } from '@shared/models';
 
 const STATUS = {
   pending:   { label: 'Aguarda confirmação', cls: 'bg-yellow-100 text-yellow-800' },
@@ -75,7 +75,7 @@ export default function PartyListPage() {
                   </div>
                   <div className="text-right shrink-0 ml-4">
                     <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${s.cls}`}>{s.label}</span>
-                    <p className="text-sm font-bold text-gray-700 mt-1.5">€{b.total.toFixed(2)}</p>
+                    <p className="text-sm font-bold text-gray-700 mt-1.5">€{partyVatBreakdown(b.total).total.toFixed(2)}</p>
                   </div>
                 </div>
               </Link>
