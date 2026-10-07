@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getDocs, query, orderBy, where, Timestamp } from 'firebase/firestore';
+import { Link } from 'react-router-dom';
 import { callable } from '../../lib/callable';
 import { col } from '../../lib/db';
 import { BillingRecord, BillingStatus, BillingPaymentMethod, BillingLineItem } from '@shared/models';
@@ -481,11 +482,6 @@ export default function BillingAdminPage() {
   const [filterStatus, setFilterStatus] = useState('pending');
   const [filterPeriod, setFilterPeriod] = useState('all');
 
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillResult, setBackfillResult] = useState<string | null>(null);
-  const [generatingEvents, setGeneratingEvents] = useState(false);
-  const [generateEventsResult, setGenerateEventsResult] = useState<string | null>(null);
-
   const fetchRecords = async () => {
     setLoading(true);
     try {
@@ -497,51 +493,6 @@ export default function BillingAdminPage() {
   };
 
   useEffect(() => { fetchRecords(); }, []);
-
-  const handleBackfill = async () => {
-    if (!confirm('Forçar recálculo de faturação para TODAS as famílias com inscrições ativas? Normalmente não é necessário — use apenas para uma correção geral.')) return;
-    setBackfilling(true);
-    setBackfillResult(null);
-    try {
-      const fn = callable<object, { created: number; updated: number; skipped: number; cancelled: number; failed: number; families: number }>('backfillBillingSchedules');
-      const res = await fn({});
-      const { created, updated, skipped, cancelled, families } = res.data;
-      const parts = [`${families} famílias`, `${created} criados`, `${updated} atualizados`, `${skipped} ignorados`];
-      if (cancelled) parts.push(`${cancelled} cancelados`);
-      setBackfillResult(`✅ ${parts.join(' · ')}`);
-      await fetchRecords();
-    } catch (err: any) {
-      setBackfillResult(`❌ ${err.message}`);
-    } finally {
-      setBackfilling(false);
-    }
-  };
-
-  // Generates the ReservationEvent rows that billing now computes gross from.
-  // Required once after this system ships: subscriptions created before it
-  // existed have no events, and a subscription with no events bills as zero.
-  // Safe to re-run — event ids are deterministic, so a rerun overwrites
-  // rather than duplicating, and it only ever touches dates from today
-  // forward (past occurrences are immutable facts).
-  const handleGenerateEvents = async () => {
-    if (!confirm(
-      'Gerar ocorrências (ReservationEvents) para todas as inscrições ativas?\n\n'
-      + 'Necessário uma vez depois de instalar este sistema — sem ocorrências, a faturação '
-      + 'calcula zero. Pode ser repetido em segurança: só afeta datas de hoje em diante.'
-    )) return;
-    setGeneratingEvents(true);
-    setGenerateEventsResult(null);
-    try {
-      const fn = callable<object, { studySubscriptions: number; transportSubscriptions: number; created: number }>('backfillReservationEvents');
-      const res = await fn({});
-      const { studySubscriptions, transportSubscriptions, created } = res.data;
-      setGenerateEventsResult(`✅ ${studySubscriptions} inscrições de sala de estudo · ${transportSubscriptions} de transporte · ${created} ocorrência(s) criada(s)`);
-    } catch (err: any) {
-      setGenerateEventsResult(`❌ ${err.message}`);
-    } finally {
-      setGeneratingEvents(false);
-    }
-  };
 
   const handleSendNotice = async (record: BillingRecord) => {
     if (!confirm(`Enviar aviso de pagamento a ${record.billingName} (${record.billingEmail}) — ${record.periodLabel}?`)) return;
@@ -604,7 +555,12 @@ export default function BillingAdminPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-800">Cobranças</h1>
+      <div className="flex items-baseline justify-between gap-4 flex-wrap">
+        <h1 className="text-2xl font-bold text-gray-800">Cobranças</h1>
+        <Link to="/admin/data-management" className="text-xs text-gray-400 hover:text-gray-600 hover:underline">
+          Recalcular tudo / gerar ocorrências → Gestão de Dados
+        </Link>
+      </div>
 
       {/* Summary — grand total across the whole generated schedule */}
       <div className="grid grid-cols-3 gap-4">
@@ -623,52 +579,6 @@ export default function BillingAdminPage() {
           <p className="text-2xl font-bold text-green-800">{fmtEur(totals.paid)}</p>
           <p className="text-xs text-green-600">{uniqueFamilies(['paid', 'invoiced'])} família(s)</p>
         </div>
-      </div>
-
-      {/* One-time setup after this system ships. Billing computes gross from
-          ReservationEvents, and subscriptions created before the collection
-          existed have none — which bills as zero. Must be run once per
-          environment, right after deploy, BEFORE any trigger recomputes a
-          family. Deliberately placed above the repair tool and styled as a
-          prerequisite, not an afterthought. */}
-      <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 flex items-center gap-4 flex-wrap">
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-amber-900">📅 Gerar ocorrências das inscrições</p>
-          <p className="text-xs text-amber-800">
-            Necessário <strong>uma vez</strong> depois de instalar o sistema de ocorrências:
-            inscrições criadas antes dele não têm ocorrências e faturariam <strong>zero</strong>.
-            Cobre o mês atual inteiro (incluindo dias já passados), para que o mês de arranque
-            não fique subfaturado. Repetível em segurança — só cria o que falta, nunca
-            altera faltas já marcadas.
-          </p>
-        </div>
-        <button onClick={handleGenerateEvents} disabled={generatingEvents}
-          className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700 disabled:opacity-50 shrink-0">
-          {generatingEvents ? 'A gerar...' : '📅 Gerar ocorrências'}
-        </button>
-        {generateEventsResult && <span className="text-sm text-amber-900 w-full">{generateEventsResult}</span>}
-      </div>
-
-      {/* Backfill — manual repair tool, not the normal flow. Subscription and
-          absence changes already recompute billing automatically on their
-          own (onStudyroomBillingSync / onTransportBillingSync /
-          onReservationEventBillingSync); this exists for forcing a full
-          recompute of every family at once when something needs a one-off
-          correction (e.g. a config/pricing fix applied retroactively). */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center gap-4 flex-wrap">
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-700">🛠️ Reparação manual — recalcular tudo</p>
-          <p className="text-xs text-gray-400">
-            Normalmente não é preciso: alterações a inscrições ou faltas já recalculam a
-            faturação automaticamente. Use isto só para forçar um recálculo geral (ex.: depois
-            de corrigir um preço/config com efeito retroativo).
-          </p>
-        </div>
-        <button onClick={handleBackfill} disabled={backfilling}
-          className="px-4 py-2 bg-gray-600 text-white text-sm font-medium rounded hover:bg-gray-700 disabled:opacity-50 shrink-0">
-          {backfilling ? 'A recalcular...' : '🛠️ Recalcular tudo'}
-        </button>
-        {backfillResult && <span className="text-sm text-gray-700 w-full">{backfillResult}</span>}
       </div>
 
       {/* Filters */}

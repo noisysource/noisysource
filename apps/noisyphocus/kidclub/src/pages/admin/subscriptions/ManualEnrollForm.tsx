@@ -156,12 +156,6 @@ export default function ManualEnrollForm({ transportConfig, studyConfig, discoun
           age: calculateAge(dob),
           schoolName: details.schoolName.trim() || null,
           schoolYear: details.schoolYear.trim() || null,
-          homeAddress: {
-            street: details.homeAddress.street.trim(),
-            city: details.homeAddress.city.trim(),
-            postalCode: details.homeAddress.postalCode.trim(),
-            country: details.homeAddress.country.trim() || null,
-          },
           contactEmail: normalizeEmail(details.contactEmail) || null,
           contactPhone: details.contactPhone.trim() || null,
           status: 'active',

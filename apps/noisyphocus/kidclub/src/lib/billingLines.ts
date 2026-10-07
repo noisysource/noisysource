@@ -1,0 +1,82 @@
+// Per-subscription amounts taken from the billing engine's own line items
+// (billing/{familyId}_{yyyy-mm}.lineItems), rather than from a subscription's
+// stored monthlyFee/monthlyPrice. The stored figure is the flat model
+// (gross − summed appliedDiscounts); since 2026-10-01 only old-pricing subs
+// are billed that way — new-pricing subs get marginal multi-trip and sibling
+// discounts, so their bill can differ from the stored fee. The bill line is
+// what the engine actually charges under whichever model applies.
+
+export interface BillLine {
+  subscriptionId: string;
+  type?: string;
+  title?: string;
+  amount: number;
+  absenceCreditAmount: number;
+  grossAmount: number;
+  multiTripDiscountAmount: number;
+  siblingDiscountAmount: number;
+  institutionalDiscountPct: number;
+  legacyPricing: boolean;
+}
+
+export const toBillLines = (raw: any[] | undefined): BillLine[] =>
+  (raw ?? []).map(l => ({
+    subscriptionId: l.subscriptionId ?? '',
+    type: l.type,
+    title: l.title,
+    amount: l.amount ?? 0,
+    absenceCreditAmount: l.absenceCreditAmount ?? 0,
+    grossAmount: l.grossAmount ?? l.amount ?? 0,
+    multiTripDiscountAmount: l.multiTripDiscountAmount ?? 0,
+    siblingDiscountAmount: l.siblingDiscountAmount ?? 0,
+    institutionalDiscountPct: l.institutionalDiscountPct ?? 0,
+    legacyPricing: !!l.legacyPricing,
+  }));
+
+/** The standard monthly amount: net of discounts, before absence credits. */
+export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount) * 100) / 100;
+
+/** yyyy-mm of a billing doc, from periodStart (Timestamp/Date/string) or the `_yyyy-mm` id suffix. */
+export function billPeriodKey(id: string, periodStart: any): string {
+  const d = periodStart?.toDate ? periodStart.toDate() : periodStart ? new Date(periodStart) : null;
+  if (d && !isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return id.match(/_(\d{4}-\d{2})$/)?.[1] ?? '';
+}
+
+export const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+/** subscriptionId -> periodKey -> line, from non-cancelled bills. */
+export type LinesBySub = Map<string, Map<string, BillLine>>;
+
+export function indexLinesBySub(bills: { periodKey: string; status: string; lines: BillLine[] }[]): LinesBySub {
+  const m: LinesBySub = new Map();
+  for (const b of bills) {
+    if (b.status === 'cancelled') continue;
+    for (const l of b.lines) {
+      if (l.type === 'enrollment' || !l.subscriptionId) continue;
+      let byMonth = m.get(l.subscriptionId);
+      if (!byMonth) m.set(l.subscriptionId, byMonth = new Map());
+      byMonth.set(b.periodKey, l);
+    }
+  }
+  return m;
+}
+
+/**
+ * The line that stands for a subscription's monthly amount: the given month's
+ * if there is one, else the current month's, else the next billed month, else
+ * the latest past one. A line worth €0 (a month the contract doesn't cover) is
+ * skipped in the fallbacks so it can't stand in for the monthly price.
+ */
+export function standardLine(byMonth: Map<string, BillLine> | undefined, month?: string): BillLine | undefined {
+  if (!byMonth?.size) return undefined;
+  if (month) {
+    const l = byMonth.get(month);
+    if (l) return l;
+  }
+  const now = monthKey();
+  const keys = [...byMonth.keys()].filter(k => lineNet(byMonth.get(k)!) > 0).sort();
+  const pick = byMonth.get(now) && lineNet(byMonth.get(now)!) > 0 ? now
+    : keys.find(k => k > now) ?? keys[keys.length - 1];
+  return pick ? byMonth.get(pick) : undefined;
+}

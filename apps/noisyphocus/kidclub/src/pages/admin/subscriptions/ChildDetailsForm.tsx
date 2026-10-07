@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { updateDoc, addDoc } from 'firebase/firestore';
 import { col, docRef } from '../../../lib/db';
-import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, EMPTY_ENROLLMENT_ADDRESS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
+import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
 import { familyService } from '../../../services/familyService';
 import { calculateAge } from '../../../lib/utils';
 import { SubItem, ChildGroup } from './model';
@@ -31,7 +31,7 @@ export default function ChildDetailsForm({ group, onSaved, onCancel }: {
   const [saveError, setSaveError] = useState<string | null>(null);
   const originalSchool = group.schoolName ?? '';
 
-  // dateOfBirth and homeAddress only exist on the children doc.
+  // dateOfBirth only exists on the children doc.
   useEffect(() => {
     if (!group.childId) return;
     familyService.getChild(group.childId).then(c => {
@@ -43,9 +43,6 @@ export default function ChildDetailsForm({ group, onSaved, onCancel }: {
         dateOfBirth: c.dateOfBirth && !isNaN(c.dateOfBirth.getTime()) ? c.dateOfBirth.toISOString().split('T')[0] : '',
         schoolName: c.schoolName ?? prev.schoolName,
         schoolYear: c.schoolYear ?? prev.schoolYear,
-        homeAddress: c.homeAddress
-          ? { street: c.homeAddress.street ?? '', city: c.homeAddress.city ?? '', postalCode: c.homeAddress.postalCode ?? '', country: c.homeAddress.country ?? '' }
-          : EMPTY_ENROLLMENT_ADDRESS,
       }));
     }).catch(() => setLoadFailed(true)).finally(() => setLoading(false));
   }, [group.childId]);
@@ -65,10 +62,7 @@ export default function ChildDetailsForm({ group, onSaved, onCancel }: {
         dateOfBirth: dob, age: calculateAge(dob),
         schoolName: details.schoolName.trim() || null,
         schoolYear: details.schoolYear.trim() || null,
-        homeAddress: {
-          street: details.homeAddress.street.trim(), city: details.homeAddress.city.trim(),
-          postalCode: details.homeAddress.postalCode.trim(), country: details.homeAddress.country.trim() || null,
-        },
+        // homeAddress intentionally not written; updateDoc leaves any legacy value untouched.
         updatedAt: new Date(),
       };
 

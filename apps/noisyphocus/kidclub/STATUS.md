@@ -11,9 +11,63 @@
   `claimfamilybyemail`, `getinvoicepdf`, `resetstuckpayment` got `allUsers` invoker by hand.
 - **Not confirmed:** whether the prod `userId` backfill for the empty-portal families (below) ever ran.
   #60 fixes it going forward only. Check before assuming those parents can see their data.
-- **Being checked/fixed 2026-10-01:** userId backfill status, Sandra Abreu's duplicate family, Maria Clara's
-  sub (belongs to elisacostafelix@gmail.com's family), Afonso Santos's missing child record, any other
-  empty duplicate families (Cláudia Faustino's looks already gone).
+- **Prod data check, 2026-10-01 evening (read-only REST snapshot, deleted after):**
+  - **userId backfill DID run.** Only mismatches left are the 2 owner-less families (Anabela Gonçalves
+    `GdTXkg9zO0lM93zRVSSE`, palexandra@sapo.pt `dJVtUfA3oDiCJsU2B7LF`) — expected; `claimFamilyByEmail`
+    fixes them on first login.
+  - ✅ **Sandra Abreu — done (2026-10-02):** duplicate gone, real family `nnBmdqT7MEL3tNeTQqbM` fully linked;
+    she knows to log in with smpabreu@hotmail.com (gmail login would create a new empty family).
+  - **Maria Clara — relinked 2026-10-02 (Renato ran the PATCH; both subs now in family `LhptHMtIfnl2pjr9ETgv`,
+    `childId: ""`).** She hasn't started yet → Renato to set her study sub to **Pendente** (no email; Oct–Aug
+    bills auto-cancel). When she starts: "Dados da criança" → Guardar FIRST (creates the child so the €60 fee
+    bills), then **Ativo** (emails "Inscrição aprovada", revives the bills). Original finding: **NOT BILLED.** Study sub `Y0E8cYlZ3P0y1csUphCP` (confirmed, from 2026-10-01, €120) and
+    cancelled `etKDNsgJGkJHnWHIT9il` point to missing family `H4hFhb2GcFVV0IGEH5Gs` and missing child
+    `fOtkoEpZCSU3kVBO8Cra`. Elisa Félix's family is `LhptHMtIfnl2pjr9ETgv` (no NIF/Vendus client yet).
+    UI can't relink (both ids set → not "não vinculado"). Fix: Renato runs a reviewed REST PATCH setting
+    `familyId=LhptHMtIfnl2pjr9ETgv`, `childId=""` on both, then Admin → Elisa Félix → Maria Clara →
+    ✏️ Dados da criança → Guardar. **Open: bill Sept 14–30 retroactively?** (never billed).
+  - **Afonso Santos:** confirmed no child record (transport `childId` missing, study `""`), no €60 fee.
+    Fix: Admin → Anabela Gonçalves → Afonso Santos → ✏️ Dados da criança → Guardar; fee lands on the
+    pending Sept bill.
+  - ✅ **Empty families:** Gil Figueiredo and "ooooooooo"/Leonardo Marques **deleted by Renato 2026-10-02**; Anabela Marques has
+    nothing; Ana Coelho, Ana Bento, Miriam Inácio signed up but never enrolled; Geral ArcoIris is staff.
+  - ✅ Maria Manon Oct = €117.60 confirmed (2026-10-02). **Afonso Santos's "Dados da criança" still to do** —
+    after #70 reaches prod (no address needed then).
+- **Child `homeAddress` removed from forms (2026-10-01, Renato):** duplicated the family billingAddress,
+  insurance doesn't need it, transport has per-trip pickup/dropoff. Handed to a kidclub-feature agent,
+  branch `agent/kidclub-child-address`, PR → staging. Existing data kept.
+- **Billing fixes, later the same day:**
+  - **#66 (hotfix, in prod):** recompute started at the current month, so from Oct 1 every change to an unpaid
+    September bill was ignored. Now unpaid earlier months are recomputed too (update only, never created,
+    left as-is if a subscription on them is no longer active). Days of a paid/invoiced/processing month are
+    locked (server refuses, admin calendar read-only). Verified: Ana Braga's Sept €156 → €108 (10 absences).
+  - **#67 (old pricing, deployed to prod via #68, #68 open/unmerged at time of writing):** the engine bills
+    per-trip (marginal multi-trip/sibling) but cards, `monthlyFee` and the 2026-10-01 email showed the flat
+    model; 5 subs were billed €94.37/month more than shown. Renato's call: grandfather. Subs created before
+    2026-10-01 (Lisbon) are billed flat (gross − summed `appliedDiscounts`) until school-year end; new subs use
+    per-trip. Per-sub admin switch "🔒 Tarifário antigo / Tarifário novo" (`legacyPricing`) on the card.
+    "Recalcular tudo" was run after (25 families, 274 updated). **Confirm Maria Manon Oct = €117.60**; if not,
+    run "Recalcular tudo" again (it may have run before #68's deploy finished), then merge #68.
+- **Next small tasks (Renato, 2026-10-01):**
+  - ✅ **PR #71 → staging (`agent/kidclub-financial-summary`), in test on dev:** summary amounts from bill
+    lines, Faturado/Recebido per month, per-model discount simulation, card shows the billed amount on
+    new-pricing subs. 2026-10-02 rework (Renato): filters on top, totals right below; new "Receita:
+    Recebido / Previsto" toggles drive every total; "Ano letivo" sums all billed months with costs × months. Original spec:
+    **Financial Summary must account for both pricing models.** `FinancialSummaryPage.tsx` sums each sub's
+    stored `monthlyFee`/`monthlyPrice`, which is the flat figure — wrong for new-pricing subs with multi-trip
+    or sibling. Take each sub's standard monthly amount from its billing line instead (current or next pending
+    month: `amount + absenceCreditAmount` = net before absences, which the engine computes with the right model;
+    fall back to `monthlyFee` only when there's no bill). Also add, per month: **Faturado** (sum of that
+    month's bill totals, after absences, incl. fees) and **Recebido** (bills `paid`/`invoiced`). Read-only.
+    The "Simulação de descontos" scenario would need the same per-model treatment.
+  - ✅ **PR open → staging (`agent/kidclub-maintenance-buttons`):** maintenance buttons moved to a
+    "Manutenção" panel at the top of Gestão de Dados (`/admin/data-management`, Renato's pick 2026-10-02).
+    Original: **Move the two maintenance buttons off the billing page** into a "Manutenção" section. "Recalcular tudo" (`backfillBillingSchedules`) stays: needed after
+    price/rule changes or billing fixes. "Gerar ocorrências" (`backfillReservationEvents`) is repair-only now:
+    events regenerate automatically on every subscription write.
+  - Low priority: transport `schedule[]` entries have no `direction` (0 of 23 active subs), so line items and
+    events say "both" for single-trip days. Amounts are unaffected (gross counts schedule entries); only labels.
+  - ✅ (same PR) The subscription card's price for **new-pricing** subs now comes from the bill line.
 - **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case).
 - **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
 - **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
