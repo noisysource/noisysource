@@ -4,6 +4,15 @@ import { Link } from 'react-router-dom';
 import { callable } from '../../lib/callable';
 import { col } from '../../lib/db';
 import { BillingRecord, BillingStatus, BillingPaymentMethod, BillingLineItem } from '@shared/models';
+import MarkPaidModal from './billing/MarkPaidModal';
+import BankDetailsPanel from './billing/BankDetailsPanel';
+import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
+
+// Bills a payment can still be recorded on (markBillingPaid accepts these).
+const OPEN_STATUSES: BillingStatus[] = ['pending', 'processing', 'failed'];
+const hasProof = (r: BillingRecord) => !!r.paymentProofs?.length;
+/** A parent sent a proof and the bill is still waiting for an admin to confirm it. */
+const proofAwaiting = (r: BillingRecord) => hasProof(r) && OPEN_STATUSES.includes(r.status);
 
 const STATUS_META: Record<BillingStatus, { label: string; className: string }> = {
   pending:    { label: 'Pendente',   className: 'bg-yellow-100 text-yellow-800' },
@@ -361,7 +370,7 @@ function DayEditor({ record, onRefreshNeeded }: {
   );
 }
 
-function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExpandRecord, sendingId, sendResult, onSendNotice, onRefreshNeeded }: {
+function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExpandRecord, sendingId, sendResult, onSendNotice, onRefreshNeeded, onMarkPaid }: {
   monthKey: string;
   records: BillingRecord[];
   expanded: boolean;
@@ -372,6 +381,7 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
   sendResult: Record<string, string>;
   onSendNotice: (r: BillingRecord) => void;
   onRefreshNeeded: () => void;
+  onMarkPaid: (r: BillingRecord) => void;
 }) {
   const sub = subtotals(records);
   const label = records[0]?.periodLabel ?? monthKey;
@@ -416,9 +426,28 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                   <td className="px-4 py-2.5 text-right font-semibold text-gray-800">{fmtEur(r.total)}</td>
                   <td className="px-4 py-2.5 text-gray-600">{fmtDate(r.dueDate)}</td>
                   <td className="px-4 py-2.5">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_META[r.status]?.className ?? 'bg-gray-100 text-gray-600'}`}>
-                      {STATUS_META[r.status]?.label ?? r.status}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_META[r.status]?.className ?? 'bg-gray-100 text-gray-600'}`}>
+                        {STATUS_META[r.status]?.label ?? r.status}
+                      </span>
+                      {hasProof(r) && (
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${proofAwaiting(r) ? 'bg-teal-100 text-teal-800' : 'bg-gray-100 text-gray-500'}`}
+                          title={r.paymentProofs!.map(p => p.fileName).join('\n')}>
+                          📎 Comprovativo recebido
+                        </span>
+                      )}
+                      {!!r.duplicatePaymentEasypayIds?.length && (
+                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-800"
+                          title={`Easypay: ${r.duplicatePaymentEasypayIds.join(', ')} — devolver ao encarregado`}>
+                          ⚠️ Pagamento em duplicado
+                        </span>
+                      )}
+                      {r.invoiceError && (
+                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-800" title={r.invoiceError}>
+                          🧾 Erro de fatura
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -427,6 +456,13 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                           onClick={() => onExpandRecord(r.id)}
                           className="px-3 py-1 bg-white border border-amber-300 text-amber-700 text-xs font-medium rounded hover:bg-amber-50 whitespace-nowrap">
                           {expandedId === r.id ? '📅 Fechar dias' : '📅 Dias'}
+                        </button>
+                      )}
+                      {OPEN_STATUSES.includes(r.status) && (
+                        <button
+                          onClick={() => onMarkPaid(r)}
+                          className="px-3 py-1 bg-green-600 text-white text-xs font-medium rounded hover:bg-green-700 whitespace-nowrap">
+                          Marcar como pago
                         </button>
                       )}
                       {['pending', 'failed'].includes(r.status) && (
@@ -453,8 +489,28 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                       {r.noticeSentAt && (
                         <p className="text-xs text-indigo-600 mt-1">Aviso enviado em {fmtDateTime(r.noticeSentAt)}</p>
                       )}
-                      {r.paidAt && <p className="text-xs text-green-700 mt-1">Pago em {fmtDate(r.paidAt)}</p>}
+                      {r.paidAt && <p className="text-xs text-green-700 mt-1">Pago em {fmtDate(r.paidAt)}{r.manualPayment ? ' · transferência confirmada manualmente' : ''}{r.manualPayment?.note ? ` — ${r.manualPayment.note}` : ''}</p>}
                       {r.invoiceNumber && <p className="text-xs text-purple-700 mt-1">Fatura: {r.invoiceNumber}</p>}
+                      {r.invoiceError && (
+                        <p className="text-xs text-red-700 mt-1 break-words">
+                          Fatura por emitir: {r.invoiceError} — <Link to="/admin/subscriptions" className="underline">Tentar faturar novamente em Famílias e inscrições</Link>
+                        </p>
+                      )}
+                      {!!r.duplicatePaymentEasypayIds?.length && (
+                        <p className="text-xs text-red-700 mt-1">
+                          Pagamento em duplicado: já estava paga e entrou outro pagamento Easypay ({r.duplicatePaymentEasypayIds.join(', ')}). Devolver ao encarregado.
+                        </p>
+                      )}
+                      <div className="mt-2 pt-2 border-t border-gray-200 space-y-1.5">
+                        <p className="text-xs font-medium text-gray-600">
+                          Comprovativos{r.proofSubmittedAt ? ` · último em ${fmtDateTime(r.proofSubmittedAt)}` : ''}
+                        </p>
+                        {hasProof(r)
+                          ? <PaymentProofList proofs={r.paymentProofs} showUploader />
+                          : <p className="text-xs text-gray-400">Nenhum.</p>}
+                        <PaymentProofUpload billingId={r.id} onUploaded={onRefreshNeeded} label="Adicionar comprovativo"
+                          className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline disabled:opacity-50" />
+                      </div>
                       {/* Only a pending record is editable. An invoiced one backs
                           an issued fiscal document and is frozen (decision 5). */}
                       {r.status === 'pending' && r.lineItems?.some(li => li.subscriptionId && (li.type === 'study' || li.type === 'transport')) && (
@@ -482,6 +538,9 @@ export default function BillingAdminPage() {
 
   const [filterStatus, setFilterStatus] = useState('pending');
   const [filterPeriod, setFilterPeriod] = useState('all');
+  const [onlyProofs, setOnlyProofs] = useState(false);
+  const [markPaidId, setMarkPaidId] = useState<string | null>(null);
+  const markPaidRecord = markPaidId ? records.find(r => r.id === markPaidId) ?? null : null;
 
   const fetchRecords = async () => {
     setLoading(true);
@@ -515,8 +574,10 @@ export default function BillingAdminPage() {
   const filtered = records.filter(r => {
     if (filterStatus !== 'all' && r.status !== filterStatus) return false;
     if (filterPeriod !== 'all' && r.periodLabel !== filterPeriod) return false;
+    if (onlyProofs && !hasProof(r)) return false;
     return true;
   });
+  const awaitingProofCount = records.filter(proofAwaiting).length;
 
   const uniqueFamilies = (statuses: string[]) =>
     new Set(records.filter(r => statuses.includes(r.status)).map(r => r.familyId)).size;
@@ -563,6 +624,20 @@ export default function BillingAdminPage() {
         </Link>
       </div>
 
+      <BankDetailsPanel />
+
+      {awaitingProofCount > 0 && !onlyProofs && (
+        <div className="bg-teal-50 border border-teal-200 rounded-lg px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-sm text-teal-800">
+            📎 {awaitingProofCount} mensalidade{awaitingProofCount === 1 ? '' : 's'} com comprovativo de pagamento por confirmar.
+          </p>
+          <button onClick={() => { setOnlyProofs(true); setFilterStatus('all'); setFilterPeriod('all'); setExpandedMonths(null); }}
+            className="px-3 py-1 bg-teal-600 text-white text-xs font-medium rounded hover:bg-teal-700">
+            Ver
+          </button>
+        </div>
+      )}
+
       {/* Summary — grand total across the whole generated schedule */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
@@ -592,6 +667,10 @@ export default function BillingAdminPage() {
           <option value="all">Todos os estados</option>
           {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+          <input type="checkbox" checked={onlyProofs} onChange={e => setOnlyProofs(e.target.checked)} className="accent-teal-600" />
+          📎 Só com comprovativo
+        </label>
         <span className="text-sm text-gray-400">{filtered.length} resultado(s)</span>
       </div>
 
@@ -615,11 +694,15 @@ export default function BillingAdminPage() {
               sendResult={sendResult}
               onSendNotice={handleSendNotice}
               onRefreshNeeded={fetchRecords}
+              onMarkPaid={r => setMarkPaidId(r.id)}
             />
           ))}
         </div>
       )}
 
+      {markPaidRecord && (
+        <MarkPaidModal record={markPaidRecord} onClose={() => setMarkPaidId(null)} onChanged={fetchRecords} />
+      )}
     </div>
   );
 }
