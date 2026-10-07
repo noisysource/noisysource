@@ -1,10 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
-import { query, where, getDocs } from 'firebase/firestore';
+import { query, where, getDocs, getDoc, limit } from 'firebase/firestore';
 import { callable } from '../../lib/callable';
-import { col } from '../../lib/db';
+import { col, docRef } from '../../lib/db';
 import { useUser } from '@shared/hooks';
-import { BillingRecord } from '@shared/models';
+import { BillingRecord, Family } from '@shared/models';
 import { useImpersonation } from '../../contexts/ImpersonationContext';
+import { familyPaymentMethod } from '../../lib/paymentMethod';
+import { useBankTransferConfig, formatIban, transferDescription, BankTransferConfig } from '../../lib/bankTransfer';
+import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
+import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
 
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
@@ -15,8 +19,19 @@ const STATUS_META: Record<string, { label: string; className: string; icon: stri
 };
 const SHOWN_STATUSES = Object.keys(STATUS_META);
 
-/** Small status pill. Overdue wins over the record's own status. */
+/** Proof sent, not confirmed yet: the bill stays unpaid until an admin confirms the transfer. */
+const awaitingConfirmation = (r: BillingRecord) =>
+  !!r.paymentProofs?.length && ['pending', 'processing', 'failed'].includes(r.status);
+
+/** Small status pill. A proof awaiting confirmation wins, then overdue, then the record's own status. */
 function StatusTag({ record }: { record: BillingRecord }) {
+  if (awaitingConfirmation(record)) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border bg-teal-50 text-teal-800 border-teal-200">
+        📎 A aguardar confirmação
+      </span>
+    );
+  }
   const overdue = isOverdue(record);
   const meta = STATUS_META[record.status];
   const cls = overdue ? 'bg-red-100 text-red-700 border-red-200' : meta?.className ?? 'bg-gray-50 text-gray-600 border-gray-200';
@@ -24,6 +39,60 @@ function StatusTag({ record }: { record: BillingRecord }) {
     <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${cls}`}>
       {overdue ? '⚠️ Em atraso' : `${meta?.icon ?? ''} ${meta?.label ?? record.status}`}
     </span>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button"
+      onClick={() => navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => {})}
+      className="text-xs text-indigo-600 hover:underline shrink-0">
+      {copied ? 'Copiado' : 'Copiar'}
+    </button>
+  );
+}
+
+/** What a parent paying by bank transfer needs: IBAN, amount and the description to use. */
+function BankTransferBox({ record, bank }: { record: BillingRecord; bank: BankTransferConfig | null }) {
+  const description = transferDescription(record.billingName, record.periodLabel);
+  return (
+    <div className="bg-white rounded-lg p-3 border border-gray-200 space-y-2">
+      <p className="text-sm font-semibold text-gray-800">🏦 Pagar por transferência bancária</p>
+      {bank === null ? (
+        <p className="text-xs text-gray-400">A carregar...</p>
+      ) : !bank.iban ? (
+        <p className="text-xs text-gray-500">Os dados para transferência ainda não estão disponíveis. Contacte-nos ou pague por MB WAY.</p>
+      ) : (
+        <div className="space-y-1.5 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-gray-500 text-xs">IBAN</span>
+            <span className="font-mono text-gray-800 text-right break-all">{formatIban(bank.iban)}</span>
+            <CopyButton text={bank.iban.replace(/\s+/g, '')} />
+          </div>
+          {bank.accountHolder && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-gray-500 text-xs">Titular</span>
+              <span className="text-gray-800 text-right flex-1">{bank.accountHolder}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-gray-500 text-xs">Valor</span>
+            <span className="font-semibold text-gray-800 text-right flex-1">{fmtEur(record.total)}</span>
+            <CopyButton text={record.total.toFixed(2)} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-gray-500 text-xs shrink-0">Descritivo</span>
+            <span className="text-gray-800 text-right flex-1">{description}</span>
+            <CopyButton text={description} />
+          </div>
+          <p className="text-[11px] text-gray-400 pt-1">
+            {PAYMENT_PROOFS_ENABLED && 'Depois de transferir, envie o comprovativo abaixo para confirmarmos mais depressa. '}
+            A fatura é emitida quando confirmarmos a transferência.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -72,6 +141,9 @@ export default function PaymentsPage() {
   const { impersonation } = useImpersonation();
   const [records, setRecords] = useState<BillingRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [family, setFamily] = useState<Family | null>(null);
+  const { config: bank } = useBankTransferConfig();
 
   // Single-item payment panel
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -96,7 +168,9 @@ export default function PaymentsPage() {
   useEffect(() => {
     if (!user) return;
     const load = async () => {
-      setLoading(true);
+      // Only the first load blanks the page; a reload after a proof upload
+      // refreshes in place.
+      if (reloadKey === 0) setLoading(true);
       try {
         // While impersonating, the admin's own uid would never match the
         // family's billing records (see familyService.ts) — query by the
@@ -118,9 +192,28 @@ export default function PaymentsPage() {
       } finally {
         setLoading(false);
       }
+      // The family's chosen payment method (Conta → "Método de pagamento").
+      // Unpaid bills follow the current choice even before the next billing
+      // recompute copies it onto them.
+      try {
+        if (impersonation) {
+          const snap = await getDoc(docRef('families', impersonation.familyId));
+          setFamily(snap.exists() ? ({ id: snap.id, ...snap.data() } as Family) : null);
+        } else {
+          const snap = await getDocs(query(col('families'), where('primaryContact.userId', '==', user.uid), limit(1)));
+          setFamily(snap.empty ? null : ({ id: snap.docs[0].id, ...snap.docs[0].data() } as Family));
+        }
+      } catch (err) {
+        console.error('[PaymentsPage] family load failed:', err);
+      }
     };
     load();
-  }, [user, impersonation]);
+  }, [user, impersonation, reloadKey]);
+
+  const familyMethod = familyPaymentMethod(family);
+  /** How this bill is meant to be paid: the family's current choice while unpaid, else what the bill recorded. */
+  const methodFor = (r: BillingRecord) => (isPayable(r) && familyMethod) ? familyMethod : r.paymentMethod;
+  const reload = () => setReloadKey(k => k + 1);
 
   // One list, month order (records is sorted), cancelled/dry-run left out.
   const shown = useMemo(() => records.filter(r => SHOWN_STATUSES.includes(r.status)), [records]);
@@ -326,6 +419,7 @@ export default function PaymentsPage() {
                       <p className="text-xs text-gray-400">
                         {record.invoiceNumber ? `Fatura ${record.invoiceNumber}` : 'Pago'}
                         {record.paidAt && ` · ${record.paidAt.toDate().toLocaleDateString('pt-PT')}`}
+                        {record.manualPayment && ' · por transferência'}
                       </p>
                     </div>
                     <div className="text-right space-y-1">
@@ -390,7 +484,13 @@ export default function PaymentsPage() {
                       ))}
                     </div>
 
-                    {record.status === 'failed' && (
+                    {awaitingConfirmation(record) && (
+                      <p className="mt-3 text-sm text-teal-800 bg-white rounded-lg px-3 py-2 border border-teal-200">
+                        Recebemos o seu comprovativo. A aguardar confirmação da transferência.
+                      </p>
+                    )}
+
+                    {record.status === 'failed' && !awaitingConfirmation(record) && (
                       <p className="mt-3 text-sm text-red-800 bg-white rounded-lg px-3 py-2 border border-red-200">
                         O pagamento anterior não foi concluído. Pode tentar de novo.
                       </p>
@@ -410,8 +510,19 @@ export default function PaymentsPage() {
                       <p className="mt-3 text-sm text-gray-700 bg-white rounded-lg px-3 py-2 border">{actionResult[record.id]}</p>
                     )}
 
-                    {/* Single-item pay panel */}
-                    {isPending && !isSelected && (
+                    {/* Single-item pay panel. Bank transfer: IBAN + description, with
+                        MB WAY still one click away. Months-in-order is enforced
+                        server-side for Easypay only; a transfer can cover several. */}
+                    {isPending && !isSelected && methodFor(record) === 'bank_transfer' && activeId !== record.id && (
+                      <div className="mt-4 space-y-2">
+                        <BankTransferBox record={record} bank={bank} />
+                        <button onClick={() => { setActiveId(record.id); setSelected(new Set()); }}
+                          className="w-full text-xs text-indigo-600 hover:underline py-1">
+                          Prefere pagar agora por MB WAY?
+                        </button>
+                      </div>
+                    )}
+                    {isPending && !isSelected && (methodFor(record) !== 'bank_transfer' || activeId === record.id) && (
                       <div className="mt-4">
                         {earlierUnpaid(records, record).length > 0 ? (
                           <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-center">
@@ -441,6 +552,15 @@ export default function PaymentsPage() {
                             <button onClick={() => setActiveId(null)} className="w-full text-xs text-gray-400 py-1">Cancelar</button>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* Proof of payment — optional, any method. Never marks the bill paid by itself. */}
+                    {(isPending || record.status === 'processing') && (PAYMENT_PROOFS_ENABLED || !!record.paymentProofs?.length) && (
+                      <div className="mt-3 pt-3 border-t border-black/5 space-y-1.5">
+                        <PaymentProofList proofs={record.paymentProofs} />
+                        <PaymentProofUpload billingId={record.id} onUploaded={reload}
+                          label={record.paymentProofs?.length ? 'Enviar outro comprovativo' : 'Enviar comprovativo'} />
                       </div>
                     )}
                   </div>

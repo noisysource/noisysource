@@ -1,7 +1,17 @@
 import { Timestamp } from 'firebase/firestore';
 import type { AppliedDiscount } from './Discount';
 
-export type BillingPaymentMethod = 'mbway' | 'multibanco' | 'card' | 'subscription';
+export type BillingPaymentMethod = 'mbway' | 'multibanco' | 'card' | 'subscription' | 'bank_transfer';
+
+/** A file a parent or admin uploaded as proof of a (bank transfer) payment.
+ *  Stored in Firebase Storage at `path`; attached via the attachPaymentProof callable. */
+export interface PaymentProof {
+  path: string;
+  fileName: string;
+  uploadedBy: string;
+  uploaderRole: 'parent' | 'admin';
+  uploadedAt: Timestamp;
+}
 
 export type BillingStatus =
   | 'pending'     // billing record created, payment not yet initiated
@@ -74,8 +84,21 @@ export interface BillingRecord {
   // Admin actions
   noticeSentAt?: Timestamp;
 
+  // Easypay payments that landed on an already-paid bill (paid by another
+  // Easypay payment, or marked paid manually by an admin) — need a refund.
+  duplicatePaymentEasypayIds?: string[];
+
+  // Proof of payment (optional). Never changes `status` by itself: a parent
+  // upload keeps the record pending; only an admin marks it paid.
+  paymentProofs?: PaymentProof[];
+  proofSubmittedAt?: Timestamp;
+
+  // Set by markBillingPaid (admin confirmed a bank transfer by hand).
+  manualPayment?: { by: string; at: Timestamp; note?: string };
+
   // Outcome
   paidAt?: Timestamp;
+  invoiceError?: string;
   invoiceNumber?: string;
   vendusId?: number;
   atcud?: string;

@@ -3,6 +3,8 @@ import { useUser } from '@shared/hooks';
 import { Family } from '@shared/models';
 import { familyService } from '../../services/familyService';
 import { isValidNif, normalizeNif } from '../../lib/nif';
+import { profilePaymentChoice } from '../../lib/paymentMethod';
+import { deleteField } from 'firebase/firestore';
 
 export default function AccountPage() {
   const user = useUser();
@@ -17,7 +19,7 @@ export default function AccountPage() {
     street: '',
     city: '',
     postalCode: '',
-    defaultPaymentMethod: 'bank_transfer' as 'bank_transfer' | 'mbway',
+    paymentMethod: 'bank_transfer' as 'bank_transfer' | 'mbway',
   });
 
   useEffect(() => {
@@ -36,7 +38,7 @@ export default function AccountPage() {
         street: fam.billingAddress?.street || '',
         city: fam.billingAddress?.city || '',
         postalCode: fam.billingAddress?.postalCode || '',
-        defaultPaymentMethod: fam.defaultPaymentMethod || 'bank_transfer',
+        paymentMethod: profilePaymentChoice(fam),
       });
       setIsLoading(false);
     };
@@ -65,7 +67,10 @@ export default function AccountPage() {
         billingAddress: form.street
           ? { street: form.street, city: form.city, postalCode: form.postalCode, country: 'PT' }
           : undefined,
-        defaultPaymentMethod: form.defaultPaymentMethod,
+        // One field for the family's choice: billing reads `paymentMethod`.
+        // The old `defaultPaymentMethod` (never read by billing) is removed.
+        paymentMethod: form.paymentMethod,
+        defaultPaymentMethod: deleteField() as unknown as undefined,
         profileComplete: true,
       });
       setSaved(true);
@@ -183,25 +188,25 @@ export default function AccountPage() {
         <div className="bg-white rounded-lg border border-gray-200 p-5">
           <h2 className="font-semibold text-gray-900 mb-3">Método de pagamento preferido</h2>
           <div className="grid grid-cols-2 gap-3">
-            <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.defaultPaymentMethod === 'bank_transfer' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+            <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.paymentMethod === 'bank_transfer' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
               <input
                 type="radio"
                 name="payment"
                 value="bank_transfer"
-                checked={form.defaultPaymentMethod === 'bank_transfer'}
-                onChange={() => set('defaultPaymentMethod', 'bank_transfer')}
+                checked={form.paymentMethod === 'bank_transfer'}
+                onChange={() => set('paymentMethod', 'bank_transfer')}
                 className="sr-only"
               />
               <span className="text-xl">🏦</span>
               <span className="font-medium text-sm">Transferência bancária</span>
             </label>
-            <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.defaultPaymentMethod === 'mbway' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+            <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.paymentMethod === 'mbway' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
               <input
                 type="radio"
                 name="payment"
                 value="mbway"
-                checked={form.defaultPaymentMethod === 'mbway'}
-                onChange={() => set('defaultPaymentMethod', 'mbway')}
+                checked={form.paymentMethod === 'mbway'}
+                onChange={() => set('paymentMethod', 'mbway')}
                 className="sr-only"
               />
               <span className="text-xl">📱</span>
