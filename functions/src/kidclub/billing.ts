@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
-import { createInvoice, createOrUpdateClient, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
+import { createInvoice, createOrUpdateClient, VendusDocument, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
@@ -178,23 +178,77 @@ async function fetchChildRecords(childIds: string[]): Promise<Map<string, ChildR
 // has its own sandbox VENDUS_API_KEY/VENDUS_REGISTER_ID.
 const DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX = new Set(["kidclub-dev"]);
 
+// Atomic claim before any Vendus call: EasyPay sends two webhook calls per
+// payment, concurrently, and both used to reach Vendus — one real Fatura-Recibo
+// each. Only the call that sets `invoiceClaimedAt` goes on. A Vendus error
+// releases the claim (with `invoiceError`) so a retry can run. A claim left
+// behind by a run that died mid-way is never auto-expired: Vendus may already
+// have issued the invoice, so it blocks retries until an admin uses
+// retryVendusInvoice, which clears it on purpose.
 async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
   console.log(`[Vendus] start billingId=${billingId}`);
 
+  const billingRef = appCol("billing").doc(billingId);
+  const billing = await db.runTransaction(async (tx) => {
+    const data = (await tx.get(billingRef)).data();
+    if (!data) throw new Error(`Billing record ${billingId} not found`);
+    if (data.status === "invoiced") {
+      console.log(`[Vendus] billing ${billingId} already invoiced, skipping`);
+      return null;
+    }
+    if (data.invoiceClaimedAt) {
+      console.log(`[Vendus] billing ${billingId} already claimed by another invoice run, skipping`);
+      return null;
+    }
+    tx.update(billingRef, {
+      invoiceClaimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      invoiceError: admin.firestore.FieldValue.delete(),
+    });
+    return data;
+  });
+  if (!billing) return;
+
+  let vendusDoc: VendusDocument;
+  try {
+    vendusDoc = await issueVendusInvoice(billing);
+  } catch (err: any) {
+    // Vendus did not issue it: release the claim so a retry can run.
+    await billingRef.update({
+      invoiceError: err.message,
+      invoiceClaimedAt: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    throw err;
+  }
+
+  try {
+    await billingRef.update({
+      status: "invoiced",
+      invoiceNumber: vendusDoc.number,
+      vendusId: vendusDoc.id,
+      atcud: vendusDoc.atcud ?? null,
+      invoiceClaimedAt: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (err: any) {
+    // Vendus issued the invoice but recording it failed: keep the claim so
+    // nothing retries into a duplicate.
+    console.error(`[Vendus] invoice ${vendusDoc.number} (id=${vendusDoc.id}) CREATED but not recorded on billing ${billingId}:`, err.message);
+    await billingRef.update({
+      invoiceError: `Fatura Vendus ${vendusDoc.number} (id ${vendusDoc.id}) criada mas não registada — confirmar no Vendus antes de repetir. (${err.message})`,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }).catch(() => {});
+    throw err;
+  }
+}
+
+async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData): Promise<VendusDocument> {
   const currentProject = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
   if (DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX.has(currentProject)) {
     throw new Error(
       `Vendus invoicing is disabled on ${currentProject}: this project has no Vendus sandbox, ` +
       `only the real production account, so creating an invoice here would generate a real fiscal document.`
     );
-  }
-
-  const billingRef = appCol("billing").doc(billingId);
-  const billing = (await billingRef.get()).data();
-  if (!billing) throw new Error(`Billing record ${billingId} not found`);
-  if (billing.status === "invoiced") {
-    console.log(`[Vendus] billing ${billingId} already invoiced, skipping`);
-    return;
   }
 
   const { familyId, userId, lineItems, total, billingName, billingEmail, periodLabel } = billing;
@@ -249,16 +303,8 @@ async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
     throw new Error(vendusDoc.errors.map((e: any) => e.message).join("; "));
   }
 
-  const invoiceNumber = vendusDoc.number;
-  console.log(`[Vendus] invoice created — number=${invoiceNumber} id=${vendusDoc.id} atcud=${vendusDoc.atcud}`);
-
-  await billingRef.update({
-    status: "invoiced",
-    invoiceNumber,
-    vendusId: vendusDoc.id,
-    atcud: vendusDoc.atcud ?? null,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  console.log(`[Vendus] invoice created — number=${vendusDoc.number} id=${vendusDoc.id} atcud=${vendusDoc.atcud}`);
+  return vendusDoc;
 }
 
 // ── Compute line items for a group ────────────────────────────────────────────
@@ -850,71 +896,67 @@ export const easypayWebhook = onRequest(
         return;
       }
 
+      // EasyPay's two calls for one payment arrive milliseconds apart and run
+      // concurrently. Decide and mark paid inside a transaction, so only the
+      // call that actually moves the bill to `paid` creates the invoice.
       const billingDoc = snap.docs[0];
-      const billingData = billingDoc.data();
-      const currentStatus = billingData.status;
-      const alreadyPaid = currentStatus === "paid" || currentStatus === "invoiced";
+      const outcome = await db.runTransaction(async (tx) => {
+        const billingData = (await tx.get(billingDoc.ref)).data();
+        if (!billingData) return "skip" as const;
+        const currentStatus = billingData.status;
+        const alreadyPaid = currentStatus === "paid" || currentStatus === "invoiced";
 
-      // Paid, and by a different Easypay payment than this one: the parent paid
-      // twice (an old attempt landed after a retry). Never invoice it again;
-      // flag it for an admin to refund. Bills paid before `paidEasypayId`
-      // existed have none, and are treated as paid by this payment.
-      if (alreadyPaid && billingData.paidEasypayId && billingData.paidEasypayId !== paymentId) {
-        const known: string[] = billingData.duplicatePaymentEasypayIds ?? [];
-        if (!known.includes(paymentId)) {
-          console.error(`[Webhook] DUPLICATE PAYMENT billing ${billingDoc.id}: easypayId=${paymentId}, already paid by ${billingData.paidEasypayId}`);
-          await billingDoc.ref.update({
-            duplicatePaymentEasypayIds: admin.firestore.FieldValue.arrayUnion(paymentId),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
+        // Paid, and by a different Easypay payment than this one: the parent paid
+        // twice (an old attempt landed after a retry). Never invoice it again;
+        // flag it for an admin to refund. Bills paid before `paidEasypayId`
+        // existed have none, and are treated as paid by this payment.
+        if (alreadyPaid && billingData.paidEasypayId && billingData.paidEasypayId !== paymentId) {
+          const known: string[] = billingData.duplicatePaymentEasypayIds ?? [];
+          if (!known.includes(paymentId)) {
+            console.error(`[Webhook] DUPLICATE PAYMENT billing ${billingDoc.id}: easypayId=${paymentId}, already paid by ${billingData.paidEasypayId}`);
+            tx.update(billingDoc.ref, {
+              duplicatePaymentEasypayIds: admin.firestore.FieldValue.arrayUnion(paymentId),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+          return "skip" as const;
         }
-        res.status(200).send("ok");
-        return;
-      }
 
-      // Retry invoice creation if paid but invoice failed previously
-      if (currentStatus === "paid" && billingData.invoiceError) {
-        console.log(`[Webhook] billing ${billingDoc.id} paid but invoice failed — retrying`);
-        await billingDoc.ref.update({ invoiceError: admin.firestore.FieldValue.delete() });
-        try {
-          await createVendusInvoiceForBilling(billingDoc.id);
-          console.log(`[Webhook] Vendus invoice created for billing ${billingDoc.id}`);
-        } catch (err: any) {
-          console.error(`[Webhook] Vendus invoice failed for billing ${billingDoc.id}:`, err.message);
-          await billingDoc.ref.update({ invoiceError: err.message, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        // Paid but the invoice failed previously. createVendusInvoiceForBilling's
+        // claim decides which call retries (and clears invoiceError there).
+        if (currentStatus === "paid" && billingData.invoiceError) return "retryInvoice" as const;
+
+        // Idempotent: EasyPay sends two webhook calls per payment
+        if (alreadyPaid || currentStatus === "cancelled") {
+          if (currentStatus === "cancelled") console.error(`[Webhook] PAYMENT ON CANCELLED billing ${billingDoc.id}: easypayId=${paymentId} — needs a refund or reinstating`);
+          else console.log(`[Webhook] billing ${billingDoc.id} already processed (status=${currentStatus})`);
+          return "skip" as const;
         }
-        res.status(200).send("ok");
-        return;
-      }
 
-      // Idempotent: EasyPay sends two webhook calls per payment
-      if (alreadyPaid || currentStatus === "cancelled") {
-        if (currentStatus === "cancelled") console.error(`[Webhook] PAYMENT ON CANCELLED billing ${billingDoc.id}: easypayId=${paymentId} — needs a refund or reinstating`);
-        else console.log(`[Webhook] billing ${billingDoc.id} already processed (status=${currentStatus})`);
-        res.status(200).send("ok");
-        return;
-      }
-
-      // `processing` is the normal case. `pending`/`failed` happen when this is
-      // an earlier attempt landing after a failure or an admin reset.
-      console.log(`[Webhook] matched billing ${billingDoc.id} (status=${currentStatus}) — marking paid`);
-      await billingDoc.ref.update({
-        status: "paid",
-        paidEasypayId: paymentId,
-        paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      console.log(`[Webhook] billing ${billingDoc.id} → paid — starting Vendus invoice`);
-      try {
-        await createVendusInvoiceForBilling(billingDoc.id);
-        console.log(`[Webhook] Vendus invoice created for billing ${billingDoc.id}`);
-      } catch (err: any) {
-        console.error(`[Webhook] Vendus invoice failed for billing ${billingDoc.id}:`, err.message);
-        await billingDoc.ref.update({
-          invoiceError: err.message,
+        // `processing` is the normal case. `pending`/`failed` happen when this is
+        // an earlier attempt landing after a failure or an admin reset.
+        tx.update(billingDoc.ref, {
+          status: "paid",
+          paidEasypayId: paymentId,
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+        return "markedPaid" as const;
+      });
+
+      if (outcome === "skip") {
+        res.status(200).send("ok");
+        return;
+      }
+
+      if (outcome === "retryInvoice") console.log(`[Webhook] billing ${billingDoc.id} paid but invoice failed — retrying`);
+      else console.log(`[Webhook] matched billing ${billingDoc.id} → marked paid by this call — starting Vendus invoice`);
+      // createVendusInvoiceForBilling records invoiceError itself on failure.
+      try {
+        await createVendusInvoiceForBilling(billingDoc.id);
+        console.log(`[Webhook] Vendus invoice step done for billing ${billingDoc.id}`);
+      } catch (err: any) {
+        console.error(`[Webhook] Vendus invoice failed for billing ${billingDoc.id}:`, err.message);
       }
     }
 
@@ -1047,6 +1089,7 @@ export const retryVendusInvoice = onCall(
     await billingRef.update({
       status: "paid",
       invoiceError: admin.firestore.FieldValue.delete(),
+      invoiceClaimedAt: admin.firestore.FieldValue.delete(), // explicit admin override of a stale claim
       invoiceNumber: admin.firestore.FieldValue.delete(),
       vendusId: admin.firestore.FieldValue.delete(),
       atcud: admin.firestore.FieldValue.delete(),
