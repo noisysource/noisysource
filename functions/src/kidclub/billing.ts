@@ -779,13 +779,32 @@ export const initiateMbwayPayment = onCall(
       throw new HttpsError("internal", `EasyPay error: ${err.message}`);
     }
 
-    await billingRef.update({
-      ...replaceEasypayIdFields(billing),
-      status: "processing",
-      easypayId: res.id,
-      mbwayPhone: phone,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // Transaction: an admin may have marked the bill paid (bank transfer,
+    // markBillingPaid) while this request was out at Easypay. Never move a paid
+    // bill back to `processing`; keep the new id in previousEasypayIds so that
+    // if the parent approves it anyway the webhook flags the duplicate.
+    const stillOpen = await db.runTransaction(async (tx) => {
+      const cur = (await tx.get(billingRef)).data();
+      if (!cur || !UNPAID_STATUSES.has(cur.status)) {
+        tx.update(billingRef, {
+          previousEasypayIds: admin.firestore.FieldValue.arrayUnion(res.id),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return false;
+      }
+      tx.update(billingRef, {
+        ...replaceEasypayIdFields(cur),
+        status: "processing",
+        easypayId: res.id,
+        mbwayPhone: phone,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return true;
     });
+    if (!stillOpen) {
+      console.warn(`[MBWay] billing ${billingId} was paid meanwhile — easypayId=${res.id} kept only in previousEasypayIds`);
+      throw new HttpsError("failed-precondition", "Esta mensalidade acabou de ser marcada como paga.");
+    }
 
     console.log(`[MBWay] billing ${billingId} → processing easypayId=${res.id}`);
     return { easypayId: res.id };

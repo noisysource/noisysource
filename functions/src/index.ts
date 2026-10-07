@@ -22,3 +22,4 @@ export { createCampSubscription, confirmCampSubscription, cancelCampSubscription
 export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
 export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";export { getKidclubVatSummary } from "./kidclub/vatSummary";
 export { getInvoicePdf } from "./kidclub/invoicePdf";
+export { markBillingPaid, attachPaymentProof } from "./kidclub/manualPayment";
