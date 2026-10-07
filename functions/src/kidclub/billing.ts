@@ -64,14 +64,33 @@ async function getActiveSubs() {
   return Object.values(byFamily);
 }
 
-// Who owns a family's billing records. families/{id}.primaryContact.userId is
-// the single source of truth: billing.userId used to be copied from whichever
+// Methods a family can choose / a bill can carry. `bank_transfer` is paid
+// outside Easypay and confirmed by an admin (markBillingPaid).
+export const FAMILY_PAYMENT_METHODS = ["mbway", "multibanco", "card", "subscription", "bank_transfer"] as const;
+
+// The family's chosen payment method, or undefined if it never chose one.
+// `paymentMethod` is the one field going forward; `defaultPaymentMethod` is
+// what the profile pages wrote until 2026-10 (billing never read it, so every
+// bill said "mbway" whatever the parent chose) — read as a fallback only.
+export function familyPaymentMethod(fam: FirebaseFirestore.DocumentData | undefined): string | undefined {
+  const m = fam?.paymentMethod ?? fam?.defaultPaymentMethod;
+  return typeof m === "string" && (FAMILY_PAYMENT_METHODS as readonly string[]).includes(m) ? m : undefined;
+}
+
+// Who owns a family's billing records (ownerUid).
+// families/{id}.primaryContact.userId is the single source of truth: billing.userId used to be copied from whichever
 // subscription triggered the write, and admin-created subscriptions often have
 // no userId, so records were written with "" and the parent could neither see
 // (rules match on billing.userId) nor pay (callables check billing.userId) them.
-async function familyOwnerUid(familyId: string): Promise<string> {
-  const snap = await appCol("families").doc(familyId).get();
-  return snap.data()?.primaryContact?.userId ?? "";
+async function familyBillingInfo(familyId: string): Promise<{ ownerUid: string; paymentMethod?: string }> {
+  const fam = (await appCol("families").doc(familyId).get()).data();
+  return { ownerUid: fam?.primaryContact?.userId ?? "", paymentMethod: familyPaymentMethod(fam) };
+}
+
+// Same self-heal as ownerUpdate, for the payment method: a still-pending bill
+// follows the family's current choice. Empty when the family never chose one.
+function methodUpdate(paymentMethod: string | undefined): { paymentMethod?: string } {
+  return paymentMethod ? { paymentMethod } : {};
 }
 
 // Fields to merge into an update of an existing billing record so its owner
@@ -185,7 +204,7 @@ const DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX = new Set(["kidclub-dev"]);
 // behind by a run that died mid-way is never auto-expired: Vendus may already
 // have issued the invoice, so it blocks retries until an admin uses
 // retryVendusInvoice, which clears it on purpose.
-async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
+export async function createVendusInvoiceForBilling(billingId: string): Promise<void> {
   console.log(`[Vendus] start billingId=${billingId}`);
 
   const billingRef = appCol("billing").doc(billingId);
@@ -594,11 +613,11 @@ async function buildBillingRecord(
   const fam = famSnap.data()!;
   const contact = fam.primaryContact ?? {};
   // Owner comes from the family, never from group.userId (a subscription's
-  // possibly-empty userId) — see familyOwnerUid().
+  // possibly-empty userId) — see familyBillingInfo().
   const userId: string = contact.userId ?? "";
   const billingName: string = contact.name ?? "Família";
   const billingEmail: string = contact.email ?? "";
-  const paymentMethod: string = fam.paymentMethod ?? "mbway";
+  const paymentMethod: string = familyPaymentMethod(fam) ?? "mbway";
 
   const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems({ study, transport }, period, configs, []);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
@@ -910,10 +929,17 @@ export const easypayWebhook = onRequest(
         // twice (an old attempt landed after a retry). Never invoice it again;
         // flag it for an admin to refund. Bills paid before `paidEasypayId`
         // existed have none, and are treated as paid by this payment.
-        if (alreadyPaid && billingData.paidEasypayId && billingData.paidEasypayId !== paymentId) {
+        // Also paid twice: an admin marked it paid by bank transfer
+        // (markBillingPaid → `manualPayment`, no paidEasypayId) and an Easypay
+        // payment for it lands too (an MB WAY / Multibanco attempt the parent
+        // also completed). Same flag, so it shows up in the same admin alerts.
+        const paidByOther = billingData.paidEasypayId
+          ? billingData.paidEasypayId !== paymentId
+          : !!billingData.manualPayment;
+        if (alreadyPaid && paidByOther) {
           const known: string[] = billingData.duplicatePaymentEasypayIds ?? [];
           if (!known.includes(paymentId)) {
-            console.error(`[Webhook] DUPLICATE PAYMENT billing ${billingDoc.id}: easypayId=${paymentId}, already paid by ${billingData.paidEasypayId}`);
+            console.error(`[Webhook] DUPLICATE PAYMENT billing ${billingDoc.id}: easypayId=${paymentId}, already paid by ${billingData.paidEasypayId ?? "manual bank transfer (markBillingPaid)"}`);
             tx.update(billingDoc.ref, {
               duplicatePaymentEasypayIds: admin.firestore.FieldValue.arrayUnion(paymentId),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1155,17 +1181,24 @@ export const setPaymentMethod = onCall(
     if (!uid) throw new Error("Unauthenticated");
 
     const { method, mbwayPhone } = request.data ?? {};
-    if (!["mbway", "multibanco", "card", "subscription"].includes(method)) {
+    if (!(FAMILY_PAYMENT_METHODS as readonly string[]).includes(method)) {
       throw new Error("Invalid payment method");
     }
 
-    const familySnap = await appCol("families").where("userId", "==", uid).limit(1).get();
+    // The owner link is primaryContact.userId (families have no top-level
+    // userId — this looked that up before and always threw "Family not found").
+    const familySnap = await appCol("families").where("primaryContact.userId", "==", uid).limit(1).get();
     if (familySnap.empty) throw new Error("Family not found");
 
     const update: Record<string, any> = { paymentMethod: method, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     if (method === "mbway" && mbwayPhone) update.mbwayPhone = mbwayPhone;
 
     await familySnap.docs[0].ref.update(update);
+
+    // Bills not yet started follow the new choice right away (the recompute
+    // triggers would also do it, but only on the next subscription change).
+    const pending = await appCol("billing").where("familyId", "==", familySnap.docs[0].id).where("status", "==", "pending").get();
+    await Promise.all(pending.docs.map(d => d.ref.update({ paymentMethod: method })));
     return { ok: true };
   }
 );
@@ -1216,12 +1249,13 @@ function pastMonthSafe(existing: BillingLineItem[], next: BillingLineItem[]): bo
 }
 
 async function autoCreateBillingSchedule(familyId: string): Promise<void> {
-  const [studySnap, transportSnap, configs, userId] = await Promise.all([
+  const [studySnap, transportSnap, configs, famInfo] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
     loadBillingConfigs(),
-    familyOwnerUid(familyId),
+    familyBillingInfo(familyId),
   ]);
+  const userId = famInfo.ownerUid;
 
   const group: { familyId: string; userId: string; study: any[]; transport: any[] } = {
     familyId,
@@ -1269,7 +1303,8 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
         } else {
           await appCol("billing").doc(docId).update({
             status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
-            lineItems, total, ...ownerUpdate(userId), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lineItems, total, ...ownerUpdate(userId), ...methodUpdate(famInfo.paymentMethod),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
           updated++;
@@ -1330,8 +1365,9 @@ export const backfillBillingSchedules = onCall(
     for (const group of groups) {
       try {
         // getActiveSubs() took userId off an arbitrary subscription; replace it
-        // with the family's owner (see familyOwnerUid()).
-        group.userId = await familyOwnerUid(group.familyId);
+        // with the family's owner (see familyBillingInfo()).
+        const famInfo = await familyBillingInfo(group.familyId);
+        group.userId = famInfo.ownerUid;
         // Same in-memory-staleness guard as autoCreateBillingSchedule.
         const applyFeeFlags = (subs: { collection: string; id: string }[]) => {
           for (const s of [...group.study, ...group.transport]) if (subs.some(x => x.id === s.id)) s.enrollmentFeeBilled = true;
@@ -1360,7 +1396,8 @@ export const backfillBillingSchedules = onCall(
               } else {
                 await existing.ref.update({
                   status: "pending", autoCancelled: admin.firestore.FieldValue.delete(),
-                  lineItems, total, ...ownerUpdate(group.userId), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  lineItems, total, ...ownerUpdate(group.userId), ...methodUpdate(famInfo.paymentMethod),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
                 if (newlyBilledEnrollmentFeeSubs.length) { await markEnrollmentFeeBilled(newlyBilledEnrollmentFeeSubs); applyFeeFlags(newlyBilledEnrollmentFeeSubs); }
                 updated++;

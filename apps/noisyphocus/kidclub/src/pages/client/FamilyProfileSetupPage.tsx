@@ -3,6 +3,8 @@ import { useUser } from '@shared/hooks';
 import { Family } from '@shared/models';
 import { familyService } from '../../services/familyService';
 import { isValidNif, normalizeNif } from '../../lib/nif';
+import { profilePaymentChoice } from '../../lib/paymentMethod';
+import { deleteField } from 'firebase/firestore';
 
 interface SetupForm {
   name: string;
@@ -11,7 +13,7 @@ interface SetupForm {
   street: string;
   city: string;
   postalCode: string;
-  defaultPaymentMethod: 'bank_transfer' | 'mbway';
+  paymentMethod: 'bank_transfer' | 'mbway';
 }
 
 export default function FamilyProfileSetupPage({ family, onComplete }: { family: Family; onComplete: () => void }) {
@@ -25,7 +27,7 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
     street: family.billingAddress?.street || '',
     city: family.billingAddress?.city || '',
     postalCode: family.billingAddress?.postalCode || '',
-    defaultPaymentMethod: family.defaultPaymentMethod || 'bank_transfer',
+    paymentMethod: profilePaymentChoice(family),
   });
 
   const set = (field: keyof SetupForm, value: string) =>
@@ -51,7 +53,10 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
         billingAddress: form.street
           ? { street: form.street, city: form.city, postalCode: form.postalCode, country: 'PT' }
           : undefined,
-        defaultPaymentMethod: form.defaultPaymentMethod,
+        // One field for the family's choice: billing reads `paymentMethod`.
+        // The old `defaultPaymentMethod` (never read by billing) is removed.
+        paymentMethod: form.paymentMethod,
+        defaultPaymentMethod: deleteField() as unknown as undefined,
         profileComplete: true,
       });
       onComplete();
@@ -166,25 +171,25 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
           <div>
             <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Método de pagamento preferido</h2>
             <div className="grid grid-cols-2 gap-3">
-              <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.defaultPaymentMethod === 'bank_transfer' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+              <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.paymentMethod === 'bank_transfer' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
                 <input
                   type="radio"
                   name="payment"
                   value="bank_transfer"
-                  checked={form.defaultPaymentMethod === 'bank_transfer'}
-                  onChange={() => set('defaultPaymentMethod', 'bank_transfer')}
+                  checked={form.paymentMethod === 'bank_transfer'}
+                  onChange={() => set('paymentMethod', 'bank_transfer')}
                   className="sr-only"
                 />
                 <span className="text-xl">🏦</span>
                 <span className="font-medium text-sm">Transferência</span>
               </label>
-              <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.defaultPaymentMethod === 'mbway' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+              <label className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${form.paymentMethod === 'mbway' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
                 <input
                   type="radio"
                   name="payment"
                   value="mbway"
-                  checked={form.defaultPaymentMethod === 'mbway'}
-                  onChange={() => set('defaultPaymentMethod', 'mbway')}
+                  checked={form.paymentMethod === 'mbway'}
+                  onChange={() => set('paymentMethod', 'mbway')}
                   className="sr-only"
                 />
                 <span className="text-xl">📱</span>

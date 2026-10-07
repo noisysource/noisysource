@@ -20,6 +20,7 @@ const METHOD_LABEL: Record<BillingPaymentMethod, string> = {
   multibanco:   'Multibanco',
   card:         'Cartão',
   subscription: 'Subscrição',
+  bank_transfer: 'Transferência',
 };
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }

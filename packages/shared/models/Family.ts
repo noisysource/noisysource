@@ -26,7 +26,12 @@ export interface Family {
   // Whether the family has completed the onboarding profile setup
   profileComplete?: boolean;
 
-  // Payment preferences
+  // Payment preferences. `paymentMethod` is the one field billing reads
+  // (copied onto each new billing record). `defaultPaymentMethod` is the old
+  // name the profile pages used to write — read only as a fallback for
+  // families that saved their choice before the fields were unified.
+  paymentMethod?: 'bank_transfer' | 'mbway' | 'multibanco' | 'card';
+  /** @deprecated read-only fallback, see paymentMethod */
   defaultPaymentMethod?: 'bank_transfer' | 'mbway';
   paymentTerms?: 'monthly' | 'quarterly' | 'annual';
 

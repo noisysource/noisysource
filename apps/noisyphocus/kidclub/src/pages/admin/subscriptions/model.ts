@@ -93,6 +93,8 @@ export interface FamilyDoc {
   billingAddress?: { street?: string; city?: string; postalCode?: string; country?: string };
   status?: string;
   paymentMethod?: string;
+  /** Old name for paymentMethod — read as a fallback only. */
+  defaultPaymentMethod?: string;
   profileComplete?: boolean;
   notes?: string;
 }
