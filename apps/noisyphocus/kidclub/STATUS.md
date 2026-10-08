@@ -190,7 +190,7 @@ stay for families that never actively chose.
 - **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
   real, pricing model (GO-LIVE §4), re-enabling card/Multibanco (needs an Easypay POS).
 
-## 🔴 Prod bug (2026-10-05): duplicate Vendus invoices for one EasyPay payment — hotfix pushed, PR NOT opened
+## 🟡 Prod bug (2026-10-05): duplicate Vendus invoices for one EasyPay payment — FIXED in prod, credit notes pending
 
 **Symptom.** One EasyPay payment produced two real Fatura-Recibo in Vendus. Prod logs: 8 extra invoices
 since 2026-09-18, latest 2026-10-05 (e.g. Sandra Abreu, billing `nnBmdqT7MEL3tNeTQqbM_2026-10` →
@@ -198,14 +198,34 @@ FR 01P2026/209 and /210, "marking paid" logged twice 7ms apart).
 **Cause.** EasyPay sends two webhook calls per payment, concurrently. `easypayWebhook` did read → check
 status → separate `update(status: "paid")`, and `createVendusInvoiceForBilling` did read → check
 `invoiced` → Vendus POST; both calls passed both checks. Same race on the "paid + invoiceError → retry" branch.
-**Fix:** branch `hotfix/vendus-duplicate-invoices` (off `origin/main`, pushed, **no PR yet** — a PR to `main`
-deploys to prod immediately; Renato opens it):
+**Fix — live in prod:** PR #74 (`hotfix/vendus-duplicate-invoices`), merged 2026-10-07 08:27 UTC; the merge
+deploy succeeded (the run shows "failed" only because the sync-staging step can't open PRs — see root
+CLAUDE.md). Branch + worktree removed. **Not yet exercised by a real payment** — no EasyPay payment had
+arrived as of 2026-10-07 evening; after the next one, check `easypaywebhook` logs for exactly one
+"[Vendus] invoice created" per billing id (the second call should log "already processed"). What changed:
 - webhook decides + marks paid in a `db.runTransaction`; only the call that performed the transition invoices;
 - `createVendusInvoiceForBilling` claims the bill atomically (`invoiceClaimedAt`, transaction) before any
   Vendus call; a Vendus error releases the claim together with `invoiceError`; success clears it with
   `status: "invoiced"`. A stale claim (run died after Vendus succeeded) is never auto-expired — it blocks
   retries; `retryVendusInvoice` (admin) clears it as the explicit override.
-**Data cleanup:** Renato is cancelling the 8 extra invoices manually in Vendus with credit notes.
+**Known gaps (not regressions):** a Vendus network error/5xx after the document was actually issued releases
+the claim, so a later retry could still duplicate; a run that dies mid-invoice leaves the bill `paid` with no
+invoice and no `invoiceError` (only the admin retry recovers it, nothing flags it).
+
+**Data cleanup — Renato, in Vendus, PENDING as of 2026-10-07:** one credit note per extra invoice, full
+amount, €997.80 total. Credit the "extra" one; Firestore's billing record points to the "keep" one. Full log
+history (back to 2026-09-12, the first prod invoice) shows no other duplicates. Customers paid once — no refunds.
+
+| Client | Vendus client | Credit | Vendus doc | Issued | Amount | Keep |
+|---|---|---|---|---|---|---|
+| Sandra Marisa Pereira Abreu | 368953853 | FR 01P2026/209 | 379211541 | 2026-09-29 | €240.00 | /210 |
+| Duarte Maia | 376574443 | FR 01P2026/211 | 379565659 | 2026-09-30 | €216.00 | /212 |
+| family `RIaPxo4Kdi5MsLNz44CF` (no billingName) | 287409030 | FR 01P2026/214 | 379881465 | 2026-10-01 | €48.00 | /215 |
+| Sónia Pires | 377843902 | FR 01P2026/219 | 380058714 | 2026-10-02 | €84.00 | /220 |
+| Joana Gomes | 360819064 | FR 01P2026/223 | 380170246 | 2026-10-02 | €60.00 | /224 |
+| Andreia Lobo | 373973794 | FR 01P2026/228 | 380764142 | 2026-10-04 | €123.00 | /229 |
+| Ana Amaral | 371056105 | FR 01P2026/231 | 380889590 | 2026-10-04 | €118.80 | /232 |
+| Cláudia Sofia Mateus Faustino | 291428847 | FR 01P2026/234 | 381086533 | 2026-10-05 | €108.00 | /235 |
 
 ## 🔴 Prod bug (2026-09-29): parents see an empty portal — docs linked by familyId but not userId
 
