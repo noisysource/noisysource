@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Booking } from '@shared/models/Booking';
-import { PartyConfig } from '@shared/models/PartyConfig';
+import { PartyConfig, PARTY_VAT_RATE } from '@shared/models/PartyConfig';
+import { computePartyPrice, extraQty } from '@shared/models/partyPricing';
 import { partyService } from '../services/partyService';
 
 interface PartyBookingFormProps {
@@ -25,27 +26,12 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig }: P
   const [submitted, setSubmitted] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
 
-  const total = useMemo(() => {
-    if (!formData) return 0;
-
-    const partyType = partyConfig.partyTypes.find(pt => pt.name === formData.partyType);
-    if (!partyType) return 0;
-
-    let calculatedTotal = partyType.basePrice;
-
-    if (formData.numKids > partyType.includedKids) {
-      calculatedTotal += (formData.numKids - partyType.includedKids) * partyType.pricePerExtraChild;
-    }
-
-    formData.extras?.forEach(extraName => {
-      const extra = partyConfig.extras.find(ex => ex.name === extraName);
-      if (extra) {
-        calculatedTotal += extra.price;
-      }
-    });
-
-    return calculatedTotal;
-  }, [formData, partyConfig]);
+  const price = useMemo(
+    () => (formData ? computePartyPrice(partyConfig, formData) : null),
+    [formData, partyConfig],
+  );
+  // Booking.total is stored before IVA, like every price in the party config.
+  const total = price?.subtotal ?? 0;
 
   useEffect(() => {
     setFormData(prev => {
@@ -101,7 +87,21 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig }: P
       const newExtras = prev.extras?.includes(extraName)
         ? prev.extras.filter(e => e !== extraName)
         : [...(prev.extras || []), extraName];
-      return { ...prev, extras: newExtras };
+      const { [extraName]: _dropped, ...restDetail } = prev.extrasDetail || {};
+      return { ...prev, extras: newExtras, extrasDetail: restDetail };
+    });
+  };
+
+  // Per-unit extras: 0 removes the extra, anything above sets its quantity.
+  const handleExtraQty = (extraName: string, rawQty: number) => {
+    const qty = Math.max(0, Math.min(999, Math.floor(rawQty) || 0));
+    setFormData(prev => {
+      if (!prev) return null;
+      const others = (prev.extras || []).filter(e => e !== extraName);
+      const { [extraName]: _dropped, ...restDetail } = prev.extrasDetail || {};
+      return qty > 0
+        ? { ...prev, extras: [...others, extraName], extrasDetail: { ...restDetail, [extraName]: qty } }
+        : { ...prev, extras: others, extrasDetail: restDetail };
     });
   };
 
@@ -166,10 +166,10 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig }: P
                   <input type="number" name="numKids" value={formData.numKids} onChange={handleChange} className="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm" required />
                   {partyType && (
                     <p className="text-xs text-gray-500 mt-2 italic">
-                      Inclui {partyType.includedKids} crianças. Criança extra: €{partyType.pricePerExtraChild.toFixed(2)}.
-                      {formData.numKids > partyType.includedKids && (
+                      Inclui {partyType.includedKids} crianças. Criança extra: €{Number(partyType.pricePerExtraChild).toFixed(2)} + IVA.
+                      {price && price.extraKids > 0 && (
                         <span className="block text-green-600">
-                          Custo adicional para {formData.numKids - partyType.includedKids} criança(s): €{((formData.numKids - partyType.includedKids) * partyType.pricePerExtraChild).toFixed(2)}
+                          Custo adicional para {price.extraKids} criança(s): €{price.extraKidsAmount.toFixed(2)} + IVA
                         </span>
                       )}
                     </p>
@@ -185,15 +185,42 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig }: P
             <div className="p-6 bg-white rounded-xl shadow-md">
               <h3 className="text-xl font-semibold text-gray-700 mb-4">Extras</h3>
               <div className="space-y-4">
-                {partyConfig.extras.map(extra => (
-                  <div key={extra.name} className={`p-4 rounded-lg transition-all duration-300 flex items-center justify-between cursor-pointer border ${formData.extras?.includes(extra.name) ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`} onClick={() => handleExtraToggle(extra.name)}>
-                    <label className="flex items-center gap-2">
-                      <input type="checkbox" id={`extra-${extra.name}`} checked={formData.extras?.includes(extra.name) || false} onChange={() => {}} className="h-5 w-5 rounded-md border-gray-300 text-purple-500 focus:ring-purple-500" />
-                      <span className="font-semibold text-gray-800">{extra.name}</span>
-                    </label>
-                    <span className="font-semibold text-purple-500">+€{extra.price.toFixed(2)}</span>
-                  </div>
-                ))}
+                {partyConfig.extras.map(extra => {
+                  const chosen = formData.extras?.includes(extra.name) || false;
+                  const unitPrice = Number(extra.price) || 0;
+                  if (extra.perUnit) {
+                    const qty = extraQty(formData, extra.name);
+                    return (
+                      <div key={extra.name} className={`p-4 rounded-lg border flex items-center justify-between gap-3 ${chosen ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`}>
+                        <label htmlFor={`extra-${extra.name}`} className="font-semibold text-gray-800">
+                          {extra.name}
+                          <span className="block text-xs font-normal text-gray-500">€{unitPrice.toFixed(2)} / {extra.unitLabel || 'unidade'}</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            id={`extra-${extra.name}`}
+                            min={0}
+                            max={999}
+                            value={qty}
+                            onChange={e => handleExtraQty(extra.name, Number(e.target.value))}
+                            className="w-20 border-gray-300 rounded-md shadow-sm text-sm text-center"
+                          />
+                          <span className="font-semibold text-purple-500 w-20 text-right">€{(unitPrice * qty).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={extra.name} className={`p-4 rounded-lg transition-all duration-300 flex items-center justify-between cursor-pointer border ${chosen ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`} onClick={() => handleExtraToggle(extra.name)}>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" id={`extra-${extra.name}`} checked={chosen} onChange={() => {}} className="h-5 w-5 rounded-md border-gray-300 text-purple-500 focus:ring-purple-500" />
+                        <span className="font-semibold text-gray-800">{extra.name}</span>
+                      </label>
+                      <span className="font-semibold text-purple-500">+€{unitPrice.toFixed(2)}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -231,45 +258,45 @@ export default function PartyBookingForm({ initialData, onSave, partyConfig }: P
 
       <div className="p-6 bg-gray-50 rounded-xl shadow-md mt-6">
         <h3 className="text-xl font-semibold text-gray-700 mb-4">Resumo da Reserva</h3>
-        {partyType && (
+        {partyType && price && (
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span>{partyType.name} (inclui {partyType.includedKids} crianças)</span>
-              <span>€{partyType.basePrice.toFixed(2)}</span>
+              <span>{partyType.name} (inclui {price.includedKids} crianças)</span>
+              <span>€{price.basePrice.toFixed(2)}</span>
             </div>
-            {formData.numKids > partyType.includedKids && (
+            {price.extraKids > 0 && (
               <div className="flex justify-between">
-                <span>Crianças extra ({formData.numKids - partyType.includedKids} x €{partyType.pricePerExtraChild.toFixed(2)})</span>
-                <span>€{((formData.numKids - partyType.includedKids) * partyType.pricePerExtraChild).toFixed(2)}</span>
+                <span>Crianças extra ({price.extraKids} x €{price.pricePerExtraChild.toFixed(2)})</span>
+                <span>€{price.extraKidsAmount.toFixed(2)}</span>
               </div>
             )}
-            {formData.extras && formData.extras.length > 0 && (
+            {price.extraLines.length > 0 && (
               <div>
                 <p className="font-semibold mt-2">Extras:</p>
-                {formData.extras.map(extraName => {
-                  const extra = partyConfig.extras.find(ex => ex.name === extraName);
-                  if (!extra) return null;
-                  return (
-                    <div className="flex justify-between" key={extra.id}>
-                      <span>{extra.name}</span>
-                      <span>€{extra.price.toFixed(2)}</span>
-                    </div>
-                  );
-                })}
+                {price.extraLines.map(line => (
+                  <div className="flex justify-between" key={line.name}>
+                    <span>{line.perUnit ? `${line.qty} x ${line.name}` : line.name}</span>
+                    <span>€{line.amount.toFixed(2)}</span>
+                  </div>
+                ))}
               </div>
             )}
             <div className="border-t pt-2 mt-2">
               <div className="flex justify-between font-semibold">
-                <span>Subtotal</span>
-                <span>€{total.toFixed(2)}</span>
+                <span>Subtotal (sem IVA)</span>
+                <span>€{price.subtotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-gray-500">
-                <span>IVA (23%)</span>
-                <span>€{(total * 0.23).toFixed(2)}</span>
+                <span>IVA ({Math.round(PARTY_VAT_RATE * 100)}%)</span>
+                <span>€{price.vat.toFixed(2)}</span>
               </div>
               <div className="flex justify-between font-bold text-lg mt-1">
                 <span>Total</span>
-                <span>€{(total * 1.23).toFixed(2)}</span>
+                <span>€{price.total.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-gray-500 text-xs mt-1">
+                <span>Sinal (50%)</span>
+                <span>€{price.deposit.toFixed(2)}</span>
               </div>
             </div>
           </div>

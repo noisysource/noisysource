@@ -19,9 +19,11 @@ export interface Booking {
   partyType: string;
   numKids: number;
   extras?: string[];
+  /** Quantity per extra name, for per-unit extras. A listed extra with no entry counts as 1. */
   extrasDetail?: Record<string, number>;
   
   // Pricing
+  /** Before IVA. Use partyVatBreakdown(total) for the IVA and the amount the family pays. */
   total: number;
   
   // Contact information (from family)

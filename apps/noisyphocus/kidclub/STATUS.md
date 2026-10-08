@@ -4,6 +4,45 @@
 
 **Last updated:** 2026-10-07
 
+## 🎈 Party prices 2026/27 + IVA + extra quantities (2026-10-07) — branch `agent/party-pricing-vat`, PR → `staging`, code NOT in prod
+
+**Prod data already changed (done 2026-10-07, Renato asked).** `config/party` on prod now matches the
+"apresentação festas 26_27" PDF. Prod had 0 party bookings and 0 party deposits, so nothing was repriced.
+Same config copied to kidclub-dev. Old prod values, for rollback: A 150/14 kids/+7, B 200/+10, C 225/+10;
+extras Prato de Fruta 4, Gelatinas (pack 6) 2.5, Pizza 4, Cachorro (pack 4) 5.
+
+| Party type | Base (sem IVA) | Kids incl. | Extra child |
+|---|---|---|---|
+| A | 150 | 14 | 7 |
+| B (lanche simples) | 210 | 14 | 14 |
+| C (lanche completo) | 240 | 14 | 17 |
+
+B and C read the PDF's "60€ (criança extra 7€)" / "90€ (criança extra 10€)" as **added on top of A**.
+If Renato meant them as standalone, change B/C in Admin → Configuração das Festas.
+Extras (sem IVA): Cachorro 2/unidade, Sobremesa 2/unidade, Prato de Fruta 4.5/prato, Pizza 3.5/unidade,
+Gelatinas ou iogurtes 3/pack de 6, Convites 6, Poster 100x70 20, Pack decoração temática 55.
+The first five carry `perUnit: true` + `unitLabel` — the live prod code ignores those fields until this PR ships.
+
+**What the PR fixes.**
+- **Deposit undercharged IVA.** `createPartyDeposit` billed 50% of `Booking.total` (pre-IVA) and Vendus treats
+  line amounts as gross: a €150 party gave a €75 invoice instead of €92.25. Now 50% of total + 23%.
+- **Client pages hid IVA.** Booking, detail and list pages showed the pre-IVA total as "Total". All party views
+  now use `packages/shared/models/partyPricing.ts` and show subtotal / IVA / total / sinal.
+- **Quantities.** Per-unit extras get a stepper (client) or number input (admin). Stored in the existing
+  `Booking.extrasDetail` map; an extra with no entry counts once, so old bookings price the same.
+  `Booking.total` still means the pre-IVA subtotal.
+
+**How to test on dev (after the PR deploy is green):** book a party as a parent with 17 kids, Festa B,
+10 cachorros + Pack decoração → summary should read subtotal €327, IVA €75.21, total €402.21, sinal €201.11.
+Confirm it as admin, then "Pagar sinal" → the billing doc's `total` should be 201.11.
+
+**Open / not done:**
+- Overtime (€5 per 15 min) and "sob consulta" items (bolo, pinturas faciais, pinhatas) aren't modelled.
+- `Booking.total` is written by the client; the deposit function trusts it. Recomputing server-side from
+  `config/party` would close that — not done here.
+- The admin edit form recomputes `total` from the *current* config as soon as a booking is opened, so editing
+  an old booking after a price change silently reprices it (pre-existing behaviour).
+
 ## 🆕 Bank transfer payments (2026-10-07) — branch `agent/kidclub-bank-transfer`, PR → `staging`, NOT in prod
 
 **What it does.** Parents can pay by bank transfer, optionally upload a proof (dev only for now — see

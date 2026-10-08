@@ -13,7 +13,7 @@ import {
 } from 'date-fns';
 import { updateDoc } from 'firebase/firestore';
 import { docRef } from '../../lib/db';
-import { Event } from '@shared/models';
+import { Event, partyVatBreakdown } from '@shared/models';
 import { ChevronLeft, ChevronRight, PartyPopper, BookOpen, Bus, EuroIcon, X, Pencil, Check } from 'lucide-react';
 import { eventService, schoolCalendarService } from '../../services/eventService';
 import Notification from '../Notification';
@@ -385,7 +385,7 @@ export default function AdminCalendar() {
                         </div>
                         {e.booking && (
                           <p className="text-xs text-gray-500 mt-0.5">
-                            {e.booking.numKids} crianças · €{(e.booking.total ?? 0).toFixed(2)}
+                            {e.booking.numKids} crianças · €{partyVatBreakdown(e.booking.total ?? 0).total.toFixed(2)}
                           </p>
                         )}
                       </div>
