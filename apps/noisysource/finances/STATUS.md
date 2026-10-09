@@ -114,8 +114,20 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
 5. After that, Phase 7 (IRC estimation) is the next untouched feature.
 
 ## Open questions for Renato
-- Should `costSummary.vatCents` be only the IVA dedutível on that month's software costs (the
-  current implementation), or the full quarterly net VAT position (income − deductible)?
+- **Decided 2026-10-09 (VAT):** Renato wants every cost shown **with VAT and without VAT**, side
+  by side, ideally on one summary page (fold into "Resumo do mês", redesign step 5). Amounts are
+  typed as they appear on the invoice, **VAT included**.
+- **Bug found 2026-10-09, fix next (follow-up PR off `staging`):** a recurring entry's `amountCents`
+  means two different things. `RecurringEntry.ts` documents it as VAT-exclusive, and the IVA page
+  + Custos do mês add `ivaRatePct` on top. But the forecast (`generateRecurringEvents`) uses it
+  as the cash leaving the account, i.e. VAT-inclusive. The form never says which. Fix: amount =
+  invoice total with VAT; derive VAT as `total × rate / (100 + rate)` and net as `total − VAT`
+  everywhere (`recurringSchedule.ts`, `costSummary.ts`, form label). Questions before fixing:
+  (1) were NoisySource's existing recurring amounts typed with or without VAT? If without, they
+  need a one-off conversion, confirmed by Renato entry by entry; (2) is EasyPay's commission %
+  quoted before VAT (fee = volume × % × 1.23) or with VAT included?
+- Also noticed: the forecast uses a commission entry's fallback `amountCents`, not
+  `commissionPct` × KidClub volume, so EasyPay's forecast is the typed estimate.
 - `softwareCostCents` counts **every** active NoisyPhocus recurring expense as software, because
   the form doesn't expose `categoryId`. Fine while the only entries are Vendus and EasyPay; it
   needs a category filter if rent or insurance ever get entered as recurring.
