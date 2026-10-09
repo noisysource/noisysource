@@ -123,7 +123,7 @@ forecast (see Q5).
    **accountant pack**.
 6. More bank parsers (CGD, Montepio, Revolut) as needed.
 
-Each step is its own `agent/` branch off `main`, PR → `staging`. Update `STATUS.md` as you go.
+Each step is its own `agent/` branch off `staging`, PR → `staging`. Update `STATUS.md` as you go.
 
 ## 6. Questions for Renato (answer before building)
 
