@@ -212,7 +212,7 @@ export default function PayrollPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Payroll (preview from shared)</h2>
+      <h2 className="text-xl font-semibold">Salários</h2>
 
       <div className="flex flex-wrap gap-2 items-end">
         <div>

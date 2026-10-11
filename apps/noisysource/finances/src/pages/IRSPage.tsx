@@ -184,7 +184,7 @@ export default function IRSPage() {
       {/* Header */}
       <div className="flex items-end gap-4 flex-wrap">
         <div>
-          <h2 className="text-xl font-semibold">IRS Simulator</h2>
+          <h2 className="text-xl font-semibold">Simulador IRS</h2>
           <div className="text-xs text-zinc-500 mt-0.5">
             Joint household declaration{people.length > 0 ? ` (${people.join(" + ")})` : ""}
           </div>
