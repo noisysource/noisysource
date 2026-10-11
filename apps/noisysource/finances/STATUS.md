@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-11
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -20,6 +20,14 @@ Takes priority over redesign steps 3–5 below. **Read `HANDOFF-email-expenses.m
 before starting.** It has the design, the traps already found (e.g. confirmed events would
 double-count balances) and the questions Renato must answer first. Start it in a fresh session,
 on a new `agent/` branch, once #75 and #76 are merged.
+
+## Queued: KidClub bank reconciliation (decided 2026-10-11)
+Monthly check of the NoisyPhocus BPI statement against KidClub bills, Vendus invoices and EasyPay's
+daily payouts. Renato's call: it lives in FinHub, not KidClub. **Read
+`HANDOFF-kidclub-reconciliation.md` (same folder) before starting.** It shares the statement page
+with emails → expenses (build that page once). Waiting on Renato: a real BPI statement sample, and
+the EasyPay API key scopes check (handoff §7). Handoff committed on `agent/finhub-kidclub-reconciliation`
+(stacked on `agent/finhub-nav`, docs only).
 
 ## Redesign plan (agreed 2026-10-05)
 Companies share one structure; only the income source differs. Steps, each its own branch + dev
