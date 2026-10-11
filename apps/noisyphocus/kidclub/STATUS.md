@@ -82,7 +82,7 @@ manual-deploy, so likely unnoticed). `studyRoomService.uploadFile` is dead code 
 notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default
 stay for families that never actively chose.
 
-## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — hotfix `hotfix/vendus-client-loop`, PR → `main` OPEN, not merged
+## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — hotfix `hotfix/vendus-client-loop`, PR #84 → `main` OPEN, not merged
 
 **Symptom.** Prod Vendus `/clients/` reports 10,000 items, which is the API's pagination ceiling. ~9,995 of them
 are copies of "Ana Bento" created 2026-09-23 (no NIF, no external_reference). On 2026-10-11 21:38:54–21:45:28 UTC,
