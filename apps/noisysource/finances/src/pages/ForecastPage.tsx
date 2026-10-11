@@ -49,7 +49,7 @@ function compactEUR(cents: number): string {
 
 const ENTITY_IDS: FinanceEntityId[] = ['private', 'noisysource', 'noisyphocus'];
 const ENTITY_LABELS: Record<FinanceEntityId, string> = {
-  private: 'Private',
+  private: 'Casa',
   noisysource: 'NoisySource',
   noisyphocus: 'NoisyPhocus',
 };

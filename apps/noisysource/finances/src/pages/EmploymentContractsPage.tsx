@@ -185,7 +185,7 @@ export default function EmploymentContractsPage() {
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
       {/* LEFT: form */}
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold">Employment Contracts</h2>
+        <h2 className="text-xl font-semibold">Contratos</h2>
 
         {/* Company label + employee selector */}
         <Card className="p-4">

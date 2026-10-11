@@ -11,7 +11,7 @@ export type Entity = {
 };
 
 export const ENTITIES: Entity[] = [
-  { id: 'private',     name: 'Private',     type: 'private' },
+  { id: 'private',     name: 'Casa',        type: 'private' },
   { id: 'noisysource', name: 'NoisySource',  type: 'company' },
   { id: 'noisyphocus', name: 'NoisyPhocus',  type: 'company' },
 ];
