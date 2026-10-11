@@ -15,13 +15,7 @@ The finances half never depended on the old KidClub billing code, so it was cher
 cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 `.claude/worktrees/finhub-cost-model`).
 
-## Next feature: emails → expenses → invoices (decided 2026-10-06)
-Takes priority over redesign steps 3–5 below. **Read `HANDOFF-email-expenses.md` (same folder)
-before starting.** It has the design, the traps already found (e.g. confirmed events would
-double-count balances) and the questions Renato must answer first. Start it in a fresh session,
-on a new `agent/` branch, once #75 and #76 are merged.
-
-## Queued: KidClub bank reconciliation (decided 2026-10-11)
+## Next feature: KidClub bank reconciliation (decided 2026-10-11)
 Monthly check of the NoisyPhocus BPI statement against KidClub bills, Vendus invoices and EasyPay's
 daily payouts. Renato's call: it lives in FinHub, not KidClub. **Read
 `HANDOFF-kidclub-reconciliation.md` (same folder) before starting.** It shares the statement page
@@ -30,7 +24,15 @@ with emails → expenses (build that page once). Core output: flag every credit 
 (BPI **PDF**, `~/dev/noisysource/prodata/`, gitignored), so steps 1–2 (PDF import, read-only
 reconciliation) are unblocked. Still open: what the card-terminal (TPA) sales are, and the EasyPay
 key scopes before step 4 (handoff §7). Handoff committed on `agent/finhub-kidclub-reconciliation`
-(stacked on `agent/finhub-nav`, docs only).
+(worktree `.claude/worktrees/finhub-kidclub-reconciliation`, local only, not pushed; stacked on
+`agent/finhub-nav` until #82 merges). Renato chose this over emails → expenses as the next feature.
+
+## After that: emails → expenses → invoices (decided 2026-10-06)
+Comes after the KidClub reconciliation (Renato, 2026-10-11); both share the statement page.
+Still takes priority over redesign steps 3–5 below. **Read `HANDOFF-email-expenses.md` (same folder)
+before starting.** It has the design, the traps already found (e.g. confirmed events would
+double-count balances) and the questions Renato must answer first. Start it in a fresh session,
+on a new `agent/` branch, once #75 and #82 (re-land of #76) are merged.
 
 ## Redesign plan (agreed 2026-10-05)
 Companies share one structure; only the income source differs. Steps, each its own branch + dev
@@ -60,69 +62,39 @@ Known bugs to fix along the way: Dashboard + Forecast load employment contracts 
 only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one shared global that
 the Dashboard flips while loading (pass the entity explicitly instead).
 
-## Currently working on (step 1)
-Testing `agent/finhub-cost-model` locally against `kidclub-dev` before opening a PR into
-`staging`. The branch contains:
+## Currently working on
+Nothing in progress. #75 is merged; #82 (re-land of #76) is waiting for its dev deploy.
 
-1. **CI/hosting fixes**
-   - `deploy-finances.yml` dev job now runs `build:staging`. Plain `build` baked the prod
-     Firebase config into the dev site, so every Firebase call 403'd.
-   - `firebase.json` finances target serves `Cache-Control: no-cache` on `**`, so a fresh deploy
-     is visible straight away instead of up to an hour later.
-2. **Commission cost model:** `RecurringEntryDoc.costModel: 'fixed' | 'commission'` +
-   `commissionPct`. The Recurring form has a Fixo/Comissão toggle for expense entries. The VAT
-   page resolves commission entries against KidClub's processed volume
-   (`api.kidclub.monthlyProcessedVolumeCents`, which sums `_apps/arcoiris/billing` with status
-   `paid`/`invoiced` by `paidAt` month). Checked 2026-09-29: the current `Billing` model still has
-   `status`, `paidAt` and `total`.
-3. **Green-receipt contracts:** `EmploymentContractDoc.contractType: 'employee' | 'green_receipt'`.
-   A green-receipt contract forces SS to 0 and hides Benefits. Use this for the NoisyPhocus
-   teacher. `/noisyphocus/ec-contracts` is for NoisySource's client income only.
-4. **Payroll scoped to entity:** the company picker used to default to NoisySource even when
-   viewing NoisyPhocus.
-5. **`/noisyphocus/costs` page:** computes payroll + software + IVA dedutível for the month and
-   writes `finances_entities/noisyphocus/costSummary/{yyyy-mm}`. It recalculates on open (no
-   publish button).
-
-Deliberately **not** on this branch:
-- The Firestore rule letting KidClub read `costSummary`. Nothing on the KidClub side reads it
-  yet; add the rule together with the consumer (step 3 below).
-- Any KidClub code (`financialEvents`, Resumo Financeiro changes). That has to be redesigned
-  against the event-sourced billing model.
-
-Build: `pnpm build:staging` passes. `tsc --noEmit` shows 20 errors, all pre-existing on `main`,
-none in files this branch touches.
+**#76 did not reach `staging` (2026-10-11).** It was stacked with base `agent/finhub-cost-model`;
+#75 merged into `staging` 26 s before #76 merged, so #76 merged into `agent/finhub-cost-model`
+instead. Re-landed as **#82** (`agent/finhub-nav` → `staging`, same 7 commits, trial merge clean).
+Lesson: after merging the base of a stacked PR, retarget the stacked PR to `staging` *before*
+merging it.
 
 ## Last completed
-Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-cost-model`
-(2026-09-29).
+- **#75 merged into `staging` (2026-10-11):** CI/hosting fixes (`build:staging` for the dev job,
+  `no-cache` headers), commission cost model (`costModel: 'fixed' | 'commission'`), green-receipt
+  contracts, Payroll scoped to the entity, `/noisyphocus/costs` page writing
+  `finances_entities/noisyphocus/costSummary/{yyyy-mm}`. Details in PR #75. Deliberately not in
+  it: the `costSummary` read rule for KidClub and any KidClub code (see Next step 5).
+- Reconciliation handoff written and agreed with Renato (2026-10-11).
 
 ## Next step
-0. Done 2026-10-05: `agent/finhub-nav` @ a855d6c deployed to dev (includes step 1).
-1. **Test on https://kidclub-dev-finhub.web.app** (`pnpm dev:finances` in the worktree also
-   works). Check:
-   - The "A ver" picker: switching keeps you on the same page when the new entity has it; Casa
-     shows no Equipa/IVA, companies show no Rendimento/IRS/Empréstimos.
-   - NoisyPhocus → Despesas → Recorrentes → "+ Nova entrada": the Fixo/Comissão toggle is
-     visible. This was the unresolved bug on 2026-09-21.
-   - NoisyPhocus → Equipa → Salários shows only NoisyPhocus contracts; NoisySource still shows
-     Renato/Marisa.
-   - NoisyPhocus → Equipa → Contratos: a green-receipt contract hides the SS fields and Benefits.
-   - Existing NoisySource recurring entries and the VAT page still show the same numbers as
-     before (they have no `costModel`, so they're treated as `fixed`).
-2. **Enter NoisyPhocus's real numbers on dev** (nothing is seeded):
-   - the driver (employee contract) and the teacher (green receipt);
-   - Vendus (fixed, real IVA) and EasyPay (commission %, real IVA) as recurring expenses.
-   Then open `/noisyphocus/costs` and check the current month looks right.
-3. **PRs open (2026-10-06):** #75 `agent/finhub-cost-model` → `staging`, and #76
-   `agent/finhub-nav`, stacked with base `agent/finhub-cost-model`. Merge #75 first, then
-   retarget #76 to `staging` and merge it. FinHub hosting isn't in the automatic dev
-   pipeline: after merging to staging, run `deploy-finances.yml` by hand (workflow_dispatch on
-   `staging`) to put it on `kidclub-dev-finhub.web.app`.
-4. **Later, a separate KidClub-scoped task:** rebuild `financialEvents` and make Resumo
+1. **Merge #82** once its `deploy` check is green. Then run `deploy-finances.yml` by hand
+   (workflow_dispatch on `staging`). FinHub hosting isn't in the automatic dev pipeline.
+2. **KidClub reconciliation, step 1 (BPI PDF import):** in the worktree
+   `.claude/worktrees/finhub-kidclub-reconciliation`, `git fetch && git rebase origin/staging`
+   (after #82 merges, only the 3 handoff/STATUS commits remain), then build step 1 per
+   `HANDOFF-kidclub-reconciliation.md` §6. PR → `staging`.
+3. **Clean up worktrees:** `finhub-cost-model` now (#75 merged); `finhub-nav` after #82 merges
+   (`.claude/skills/worktree-cleanup`).
+4. **Still to do on dev, from the cost-model work:** enter NoisyPhocus's real numbers (the driver
+   as an employee contract, the teacher as a green receipt, Vendus fixed and EasyPay commission as
+   recurring expenses), then check `/noisyphocus/costs` for the current month.
+5. **Later, a separate KidClub-scoped task:** rebuild `financialEvents` and make Resumo
    Financeiro read `costSummary`, against the new event-sourced billing. Add the `costSummary`
    read rule and a Cross-App Data Contracts entry in root CLAUDE.md in that same PR.
-5. After that, Phase 7 (IRC estimation) is the next untouched feature.
+6. Separately: the VAT amount bug (Open questions below), then Phase 7 (IRC estimation).
 
 ## Open questions for Renato
 - **Decided 2026-10-09 (VAT):** Renato wants every cost shown **with VAT and without VAT**, side
@@ -144,13 +116,15 @@ Cherry-picked the finance/CI commits from the closed PR #20 onto `agent/finhub-c
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **`kidclub-dev-finhub.web.app` is serving the unmerged `agent/finhub-nav`** (@ a855d6c, which
-  includes `agent/finhub-cost-model`), deployed by hand 2026-10-05 with `build:staging` +
-  `firebase deploy --only hosting:finances --project=kidclub-dev`. Hosting only, no rules or
-  functions. Checked: bundle has `projectId:"kidclub-dev"`; `/` and client routes serve
-  `cache-control: no-cache`.
-- A PR into `main` deploys to prod the moment it's opened. This branch goes to `staging` first.
-- Two open, unmerged PRs: #75 and #76 (stacked). Opening #75 ran `deploy-dev.yml` against the
-  shared `kidclub-dev`. It changes no KidClub code, but it can overwrite another open PR's KidClub
-  deploy there.
-- No new metered API calls. Reads only existing Firestore collections.
+- **#82 open** (`agent/finhub-nav` → `staging`). Its deploy runs `deploy-dev.yml` against the
+  shared `kidclub-dev`; it changes no KidClub code.
+- **`kidclub-dev-finhub.web.app` still serves the hand-deployed `agent/finhub-nav` @ a855d6c**
+  (2026-10-05, hosting only) until `deploy-finances.yml` runs on `staging`.
+- **`agent/finhub-kidclub-reconciliation` exists only locally** (in its worktree). Don't delete
+  that worktree before the branch is pushed.
+- The real BPI statement used for the reconciliation design is in the main checkout's
+  gitignored `prodata/`. Never copy it into a worktree or commit it.
+- A PR into `main` only deploys to prod when its head is `staging`. Feature branches go to
+  `staging` first.
+- No new metered API calls yet. Reconciliation steps 2 and 4 will add Vendus and EasyPay reads
+  (checklists in the handoff §5).
