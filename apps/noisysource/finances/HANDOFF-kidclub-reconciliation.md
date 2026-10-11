@@ -74,7 +74,7 @@ Decided with Renato (2026-10-08 / 2026-10-11):
   import on any mismatch**. That's what makes PDF parsing safe.
 - **Page 2 repeats the column header**; the footer is BPI legal text (overdraft rates). Ignore
   both.
-- **Credit lines seen (18 in the month):**
+- **Credit lines seen (16 in the month: 14 named transfers, 2 card-terminal batches; 20 debits):**
   - `TRF SEPA+ INST <seq> DE <PAYER NAME>`: instant SEPA transfer (most common);
   - `TRF CR SEPA+ <seq> DE <PAYER NAME>`: regular SEPA transfer;
   - `TRF CR INTRAB <seq> DE <PAYER NAME>`: BPI-to-BPI transfer;
