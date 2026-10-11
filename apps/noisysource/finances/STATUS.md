@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-11
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -14,6 +14,12 @@ couldn't be rebased. None of its work reached `main`. The old commits are still 
 The finances half never depended on the old KidClub billing code, so it was cherry-picked
 cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 `.claude/worktrees/finhub-cost-model`).
+
+## Also next: one VAT convention for both apps (decided 2026-10-11)
+`packages/shared/HANDOFF-vat-convention.md`. PR 1 there (shared helper + FinHub) fixes the
+recurring-amount VAT bug below and adds com/sem IVA columns to Custos do mês. Renato will
+re-enter all recurring entries afterwards (no migration). Do it before or alongside the email
+work, since bank-transaction amounts follow the same rule.
 
 ## Next feature: emails → expenses → invoices (decided 2026-10-06)
 Takes priority over redesign steps 3–5 below. **Read `HANDOFF-email-expenses.md` (same folder)
