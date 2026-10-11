@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createOrUpdateClient } from "./vendus";
+import { vendusClientFieldsChanged } from "./vendusClientLogic";
 import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -9,7 +10,9 @@ const db = admin.firestore();
 /**
  * Syncs a family to Vendus as a client whenever their profile is saved.
  * Fires on create and update of /families/{familyId}.
- * Only runs when profileComplete is true and contact data is present.
+ * Only runs when profileComplete is true and contact data is present, and
+ * only when a synced field (profileComplete, nif, primaryContact
+ * name/email/phone) changed — see vendusClientFieldsChanged.
  */
 export const syncVendusClient = onDocumentWritten(
   {
@@ -23,6 +26,12 @@ export const syncVendusClient = onDocumentWritten(
 
     const data = after.data()!;
     const { familyId } = event.params;
+
+    // Only react to changes in what we send to Vendus. In particular, our own
+    // vendusClientId write-back below (and billing.ts's) re-fires this trigger;
+    // without this check that was an infinite create-client loop (2026-10-11).
+    const before = event.data?.before;
+    if (!vendusClientFieldsChanged(before?.exists ? before.data() : undefined, data)) return;
 
     // Only sync complete profiles
     if (!data.profileComplete) return;

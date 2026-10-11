@@ -1,4 +1,5 @@
 import { assertExternalCallsAllowed } from "../externalGuard";
+import { reserveVendusClientCreation } from "./vendusClientCap";
 
 const BASE_URL = "https://www.vendus.pt/ws/v1.1";
 
@@ -112,8 +113,14 @@ async function findClientByNif(fiscalId: string): Promise<VendusClientRecord | n
   }
 }
 
-/** Create a new Vendus client. */
+/**
+ * Create a new Vendus client. Every creation goes through the daily cap first
+ * (vendusClientCap.ts); over the cap, or if the counter can't be updated, this
+ * throws without calling Vendus.
+ */
 export async function createClient(payload: VendusClientPayload): Promise<VendusClientRecord> {
+  assertExternalCallsAllowed("Vendus"); // don't count a call the guard would block anyway
+  await reserveVendusClientCreation(payload.external_reference || payload.name || "(unnamed)");
   return request<VendusClientRecord>("POST", "/clients/", payload);
 }
 
@@ -123,7 +130,8 @@ export async function updateClient(id: number, payload: Partial<VendusClientPayl
 }
 
 /**
- * Create or update a Vendus client by Firebase family ID.
+ * Create or update a Vendus client by Firebase family ID, keyed in Vendus by
+ * external_reference "family:<familyId>" (set on create and on the NIF re-link).
  * Falls back to NIF lookup when creation fails with duplicate NIF.
  * Returns the Vendus client ID.
  */
@@ -137,7 +145,10 @@ export async function createOrUpdateClient(familyId: string, payload: VendusClie
   }
 
   try {
-    const created = await createClient(payload);
+    // Always tag the new client with the family ref, so the findClientByRef
+    // above finds it next time. Without it, every call for a family with no
+    // NIF created another client (2026-10-11 prod loop: 904 in ~7 minutes).
+    const created = await createClient({ ...payload, external_reference: ref });
     return created.id;
   } catch (err: any) {
     // Vendus rejects duplicate NIFs — find the existing client and re-link it
