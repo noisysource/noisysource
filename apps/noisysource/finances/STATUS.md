@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-11
+**Last updated:** 2026-10-12
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -21,11 +21,11 @@ daily payouts. Renato's call: it lives in FinHub, not KidClub. **Read
 `HANDOFF-kidclub-reconciliation.md` (same folder) before starting.** It shares the statement page
 with emails → expenses (build that page once). Core output: flag every credit with no invoice
 ("Sem fatura"; Vendus is the source of truth, not only KidClub bills). Sample statement received
-(BPI **PDF**, `~/dev/noisysource/prodata/`, gitignored), so steps 1–2 (PDF import, read-only
-reconciliation) are unblocked. Still open: what the card-terminal (TPA) sales are, and the EasyPay
-key scopes before step 4 (handoff §7). Handoff committed on `agent/finhub-kidclub-reconciliation`
-(worktree `.claude/worktrees/finhub-kidclub-reconciliation`, local only, not pushed; stacked on
-`agent/finhub-nav` until #82 merges). Renato chose this over emails → expenses as the next feature.
+(BPI **PDF**, `~/dev/noisysource/prodata/`, gitignored). **Step 1 (PDF import) is built** and in
+a PR → `staging` from `agent/finhub-kidclub-reconciliation` (worktree
+`.claude/worktrees/finhub-kidclub-reconciliation`); step 2 (read-only reconciliation) is next.
+Still open: what the card-terminal (TPA) sales are, and the EasyPay key scopes before step 4
+(handoff §7). Renato chose this over emails → expenses as the next feature.
 
 ## After that: emails → expenses → invoices (decided 2026-10-06)
 Comes after the KidClub reconciliation (Renato, 2026-10-11); both share the statement page.
@@ -63,15 +63,39 @@ only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one sh
 the Dashboard flips while loading (pass the entity explicitly instead).
 
 ## Currently working on
-Nothing in progress. #75 is merged; #82 (re-land of #76) is waiting for its dev deploy.
+Reconciliation step 1 (BPI PDF import) is done and waiting for review: PR → `staging` from
+`agent/finhub-kidclub-reconciliation`. Nothing else in progress.
 
-**#76 did not reach `staging` (2026-10-11).** It was stacked with base `agent/finhub-cost-model`;
-#75 merged into `staging` 26 s before #76 merged, so #76 merged into `agent/finhub-cost-model`
-instead. Re-landed as **#82** (`agent/finhub-nav` → `staging`, same 7 commits, trial merge clean).
-Lesson: after merging the base of a stacked PR, retarget the stacked PR to `staging` *before*
-merging it.
+Lesson kept from #76 (2026-10-11): after merging the base of a stacked PR, retarget the stacked PR
+to `staging` *before* merging it (#76 merged into its old base instead and was re-landed as #82).
 
 ## Last completed
+- **Reconciliation step 1, BPI PDF import (2026-10-12)**, PR → `staging`:
+  - `src/lib/parsers/bpiPdf.ts`, same `ParsedBpiStatement` as `bpiXlsx.ts` (plus an optional
+    `openingBalanceCents`). Two parts: pdfjs extraction (`extractPdfTextItems`), then pure
+    functions (`groupTextLines` → `parseBpiPdfLines`). pdfjs reads text runs column by column,
+    so rows are rebuilt from y-coordinates and columns from the header's x-positions; a
+    string-only parser would misread rows like a blank DATA MOV followed by a description that
+    starts with `27/08 …`.
+  - **Balance check:** SALDO ANTERIOR + each line must equal that line's SALDO, ending at SALDO
+    ACTUAL CONTABILISTICO. Any mismatch, unknown line, missing balance, date outside `Período` or
+    second account section refuses the whole import with the reason shown in the modal.
+  - Year from `Período` (Dec → Jan statements and value dates just before the period handled);
+    a blank DATA MOV takes the date of the line above, across the page break too.
+  - **Ids:** `bpiPdfTxId` = `bpiTxId` + the running balance (handoff §5.8). `bpiTxId` is
+    unchanged; a test pins its output.
+  - **Import** (`api.bankTransactions.importStatement`, was `importXlsx`): the Accounts page modal
+    takes `.pdf` or `.xlsx`. The PDF isn't stored. It refuses if the account already has movements
+    from the *other* format in the same dates (the ids never match, so everything would be
+    duplicated). The preview shows opening balance, the statement's account number and "Saldos
+    verificados". Import records now get `sourceFormat: 'pdf'` and `openingBalanceCents`.
+  - **Tests:** vitest added to the finances app (`pnpm --filter finances test`): 28 tests on an
+    anonymised fixture (`src/lib/parsers/fixtures/bpiPdfSeptember.ts`: the real layout, made-up
+    names, IBANs and amounts). To re-check a real statement locally without committing it:
+    `BPI_PDF=~/dev/noisysource/prodata/<file>.pdf pnpm --filter finances test`.
+  - **Verified:** the September 2026 statement parses with every balance matching, 36 movements
+    (16 credits, 20 debits), both in Node and in Chrome through the pdfjs worker.
+- **#82 (re-land of #76, navigation) merged into `staging` (2026-10-11).**
 - **#75 merged into `staging` (2026-10-11):** CI/hosting fixes (`build:staging` for the dev job,
   `no-cache` headers), commission cost model (`costModel: 'fixed' | 'commission'`), green-receipt
   contracts, Payroll scoped to the entity, `/noisyphocus/costs` page writing
@@ -80,14 +104,23 @@ merging it.
 - Reconciliation handoff written and agreed with Renato (2026-10-11).
 
 ## Next step
-1. **Merge #82** once its `deploy` check is green. Then run `deploy-finances.yml` by hand
-   (workflow_dispatch on `staging`). FinHub hosting isn't in the automatic dev pipeline.
-2. **KidClub reconciliation, step 1 (BPI PDF import):** in the worktree
-   `.claude/worktrees/finhub-kidclub-reconciliation`, `git fetch && git rebase origin/staging`
-   (after #82 merges, only the 3 handoff/STATUS commits remain), then build step 1 per
-   `HANDOFF-kidclub-reconciliation.md` §6. PR → `staging`.
-3. **Clean up worktrees:** `finhub-cost-model` now (#75 merged); `finhub-nav` after #82 merges
-   (`.claude/skills/worktree-cleanup`).
+1. **Review and merge the step 1 PR** (`agent/finhub-kidclub-reconciliation` → `staging`). Its
+   automatic dev deploy covers KidClub only. To click through FinHub on dev: merge into `staging`,
+   then run `deploy-finances.yml` (workflow_dispatch, ref `staging`; it only deploys dev from
+   `staging`). Or run it locally first with `pnpm dev:finances` (dev project). Try: upload a
+   statement to the NoisyPhocus BPI account, re-upload it (expect all duplicates ignored), and try
+   a non-BPI PDF (expect a refusal with the reason). Note that importing the real September PDF
+   on dev stores real payer names in the dev Firestore; Renato's call whether that's OK.
+2. **Before the first prod PDF import:** check whether the NoisyPhocus BPI account already has
+   XLSX-imported movements (`.claude/skills/prod-data-check`). The import now refuses an overlap,
+   but if old XLSX data exists Renato has to decide whether to delete it or keep using XLSX for
+   those months. FinHub's prod deploy job is disabled (`if: false` in `deploy-finances.yml`).
+3. **KidClub reconciliation, step 2** (read-only matching, Sem fatura flag, monthly check page),
+   per `HANDOFF-kidclub-reconciliation.md` §4 and §6. New `agent/` branch off `staging` after the
+   step 1 PR merges. It reads Vendus documents: run the sandbox-first and metered-API checklists.
+4. **Clean up worktrees:** `finhub-cost-model` (#75 merged) and `finhub-nav` (#82 merged)
+   (`.claude/skills/worktree-cleanup`); this one after the step 1 PR merges, unless step 2
+   continues in it.
 4. **Still to do on dev, from the cost-model work:** enter NoisyPhocus's real numbers (the driver
    as an employee contract, the teacher as a green receipt, Vendus fixed and EasyPay commission as
    recurring expenses), then check `/noisyphocus/costs` for the current month.
@@ -97,6 +130,12 @@ merging it.
 6. Separately: the VAT amount bug (Open questions below), then Phase 7 (IRC estimation).
 
 ## Open questions for Renato
+- **Found 2026-10-12, not fixed (existing behaviour, XLSX too):** every statement import sets the
+  account's `balanceCents` / `balanceAsOf` to that statement's closing balance, even when the
+  statement is older than the current `balanceAsOf`. Importing August after September would put
+  August's balance back. Fix: only update when `dateTo ≥ balanceAsOf`. Small; worth doing in step 2.
+- The PDF preview shows the statement's account number, but the import doesn't check it against
+  the account picked. Eyeball it before clicking Importar.
 - **Decided 2026-10-09 (VAT):** Renato wants every cost shown **with VAT and without VAT**, side
   by side, ideally on one summary page (fold into "Resumo do mês", redesign step 5). Amounts are
   typed as they appear on the invoice, **VAT included**.
@@ -116,15 +155,14 @@ merging it.
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **#82 open** (`agent/finhub-nav` → `staging`). Its deploy runs `deploy-dev.yml` against the
-  shared `kidclub-dev`; it changes no KidClub code.
-- **`kidclub-dev-finhub.web.app` still serves the hand-deployed `agent/finhub-nav` @ a855d6c**
-  (2026-10-05, hosting only) until `deploy-finances.yml` runs on `staging`.
-- **`agent/finhub-kidclub-reconciliation` exists only locally** (in its worktree). Don't delete
-  that worktree before the branch is pushed.
+- **Step 1 PR open** (`agent/finhub-kidclub-reconciliation` → `staging`). Its automatic deploy
+  runs `deploy-dev.yml` against the shared `kidclub-dev`; it changes no KidClub code, rules or
+  functions.
+- **`kidclub-dev-finhub.web.app` may still serve the hand-deployed `agent/finhub-nav` @ a855d6c**
+  (2026-10-05) if `deploy-finances.yml` hasn't been run on `staging` since #82 merged.
 - The real BPI statement used for the reconciliation design is in the main checkout's
   gitignored `prodata/`. Never copy it into a worktree or commit it.
 - A PR into `main` only deploys to prod when its head is `staging`. Feature branches go to
   `staging` first.
-- No new metered API calls yet. Reconciliation steps 2 and 4 will add Vendus and EasyPay reads
-  (checklists in the handoff §5).
+- No new metered API calls yet (step 1 is browser-only parsing + Firestore). Reconciliation steps
+  2 and 4 will add Vendus and EasyPay reads (checklists in the handoff §5).
