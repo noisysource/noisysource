@@ -25,8 +25,11 @@ on a new `agent/` branch, once #75 and #76 are merged.
 Monthly check of the NoisyPhocus BPI statement against KidClub bills, Vendus invoices and EasyPay's
 daily payouts. Renato's call: it lives in FinHub, not KidClub. **Read
 `HANDOFF-kidclub-reconciliation.md` (same folder) before starting.** It shares the statement page
-with emails → expenses (build that page once). Waiting on Renato: a real BPI statement sample, and
-the EasyPay API key scopes check (handoff §7). Handoff committed on `agent/finhub-kidclub-reconciliation`
+with emails → expenses (build that page once). Core output: flag every credit with no invoice
+("Sem fatura"; Vendus is the source of truth, not only KidClub bills). Sample statement received
+(BPI **PDF**, `~/dev/noisysource/prodata/`, gitignored), so steps 1–2 (PDF import, read-only
+reconciliation) are unblocked. Still open: what the card-terminal (TPA) sales are, and the EasyPay
+key scopes before step 4 (handoff §7). Handoff committed on `agent/finhub-kidclub-reconciliation`
 (stacked on `agent/finhub-nav`, docs only).
 
 ## Redesign plan (agreed 2026-10-05)
