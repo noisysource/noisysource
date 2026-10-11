@@ -17,6 +17,9 @@
   emails:** the amount already includes VAT.
 - **Existing FinHub recurring entries:** Renato doesn't remember whether he typed them with or
   without VAT, and will **re-enter them all**. No data migration; flag them instead (PR 1).
+- **KidClub VAT rates (Renato, 2026-10-11):** **23% for parties and the study room, 6% for
+  transport.** Enrollment fee and insurance: not stated yet (Q2).
+- **Families see the VAT breakdown on subscriptions in PR 2**, not later.
 - **EasyPay commission:** Renato believes the % is charged **before VAT** (he funds the EasyPay
   wallet with €100 by transferring €123; the commission comes out of the €100). To confirm (Q3).
 
@@ -38,7 +41,9 @@
 - Rates are **percent integers** (23).
 
 **KidClub**
-- Rates are **fractions** (0.23): transport config `vatRate`; `PARTY_VAT_RATE` in
+- Rates are **fractions** (0.23): transport config `vatRate`, whose **code default is 0.23**
+  (`AdminTransportationConfig.tsx`, `TransportPlannerPage.tsx`) although transport's real rate is
+  **6%**, so check the saved `config` value; `PARTY_VAT_RATE` in
   `packages/shared/models/PartyConfig.ts`, mirrored in `functions/src/kidclub/partyDepositLogic.ts`.
 - **Parties (#81, merged to `staging` 2026-10-11, not yet in prod):** `Booking.total` and the
   party config are **before VAT**. Every party page now shows subtotal / IVA / total / deposit
@@ -102,10 +107,14 @@
   cash-in.
 
 **PR 2 — KidClub** (`kidclub-feature` agent, branch off `staging`)
-1. **Read-only check first:** for transport, study room, enrollment and insurance, compare what
-   the client pages show with what billing actually sends to Vendus and which VAT rate each Vendus
-   product applies. Use real billing docs and the existing read-only `getKidclubVatSummary`. Report
-   to Renato before changing anything; see Q1.
+1. **Read-only check first, report to Renato before changing anything.** Plain version: a family
+   looking at a transport subscription sees e.g. "€100/mês + €6 IVA". Is the invoice they actually
+   pay €100 (VAT inside) or €106? Do the same for the study room, enrollment fee and insurance.
+   Compare what the client pages show, the billing docs' line amounts and `total`, and the VAT
+   rate on the real Vendus invoices (the existing read-only `getKidclubVatSummary` groups by
+   rate). Also confirm the saved transport `vatRate` is 0.06 and the Vendus transport product
+   applies 6%, and the study room product applies 23%. Use dev first; prod reads only per the
+   root CLAUDE.md prod-access rule. See Q1.
 2. **Admin:** every place a subscription price is set or shown (transport config, study room
    config, enrollment and insurance fees, the unified families/subscriptions admin page) shows sem
    IVA / IVA / com IVA. Parties are done (#81).
@@ -122,12 +131,12 @@ invoice.
 1. **Transport:** if the check shows families are billed `monthlyFee` with VAT inside it, which
    is right: the page's "+ IVA" (prices go up by 23%) or the invoice (fix the page)? This changes
    what families pay, so it's your call after the check, not the agent's.
-2. **VAT rates for study room, enrollment fee and insurance:** which applies (23%, exempt…)?
-   Worth confirming with the accountant against what the Vendus products are set to.
+2. **VAT rates — partly answered 2026-10-11:** parties and study room 23%, transport 6%. Still
+   open: **enrollment fee and insurance** (insurance is usually exempt; confirm with the
+   accountant against what the Vendus products are set to).
 3. **EasyPay:** confirm the commission is before VAT from one real EasyPay fee invoice (it shows
    base + IVA). The EasyPay API/sandbox is a fallback if no invoice is at hand.
-4. **Families seeing the VAT breakdown on subscriptions:** in PR 2, or admins first and families
-   in a later step?
+4. ~~Families seeing the VAT breakdown on subscriptions~~ — answered: **in PR 2.**
 
 ## 6. Don'ts
 
