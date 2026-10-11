@@ -13,6 +13,7 @@ import { makeFinanceEventsDomain } from "./domains/financeEvents";
 import { makeIncomeSourcesDomain } from "./domains/incomeSources";
 import { makeCreditsDomain } from "./domains/credits";
 import { makeKidclubDomain } from "./domains/kidclub";
+import { makeCostSummaryDomain } from "./domains/costSummary";
 import { makeLoansDomain } from "./domains/loans";
 import { makeInsurancesDomain } from "./domains/insurances";
 import { makeNotificationsDomain } from "./domains/notifications";
@@ -45,6 +46,7 @@ export const api = (() => {
     notifications: makeNotificationsDomain(),
     bankTransactions: makeBankTransactionsDomain(),
     kidclub: makeKidclubDomain(),
+    costSummary: makeCostSummaryDomain(),
   };
 })();
 

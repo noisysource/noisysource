@@ -25,6 +25,9 @@ const from = (raw: any, id: string): RecurringEntryDoc => ({
   paidByAccountId: raw?.paidByAccountId || undefined,
   lastReimbursedYM: raw?.lastReimbursedYM || undefined,
   ivaRatePct: typeof raw?.ivaRatePct === 'number' ? raw.ivaRatePct : undefined,
+  costModel: raw?.costModel === 'commission' ? 'commission' : undefined,
+  commissionPct: typeof raw?.commissionPct === 'number' ? raw.commissionPct : undefined,
+  commissionVolumeSource: raw?.commissionVolumeSource === 'kidclub_billing' ? 'kidclub_billing' : undefined,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
 

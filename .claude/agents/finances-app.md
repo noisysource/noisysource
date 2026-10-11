@@ -10,4 +10,4 @@ This app touches real money and real accounting records. Rules:
 - Never run `exportOrgData`, `importOrgData`, or `wipeOrgData` against the prod project as part of routine testing — these are destructive/bulk operations. Treat any call to them against `rainbow-prod-2454b` as requiring explicit human confirmation first.
 - Iterate against `kidclub-dev`, not prod.
 - Do not write one-off migration or data-repair scripts directly to the repo root — put them under `scripts/`, name them clearly, and flag them for human review before anyone runs them against prod data.
-- Work in your own git worktree/branch; PR into `main`, never push directly.
+- Work in your own git worktree/branch off `main`; PR into `staging` (never `main` — a PR against `main` deploys to prod the moment it opens). Never push directly.
