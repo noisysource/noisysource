@@ -15,14 +15,26 @@ The finances half never depended on the old KidClub billing code, so it was cher
 cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 `.claude/worktrees/finhub-cost-model`).
 
+## Release to prod (2026-10-12)
+`RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
+and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
+2026-07-31; its prod deploy job is disabled (`if: false`).** First question to settle: does the
+real FinHub data live on dev or prod?
+
+## VAT convention for both apps (decided 2026-10-11)
+`packages/shared/HANDOFF-vat-convention.md`. PR 1 there (shared helper + FinHub) fixes the
+recurring-amount VAT bug below and adds com/sem IVA columns to Custos do mês. Renato will
+re-enter all recurring entries afterwards (no migration). Do it before or alongside the
+reconciliation and email work below, since bank-transaction amounts follow the same rule.
+
 ## Next feature: KidClub bank reconciliation (decided 2026-10-11)
 Monthly check of the NoisyPhocus BPI statement against KidClub bills, Vendus invoices and EasyPay's
 daily payouts. Renato's call: it lives in FinHub, not KidClub. **Read
 `HANDOFF-kidclub-reconciliation.md` (same folder) before starting.** It shares the statement page
 with emails → expenses (build that page once). Core output: flag every credit with no invoice
 ("Sem fatura"; Vendus is the source of truth, not only KidClub bills). Sample statement received
-(BPI **PDF**, `~/dev/noisysource/prodata/`, gitignored). **Step 1 (PDF import) is built** and in
-a PR → `staging` from `agent/finhub-kidclub-reconciliation` (worktree
+(BPI **PDF**, `~/dev/noisysource/prodata/`, gitignored). **Step 1 (PDF import) is built** and
+merged into `staging` (#85) from `agent/finhub-kidclub-reconciliation` (worktree
 `.claude/worktrees/finhub-kidclub-reconciliation`); step 2 (read-only reconciliation) is next.
 Still open: what the card-terminal (TPA) sales are, and the EasyPay key scopes before step 4
 (handoff §7). Renato chose this over emails → expenses as the next feature.

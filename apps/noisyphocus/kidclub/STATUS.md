@@ -4,6 +4,14 @@
 
 **Last updated:** 2026-10-11
 
+## 🧾 VAT transparency + one VAT convention with FinHub (decided 2026-10-11) — not started
+Renato wants admins (and later families) to always see sem IVA / IVA / com IVA wherever a
+subscription or party price is set or shown. Parties are done (#81). Subscriptions are not, and
+it's unverified whether transport families are billed `monthlyFee` or `monthlyFee` + VAT, while
+the client page shows "+ IVA" on top. Start with the **read-only check** in
+`packages/shared/HANDOFF-vat-convention.md` (PR 2), and don't change billed amounts without
+Renato's decision.
+
 ## 🎈 Party prices 2026/27 + IVA + extra quantities (2026-10-07) — branch `agent/party-pricing-vat`, PR → `staging`, code NOT in prod
 
 **Prod data already changed (done 2026-10-07, Renato asked).** `config/party` on prod now matches the

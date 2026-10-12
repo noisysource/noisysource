@@ -94,6 +94,10 @@ invoice fields extracted → matched to a bank tx → attached → confirmed eve
   manual decision should offer "remember for this sender".
 - Storage: `finances/{entityId}/invoices/{yyyy-mm}/{file}`, finhub-admin-only rule.
 
+**VAT:** follow `packages/shared/HANDOFF-vat-convention.md` (decided 2026-10-11). Bank-transaction
+amounts are VAT-inclusive; the VAT code comes from the matched invoice or the vendor rule, else
+`por_confirmar`, never 0. Foreign vendors (Anthropic, Google…) are usually `autoliquidacao`.
+
 **Matching:** same amount (same sign, EUR) within a date window (e.g. −3/+10 days of the invoice
 date), and for a tie prefer the vendor name appearing in the bank description. One clear match
 gets suggested; zero or several go to `needs_review`. Always show the suggestion and let Renato
