@@ -1,4 +1,6 @@
-import { PartyConfig, PARTY_DEPOSIT_RATE, PARTY_VAT_RATE } from './PartyConfig';
+import { PartyConfig, PARTY_DEPOSIT_RATE } from './PartyConfig';
+import { grossFromNet } from '../lib/vat';
+import { KIDCLUB_VAT } from './kidclubVat';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -43,11 +45,16 @@ export function extraQty(sel: Pick<PartySelection, 'extras' | 'extrasDetail'>, n
   return Number.isFinite(q) && q > 0 ? Math.floor(q) : 1;
 }
 
-/** VAT split for a stored Booking.total (before IVA). */
+/**
+ * VAT split for a stored Booking.total (before IVA). The VAT comes from lib/vat.ts; the deposit
+ * keeps its own rounding so no party price or deposit moves by a cent (pinned by
+ * functions/src/kidclub/partyPricingParity.test.ts, mirrored in partyDepositLogic.ts).
+ */
 export function partyVatBreakdown(subtotal: number) {
   const net = round2(Number(subtotal) || 0);
-  const vat = round2(net * PARTY_VAT_RATE);
-  const total = round2(net + vat);
+  const split = grossFromNet(Math.round(net * 100), KIDCLUB_VAT.party)!;
+  const vat = split.vatCents / 100;
+  const total = split.grossCents / 100;
   return { subtotal: net, vat, total, deposit: round2(total * PARTY_DEPOSIT_RATE) };
 }
 

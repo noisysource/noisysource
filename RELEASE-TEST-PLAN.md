@@ -13,8 +13,11 @@
   has the new prices; prod has no party bookings yet.
 - Docs only: #80, #83.
 - **#87 (VAT PR 1)** adds `packages/shared/lib/vat.ts`, which the KidClub build includes, but no
-  KidClub screen or billing changes. KidClub's own VAT work (transport, study room, fees) is
-  PR 2, not in this release.
+  KidClub screen or billing changes.
+- **VAT PR 2 (#89), if merged before the release:** every
+  subscription price shows "IVA incluído · sem IVA €X · IVA 6%/23% €Y" for families and admins;
+  the transport page's wrong "+ €X IVA" line is gone; admin price settings say "com IVA". **No
+  billed amount changes.** Scenarios §6 V6–V9; changes K2.4.
 - Already in prod, but `staging` needs it before testing: **hotfix #84** (Vendus client-creation
   loop), brought into `staging` by **#86**.
 
@@ -102,8 +105,12 @@ Each scenario is a real-life story. ✅ = expected result. **NEW** = changed in 
    final price only.
 3. Planeador de Transporte (`/admin/transport-planner`). ✅ Both children on the right days, and
    off-pattern weeks empty.
-4. As the parent: the transport subscription page. ✅ Note what VAT line it shows. This is the
-   open VAT question in `packages/shared/HANDOFF-vat-convention.md`; just write down what you see.
+4. As the parent: the transport subscription page. **Changed by VAT PR 2.** ✅ The main price is
+   the price with VAT, e.g. **€120.00/mês**, and under it **IVA incluído · sem IVA €113.21 · IVA
+   6% €6.79**. No "+ IVA" on top anywhere. ✅ Pagamentos (and Cobranças as admin): that month's
+   transport line is the same amount (less any absence credit). If it isn't, write down both
+   amounts: that's a card-vs-bill difference, not VAT. Without PR 2 the page still shows
+   "+ €X IVA" (wrong: nothing is added to the bill); note it, don't report it as new.
 
 ### K3. Absences and the credit
 1. As the parent: cancel 3 study-room days in the current month from the calendar.
@@ -180,7 +187,8 @@ config.
    ✅ "comissão X% sem IVA" badge on EasyPay; "sem IVA … · IVA 23% …" under each amount.
 4. IVA → this quarter. ✅ EasyPay's base = KidClub's paid volume × %, and its IVA = 23% of that
    base. ✅ Vendus's base = amount ÷ 1.23 (VAT taken out, not added). ✅ "IVA liquidado" shows
-   KidClub's real Vendus figures (that function reads Vendus, read-only, even on dev).
+   KidClub's real Vendus figures **on prod only**: on dev it can't load, because every Vendus
+   call from dev is blocked (`functions/src/externalGuard.ts`). Expected on dev, not a bug.
 5. Custos do mês. **Changed by #87.** ✅ One line per worker, Vendus and EasyPay, in two columns,
    com IVA and sem IVA; no separate VAT line. ✅ A worker appears once ("Contrato — …" or "Recibo
    Verde — …"), not again as "Encargos Salariais". Check by hand: total com IVA − total sem IVA =
@@ -212,7 +220,7 @@ Only after §2 and §3 pass on dev.
 1. Open a PR **`staging` → `main`**. Opening it deploys to prod (only `staging` as head does).
    `ci-checks.yml` runs build/typecheck alongside.
 2. Check the PR's commit list: it should be #81, #75, #82, #85, #80, #83, #86, #73 (+ #87, #88 and
-   any later VAT PR if you wait for them). Anything else, stop and ask.
+   #89 if it's merged). Anything else, stop and ask.
 3. When the deploy check is green, smoke-test **prod**, read-only:
    - kidclub.pt loads; you can log in as admin; Cobranças and Famílias e inscrições load.
    - A party page shows subtotal / IVA / total (look, don't book).
@@ -247,8 +255,9 @@ Functions: revert the merge on `main` (a PR), which redeploys the previous code.
    (FinHub). Enable it before relying on those in prod? It also needs the stricter storage rule
    flagged in `apps/noisysource/finances/HANDOFF-email-expenses.md` §3.4.
 4. **Release now, or wait for the VAT work?** VAT PR 1 (#87, FinHub + the shared helper) is
-   ready for review; KidClub's PR 2 isn't started. #87 changes no KidClub screen, so it can go in
-   this release if it's merged and §6 V1–V5 pass. If it does, re-enter the recurring entries
+   merged into `staging`. KidClub's PR 2 is display-only (no billed amount changes), so it can go
+   in this release if it's merged and §6 V6–V9 pass; otherwise it goes in the next one. #87
+   changes no KidClub screen, so it can go in this release if §6 V1–V5 pass. If it does, re-enter the recurring entries
    (V1) **where your real FinHub data lives** (Q1): on prod after the deploy if that's where it
    is, otherwise they stay "IVA por confirmar" there.
 
@@ -314,3 +323,49 @@ Changes F3.3, F3.4, F3.5, F4.2 and F4.3 above. Rule: a recurring amount is what 
 **Still open (not a bug):** EasyPay's % is assumed to be before VAT (handoff Q3). Check one real
 EasyPay fee invoice: if it shows base + IVA, V3/V4 are right; if the % already includes VAT, tell
 the next session (the fix is one line in `recurringMonthlyAmountCents`).
+
+### VAT convention, PR 2 — KidClub (#89)
+
+Changes K2.4 above. Rule: every KidClub subscription price is **com IVA**: what the family pays
+and what the invoice totals. The rates are the Vendus products': study room, enrollment fee and
+insurance **23%**, transport **6%**. Checked 2026-10-12: prod bills already equal the shown
+prices, VAT inside, so **no billed amount changes**; only what the pages say.
+
+#### V6. A family checks their prices
+1. As the parent: Inscrições → a transport subscription. ✅ "€120.00/mês" and under it "IVA
+   incluído · sem IVA €113.21 · IVA 6% €6.79" (for €120). No "+ IVA" line.
+2. A study-room subscription. ✅ For €48: "IVA incluído · sem IVA €39.02 · IVA 23% €8.98".
+3. Filhos → a child → a subscription (side panel). ✅ The same line under the price.
+4. Pagamentos. ✅ That month's line is the same amount as the page (less any absence credit).
+
+#### V7. Enrolling shows the split
+1. As the parent: enroll a child (`/client/enroll/study`, with transport on some days). ✅ The
+   price box ends with "Valor fixo mensal, IVA incluído · sem IVA €X · IVA €Y". For study €48 +
+   transport €48: "sem IVA €84.30 · IVA €11.70" (each rate split once, like the invoice).
+2. As admin: Famílias e inscrições → a family → edit a subscription, or enroll manually.
+   ✅ The same line in the price box.
+
+#### V8. Admin price settings say com IVA
+1. Planeador de Transporte → ⚙. ✅ "€/viagem com IVA"; for €6 the hint reads "sem IVA €5.66 ·
+   IVA 6% €0.34" and "IVA 6% incluído: é a taxa do produto Transporte no Vendus". ✅ No
+   editable "IVA (%)" field any more.
+2. `/admin/transport-config`. ✅ "Preço Fixo por Viagem (com IVA)" with the split; the IVA box
+   reads "IVA 6%, incluído no preço", with no Editar button.
+3. Planeador da Sala de Estudo → ⚙. ✅ "€/dia com IVA", hint "Por dia: sem IVA €4.88 · IVA 23%
+   €1.12" for €6. ✅ "Taxa de inscrição (€ com IVA)" €35 → "sem IVA €28.46 · IVA 23% €6.54".
+   ✅ "Seguro (€ com IVA)" €25 → "Uma vez por criança e ano letivo, com a taxa de inscrição ·
+   sem IVA €20.33 · IVA 23% €4.67" (it used to say €/mês, which billing never charged).
+4. Famílias e inscrições → a subscription card. ✅ Under the monthly price: "IVA incluído · sem
+   IVA … · IVA 6% …" (transport) or "IVA 23%" (study room).
+
+#### V9. Nothing billed changes
+1. Note three pending bills' totals in Cobranças, then Famílias e inscrições → "Recalcular
+   tudo". ✅ The same totals.
+2. Parties: repeat K5.1. ✅ Still subtotal €327.00 · IVA €75.21 · total €402.21 · sinal
+   €201.11 (party VAT now goes through `vat.ts`; a test pins every subtotal to the cent).
+3. Prod, after the release, on the first real invoice with transport (look, don't create one):
+   ✅ the transport line shows IVA 6% and the invoice total equals the bill.
+
+**Still open (not a bug):** insurance is invoiced at 23% (its Vendus product). Ask the accountant
+whether it should be exempt (`isento`); if so, that's a Vendus product change plus one line in
+`KIDCLUB_VAT` (`packages/shared/models/kidclubVat.ts`).
