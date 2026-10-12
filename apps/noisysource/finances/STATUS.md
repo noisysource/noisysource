@@ -18,8 +18,9 @@ cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 ## Release to prod (2026-10-12)
 `RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
 and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
-2026-07-31; its prod deploy job is disabled (`if: false`).** First question to settle: does the
-real FinHub data live on dev or prod?
+2026-07-31.** **#88 (2026-10-12) deploys FinHub with KidClub**: a PR into `staging` → dev, the
+`staging` → `main` PR → prod, no manual runs. First question to settle, before that promotion PR:
+does the real FinHub data live on dev or prod?
 
 ## VAT convention for both apps (decided 2026-10-11)
 `packages/shared/HANDOFF-vat-convention.md`. PR 1 there (shared helper + FinHub) fixes the
@@ -126,7 +127,7 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 2. **Before the first prod PDF import:** check whether the NoisyPhocus BPI account already has
    XLSX-imported movements (`.claude/skills/prod-data-check`). The import now refuses an overlap,
    but if old XLSX data exists Renato has to decide whether to delete it or keep using XLSX for
-   those months. FinHub's prod deploy job is disabled (`if: false` in `deploy-finances.yml`).
+   those months. FinHub now deploys to prod with the `staging` → `main` PR (#88).
 3. **KidClub reconciliation, step 2** (read-only matching, Sem fatura flag, monthly check page),
    per `HANDOFF-kidclub-reconciliation.md` §4 and §6. New `agent/` branch off `staging` after the
    step 1 PR merges. It reads Vendus documents: run the sandbox-first and metered-API checklists.
