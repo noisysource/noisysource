@@ -13,6 +13,7 @@
 
 import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { EcContractDoc } from "@shared/models/EcContract";
+import { ecContractVatCode } from "@shared/models/EcContract";
 import type { IncomeSourceDoc } from "@shared/models/IncomeSource";
 import { computeMonthlyPayroll } from "@shared/lib/payroll";
 import { computeEcProjection } from "@shared/lib/ecProjection";
@@ -152,6 +153,7 @@ export async function syncEcContractRecurring(contract: EcContractDoc): Promise<
     type: "income",
     description: `EC — ${contract.clientName}${contract.projectName ? ` / ${contract.projectName}` : ""}`,
     amountCents,
+    vatCode: ecContractVatCode(contract),
     frequency: "monthly",
     dayOfMonth: 1,
     startYearMonth: toYearMonth(contract.startDate),

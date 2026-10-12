@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { RecurringEntryDoc, RecurringType, RecurringFrequency, RecurringCostModel } from "@shared/models/RecurringEntry";
+import { recurringVatCode } from "@shared/models/RecurringEntry";
 import { formatEUR } from "@shared/lib/money";
+import { VAT_CODES, formatVatBreakdown, grossFromNet, vatCodeChargesVat, type VatCode } from "@shared/lib/vat";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -63,7 +65,14 @@ type Form = {
   active: boolean;
   reimbursable: boolean;
   paidByAccountId: string;
-  ivaRatePct: string; // '' | '0' | '6' | '13' | '23'
+  vatCode: VatCode;
+  /** The typed amount includes VAT ("com IVA", default). Saved amounts always do. */
+  amountIncludesVat: boolean;
+  /** Synced from an employment contract or income source: VAT doesn't apply. */
+  vatNotApplicable: boolean;
+  /** Saved before the VAT convention: the old rate, shown as a hint until re-saved. */
+  legacyUnconfirmed: boolean;
+  legacyRatePct?: number;
   costModel: RecurringCostModel;
   commissionPct: string;
 };
@@ -72,10 +81,12 @@ const emptyForm = (): Form => ({
   accountId: '', toAccountId: '', frequency: 'monthly',
   dayOfMonth: '1', monthOfYear: '1', startYearMonth: '',
   endYearMonth: '', onceYearMonth: '', active: true,
-  reimbursable: false, paidByAccountId: '', ivaRatePct: '',
+  reimbursable: false, paidByAccountId: '',
+  vatCode: 'por_confirmar', amountIncludesVat: true, vatNotApplicable: false, legacyUnconfirmed: false,
   costModel: 'fixed', commissionPct: '',
 });
 function fromDoc(d: RecurringEntryDoc): Form {
+  const vatCode = recurringVatCode(d);
   return {
     type: d.type, description: d.description,
     amountEUR: (d.amountCents / 100).toFixed(2),
@@ -86,10 +97,26 @@ function fromDoc(d: RecurringEntryDoc): Form {
     onceYearMonth: d.onceYearMonth ?? '', active: d.active,
     reimbursable: d.reimbursable ?? false,
     paidByAccountId: d.paidByAccountId ?? '',
-    ivaRatePct: d.ivaRatePct != null ? String(d.ivaRatePct) : '',
+    vatCode: vatCode ?? 'por_confirmar',
+    amountIncludesVat: true,
+    vatNotApplicable: vatCode == null && d.type !== 'transfer',
+    legacyUnconfirmed: d.vatCode === undefined && vatCode === 'por_confirmar',
+    legacyRatePct: d.ivaRatePct,
     costModel: d.costModel === 'commission' ? 'commission' : 'fixed',
     commissionPct: d.commissionPct != null ? String(d.commissionPct) : '',
   };
+}
+
+/** VAT is chosen for company income/expenses only: not for Casa, transfers or synced pay. */
+function formVatEditable(form: Form, isPrivate: boolean): boolean {
+  return form.type !== 'transfer' && !isPrivate && !form.vatNotApplicable;
+}
+
+/** The amount as saved: always VAT-inclusive, converted when typed "sem IVA". */
+function formAmountCents(form: Form, isPrivate: boolean): number {
+  const typedCents = Math.round(parseFloat(form.amountEUR || '0') * 100);
+  if (!formVatEditable(form, isPrivate) || form.amountIncludesVat) return typedCents;
+  return grossFromNet(typedCents, form.vatCode)?.grossCents ?? typedCents;
 }
 
 type AccountOpt = { id: string; name: string; entityId: string };
@@ -119,6 +146,9 @@ function RecurringFormModal({
   const [err, setErr]   = useState<string | null>(null);
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm(f => ({ ...f, [k]: v }));
+  const vatEditable = formVatEditable(form, isPrivate);
+  const showVatSwitch = vatEditable && vatCodeChargesVat(form.vatCode);
+  const savedCents = formAmountCents(form, isPrivate);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -182,19 +212,72 @@ function RecurringFormModal({
             </div>
           )}
 
+          {vatEditable && (
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">IVA</div>
+              <div className="grid grid-cols-4 gap-1">
+                {VAT_CODES.map(({ code, label }) => (
+                  <button key={String(code)} type="button" onClick={() => set('vatCode', code)}
+                    className={`py-1 rounded text-xs font-medium border transition-colors ${
+                      form.vatCode === code
+                        ? code === 'por_confirmar'
+                          ? 'border-amber-500 bg-amber-900/40 text-amber-200'
+                          : 'border-blue-500 bg-blue-900/50 text-blue-200'
+                        : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                    }`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {form.legacyUnconfirmed && (
+                <div className="text-[11px] text-amber-400/90 mt-1">
+                  Entrada guardada antes da regra do IVA
+                  {form.legacyRatePct != null ? ` (taxa ${form.legacyRatePct}%)` : ''}: não se sabe se o valor inclui IVA.
+                  Escolhe a taxa e indica se o valor abaixo é com ou sem IVA.
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
             <div className="text-xs text-zinc-400 mb-1">
               {form.costModel === 'commission' ? 'Valor estimado (€) — usado se o volume ainda não estiver disponível' : 'Valor (€)'}
             </div>
-            <Input type="number" step="0.01" placeholder="0.00"
-              value={form.amountEUR} onChange={e => set('amountEUR', e.target.value)} required />
+            <div className="flex gap-2">
+              <Input type="number" step="0.01" placeholder="0.00"
+                value={form.amountEUR} onChange={e => set('amountEUR', e.target.value)} required />
+              {showVatSwitch && (
+                <div className="grid grid-cols-2 gap-0.5 shrink-0">
+                  {([true, false] as const).map(incl => (
+                    <button key={String(incl)} type="button" onClick={() => set('amountIncludesVat', incl)}
+                      className={`px-2 rounded text-xs font-medium border transition-colors whitespace-nowrap ${
+                        form.amountIncludesVat === incl
+                          ? 'border-blue-500 bg-blue-900/50 text-blue-200'
+                          : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                      }`}>
+                      {incl ? 'com IVA' : 'sem IVA'}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {vatEditable && savedCents !== 0 && (
+              <div className="text-[11px] text-zinc-500 mt-1">
+                {form.vatCode === 'por_confirmar'
+                  ? 'Sem taxa: o valor é guardado como está e fica "IVA por confirmar".'
+                  : <>Guarda <span className="text-zinc-300">{formatEUR(savedCents)}</span> com IVA · {formatVatBreakdown(savedCents, form.vatCode)}</>}
+              </div>
+            )}
           </div>
 
           {form.type === 'expense' && form.costModel === 'commission' && (
             <div>
-              <div className="text-xs text-zinc-400 mb-1">Comissão (%)</div>
+              <div className="text-xs text-zinc-400 mb-1">Comissão (% sem IVA)</div>
               <Input type="number" step="0.01" min="0" max="100" placeholder="ex: 1.5"
                 value={form.commissionPct} onChange={e => set('commissionPct', e.target.value)} />
+              <div className="text-[11px] text-zinc-500 mt-1">
+                Percentagem antes do IVA; o IVA (taxa acima) é somado à comissão.
+              </div>
             </div>
           )}
 
@@ -291,24 +374,6 @@ function RecurringFormModal({
             </div>
           )}
 
-          {form.type !== 'transfer' && (
-            <div>
-              <div className="text-xs text-zinc-400 mb-1">Taxa de IVA</div>
-              <div className="flex gap-1">
-                {(['', '0', '6', '13', '23'] as const).map(r => (
-                  <button key={r} type="button" onClick={() => set('ivaRatePct', r)}
-                    className={`flex-1 py-1 rounded text-xs font-medium border transition-colors ${
-                      form.ivaRatePct === r
-                        ? 'border-blue-500 bg-blue-900/50 text-blue-200'
-                        : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
-                    }`}>
-                    {r === '' ? 'N/A' : `${r}%`}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.active} onChange={e => set('active', e.target.checked)} />
             Ativo
@@ -401,7 +466,8 @@ export default function RecurringPage() {
       id: id ?? undefined,
       type: form.type,
       description: form.description.trim(),
-      amountCents: Math.round(parseFloat(form.amountEUR || '0') * 100),
+      amountCents: formAmountCents(form, isPrivate),
+      vatCode: formVatEditable(form, isPrivate) ? form.vatCode : undefined,
       accountId: form.accountId || undefined,
       toAccountId: form.type === 'transfer' ? (form.toAccountId || undefined) : undefined,
       frequency: form.frequency,
@@ -413,9 +479,6 @@ export default function RecurringPage() {
       active: form.active,
       reimbursable: form.reimbursable || undefined,
       paidByAccountId: (form.reimbursable && form.paidByAccountId) ? form.paidByAccountId : undefined,
-      ivaRatePct: (form.type !== 'transfer' && form.ivaRatePct !== '')
-        ? parseInt(form.ivaRatePct, 10)
-        : undefined,
       costModel: (form.type === 'expense' && form.costModel === 'commission') ? 'commission' : undefined,
       commissionPct: (form.type === 'expense' && form.costModel === 'commission' && form.commissionPct !== '')
         ? parseFloat(form.commissionPct)
@@ -485,6 +548,15 @@ export default function RecurringPage() {
     return `Pago por Renato · ${name}`;
   };
 
+  /** "sem IVA … · IVA 23% …" under a company entry's amount; the badge covers por_confirmar. */
+  const vatLine = (r: RecurringEntryDoc) => {
+    if (isPrivate) return null;
+    const code = recurringVatCode(r);
+    if (code == null || code === 'por_confirmar') return null;
+    return formatVatBreakdown(r.amountCents, code);
+  };
+  const unconfirmedCount = isPrivate ? 0 : rows.filter(r => recurringVatCode(r) === 'por_confirmar').length;
+
   const freqLabel = (r: RecurringEntryDoc) => {
     if (r.frequency === 'monthly')   return `dia ${r.dayOfMonth}`;
     if (r.frequency === 'quarterly') return `trimestral · dia ${r.dayOfMonth}`;
@@ -536,6 +608,14 @@ export default function RecurringPage() {
         </div>
       )}
 
+      {unconfirmedCount > 0 && (
+        <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/50 px-3 py-2 rounded">
+          {unconfirmedCount === 1 ? '1 entrada tem' : `${unconfirmedCount} entradas têm`} IVA por confirmar.
+          Abre cada uma, escolhe a taxa de IVA e indica se o valor é com ou sem IVA. Até lá ficam fora das
+          contas do IVA e entram pelo valor guardado nos Custos do mês.
+        </div>
+      )}
+
       {/* Grouped entries */}
       {GROUPS.map(({ type, label, sign, color }) => {
         const group = rows.filter(r => r.type === type);
@@ -559,7 +639,12 @@ export default function RecurringPage() {
                       <span className="text-sm font-medium truncate">{r.description}</span>
                       {r.costModel === 'commission' && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 border border-blue-800/60 shrink-0">
-                          comissão {r.commissionPct ?? 0}%
+                          comissão {r.commissionPct ?? 0}% sem IVA
+                        </span>
+                      )}
+                      {!isPrivate && recurringVatCode(r) === 'por_confirmar' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/60 shrink-0">
+                          IVA por confirmar
                         </span>
                       )}
                       {r.reimbursable && (
@@ -584,10 +669,13 @@ export default function RecurringPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
-                    <span className={`text-sm font-semibold tabular-nums ${color}`}>
-                      {type !== 'transfer' ? sign : ''}{formatEUR(r.amountCents)}
-                      {r.costModel === 'commission' && <span className="text-[10px] text-zinc-500 font-normal ml-1">(estimado)</span>}
-                    </span>
+                    <div className="text-right">
+                      <div className={`text-sm font-semibold tabular-nums ${color}`}>
+                        {type !== 'transfer' ? sign : ''}{formatEUR(r.amountCents)}
+                        {r.costModel === 'commission' && <span className="text-[10px] text-zinc-500 font-normal ml-1">(estimado)</span>}
+                      </div>
+                      {vatLine(r) && <div className="text-[10px] text-zinc-500 tabular-nums">{vatLine(r)}</div>}
+                    </div>
                     <div className="flex gap-2 text-xs">
                       <button className="text-blue-400 hover:underline" onClick={() => openEdit(r)}>Editar</button>
                       <button className="text-red-400 hover:underline" onClick={() => deleteOne(r.id)}>Apagar</button>

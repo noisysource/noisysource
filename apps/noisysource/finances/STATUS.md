@@ -30,10 +30,11 @@ exercised by the next `staging` → `main` PR. First question to settle, before 
 PR: does the real FinHub data live on dev or prod?
 
 ## VAT convention for both apps (decided 2026-10-11)
-`packages/shared/HANDOFF-vat-convention.md`. PR 1 there (shared helper + FinHub) fixes the
-recurring-amount VAT bug below and adds com/sem IVA columns to Custos do mês. Renato will
-re-enter all recurring entries afterwards (no migration). Do it before or alongside the
-reconciliation and email work below, since bank-transaction amounts follow the same rule.
+`packages/shared/HANDOFF-vat-convention.md`. **PR 1 (shared helper + FinHub) is #87 → `staging`,
+open for review (2026-10-12).** Renato re-enters all recurring entries afterwards (no migration;
+`RELEASE-TEST-PLAN.md` §6 V1). PR 2 (KidClub) not started. The reconciliation and email work
+below must follow the same rule: bank-transaction amounts are VAT-inclusive, with a VAT code from
+`packages/shared/lib/vat.ts`.
 
 ## Next feature: KidClub bank reconciliation (decided 2026-10-11)
 Monthly check of the NoisyPhocus BPI statement against KidClub bills, Vendus invoices and EasyPay's
@@ -83,13 +84,40 @@ only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one sh
 the Dashboard flips while loading (pass the entity explicitly instead).
 
 ## Currently working on
-Reconciliation step 1 (BPI PDF import) is done and waiting for review: PR → `staging` from
-`agent/finhub-kidclub-reconciliation`. Nothing else in progress.
+**VAT PR 1, #87** (`agent/finhub-vat`, worktree `.claude/worktrees/finhub-vat`) → `staging`:
+done, tested on dev, waiting for Renato's review. Nothing else in progress. (Reconciliation
+step 1 was merged as #85.)
 
 Lesson kept from #76 (2026-10-11): after merging the base of a stacked PR, retarget the stacked PR
 to `staging` *before* merging it (#76 merged into its old base instead and was re-landed as #82).
 
 ## Last completed
+- **VAT convention PR 1, #87 (2026-10-12)**, → `staging`, not merged:
+  - `packages/shared/lib/vat.ts`: codes `23 | 13 | 6 | 0 | isento | autoliquidacao |
+    por_confirmar` (percent integers, cents), `splitGross`, `grossFromNet`, labels,
+    `formatVatBreakdown`. `por_confirmar` returns null, never 0. Byte-identical mirror in
+    `functions/src/lib/vat.ts`; `functions/src/lib/vat.test.ts` fails if they drift.
+  - `RecurringEntryDoc.vatCode` replaces `ivaRatePct` (kept only as a hint). With a code the
+    amount includes VAT; without one it's "IVA por confirmar". Always read it through
+    `recurringVatCode()`: none for transfers and pay synced from contracts (`emp:`/`inc:`),
+    `isento` for synced EC income and insurance.
+  - Form: VAT code picker (default Por confirmar), com IVA / sem IVA switch next to the amount
+    (converted on save), preview of what gets saved; "% sem IVA" for commissions. List: badge,
+    breakdown under each amount, banner counting entries to confirm. Nothing for Casa.
+  - IVA page (`recurringVatInMonths`, was `recurringIvaInQuarter`): VAT split out of the amount
+    per month; "IVA por confirmar — fora dos totais" section.
+  - Custos do mês: com/sem IVA columns, no extra VAT line. `costSummary` docs gain
+    `softwareNetCents`, `totalNetCents`, `unconfirmedVatCount`, per-line `netCents`/`vatCode`;
+    **`totalCostCents` is now the com IVA total** (before: payroll + costs + VAT on top). KidClub
+    doesn't read it yet. Also fixed: a NoisyPhocus contract's pay was counted twice (contract +
+    its synced "Encargos Salariais" recurring entry).
+  - Commission: fee = volume × % (before VAT) + VAT at the entry's code. Forecast: commission =
+    % × that month's KidClub revenue (`kidclubVolumeByMonth`), estimate when no KidClub bills;
+    EC cash-in = invoice with VAT at `ecContractVatCode()`. EC is `isento` (Renato,
+    2026-10-12), so EC cash-in is unchanged; EC contracts now save `vatCode: 'isento'`.
+  - Tests: finances vitest now resolves `@shared`; 17 new tests (`src/lib/recurringVat.test.ts`).
+    tsc: finances 20 errors = `staging` baseline. Deployed by hand to dev hosting; smoke-tested
+    Recorrentes (form both ways), IVA, Custos do mês, Previsão.
 - **Reconciliation step 1, BPI PDF import (2026-10-12)**, PR → `staging`:
   - `src/lib/parsers/bpiPdf.ts`, same `ParsedBpiStatement` as `bpiXlsx.ts` (plus an optional
     `openingBalanceCents`). Two parts: pdfjs extraction (`extractPdfTextItems`), then pure
@@ -124,13 +152,12 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 - Reconciliation handoff written and agreed with Renato (2026-10-11).
 
 ## Next step
-1. **Review and merge the step 1 PR** (`agent/finhub-kidclub-reconciliation` → `staging`). Its
-   automatic dev deploy covers KidClub only. To click through FinHub on dev: merge into `staging`,
-   then run `deploy-finances.yml` (workflow_dispatch, ref `staging`; it only deploys dev from
-   `staging`). Or run it locally first with `pnpm dev:finances` (dev project). Try: upload a
-   statement to the NoisyPhocus BPI account, re-upload it (expect all duplicates ignored), and try
-   a non-BPI PDF (expect a refusal with the reason). Note that importing the real September PDF
-   on dev stores real payer names in the dev Firestore; Renato's call whether that's OK.
+1. **Review #87 (VAT PR 1)** with `RELEASE-TEST-PLAN.md` §6 V1–V5 on
+   `kidclub-dev-finhub.web.app` (already serving #87's build). Merge into `staging`, then run
+   `deploy-finances.yml` on `staging` so dev serves `staging` again. Then re-enter the recurring
+   entries (V1) wherever the real FinHub data lives (release plan §5 Q1). Remove the
+   `finhub-vat` worktree after the merge (`.claude/skills/worktree-cleanup`).
+   Then: **confirm EasyPay's % is before VAT** from one real EasyPay fee invoice (handoff Q3).
 2. **Before the first prod PDF import:** check whether the NoisyPhocus BPI account already has
    XLSX-imported movements (`.claude/skills/prod-data-check`). The import now refuses an overlap,
    but if old XLSX data exists Renato has to decide whether to delete it or keep using XLSX for
@@ -148,7 +175,7 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 5. **Later, a separate KidClub-scoped task:** rebuild `financialEvents` and make Resumo
    Financeiro read `costSummary`, against the new event-sourced billing. Add the `costSummary`
    read rule and a Cross-App Data Contracts entry in root CLAUDE.md in that same PR.
-6. Separately: the VAT amount bug (Open questions below), then Phase 7 (IRC estimation).
+6. Then Phase 7 (IRC estimation).
 
 ## Open questions for Renato
 - **Found 2026-10-12, not fixed (existing behaviour, XLSX too):** every statement import sets the
@@ -160,27 +187,25 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 - **Decided 2026-10-09 (VAT):** Renato wants every cost shown **with VAT and without VAT**, side
   by side, ideally on one summary page (fold into "Resumo do mês", redesign step 5). Amounts are
   typed as they appear on the invoice, **VAT included**.
-- **Bug found 2026-10-09, fix next (follow-up PR off `staging`):** a recurring entry's `amountCents`
-  means two different things. `RecurringEntry.ts` documents it as VAT-exclusive, and the IVA page
-  + Custos do mês add `ivaRatePct` on top. But the forecast (`generateRecurringEvents`) uses it
-  as the cash leaving the account, i.e. VAT-inclusive. The form never says which. Fix: amount =
-  invoice total with VAT; derive VAT as `total × rate / (100 + rate)` and net as `total − VAT`
-  everywhere (`recurringSchedule.ts`, `costSummary.ts`, form label). Questions before fixing:
-  (1) were NoisySource's existing recurring amounts typed with or without VAT? If without, they
-  need a one-off conversion, confirmed by Renato entry by entry; (2) is EasyPay's commission %
-  quoted before VAT (fee = volume × % × 1.23) or with VAT included?
-- Also noticed: the forecast uses a commission entry's fallback `amountCents`, not
-  `commissionPct` × KidClub volume, so EasyPay's forecast is the typed estimate.
+- **EasyPay commission (#87 assumes before VAT):** confirm from one real EasyPay fee invoice. If
+  the % already includes VAT, change `recurringMonthlyAmountCents` in
+  `packages/shared/models/RecurringEntry.ts` (one line) and its test.
+- The recurring-amount VAT bug (found 2026-10-09) and the forecast ignoring the commission %
+  are fixed by #87. EC contracts: no PT VAT, `isento` (Renato, 2026-10-12).
 - `softwareCostCents` counts **every** active NoisyPhocus recurring expense as software, because
   the form doesn't expose `categoryId`. Fine while the only entries are Vendus and EasyPay; it
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **Step 1 PR open** (`agent/finhub-kidclub-reconciliation` → `staging`). Its automatic deploy
-  runs `deploy-dev.yml` against the shared `kidclub-dev`; it changes no KidClub code, rules or
-  functions.
-- **`kidclub-dev-finhub.web.app` may still serve the hand-deployed `agent/finhub-nav` @ a855d6c**
-  (2026-10-05) if `deploy-finances.yml` hasn't been run on `staging` since #82 merged.
+- **#87 open** (`agent/finhub-vat` → `staging`). Its automatic `deploy-dev.yml` run deploys
+  KidClub to `kidclub-dev`; #87 only adds a shared file KidClub's build includes, no KidClub
+  code. Nothing deployed to prod.
+- **`kidclub-dev-finhub.web.app` serves #87's branch build** (hand-deployed 2026-10-12), not
+  `staging`, until `deploy-finances.yml` runs on `staging` after the merge.
+- **Local Firebase CLI login expired** (2026-10-12). That deploy used your gcloud session:
+  `GOOGLE_CLOUD_QUOTA_PROJECT=kidclub-dev firebase deploy --only hosting:finances
+  --project=kidclub-dev --token "$(gcloud auth print-access-token)"` (the quota variable is
+  needed with a user token). `firebase login --reauth` fixes the plain command.
 - The real BPI statement used for the reconciliation design is in the main checkout's
   gitignored `prodata/`. Never copy it into a worktree or commit it.
 - A PR into `main` only deploys to prod when its head is `staging`. Feature branches go to

@@ -1,3 +1,5 @@
+import type { VatCode } from '../lib/vat';
+
 export interface EcContractDoc {
   id: string;
   clientName: string;
@@ -12,11 +14,19 @@ export interface EcContractDoc {
   halfDays?: string[];         // ISO date strings — half day off (counts as 0.5 day)
   daysToPayment?: number;      // calendar days from TS submission to expected payment
   paymentAccountId?: string;   // account that receives EC payments
-  ivaRatePct?: number;         // IVA rate charged on invoices (default 23 in PT for B2B services)
+  /** VAT on the invoices. EC invoices carry no PT VAT: 'isento' (Renato, 2026-10-12). */
+  vatCode?: VatCode;
+  /** Pre-convention field, always saved as 0. Ignored: read the VAT through ecContractVatCode(). */
+  ivaRatePct?: number;
   createdAt?: Date;
 }
 
 /** Derived field — not stored */
 export function estimatedMonthlyInvoiceCents(c: EcContractDoc): number {
   return c.dailyRateCents * c.expectedDaysPerMonth;
+}
+
+/** VAT code of an EC contract's invoices. Contracts saved before the VAT convention are exempt too. */
+export function ecContractVatCode(c: EcContractDoc): VatCode {
+  return c.vatCode ?? 'isento';
 }

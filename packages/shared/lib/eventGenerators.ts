@@ -9,7 +9,10 @@ import { computeEcProjection } from './ecProjection';
 import { computeMonthlyPayroll } from './payroll';
 import { buildAmortizationSchedule } from './amortization';
 import type { EcContractDoc } from '../models/EcContract';
+import { ecContractVatCode } from '../models/EcContract';
 import type { RecurringEntryDoc } from '../models/RecurringEntry';
+import { recurringMonthlyAmountCents } from '../models/RecurringEntry';
+import { grossFromNet } from './vat';
 import type { EmploymentContractDoc } from '../models/Employment';
 import type { IncomeSourceDoc } from '../models/IncomeSource';
 import type { CreditContractDoc } from '../models/CreditContract';
@@ -46,7 +49,8 @@ function lastWorkingDayOfMonth(year: number, month: number, nwdSet: Set<string>)
  * contract period.
  *
  * - ec_ts_submission: last working day of each month (amountCents = 0, marker)
- * - ec_payment:       tsDay + contract.daysToPayment (amountCents = that month's projected income)
+ * - ec_payment:       tsDay + contract.daysToPayment (amountCents = that month's projected income,
+ *                     plus VAT at the contract's code: none today, EC invoices are 'isento')
  */
 export function generateEcEvents(
   contract: EcContractDoc,
@@ -96,21 +100,24 @@ export function generateEcEvents(
       metadata: { yearMonth: mb.yearMonth, workingDays: mb.workingDays },
     });
 
-    // Payment expected
+    // Payment expected. Cash in = the invoice total, VAT included (the VAT is owed to the
+    // state in the quarterly return, it isn't income).
     const payDay = addCalendarDays(tsDay, daysToPayment);
+    const vatCode = ecContractVatCode(contract);
+    const invoiceCents = grossFromNet(mb.incomeCents, vatCode)?.grossCents ?? mb.incomeCents;
     events.push({
       key: `ec_pay:${contract.id}:${mb.yearMonth}`,
       computed: true,
       entityId: 'noisysource' as FinanceEntityId,
       type: 'ec_payment',
       date: payDay,
-      amountCents: mb.incomeCents,
+      amountCents: invoiceCents,
       status: 'planned',
       description: `Pagamento EC — ${mb.yearMonth}`,
       accountId: contract.paymentAccountId,
       sourceType: 'ec_contract',
       sourceId: contract.id,
-      metadata: { yearMonth: mb.yearMonth, tsDate: tsDay },
+      metadata: { yearMonth: mb.yearMonth, tsDate: tsDay, netCents: mb.incomeCents, vatCode },
     });
   }
 
@@ -344,12 +351,16 @@ function clampDayToMonth(ym: string, day: number): number {
 
 /**
  * Convert recurring entry templates into ComputedEvent[] for a month window.
- * Entries are tagged with their entity; amountCents is signed (income positive, expense negative).
+ * Entries are tagged with their entity; amountCents is signed (income positive, expense negative)
+ * and VAT-inclusive (recurringMonthlyAmountCents). `volumeCentsByMonth` ("YYYY-MM" → cents) feeds
+ * commission entries (EasyPay: % of KidClub's volume, see kidclubVolumeByMonth); a month without
+ * a volume uses the entry's typed estimate.
  */
 export function generateRecurringEvents(
   entries: ReadonlyArray<{ entry: RecurringEntryDoc; entityId: FinanceEntityId }>,
   startYM: string,
   months: number,
+  volumeCentsByMonth?: Readonly<Record<string, number>>,
 ): ComputedEvent[] {
   const events: ComputedEvent[] = [];
   const startN = ymToMonths(startYM);
@@ -361,7 +372,8 @@ export function generateRecurringEvents(
 
       const day = clampDayToMonth(ym, r.dayOfMonth);
       const date = `${ym}-${String(day).padStart(2, '0')}`;
-      const signedAmount = r.type === 'expense' ? -r.amountCents : r.amountCents;
+      const amountCents = recurringMonthlyAmountCents(r, volumeCentsByMonth?.[ym]);
+      const signedAmount = r.type === 'expense' ? -amountCents : amountCents;
 
       events.push({
         key: `rec:${r.id}:${ym}`,
@@ -516,4 +528,18 @@ export function generateKidclubEvents(
   }
 
   return events;
+}
+
+/**
+ * KidClub revenue per "YYYY-MM", from generateKidclubEvents' output: the volume a commission
+ * entry's % applies to in the forecast. Months with no KidClub bills have no key.
+ */
+export function kidclubVolumeByMonth(events: ReadonlyArray<ComputedEvent>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of events) {
+    if (e.type !== 'kidclub_revenue') continue;
+    const ym = e.date.slice(0, 7);
+    out[ym] = (out[ym] ?? 0) + e.amountCents;
+  }
+  return out;
 }

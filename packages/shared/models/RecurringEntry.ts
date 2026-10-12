@@ -1,3 +1,5 @@
+import { grossFromNet, type VatCode } from '../lib/vat';
+
 export type RecurringType = 'income' | 'expense' | 'transfer';
 export type RecurringFrequency = 'monthly' | 'quarterly' | 'annual' | 'once';
 /**
@@ -22,7 +24,11 @@ export interface RecurringEntryDoc {
   id: string;
   type: RecurringType;
   description: string;
-  amountCents: number;      // for costModel 'commission': fallback/estimate only, see RecurringCostModel
+  /**
+   * VAT-inclusive when `vatCode` is set (VAT convention, packages/shared/HANDOFF-vat-convention.md).
+   * For costModel 'commission': fallback/estimate only, see RecurringCostModel.
+   */
+  amountCents: number;
   accountId?: string;       // source account (income/expense) or from-account (transfer)
   toAccountId?: string;     // target account (transfer only)
   categoryId?: string;
@@ -37,20 +43,45 @@ export interface RecurringEntryDoc {
   reimbursable?: boolean;    // true = paid from a personal account on behalf of this entity
   paidByAccountId?: string;  // e.g. 'private-revolut' — account that actually pays; entity derived by prefix
   lastReimbursedYM?: string; // "YYYY-MM" — month through which reimbursement was settled
-  ivaRatePct?: number;       // 0 | 6 | 13 | 23 — IVA rate applied to this entry (base amount is IVA-exclusive)
+  /**
+   * VAT code of amountCents. Set = the entry follows the VAT convention (amount includes VAT).
+   * Absent = saved before 2026-10-12, when the amount could be with or without VAT: shown as
+   * "IVA por confirmar" until re-saved from the form. No migration (Renato re-enters them).
+   * Read it through recurringVatCode(), not directly.
+   */
+  vatCode?: VatCode;
+  /** Pre-convention rate. Only shown as a hint in the form; ignored once vatCode is set. */
+  ivaRatePct?: number;
   costModel?: RecurringCostModel;                       // absent = 'fixed'
-  commissionPct?: number;                               // required when costModel = 'commission'
+  commissionPct?: number;                               // required when costModel = 'commission'; % before VAT
   commissionVolumeSource?: RecurringCommissionVolumeSource; // absent + costModel='commission' = 'kidclub_billing'
   createdAt?: Date;
 }
 
 /**
- * Resolves what a recurring entry actually costs/earns in a given month.
+ * The VAT code that applies to an entry, or null when VAT doesn't apply at all: transfers, and
+ * entries synced from employment contracts or income sources (salaries, net pay, benefits).
+ * An entry with no vatCode is 'por_confirmar', except entries synced from an EC contract or an
+ * insurance, which are exempt (EC: Renato, 2026-10-12; insurance: CIVA art. 9).
+ */
+export function recurringVatCode(entry: RecurringEntryDoc): VatCode | null {
+  if (entry.type === 'transfer') return null;
+  const src = entry.sourceId ?? '';
+  if (src.startsWith('emp:') || src.startsWith('inc:')) return null;
+  if (entry.vatCode !== undefined) return entry.vatCode;
+  if (src.startsWith('ec:') || src.startsWith('insurance:')) return 'isento';
+  return 'por_confirmar';
+}
+
+/**
+ * Resolves what a recurring entry actually costs/earns in a given month, VAT included.
  * - 'fixed' (or no costModel, i.e. every pre-existing entry): amountCents, unchanged.
- * - 'commission': commissionPct% of the month's volume, when the caller can supply one
- *   (e.g. VatPage/costSummary already fetched KidClub's monthly processed billing).
- *   Falls back to the stored amountCents estimate when no volume is available yet, so
- *   the entry still shows *something* rather than silently going to zero.
+ * - 'commission': commissionPct% (before VAT) of the month's volume, plus VAT at the entry's
+ *   code, when the caller can supply a volume (e.g. VatPage/costSummary already fetched
+ *   KidClub's monthly processed billing). With 'IVA por confirmar' the fee is returned without
+ *   VAT (the entry is flagged wherever it's shown). Falls back to the stored amountCents
+ *   estimate when no volume is available yet, so the entry still shows *something* rather
+ *   than silently going to zero.
  */
 export function recurringMonthlyAmountCents(
   entry: RecurringEntryDoc,
@@ -58,7 +89,9 @@ export function recurringMonthlyAmountCents(
 ): number {
   if (entry.costModel === 'commission') {
     if (typeof volumeCentsForMonth === 'number') {
-      return Math.round((volumeCentsForMonth * (entry.commissionPct ?? 0)) / 100);
+      const feeNetCents = Math.round((volumeCentsForMonth * (entry.commissionPct ?? 0)) / 100);
+      const code = recurringVatCode(entry) ?? 'por_confirmar';
+      return grossFromNet(feeNetCents, code)?.grossCents ?? feeNetCents;
     }
     return entry.amountCents; // fallback estimate — see field doc above
   }
