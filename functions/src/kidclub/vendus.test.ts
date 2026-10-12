@@ -5,17 +5,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../externalGuard", () => ({ assertExternalCallsAllowed: vi.fn() }));
 vi.mock("./vendusClientCap", () => ({ reserveVendusClientCreation: vi.fn(async () => {}) }));
 
-import { createOrUpdateClient } from "./vendus";
+import { createOrUpdateClient, VendusClientPayload } from "./vendus";
 import { reserveVendusClientCreation } from "./vendusClientCap";
 
 type Reply = { status?: number; body: unknown };
 interface Call { method: string; url: string; body?: any }
 
+// Every fetch made in the current test, checked in afterEach.
+let recorded: Call[] = [];
+
 /** Stubs fetch with one queued reply per call; records every call. */
 function stubFetch(replies: Reply[]): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: { method: string; body?: string }) => {
-    calls.push({ method: init.method, url, body: init.body ? JSON.parse(init.body) : undefined });
+    const call = { method: init.method, url, body: init.body ? JSON.parse(init.body) : undefined };
+    calls.push(call);
+    recorded.push(call);
     const reply = replies.shift();
     if (!reply) throw new Error(`unexpected fetch: ${init.method} ${url}`);
     const status = reply.status ?? 200;
@@ -24,80 +29,154 @@ function stubFetch(replies: Reply[]): Call[] {
   return calls;
 }
 
+const NOT_FOUND: Reply = { status: 404, body: { errors: [{ code: "A001", message: "Not found" }] } };
+const client = (id: number, fiscal_id = "") => ({ id, name: "X", email: "", fiscal_id, external_reference: "" });
+
 beforeEach(() => {
+  recorded = [];
   vi.stubEnv("VENDUS_API_KEY", "test-key-not-real");
   vi.mocked(reserveVendusClientCreation).mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
+  // Vendus prints external_reference on invoices: no path may send it, and
+  // nothing may look clients up by it any more.
+  for (const c of recorded) {
+    expect(c.url).not.toContain("external_reference");
+    if (c.body !== undefined) expect(c.body).not.toHaveProperty("external_reference");
+  }
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 
 describe("createOrUpdateClient", () => {
-  it("creates a missing client WITH external_reference family:<id>, so the next lookup finds it", async () => {
+  it("known vendusClientId: PATCHes that client only (no lookup, no create, no cap)", async () => {
+    const calls = stubFetch([{ body: { id: 42 } }]);
+
+    const id = await createOrUpdateClient("fam1", { name: "A", phone: "912345678" }, 42);
+
+    expect(id).toBe(42);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+    expect(calls[0].url).toMatch(/\/clients\/42\/$/);
+    expect(calls[0].body).toEqual({ name: "A", phone: "912345678" });
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId with a NIF still PATCHes it directly (no NIF lookup)", async () => {
+    const calls = stubFetch([{ body: { id: 42 } }]);
+
+    const id = await createOrUpdateClient("fam1", { name: "A", fiscal_id: "123456789" }, 42);
+
+    expect(id).toBe(42);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId, any non-404 error: throws and never creates", async () => {
+    const calls = stubFetch([{ status: 500, body: { errors: [{ message: "boom" }] } }]);
+
+    await expect(createOrUpdateClient("fam1", { name: "A" }, 42)).rejects.toThrow(/failed \(500\)/);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId 404 (deleted), with NIF: falls through to NIF lookup and PATCHes that client", async () => {
     const calls = stubFetch([
-      { body: [] },                     // GET by external_reference: not found
-      { status: 201, body: { id: 555 } }, // POST /clients/
+      NOT_FOUND,                          // PATCH /clients/42/
+      { body: [client(77, "123456789")] }, // GET by NIF
+      { body: { id: 77 } },               // PATCH /clients/77/
     ]);
+
+    const id = await createOrUpdateClient("fam1", { name: "A", fiscal_id: "123456789" }, 42);
+
+    expect(id).toBe(77);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET", "PATCH"]);
+    expect(calls[1].url).toContain("/clients/?fiscal_id=123456789");
+    expect(calls[2].url).toMatch(/\/clients\/77\/$/);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId 404 (deleted), no NIF: falls through to create", async () => {
+    const calls = stubFetch([NOT_FOUND, { status: 201, body: { id: 555 } }]);
+
+    const id = await createOrUpdateClient("fam1", { name: "A" }, 42);
+
+    expect(id).toBe(555);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH", "POST"]);
+    expect(reserveVendusClientCreation).toHaveBeenCalledTimes(1);
+  });
+
+  it("no known id, NIF found in Vendus: PATCHes that client, no create", async () => {
+    const calls = stubFetch([{ body: [client(77, "123456789")] }, { body: { id: 77 } }]);
+
+    const id = await createOrUpdateClient("fam2", { name: "B", fiscal_id: "123456789", send_email: "yes" }, null);
+
+    expect(id).toBe(77);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
+    expect(calls[1].url).toMatch(/\/clients\/77\/$/);
+    expect(calls[1].body).toEqual({ name: "B", fiscal_id: "123456789", send_email: "yes" });
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("no known id, NIF not in Vendus (empty list or 404): creates", async () => {
+    for (const lookup of [{ body: [] }, NOT_FOUND]) {
+      vi.mocked(reserveVendusClientCreation).mockClear();
+      const calls = stubFetch([lookup, { status: 201, body: { id: 600 } }]);
+
+      const id = await createOrUpdateClient("fam2", { name: "B", fiscal_id: "123456789" });
+
+      expect(id).toBe(600);
+      expect(calls.map((c) => c.method)).toEqual(["GET", "POST"]);
+      expect(calls[1].body).toEqual({ name: "B", fiscal_id: "123456789" });
+      expect(reserveVendusClientCreation).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("no known id, no NIF: creates without external_reference; cap label is family:<id>", async () => {
+    const calls = stubFetch([{ status: 201, body: { id: 555 } }]);
 
     const id = await createOrUpdateClient("qgQTaxxSpsUJl5bVpVR5", { name: "thaise.ps07", email: "t@example.com" });
 
     expect(id).toBe(555);
-    expect(calls).toHaveLength(2);
-    expect(calls[0].method).toBe("GET");
-    expect(calls[0].url).toContain("/clients/?external_reference=family%3AqgQTaxxSpsUJl5bVpVR5");
-    expect(calls[1].method).toBe("POST");
-    expect(calls[1].url).toMatch(/\/clients\/$/);
-    expect(calls[1].body).toEqual({
-      name: "thaise.ps07",
-      email: "t@example.com",
-      external_reference: "family:qgQTaxxSpsUJl5bVpVR5",
-    });
-    expect(reserveVendusClientCreation).toHaveBeenCalledTimes(1);
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+    expect(calls[0].url).toMatch(/\/clients\/$/);
+    expect(calls[0].body).toEqual({ name: "thaise.ps07", email: "t@example.com" });
+    expect(reserveVendusClientCreation).toHaveBeenCalledWith("family:qgQTaxxSpsUJl5bVpVR5");
   });
 
-  it("the family ref wins over any external_reference the caller passed", async () => {
-    const calls = stubFetch([{ body: [] }, { body: { id: 1 } }]);
-    await createOrUpdateClient("fam1", { name: "A", external_reference: "something-else" });
-    expect(calls[1].body.external_reference).toBe("family:fam1");
-  });
-
-  it("updates (PATCH) an existing client found by ref, without creating or touching the cap", async () => {
+  it("duplicate NIF on create: re-links the existing client found by NIF, without external_reference", async () => {
     const calls = stubFetch([
-      { body: [{ id: 42, name: "A", email: "", fiscal_id: "", external_reference: "family:fam1" }] },
-      { body: { id: 42 } },
-    ]);
-
-    const id = await createOrUpdateClient("fam1", { name: "A", phone: "912345678" });
-
-    expect(id).toBe(42);
-    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
-    expect(calls[1].url).toMatch(/\/clients\/42\/$/);
-    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
-  });
-
-  it("fails closed: over the daily cap it never POSTs to Vendus", async () => {
-    vi.mocked(reserveVendusClientCreation).mockRejectedValueOnce(new Error("[Vendus] daily client-creation cap reached"));
-    const calls = stubFetch([{ body: [] }]); // only the lookup may happen
-
-    await expect(createOrUpdateClient("fam1", { name: "A" })).rejects.toThrow(/cap reached/);
-    expect(calls.map((c) => c.method)).toEqual(["GET"]);
-  });
-
-  it("duplicate NIF: re-links the existing client by NIF with the family ref", async () => {
-    const calls = stubFetch([
-      { body: [] },                                                         // GET by ref
-      { status: 400, body: { errors: [{ message: "NIF duplicado" }] } },    // POST rejected
-      { body: [{ id: 77, name: "B", email: "", fiscal_id: "123456789", external_reference: "" }] }, // GET by NIF
-      { body: { id: 77 } },                                                 // PATCH
+      { body: [] },                                                      // GET by NIF: not found (yet)
+      { status: 400, body: { errors: [{ message: "NIF duplicado" }] } }, // POST rejected
+      { body: [client(77, "123456789")] },                               // GET by NIF again
+      { body: { id: 77 } },                                              // PATCH
     ]);
 
     const id = await createOrUpdateClient("fam2", { name: "B", fiscal_id: "123456789" });
 
     expect(id).toBe(77);
     expect(calls.map((c) => c.method)).toEqual(["GET", "POST", "GET", "PATCH"]);
-    expect(calls[1].body.external_reference).toBe("family:fam2");
-    expect(calls[3].body.external_reference).toBe("family:fam2");
+    expect(calls[3].url).toMatch(/\/clients\/77\/$/);
+    expect(calls[3].body).toEqual({ name: "B", fiscal_id: "123456789" });
+  });
+
+  it("fails closed: over the daily cap it never POSTs to Vendus", async () => {
+    vi.mocked(reserveVendusClientCreation).mockRejectedValueOnce(new Error("[Vendus] daily client-creation cap reached"));
+    const calls = stubFetch([]);
+
+    await expect(createOrUpdateClient("fam1", { name: "A" })).rejects.toThrow(/cap reached/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("strips an external_reference smuggled in by an untyped caller, on create and on PATCH", async () => {
+    const sneaky = { name: "A", external_reference: "family:fam1" } as unknown as VendusClientPayload;
+
+    const created = stubFetch([{ status: 201, body: { id: 1 } }]);
+    await createOrUpdateClient("fam1", sneaky);
+    expect(created[0].body).toEqual({ name: "A" });
+
+    const patched = stubFetch([{ body: { id: 2 } }]);
+    await createOrUpdateClient("fam1", sneaky, 2);
+    expect(patched[0].body).toEqual({ name: "A" });
   });
 });

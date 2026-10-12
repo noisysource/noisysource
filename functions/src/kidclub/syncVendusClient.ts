@@ -55,12 +55,15 @@ export const syncVendusClient = onDocumentWritten(
     }
 
     try {
+      // A family that already has a Vendus client only ever PATCHes it; see
+      // createOrUpdateClient for when it looks up / creates instead.
+      const knownClientId = Number(data.vendusClientId) || null;
       const vendusClientId = await createOrUpdateClient(familyId, {
         name: clientName,
         email: clientEmail || undefined,
         ...(clientNif ? { fiscal_id: clientNif } : {}),
         ...(clientPhone ? { phone: clientPhone } : {}),
-      });
+      }, knownClientId);
 
       // Store back on the family doc (only if changed)
       if (data.vendusClientId !== vendusClientId) {

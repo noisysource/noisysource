@@ -286,7 +286,7 @@ async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData): Prom
       email: billingEmail,
       send_email: "yes",
       ...(clientNif !== "999999990" ? { fiscal_id: clientNif } : {}),
-    });
+    }, null); // only reached when the family has no vendusClientId yet
     await appCol("families").doc(familyId).update({ vendusClientId });
     console.log(`[Vendus] client created/synced vendusClientId=${vendusClientId}`);
   }
