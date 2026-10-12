@@ -14,7 +14,7 @@
 - Docs only: #80, #83.
 - **#87 (VAT PR 1)** adds `packages/shared/lib/vat.ts`, which the KidClub build includes, but no
   KidClub screen or billing changes.
-- **VAT PR 2 (branch `agent/kidclub-vat-pr2`), if merged before the release:** every
+- **VAT PR 2 (#89), if merged before the release:** every
   subscription price shows "IVA incluído · sem IVA €X · IVA 6%/23% €Y" for families and admins;
   the transport page's wrong "+ €X IVA" line is gone; admin price settings say "com IVA". **No
   billed amount changes.** Scenarios §6 V6–V9; changes K2.4.
@@ -220,7 +220,7 @@ Only after §2 and §3 pass on dev.
 1. Open a PR **`staging` → `main`**. Opening it deploys to prod (only `staging` as head does).
    `ci-checks.yml` runs build/typecheck alongside.
 2. Check the PR's commit list: it should be #81, #75, #82, #85, #80, #83, #86, #73 (+ #87, #88 and
-   VAT PR 2 if it's merged). Anything else, stop and ask.
+   #89 if it's merged). Anything else, stop and ask.
 3. When the deploy check is green, smoke-test **prod**, read-only:
    - kidclub.pt loads; you can log in as admin; Cobranças and Famílias e inscrições load.
    - A party page shows subtotal / IVA / total (look, don't book).
@@ -324,7 +324,7 @@ Changes F3.3, F3.4, F3.5, F4.2 and F4.3 above. Rule: a recurring amount is what 
 EasyPay fee invoice: if it shows base + IVA, V3/V4 are right; if the % already includes VAT, tell
 the next session (the fix is one line in `recurringMonthlyAmountCents`).
 
-### VAT convention, PR 2 — KidClub (branch `agent/kidclub-vat-pr2`)
+### VAT convention, PR 2 — KidClub (#89)
 
 Changes K2.4 above. Rule: every KidClub subscription price is **com IVA**: what the family pays
 and what the invoice totals. The rates are the Vendus products': study room, enrollment fee and

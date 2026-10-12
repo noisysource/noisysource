@@ -4,7 +4,7 @@
 
 **Last updated:** 2026-10-12
 
-## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — branch `agent/kidclub-vat-pr2`, PR → `staging`, NOT in prod
+## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, NOT in prod
 
 **What the check found (read-only, dev + prod + invoice FR 01P2026/202).** Families pay exactly the
 price the app shows; VAT is already inside it (billing sends each line to Vendus as `gross_price`).

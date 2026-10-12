@@ -125,8 +125,7 @@ KidClub pricing and has its own functions mirror).
 - Forecast: use `recurringMonthlyAmountCents` for commission entries; EC payments include VAT in
   cash-in.
 
-**PR 2 — KidClub** (`kidclub-feature` agent, branch off `staging`) — **done 2026-10-12, branch
-`agent/kidclub-vat-pr2`.** Rates per service in `packages/shared/models/kidclubVat.ts`
+**PR 2 — KidClub** (`kidclub-feature` agent, branch off `staging`) — **done 2026-10-12: #89.** Rates per service in `packages/shared/models/kidclubVat.ts`
 (`KIDCLUB_VAT`, mirroring the Vendus products), split with `kidclubVatNote`. The transport "+ IVA"
 line is gone; config `vatRate` is deprecated and its admin field read-only. No billed amount
 changes. Scenarios: `RELEASE-TEST-PLAN.md` §6 V6–V9.
