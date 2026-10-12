@@ -1,6 +1,7 @@
 import { makeOrgCRUD } from "./base";
 import type { EcContractDoc } from "@shared/models/EcContract";
 import { toDate } from "../utils";
+import { parseVatCode } from "@shared/lib/vat";
 
 type EcContractSave = Omit<EcContractDoc, "id" | "createdAt"> & { id?: string };
 
@@ -18,6 +19,7 @@ const from = (raw: any, id: string): EcContractDoc => ({
   halfDays: Array.isArray(raw?.halfDays) ? (raw.halfDays as string[]) : undefined,
   daysToPayment: raw?.daysToPayment != null ? Number(raw.daysToPayment) : undefined,
   paymentAccountId: raw?.paymentAccountId || undefined,
+  vatCode: parseVatCode(raw?.vatCode),
   ivaRatePct: typeof raw?.ivaRatePct === 'number' ? raw.ivaRatePct : undefined,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
