@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createOrUpdateClient } from "./vendus";
-import { vendusClientFieldsChanged } from "./vendusClientLogic";
+import { vendusClientFieldsChanged, vendusSyncWriteback } from "./vendusClientLogic";
 import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -13,6 +13,8 @@ const db = admin.firestore();
  * Only runs when profileComplete is true and contact data is present, and
  * only when a synced field (profileComplete, nif, primaryContact
  * name/email/phone) changed — see vendusClientFieldsChanged.
+ * A failure is stored on the family as `vendusSyncError: { message, at }`
+ * (admin badge); the next successful sync deletes it.
  */
 export const syncVendusClient = onDocumentWritten(
   {
@@ -54,25 +56,39 @@ export const syncVendusClient = onDocumentWritten(
       return;
     }
 
+    const sentinels = {
+      del: admin.firestore.FieldValue.delete(),
+      now: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    let outcome: { clientId: number } | { error: unknown };
     try {
       // A family that already has a Vendus client only ever PATCHes it; see
-      // createOrUpdateClient for when it looks up / creates instead.
+      // createOrUpdateClient for when it re-links or creates instead.
       const knownClientId = Number(data.vendusClientId) || null;
-      const vendusClientId = await createOrUpdateClient(familyId, {
+      const clientId = await createOrUpdateClient(familyId, {
         name: clientName,
         email: clientEmail || undefined,
         ...(clientNif ? { fiscal_id: clientNif } : {}),
         ...(clientPhone ? { phone: clientPhone } : {}),
       }, knownClientId);
-
-      // Store back on the family doc (only if changed)
-      if (data.vendusClientId !== vendusClientId) {
-        await appCol("families").doc(familyId).update({ vendusClientId });
-        console.log(`Synced family ${familyId} → Vendus client ${vendusClientId}`);
-      }
+      outcome = { clientId };
     } catch (err) {
-      // Non-fatal — invoice generation will retry client creation
+      // Non-fatal, but recorded on the family as vendusSyncError so the admin
+      // sees it (badge in Inscrições); otherwise invoices could keep going out
+      // to the wrong client, e.g. without a NIF the family added later.
       console.error(`Failed to sync family ${familyId} to Vendus:`, err);
+      outcome = { error: err };
+    }
+
+    // Write back only what changed. vendusClientId / vendusSyncError aren't
+    // synced fields, so this write's own trigger run exits early (no loop).
+    const update = vendusSyncWriteback(data, outcome, sentinels);
+    if (!update) return;
+    try {
+      await appCol("families").doc(familyId).update(update);
+      if ("vendusClientId" in update) console.log(`Synced family ${familyId} → Vendus client ${update.vendusClientId}`);
+    } catch (err) {
+      console.error(`Failed to record Vendus sync result on family ${familyId}:`, err);
     }
   }
 );
