@@ -62,6 +62,18 @@
   `monthlyFee × 1.23`. If it's `monthlyFee`, the page promises a higher price than the invoice
   (or the VAT is inside the price, and the page is wrong).
 - **Study room, enrollment fee, insurance:** no VAT shown anywhere, to admins or families.
+
+**Verified 2026-10-12 (PR 2 step 1, dev + prod Firestore read-only + one real invoice):**
+- **Families pay exactly the price the app shows; VAT is inside it.** Prod: 246 transport and
+  155 study-room bill lines equal the subscription's `monthlyFee` / `monthlyPrice`; the rest are
+  absence credits or part months (start/end of a contract). None is the price + VAT, none is
+  above the shown price. Invoice FR 01P2026/202 totals €90.00, the same as its bill.
+- **Vendus products:** study room **23%**, enrollment fee **23%**, insurance **23%**, transport
+  **6%** (the same invoice, per line). Vendus splits VAT once per rate per invoice (€84 at 23% →
+  €15.71), so a per-line split can be a cent off; FinHub should use Vendus's per-rate figures.
+- **Saved transport `vatRate` is 0.23 on prod and dev.** Billing never reads it; it only fed the
+  wrong "+ IVA" line, so families saw ~23% added on top of a price that already had 6% inside.
+- So the **transport and study price lists are com IVA**, unlike parties (see §3 rule 3).
 - `functions/` can't import `@shared` at runtime (see the header of `billing.ts`); shared logic
   is mirrored there with a parity test. `partyDepositLogic.ts` is the existing example.
 
@@ -75,9 +87,12 @@
    Anthropic, Google: no PT VAT on the invoice). `isento` = exempt (e.g. insurance, bank fees).
    `por_confirmar` = unknown; it is **never** silently treated as 0. Naming is up to the
    implementer; the set of cases isn't.
-3. **Price lists may stay net:** KidClub party and transport config, the EC daily rate. They're
-   price lists, not payments, and changing their storage touches live billing. They must be
-   labelled "sem IVA" wherever they're edited, and converted through the shared helper.
+3. **Price lists keep their current storage:** they're price lists, not payments, and changing
+   their storage touches live billing. **Net (sem IVA):** KidClub party config and
+   `Booking.total`, the EC daily rate. **Gross (com IVA)** — corrected 2026-10-12 after the PR 2
+   check: KidClub transport and study room config, enrollment fee and insurance (billing sends
+   them to Vendus as-is, VAT inside). Each is labelled "sem IVA" or "com IVA" wherever it's
+   edited, and converted through the shared helper.
 4. **Rates are percent integers** in all new code. KidClub's fractions are converted at its
    boundary; don't migrate KidClub config in this pass.
 5. **One helper:** `packages/shared/lib/vat.ts` — split a VAT-inclusive amount into
@@ -110,7 +125,11 @@ KidClub pricing and has its own functions mirror).
 - Forecast: use `recurringMonthlyAmountCents` for commission entries; EC payments include VAT in
   cash-in.
 
-**PR 2 — KidClub** (`kidclub-feature` agent, branch off `staging`)
+**PR 2 — KidClub** (`kidclub-feature` agent, branch off `staging`) — **done 2026-10-12, branch
+`agent/kidclub-vat-pr2`.** Rates per service in `packages/shared/models/kidclubVat.ts`
+(`KIDCLUB_VAT`, mirroring the Vendus products), split with `kidclubVatNote`. The transport "+ IVA"
+line is gone; config `vatRate` is deprecated and its admin field read-only. No billed amount
+changes. Scenarios: `RELEASE-TEST-PLAN.md` §6 V6–V9.
 1. **Read-only check first, report to Renato before changing anything.** Plain version: a family
    looking at a transport subscription sees e.g. "€100/mês + €6 IVA". Is the invoice they actually
    pay €100 (VAT inside) or €106? Do the same for the study room, enrollment fee and insurance.
@@ -135,12 +154,13 @@ invoice.
 
 ## 5. Questions for Renato
 
-1. **Transport:** if the check shows families are billed `monthlyFee` with VAT inside it, which
-   is right: the page's "+ IVA" (prices go up by 23%) or the invoice (fix the page)? This changes
-   what families pay, so it's your call after the check, not the agent's.
-2. **VAT rates — partly answered 2026-10-11:** parties and study room 23%, transport 6%. Still
-   open: **enrollment fee and insurance** (insurance is usually exempt; confirm with the
-   accountant against what the Vendus products are set to).
+1. ~~**Transport:** "+ IVA" on the page or the invoice?~~ — answered 2026-10-12: families are
+   billed `monthlyFee` with VAT inside; **fix the page, keep what families pay** (Renato). Done
+   in PR 2.
+2. ~~**VAT rates**~~ — answered 2026-10-12 from invoice FR 01P2026/202: enrollment fee and
+   insurance are **23%**, like the study room; transport 6%. Still worth asking the accountant
+   whether insurance should be exempt (`isento`) instead; that would be a Vendus product change,
+   not a KidClub one.
 3. **EasyPay:** confirm the commission is before VAT from one real EasyPay fee invoice (it shows
    base + IVA). The EasyPay API/sandbox is a fallback if no invoice is at hand. PR 1 (#87)
    assumes before VAT; if wrong, it's one line in `recurringMonthlyAmountCents`.

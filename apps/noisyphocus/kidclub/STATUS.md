@@ -2,15 +2,44 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-11
+**Last updated:** 2026-10-12
 
-## 🧾 VAT transparency + one VAT convention with FinHub (decided 2026-10-11) — not started
-Renato wants admins (and later families) to always see sem IVA / IVA / com IVA wherever a
-subscription or party price is set or shown. Parties are done (#81). Subscriptions are not, and
-it's unverified whether transport families are billed `monthlyFee` or `monthlyFee` + VAT, while
-the client page shows "+ IVA" on top. Start with the **read-only check** in
-`packages/shared/HANDOFF-vat-convention.md` (PR 2), and don't change billed amounts without
-Renato's decision.
+## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — branch `agent/kidclub-vat-pr2`, PR → `staging`, NOT in prod
+
+**What the check found (read-only, dev + prod + invoice FR 01P2026/202).** Families pay exactly the
+price the app shows; VAT is already inside it (billing sends each line to Vendus as `gross_price`).
+Prod: no bill line is the price + VAT, none is above the shown price. Vendus products: study room,
+enrollment fee, insurance **23%**, transport **6%**. The transport page was wrong: it showed
+"+ €X IVA" on top, using `config/transportation.vatRate` = **0.23 on prod**, a field billing never
+reads. **Renato's decision: fix the page, keep what families pay.**
+
+**What the PR does (display only, no billed amount changes):**
+- `packages/shared/models/kidclubVat.ts`: `KIDCLUB_VAT` (rate per service, mirroring the Vendus
+  products) and `kidclubVatNote` / `kidclubVatNoteMixed` (split a com-IVA price; mixed totals split
+  once per rate, like the invoice).
+- Families: transport and study-room detail pages, the child panel and the enrollment price box show
+  "IVA incluído · sem IVA €X · IVA 6%/23% €Y". The transport page no longer reads the transport
+  config or sibling subscriptions (they only fed the removed line).
+- Admin: transport price (planner ⚙ and `/admin/transport-config`), study room €/dia, enrollment fee
+  and insurance say "com IVA" with the split; the subscription card shows it under the price. The
+  editable transport "IVA (%)" is gone (read-only "IVA 6% … produto Vendus"); `vatRate` is
+  deprecated in the model, old docs keep it, no migration. Insurance is labelled once per child and
+  school year (it said €/mês).
+- Parties: `partyVatBreakdown` and `partyDepositAmount` take the VAT from `vat.ts`; the deposit keeps
+  its rounding. `functions/src/kidclub/partyPricingParity.test.ts` pins every subtotal €0–€5000 to the
+  cent (the helper's own rounding would have moved ~3% of deposits by 1 cent, so it isn't used there).
+
+**How to test on dev:** `RELEASE-TEST-PLAN.md` §6 V6–V9 (and K2.4). Not clicked through by the agent:
+builds, typecheck (no new errors; 11 old ones remain) and the 177 function tests pass.
+
+**Open:**
+- Ask the accountant whether insurance should be exempt; today Vendus invoices it at 23%. If so: change
+  the Vendus product, then `KIDCLUB_VAT.insurance`.
+- `getKidclubVatSummary` (`functions/src/kidclub/vatSummary.ts`) has no sign-in/admin check and is
+  callable by `allUsers` (checked on dev): anyone could read KidClub's quarterly sales by VAT rate,
+  and each call makes one Vendus request per invoice. Not fixed here; small separate fix.
+- Lists and totals (Inscrições list, dashboard, child page totals) still show the com-IVA price
+  without the split. Deliberate: the handoff asks for setup and detail pages.
 
 ## 🎈 Party prices 2026/27 + IVA + extra quantities (2026-10-07) — branch `agent/party-pricing-vat`, PR → `staging`, code NOT in prod
 
