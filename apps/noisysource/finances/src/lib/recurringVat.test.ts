@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import type { RecurringEntryDoc } from "@shared/models/RecurringEntry";
 import { recurringMonthlyAmountCents, recurringVatCode } from "@shared/models/RecurringEntry";
 import { recurringVatInMonths } from "./recurringSchedule";
+import {
+  generateEcEvents,
+  generateKidclubEvents,
+  generateRecurringEvents,
+  kidclubVolumeByMonth,
+} from "@shared/lib/eventGenerators";
 
 vi.mock("./firebase", () => ({ db: {} }));
 const { computeNoisyphocusCostSummary } = await import("./api/domains/costSummary");
@@ -111,5 +117,43 @@ describe("computeNoisyphocusCostSummary", () => {
     });
     expect(s.softwareCostCents).toBe(0);
     expect(s.breakdown).toEqual([]);
+  });
+});
+
+describe("forecast", () => {
+  const kcEvents = generateKidclubEvents(
+    [{
+      id: "b1", status: "pending", total: 2000,
+      dueDate: { toDate: () => new Date(2026, 10, 8) }, // November
+    }],
+    "2026-10", 3,
+  );
+
+  it("books KidClub volume per month", () => {
+    expect(kidclubVolumeByMonth(kcEvents)).toEqual({ "2026-11": 200000 });
+  });
+
+  it("charges the commission on that month's volume, VAT included, else the estimate", () => {
+    const evts = generateRecurringEvents(
+      [{ entry: easypay, entityId: "noisyphocus" }], "2026-10", 3, kidclubVolumeByMonth(kcEvents),
+    );
+    expect(evts.map(e => [e.date.slice(0, 7), e.amountCents])).toEqual([
+      ["2026-10", -3000], // no KidClub bills yet: typed estimate
+      ["2026-11", -3690], // 1.5% of 2 000 € + 23%
+      ["2026-12", -3000],
+    ]);
+  });
+
+  it("keeps EC cash-in unchanged: EC invoices are isento", () => {
+    const contract = {
+      id: "ec1", clientName: "EC", dailyRateCents: 50000, totalDays: 40,
+      expectedDaysPerMonth: 20, startDate: new Date(2026, 9, 1), active: true,
+    };
+    const pay = generateEcEvents(contract, new Date(2026, 9, 1)).filter(e => e.type === "ec_payment");
+    expect(pay.length).toBeGreaterThan(0);
+    for (const e of pay) {
+      expect(e.amountCents).toBe(e.metadata?.netCents);
+      expect(e.metadata?.vatCode).toBe("isento");
+    }
   });
 });
