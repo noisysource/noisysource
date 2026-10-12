@@ -11,6 +11,7 @@ export interface ParsedBpiTransaction {
 export interface ParsedBpiStatement {
   accountNumber: string;
   holderName: string;
+  openingBalanceCents?: number; // PDF only (SALDO ANTERIOR)
   closingBalanceCents: number;
   transactions: ParsedBpiTransaction[];
   dateFrom: string;  // YYYY-MM-DD (oldest)

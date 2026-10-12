@@ -26,6 +26,11 @@ April repo migration. So this is FinHub's first real release in months:
 - **#85 BPI PDF statements:** the account import accepts the monthly BPI PDF as well as XLSX,
   with a line-by-line balance check that refuses the whole import on any mismatch.
 
+**Domotics, rides along:** **#73** heat pump fault codes (Zantia E-codes in the floor plan,
+corrected datapoint map). The release pipeline only deploys KidClub's hosting, rules, indexes and
+functions, and #73 touches none of them, so nothing changes live. The domotics app and the Pi
+bridge are deployed separately (the bridge by hand, per #73's notes).
+
 **Already in prod (regression checks only):** event-sourced billing, absences and credits,
 family calendar, the unified families/subscriptions admin page, payments page (one list, months
 in order, MB WAY only), payment retry and admin reset (#57), bank transfer + proof + "Marcar como
@@ -184,8 +189,8 @@ Only after §2 and §3 pass on dev.
 **KidClub (+ Firestore rules, indexes, functions):**
 1. Open a PR **`staging` → `main`**. Opening it deploys to prod (only `staging` as head does).
    `ci-checks.yml` runs build/typecheck alongside.
-2. Check the PR's commit list: it should be #81, #75, #82, #85, #80, #83, #86 (+ any VAT PRs if
-   you wait for them). Anything else, stop and ask.
+2. Check the PR's commit list: it should be #81, #75, #82, #85, #80, #83, #86, #73 (+ any VAT
+   PRs if you wait for them). Anything else, stop and ask.
 3. When the deploy check is green, smoke-test **prod**, read-only:
    - kidclub.pt loads; you can log in as admin; Cobranças and Famílias e inscrições load.
    - A party page shows subtotal / IVA / total (look, don't book).

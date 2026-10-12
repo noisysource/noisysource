@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-07
+**Last updated:** 2026-10-11
 
 ## 🧾 VAT transparency + one VAT convention with FinHub (decided 2026-10-11) — not started
 Renato wants admins (and later families) to always see sem IVA / IVA / com IVA wherever a
@@ -128,6 +128,72 @@ manual-deploy, so likely unnoticed). `studyRoomService.uploadFile` is dead code 
 **Open questions for Renato:** IBAN + account holder value; is `admin@kidclub.pt` the right inbox for proof
 notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default
 stay for families that never actively chose.
+
+## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — hotfix `hotfix/vendus-client-loop`, PR #84 → `main` OPEN, not merged
+
+**Symptom.** Prod Vendus `/clients/` reports 10,000 items, which is the API's pagination ceiling. ~9,995 of them
+are copies of "Ana Bento" created 2026-09-23 (no NIF, no external_reference). On 2026-10-11 21:38:54–21:45:28 UTC,
+`syncVendusClient` logged 904 × "Synced family qgQTaxxSpsUJl5bVpVR5 → Vendus client <new id>". Each was a new
+client "thaise.ps07" (thaise.ps07@hotmail.com, no NIF). It only stopped because the instance hit its 256 MiB
+memory limit. Found by a read-only investigation the same night. Nothing in Vendus or Firestore was changed.
+
+**Mechanism.**
+1. `createOrUpdateClient()` (`functions/src/kidclub/vendus.ts`) looks the client up by
+   `external_reference=family:<id>`, but created it WITHOUT `external_reference`. Only the duplicate-NIF
+   fallback set it. So the next lookup never found the client it had just made.
+2. `syncVendusClient` (onDocumentWritten on `families/{id}`) wrote the new `vendusClientId` back to the same
+   doc whenever it differed. That re-fired the trigger → new client → new id → another write → loop.
+3. Families WITH a NIF escape: Vendus rejects the duplicate NIF and the fallback re-links by NIF. Families
+   WITHOUT a NIF loop until something crashes. **Until this hotfix is deployed, any NIF-less, profileComplete
+   family saving their profile on prod can start it again.**
+4. `billing.ts` (`issueVendusInvoice`, family with no `vendusClientId`) also calls `createOrUpdateClient`. For
+   NIF-less families it created a ref-less client each time, and its `vendusClientId` write re-fires
+   `syncVendusClient`, so it could start the loop too.
+
+**Fix.** Three independent layers, each one enough to stop the loop on its own:
+- `vendus.ts`: `createOrUpdateClient` always sends `external_reference: "family:<id>"` on create, so the next
+  lookup finds it. Fixes the billing.ts path too.
+- `syncVendusClient.ts`: returns early unless the doc is new or a field it sends changed (`profileComplete`,
+  `nif`, `primaryContact.name/email/phone`). Its own `vendusClientId` write-back no longer calls Vendus. The
+  check is `vendusClientFieldsChanged` in `vendusClientLogic.ts`.
+- `vendusClientCap.ts`: every `createClient` first reserves a slot in
+  `_apps/arcoiris/rateLimits/vendusClientCreate_{YYYY-MM-DD}` (UTC day, in a transaction). Cap **50/day**
+  (`DAILY_VENDUS_CLIENT_CREATE_CAP`). Over the cap, or if the counter can't be written, it logs
+  `console.error` "[Vendus] daily client-creation cap reached" and throws without calling Vendus. Same pattern
+  as the invoice-PDF cap. No rules change: `rateLimits` has no client rule, so it's server-only.
+- Tests: `vendusClientLogic.test.ts` (9) and `vendus.test.ts` (5, fetch mocked). `functions` build passes,
+  155/155 tests pass. No Vendus calls and no prod access were made.
+
+**What to expect after the deploy.**
+- NIF-less families whose current Vendus client has no ref (Ana Bento, thaise.ps07, any others) get **one**
+  more client, this time with the ref, the next time a synced field changes (or at their first invoice if they
+  have no `vendusClientId`). Their `vendusClientId` moves to it and stays put after that.
+- A family whose trigger sync failed isn't retried until a synced field changes. Invoicing still creates or
+  links the client when `vendusClientId` is missing, same as before.
+- If the cap is ever hit: the trigger logs and gives up (non-fatal). An invoice for a family with no
+  `vendusClientId` fails with `invoiceError`, and "Tentar faturar novamente" works the next UTC day.
+- Not verifiable without a Vendus call: that `POST /clients/` stores `external_reference`. The existing
+  duplicate-NIF path already relies on it via PATCH, and the other two layers stop the loop regardless.
+  Read-only check after the next new family: `GET /clients/?external_reference=family:<id>` returns 1 client.
+
+**Deploy.** A hotfix PR into `main` doesn't deploy when opened. It deploys on merge, and Renato merges. No
+manual steps after (no new function, no new callable, no IAM).
+⚠️ The post-merge "Sync staging with main" job will probably fail, as it did after #66 and #74: `staging` is
+ahead of `main`, so it can't fast-forward, and opening the sync PR fails with "GitHub Actions is not permitted
+to create or approve pull requests" (a repo setting). Merge `main` into `staging` by hand, or turn that setting
+on. The 2026-10-05 section below now matches staging's text word for word, so that merge shouldn't conflict
+here. A later `staging` → `main` PR deploys its merge ref, which still includes this fix.
+
+**Open follow-ups (not in this PR):**
+- **(a) Clean up the ~10,900+ junk clients in Vendus** (~9,995 "Ana Bento" + 904 "thaise.ps07"). Vendus's list
+  API can't page past 10,000, so real clients that sort alphabetically after "Ana Bento" can't currently be
+  reached via list. Separate, deliberate task.
+- **(b) Dangling `vendusClientId`s.** Family `qgQTaxxSpsUJl5bVpVR5` (thaise.ps07) and Ana Bento's family each
+  point at one arbitrary duplicate. Decide which client to keep (or let (a) delete them all and the next sync
+  make a fresh one with the ref), then fix the family docs to match.
+- **(c) Live Vendus key in `.claude/settings.local.json`.** It's hardcoded in always-allow permission rules,
+  including write calls. Remove those rules and rotate the key (then update the `VENDUS_API_KEY` secret on
+  prod). Renato's decision.
 
 ## Where things stand (2026-10-01, end of session)
 
