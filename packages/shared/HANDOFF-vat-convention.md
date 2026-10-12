@@ -138,7 +138,13 @@ invoice.
    base + IVA). The EasyPay API/sandbox is a fallback if no invoice is at hand.
 4. ~~Families seeing the VAT breakdown on subscriptions~~ — answered: **in PR 2.**
 
-## 6. Don'ts
+## 6. When a PR is done
+
+Add its scenarios to `RELEASE-TEST-PLAN.md` §6 (repo root): real-life stories, steps, ✅ expected
+results, in the same format as §2–§3 there. Note which existing scenario it changes (e.g. F3.5
+Custos do mês, K2.4 transport VAT line). That file is what Renato tests before prod.
+
+## 7. Don'ts
 
 - Don't change any amount a family is billed, or any Vendus product's VAT setting, without
   Renato's explicit decision (Q1, Q2).

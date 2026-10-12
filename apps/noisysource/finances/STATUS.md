@@ -15,6 +15,12 @@ The finances half never depended on the old KidClub billing code, so it was cher
 cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 `.claude/worktrees/finhub-cost-model`).
 
+## Release to prod (2026-10-12)
+`RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
+and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
+2026-07-31; its prod deploy job is disabled (`if: false`).** First question to settle: does the
+real FinHub data live on dev or prod?
+
 ## Also next: one VAT convention for both apps (decided 2026-10-11)
 `packages/shared/HANDOFF-vat-convention.md`. PR 1 there (shared helper + FinHub) fixes the
 recurring-amount VAT bug below and adds com/sem IVA columns to Custos do mês. Renato will
