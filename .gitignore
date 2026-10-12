@@ -51,3 +51,6 @@ apps/noisysource/domotics/.env.*
 # Claude Code — personal/local-only config, never shared or committed
 .claude/settings.local.json
 .claude/worktrees/
+
+# Real data: bank statements, payslips, FinHub seed and exports. Never commit.
+prodata/

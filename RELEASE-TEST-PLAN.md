@@ -236,10 +236,10 @@ Functions: revert the merge on `main` (a PR), which redeploys the previous code.
 
 ## 5. Open questions for Renato (before FinHub goes to prod)
 
-1. **Where does your real FinHub data live today, dev or prod?** Everything tested above ran on
-   dev. If your real accounts, contracts and recurring entries are on dev, prod FinHub would open
-   empty, and the data would need copying or re-entering. (You're re-entering recurring entries
-   anyway after the VAT work.)
+1. ~~**Where does your real FinHub data live today, dev or prod?**~~ — answered 2026-10-12:
+   **nowhere yet.** Dev has a partial draft. Before this release: seed file + importer, checked
+   on dev with KidClub's real billing copied in (`apps/noisysource/finances/HANDOFF-finhub-data.md`).
+   After the prod deploy, Renato imports the seed on prod.
 2. ~~**FinHub prod deploys from now on**~~ — answered 2026-10-12: automatic, in the same pipeline as
    KidClub (#88). `deploy-finances.yml` stays as a manual fallback (dev from `staging`, prod
    from `main`).

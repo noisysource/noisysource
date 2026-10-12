@@ -18,12 +18,10 @@ cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 ## Release to prod (2026-10-12)
 `RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
 and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
-2026-07-31.** **#88, FinHub deploy pipeline** (`agent/finhub-deploy-pipeline`, worktree
-`.claude/worktrees/finhub-deploy-pipeline`) → `staging`, open: it deploys FinHub with KidClub (a
-PR into `staging` → dev, the `staging` → `main` PR → prod, no manual runs). Its own dev run is the
-first real test: "Check both builds target kidclub-dev" and "Deploy FinHub Hosting" must be green.
-The prod half is only exercised by the next `staging` → `main` PR. First question to settle,
-before that promotion PR: does the real FinHub data live on dev or prod?
+2026-07-31.** **#88 (merged 2026-10-12) deploys FinHub with KidClub**: a PR into `staging` → dev,
+the `staging` → `main` PR → prod, no manual runs; its dev half ran green on 2026-10-12, the prod
+half first runs on the next `staging` → `main` PR. **No real FinHub data exists yet** (Q1
+answered): the release waits for `HANDOFF-finhub-data.md`.
 
 ## VAT convention for both apps (decided 2026-10-11)
 `packages/shared/HANDOFF-vat-convention.md`. **PR 1 (shared helper + FinHub) is #87, merged into
@@ -80,8 +78,12 @@ only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one sh
 the Dashboard flips while loading (pass the entity explicitly instead).
 
 ## Currently working on
-**#88, FinHub deploy pipeline** → `staging`, open (see "Release to prod" above). VAT PR 1 (#87)
-merged into `staging` 2026-10-12; Renato is testing it on dev. Nothing else in progress.
+**Next session: real data for FinHub — read `HANDOFF-finhub-data.md` (same folder).** FinHub has
+no real data anywhere yet. Plan (Renato, 2026-10-12): copy KidClub's prod billing into dev
+(pseudonymised), build a seed file from the dev draft + Renato's documents and answers, an
+importer in Dev Tools, check everything on dev, then release and import on prod. The review of
+dev's data (5 conflicts, gaps) is in `prodata/finhub-data-review.md` (local only). #87 (VAT) and
+#88 (FinHub in the deploy pipeline) are merged into `staging`.
 
 Lesson kept from #76 (2026-10-11): after merging the base of a stacked PR, retarget the stacked PR
 to `staging` *before* merging it (#76 merged into its old base instead and was re-landed as #82).
@@ -147,11 +149,9 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 - Reconciliation handoff written and agreed with Renato (2026-10-11).
 
 ## Next step
-1. **Test #87 (VAT) on dev** with `RELEASE-TEST-PLAN.md` §6 V1–V5 once #88's dev run is green
-   (it deploys `staging` + #88, which includes #87, to `kidclub-dev-finhub.web.app`). Merge #88.
-   Then re-enter the recurring entries (V1) wherever the real FinHub data lives (release plan
-   §5 Q1), and **confirm EasyPay's % is before VAT** from one real EasyPay fee invoice
-   (handoff Q3).
+1. **Real data, then release:** `HANDOFF-finhub-data.md` steps 1–5. The release
+   (`staging` → `main`) waits until Renato has checked FinHub on dev with real data. Also
+   **confirm EasyPay's % is before VAT** from one real EasyPay fee invoice (VAT handoff Q3).
 2. **Before the first prod PDF import:** check whether the NoisyPhocus BPI account already has
    XLSX-imported movements (`.claude/skills/prod-data-check`). The import now refuses an overlap,
    but if old XLSX data exists Renato has to decide whether to delete it or keep using XLSX for
@@ -191,10 +191,10 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **#88 open** (pipeline change, `.github/workflows/`). Its dev run is the first run of the new
-  steps; if it fails, dev FinHub keeps the hand-deployed #87 build (same code as `staging`).
-  The prod half first runs on the next `staging` → `main` PR, which will now deploy FinHub to
-  prod too.
+- **The next `staging` → `main` PR deploys FinHub to prod too** (#88), not just KidClub. Its
+  prod half hasn't run yet.
+- **`prodata/` holds real personal and financial data** (statements, the dev export, the data
+  review, soon the seed). It's in `.gitignore`. Never copy it into a worktree or commit it.
 - **Branch protection on `main` isn't enforced** (private repo, GitHub Free; root CLAUDE.md).
   Check a deploy is green before merging.
 - **Local Firebase CLI login expired** (2026-10-12). That deploy used your gcloud session:
