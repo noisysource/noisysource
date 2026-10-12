@@ -5,7 +5,8 @@ import { api } from '../lib/api';
 import { formatEUR } from '@shared/lib/money';
 import { Card } from '../components/ui/card';
 import type { RecurringEntryDoc } from '@shared/models/RecurringEntry';
-import { recurringIvaInQuarter } from '../lib/recurringSchedule';
+import { recurringVatInMonths, type RecurringVatRow } from '../lib/recurringSchedule';
+import { vatCodeLabel } from '@shared/lib/vat';
 
 // ── Quarter helpers ────────────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ function IvaTable({
 }: {
   title: string;
   color: 'red' | 'green';
-  rows: { description: string; baseCents: number; ivaCents: number }[];
+  rows: RecurringVatRow[];
 }) {
   const totalIva = rows.reduce((s, r) => s + r.ivaCents, 0);
   if (!rows.length) return (
@@ -77,7 +78,10 @@ function IvaTable({
       <div className="space-y-1">
         {rows.map((r, i) => (
           <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-zinc-800/50">
-            <span className="text-zinc-400 flex-1 truncate pr-3">{r.description}</span>
+            <span className="text-zinc-400 flex-1 truncate pr-3">
+              {r.description}
+              {r.vatCode !== undefined && <span className="text-zinc-600 ml-1.5">{vatCodeLabel(r.vatCode)}</span>}
+            </span>
             <span className="text-zinc-500 tabular-nums mr-3">{formatEUR(r.baseCents)}</span>
             <span className={`tabular-nums font-medium ${color === 'green' ? 'text-emerald-400' : 'text-red-400'}`}>
               {formatEUR(r.ivaCents)}
@@ -90,6 +94,28 @@ function IvaTable({
             {formatEUR(totalIva)}
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function UnconfirmedTable({ rows }: { rows: { description: string; amountCents: number; kind: string }[] }) {
+  if (!rows.length) return null;
+  return (
+    <div>
+      <div className="text-xs font-semibold mb-1 text-amber-400">IVA por confirmar — fora dos totais</div>
+      <div className="text-[11px] text-zinc-500 mb-2">
+        Guardadas antes da regra do IVA (ou sem taxa): não se sabe se o valor inclui IVA.
+        Abre cada uma em Recorrentes, escolhe a taxa e guarda.
+      </div>
+      <div className="space-y-1">
+        {rows.map((r, i) => (
+          <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-zinc-800/50">
+            <span className="text-zinc-400 flex-1 truncate pr-3">{r.description}</span>
+            <span className="text-zinc-600 mr-3">{r.kind}</span>
+            <span className="text-zinc-500 tabular-nums">{formatEUR(r.amountCents)}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -154,9 +180,18 @@ export default function VatPage() {
     return () => { cancelled = true; };
   }, [entityId, recurring, months]);
 
+  const incomeVat = useMemo(
+    () => recurringVatInMonths(recurring, months, 'income', volumeCentsByMonth),
+    [recurring, months, volumeCentsByMonth],
+  );
+  const expenseVat = useMemo(
+    () => recurringVatInMonths(recurring, months, 'expense', volumeCentsByMonth),
+    [recurring, months, volumeCentsByMonth],
+  );
+
   // IVA liquidado rows
   const collectedRows = useMemo(() => {
-    const rows = recurringIvaInQuarter(recurring, months, 'income', volumeCentsByMonth);
+    const rows: RecurringVatRow[] = [...incomeVat.rows];
 
     // NoisyPhocus: add KidClub rows from Vendus (one row per VAT rate)
     if (entityId === 'noisyphocus' && kidclubVat) {
@@ -173,12 +208,13 @@ export default function VatPage() {
     }
 
     return rows;
-  }, [recurring, months, entityId, kidclubVat]);
+  }, [incomeVat, entityId, kidclubVat]);
 
-  const deductibleRows = useMemo(() =>
-    recurringIvaInQuarter(recurring, months, 'expense', volumeCentsByMonth),
-    [recurring, months, volumeCentsByMonth]
-  );
+  const deductibleRows = expenseVat.rows;
+  const unconfirmedRows = useMemo(() => [
+    ...incomeVat.unconfirmed.map(r => ({ ...r, kind: 'rendimento' })),
+    ...expenseVat.unconfirmed.map(r => ({ ...r, kind: 'despesa' })),
+  ], [incomeVat, expenseVat]);
 
   const totalCollected  = collectedRows.reduce((s, r)  => s + r.ivaCents, 0);
   const totalDeductible = deductibleRows.reduce((s, r) => s + r.ivaCents, 0);
@@ -262,15 +298,16 @@ export default function VatPage() {
           <Card className="p-4 space-y-5">
             <IvaTable title="IVA liquidado (cobrado)" color="green" rows={collectedRows} />
             <IvaTable title="IVA dedutível (pago em despesas)" color="red" rows={deductibleRows} />
+            <UnconfirmedTable rows={unconfirmedRows} />
           </Card>
 
-          {collectedRows.length === 0 && deductibleRows.length === 0 && !kidclubLoading && (
+          {collectedRows.length === 0 && deductibleRows.length === 0 && unconfirmedRows.length === 0 && !kidclubLoading && (
             <div className="text-center text-zinc-500 text-sm py-6">
               <div>Nenhuma entrada tem taxa de IVA configurada.</div>
               {entityId === 'noisysource' && (
                 <div className="text-xs mt-1">
                   Edita as entradas em Recorrentes para adicionar a taxa de IVA.
-                  Contratos EC são isentos (intracomunitário).
+                  Contratos EC são isentos de IVA.
                 </div>
               )}
             </div>
