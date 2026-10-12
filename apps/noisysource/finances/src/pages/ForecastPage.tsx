@@ -13,6 +13,7 @@ import {
   generateIncomeSourceEvents,
   generateEcEvents,
   generateKidclubEvents,
+  kidclubVolumeByMonth,
 } from "@shared/lib/eventGenerators";
 import type { KidclubBillingRecord } from "@shared/lib/eventGenerators";
 import { isCashLike } from "@shared/models/Account";
@@ -167,12 +168,13 @@ export default function ForecastPage() {
   }, []);
 
   const allEvents = useMemo((): ComputedEvent[] => {
-    const rec  = generateRecurringEvents(allRecurring, startYM, MONTHS);
+    const kc   = generateKidclubEvents(kidclubBilling, startYM, MONTHS);
+    // Commission costs (EasyPay) = % of the KidClub revenue booked that month.
+    const rec  = generateRecurringEvents(allRecurring, startYM, MONTHS, kidclubVolumeByMonth(kc));
     const cred = generateCreditEvents(allCredits, startYM, MONTHS);
     const emp  = generateEmploymentEvents(employmentContracts, peopleMap, startYM, MONTHS);
     const inc  = generateIncomeSourceEvents(incomeSources, startYM, MONTHS);
     const ec   = ecContract ? generateEcEvents(ecContract) : [];
-    const kc   = generateKidclubEvents(kidclubBilling, startYM, MONTHS);
     return [...rec, ...cred, ...emp, ...inc, ...ec, ...kc];
   }, [allRecurring, allCredits, employmentContracts, incomeSources, ecContract, peopleMap, kidclubBilling, startYM]);
 

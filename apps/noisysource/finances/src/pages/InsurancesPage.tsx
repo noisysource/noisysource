@@ -163,6 +163,7 @@ function InsuranceModal({
           type: "expense",
           description: `${form.name.trim()} (${form.insurer.trim()})`,
           amountCents: premiumCents,
+          vatCode: "isento", // insurance premiums are VAT-exempt (CIVA art. 9)
           frequency: form.frequency,
           dayOfMonth,
           monthOfYear,

@@ -158,7 +158,7 @@ export default function EcContractsPage() {
         nonWorkingDays: form.nonWorkingDays.length > 0 ? form.nonWorkingDays : undefined,
         halfDays: form.halfDays.length > 0 ? form.halfDays : undefined,
         daysToPayment: form.daysToPayment ? parseInt(form.daysToPayment, 10) : undefined,
-        ivaRatePct: 0, // intra-community — always exempt
+        vatCode: "isento", // EC invoices carry no PT VAT (Renato, 2026-10-12)
       });
       console.log("[ecContracts.save] saved id:", id);
       setEditingId(null);

@@ -2,6 +2,7 @@ import { where } from "firebase/firestore";
 import { makeOrgCRUD } from "./base";
 import type { RecurringEntryDoc, RecurringType, RecurringFrequency } from "@shared/models/RecurringEntry";
 import { toDate } from "../utils";
+import { parseVatCode } from "@shared/lib/vat";
 
 type RecurringSave = Omit<RecurringEntryDoc, "id" | "createdAt"> & { id?: string };
 
@@ -24,6 +25,7 @@ const from = (raw: any, id: string): RecurringEntryDoc => ({
   reimbursable: raw?.reimbursable === true,
   paidByAccountId: raw?.paidByAccountId || undefined,
   lastReimbursedYM: raw?.lastReimbursedYM || undefined,
+  vatCode: parseVatCode(raw?.vatCode),
   ivaRatePct: typeof raw?.ivaRatePct === 'number' ? raw.ivaRatePct : undefined,
   costModel: raw?.costModel === 'commission' ? 'commission' : undefined,
   commissionPct: typeof raw?.commissionPct === 'number' ? raw.commissionPct : undefined,

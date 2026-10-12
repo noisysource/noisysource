@@ -36,8 +36,10 @@
 - The forecast also ignores the commission model: it uses a commission entry's fallback
   `amountCents`, not `commissionPct` × KidClub volume.
 - **EC income:** `generateEcEvents` books the payment as days × `dailyRateCents`, with no VAT.
-  The client actually pays that + `ivaRatePct` (default 23), so forecast cash-in is understated.
-  The VAT collected isn't income, though: it's owed to the state in the quarterly return.
+  ~~The client actually pays that + `ivaRatePct` (default 23)~~ — **corrected 2026-10-12:** the
+  EC contract form always saved `ivaRatePct: 0` ("intra-community, always exempt"), and Renato
+  confirmed EC invoices carry no PT VAT (`isento`). So forecast cash-in wasn't understated. PR 1
+  records `vatCode: 'isento'` and books cash-in through the helper anyway.
 - Rates are **percent integers** (23).
 
 **KidClub**
@@ -93,7 +95,9 @@
 
 ## 4. Work split
 
-**PR 1 — shared helper + FinHub** (`finances-app` agent, branch off `staging`)
+**PR 1 — shared helper + FinHub** (`finances-app` agent, branch off `staging`) — **done: #87
+(2026-10-12), open for review.** `partyVatBreakdown` was left for PR 2 (Renato's call: it's
+KidClub pricing and has its own functions mirror).
 - `packages/shared/lib/vat.ts` + the `functions/` mirror + tests.
 - Recurring entries: amount = VAT-inclusive, VAT code instead of a bare rate, and the com/sem IVA
   switch on the form. Existing entries have no marker saying which convention they follow: show
@@ -121,6 +125,9 @@
 3. **Families:** subscription setup and detail pages show the VAT-inclusive price first, with the
    breakdown, matching what parties already do.
 4. Use `vat.ts`; rates converted from KidClub's fractions at the boundary.
+5. `partyVatBreakdown` (and its mirror `partyDepositLogic.ts`) uses the helper inside, same API,
+   with a test pinning that party prices and deposits don't move by a cent (moved here from
+   §3.5 / PR 1).
 
 **Email → expenses** (`apps/noisysource/finances/HANDOFF-email-expenses.md`) follows the same
 convention: bank-transaction amounts are VAT-inclusive, and the VAT code comes from the matched
@@ -135,7 +142,8 @@ invoice.
    open: **enrollment fee and insurance** (insurance is usually exempt; confirm with the
    accountant against what the Vendus products are set to).
 3. **EasyPay:** confirm the commission is before VAT from one real EasyPay fee invoice (it shows
-   base + IVA). The EasyPay API/sandbox is a fallback if no invoice is at hand.
+   base + IVA). The EasyPay API/sandbox is a fallback if no invoice is at hand. PR 1 (#87)
+   assumes before VAT; if wrong, it's one line in `recurringMonthlyAmountCents`.
 4. ~~Families seeing the VAT breakdown on subscriptions~~ — answered: **in PR 2.**
 
 ## 6. When a PR is done
