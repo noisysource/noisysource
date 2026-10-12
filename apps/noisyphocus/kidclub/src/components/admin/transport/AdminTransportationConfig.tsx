@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { getTransportationConfig, saveTransportationConfig } from '../../../services/transportationService';
 import { TransportationConfig } from '@shared/models/Transportation'; // Removed ZonePrice
+import { KIDCLUB_VAT, kidclubVatNote } from '@shared/models/kidclubVat';
+import { vatCodeLabel } from '@shared/lib/vat';
 
 // Add a unique id to each item for editing purposes
 type Editable<T> = T & { id: string; isEditing?: boolean };
@@ -8,9 +10,7 @@ type Editable<T> = T & { id: string; isEditing?: boolean };
 export default function AdminTransportationConfig() {
   const [config, setConfig] = useState<TransportationConfig | null>(null);
   const [flatRatePerTrip, setFlatRatePerTrip] = useState(0);
-  const [vatRate, setVatRate] = useState(0.23);
   const [isFlatRateEditing, setIsFlatRateEditing] = useState(false);
-  const [isVatEditing, setIsVatEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -23,10 +23,9 @@ export default function AdminTransportationConfig() {
         if (data) {
           setConfig(data);
           setFlatRatePerTrip(data.flatRatePerTrip || 0);
-          setVatRate(data.vatRate || 0.23);
         } else {
           // Initialize with default empty config if not found
-          setConfig({ flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23, multiTripDiscountPercentage: 0.3, minTripsForDiscount: 2, siblingDiscountPercentage: 0, returningStudentDiscountPercentage: 0, schoolDiscounts: [], driverRatePerHour: 7, weeksPerMonth: 4.33, vanCapacity: 8, vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22 });
+          setConfig({ flatRatePerTrip: 0, pricePerTrip: 0, multiTripDiscountPercentage: 0.3, minTripsForDiscount: 2, siblingDiscountPercentage: 0, returningStudentDiscountPercentage: 0, schoolDiscounts: [], driverRatePerHour: 7, weeksPerMonth: 4.33, vanCapacity: 8, vanMonthlyCost: 200, consumptionPer100km: 20, electricityPricePerKwh: 0.22 });
         }
       } catch (err) {
         console.error("Error fetching transportation config:", err);
@@ -51,7 +50,6 @@ export default function AdminTransportationConfig() {
     } finally {
       setLoading(false);
       if (field === 'flatRatePerTrip') setIsFlatRateEditing(false);
-      if (field === 'vatRate') setIsVatEditing(false);
     }
   };
 
@@ -76,8 +74,9 @@ export default function AdminTransportationConfig() {
       <div className="p-4 bg-white rounded-lg shadow-md">
         <div className="flex justify-between items-center">
           <div>
-            <h3 className="text-xl font-semibold text-gray-700">Preço Fixo por Viagem</h3>
+            <h3 className="text-xl font-semibold text-gray-700">Preço Fixo por Viagem (com IVA)</h3>
             <p className="text-base font-semibold mt-1">€{flatRatePerTrip.toFixed(2)}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{kidclubVatNote(flatRatePerTrip, 'transport')}</p>
           </div>
           {isFlatRateEditing ? (
             <div className="flex items-center gap-2">
@@ -95,27 +94,13 @@ export default function AdminTransportationConfig() {
         </div>
       </div>
 
-      {/* VAT Rate Section */}
+      {/* VAT: set by the Vendus product, read-only here */}
       <div className="p-4 bg-white rounded-lg shadow-md">
-        <div className="flex justify-between items-center">
-          <div>
-            <h3 className="text-xl font-semibold text-gray-700">Taxa de IVA (%)</h3>
-            <p className="text-base font-semibold mt-1">{vatRate * 100}%</p>
-          </div>
-          {isVatEditing ? (
-            <div className="flex items-center gap-2">
-              <input 
-                type="number" 
-                value={vatRate * 100} 
-                onChange={e => setVatRate(parseFloat(e.target.value) / 100)} 
-                onBlur={() => handleBlurSave('vatRate', vatRate)}
-                className="w-24 border-gray-300 rounded-md shadow-sm text-sm" 
-              />
-            </div>
-          ) : (
-            <button onClick={() => setIsVatEditing(true)} className="text-xs text-blue-600 font-semibold">Editar</button>
-          )}
-        </div>
+        <h3 className="text-xl font-semibold text-gray-700">IVA</h3>
+        <p className="text-base font-semibold mt-1">{vatCodeLabel(KIDCLUB_VAT.transport)}, incluído no preço</p>
+        <p className="text-xs text-gray-500 mt-0.5">
+          É a taxa do produto Transporte no Vendus, que fatura cada linha com IVA incluído. Muda-se no Vendus, não aqui.
+        </p>
       </div>
 
       {/* Discounts moved to central system */}

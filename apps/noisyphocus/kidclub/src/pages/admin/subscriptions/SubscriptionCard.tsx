@@ -1,5 +1,6 @@
 import { useState, forwardRef } from 'react';
 import { TransportationConfig } from '@shared/models/Transportation';
+import { kidclubVatNote } from '@shared/models/kidclubVat';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { DiscountRule } from '@shared/models/Discount';
 import { grossFromAppliedDiscounts } from '../../../services/discountService';
@@ -213,6 +214,11 @@ function DiscountRow({ item, billLine, discountRules, actions, busy }: {
           </span>
         )}
       </div>
+      {fee > 0 && (
+        <p className="text-[11px] text-gray-400">
+          IVA incluído · {kidclubVatNote(fee, item._type === 'study' ? 'study' : 'transport')}
+        </p>
+      )}
 
       {/* Applied auto discounts — clickable to override off */}
       {autoApplied.length > 0 && (

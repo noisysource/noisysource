@@ -11,7 +11,12 @@ export interface TransportationConfig {
   // Pricing
   flatRatePerTrip: number;
   pricePerTrip: number;  // legacy alias
-  vatRate: number;
+  /**
+   * @deprecated Never used by billing. Transport prices are VAT-inclusive and Vendus applies its
+   * Transporte product's rate (6%); pages take it from KIDCLUB_VAT (kidclubVat.ts). Old config
+   * docs still carry this field (0.23 on prod and dev); nothing reads it.
+   */
+  vatRate?: number;
   // Discounts (fractions 0–1)
   multiTripDiscountPercentage: number;
   minTripsForDiscount: number;

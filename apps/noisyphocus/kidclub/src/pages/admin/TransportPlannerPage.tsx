@@ -5,6 +5,8 @@ import { db } from '../../lib/firebase';
 import { col, docRef } from '../../lib/db';
 import { solveRoutes, SolverKid, DEPOT_ADDRESS as SOLVER_DEPOT } from '../../lib/routeSolver';
 import { TransportationConfig, SchoolDiscount, WeekPattern } from '@shared/models/Transportation';
+import { KIDCLUB_VAT, kidclubVatNote } from '@shared/models/kidclubVat';
+import { vatCodeLabel } from '@shared/lib/vat';
 import { saveTransportationConfig, getActiveTransportationSubscriptions } from '../../services/transportationService';
 import PlacesInput from '../../components/PlacesInput';
 
@@ -87,7 +89,7 @@ interface SavedPlan {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const HOURS_PER_RUN = 2;
 const DEFAULT_CONFIG: TransportationConfig = {
-  flatRatePerTrip: 0, pricePerTrip: 0, vatRate: 0.23,
+  flatRatePerTrip: 0, pricePerTrip: 0,
   multiTripDiscountPercentage: 0, minTripsForDiscount: 2,
   siblingDiscountPercentage: 0, returningStudentDiscountPercentage: 0, schoolDiscounts: [],
   driverRatePerHour: 7, vanCapacity: 8, weeksPerMonth: 4.33,
@@ -427,10 +429,10 @@ function SettingsModal({
             <div>
               {sectionTitle('Preços')}
               <div className="space-y-2">
-                <Field label="€/viagem" value={cfg.flatRatePerTrip} step={0.5} onChange={v => set('flatRatePerTrip', v)} width="w-20" />
-                <Field label="IVA (%)" value={pct(cfg.vatRate)} step={1} onChange={v => set('vatRate', frac(v))} width="w-16" />
+                <Field label="€/viagem com IVA" value={cfg.flatRatePerTrip} step={0.5} onChange={v => set('flatRatePerTrip', v)} width="w-20" />
               </div>
-              {hint('Preço base por viagem, antes de descontos')}
+              {hint(`Preço base por viagem, antes de descontos, o que a família paga · ${kidclubVatNote(cfg.flatRatePerTrip, 'transport')}`)}
+              {hint(`${vatCodeLabel(KIDCLUB_VAT.transport)} incluído: é a taxa do produto Transporte no Vendus`)}
             </div>
 
             {/* Motorista */}
