@@ -70,6 +70,10 @@ export function computeNoisyphocusCostSummary(input: ComputeCostSummaryInput): C
   let softwareCostCents = 0;
   for (const r of input.recurring) {
     if (r.type !== "expense" || !r.active) continue;
+    // Saving an employment contract also writes an "Encargos Salariais" recurring
+    // expense (sourceId "emp:…", contractSync.ts). That pay is already counted
+    // above from the contract itself.
+    if (r.sourceId?.startsWith("emp:")) continue;
     const amountCents = recurringAmountInMonth(r, input.yearMonth, input.kidclubVolumeCentsForMonth);
     if (!amountCents) continue;
     softwareCostCents += amountCents;
