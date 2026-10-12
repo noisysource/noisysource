@@ -19,8 +19,10 @@
   loop), brought into `staging` by **#86**.
 
 **FinHub, new in this release.** Prod FinHub still runs a **build from 2026-07-31** (it still has
-Cash Flow). Its prod deploy job (`deploy-finances.yml`) has been disabled (`if: false`) since the
-April repo migration. So this is FinHub's first real release in months:
+Cash Flow). Its prod deploy job (`deploy-finances.yml`) was disabled (`if: false`) from the April
+repo migration. **#88** puts FinHub in the same pipeline as KidClub: once it's in `staging`, the
+`staging` → `main` PR deploys FinHub to prod too. So this is FinHub's first real release in
+months:
 - **#75 Cost model:** Fixo/Comissão recurring costs (EasyPay = % of KidClub's paid volume),
   recibo verde contracts, Payroll limited to the selected company, `/noisyphocus/costs`
   (Custos do mês), dev build fixed (`build:staging`), no-cache headers.
@@ -28,7 +30,7 @@ April repo migration. So this is FinHub's first real release in months:
   structure for every company, Cash Flow removed (→ Contas), Portuguese labels.
 - **#85 BPI PDF statements:** the account import accepts the monthly BPI PDF as well as XLSX,
   with a line-by-line balance check that refuses the whole import on any mismatch.
-- **#87 VAT convention, PR 1 (if merged before the release):** recurring amounts are stored
+- **#87 VAT convention, PR 1 (merged into `staging` 2026-10-12):** recurring amounts are stored
   **with VAT** and carry a VAT code (23 / 13 / 6 / 0 / Isento / Autoliquidação / Por confirmar);
   the form has a "com IVA / sem IVA" switch. **Every existing recurring entry shows "IVA por
   confirmar"** until you re-save it (no migration; you re-enter them, §6 V1), and until then it's
@@ -53,9 +55,9 @@ address (#70), duplicate-invoice fix (#74), Vendus client-loop fix (#84).
 
 1. **Merge #86** (main → staging sync) so dev runs the Vendus hotfix too.
 2. **Merge #83** (this file, the VAT handoff, docs only).
-3. **Run "Deploy Finances" on `staging`** (GitHub → Actions → Deploy Finances → Run workflow →
-   branch `staging`). This also tests the fixed dev build. Run it again after merging **#87**:
-   until then dev FinHub serves #87's branch build, deployed by hand on 2026-10-12. KidClub deploys to dev automatically
+3. **FinHub on dev:** once **#88** is merged, every PR into `staging` and every merge deploys
+   FinHub to dev with KidClub; no manual step. Until then, "Deploy Finances" on `staging`
+   (GitHub → Actions) does it by hand. KidClub deploys to dev automatically
    on each merge into `staging`; wait for that run to go green.
 4. **Decide where your real FinHub data lives** (see §5, Q1). It changes what "FinHub in prod"
    means.
@@ -209,7 +211,7 @@ Only after §2 and §3 pass on dev.
 **KidClub (+ Firestore rules, indexes, functions):**
 1. Open a PR **`staging` → `main`**. Opening it deploys to prod (only `staging` as head does).
    `ci-checks.yml` runs build/typecheck alongside.
-2. Check the PR's commit list: it should be #81, #75, #82, #85, #80, #83, #86, #73 (+ #87 and
+2. Check the PR's commit list: it should be #81, #75, #82, #85, #80, #83, #86, #73 (+ #87, #88 and
    any later VAT PR if you wait for them). Anything else, stop and ask.
 3. When the deploy check is green, smoke-test **prod**, read-only:
    - kidclub.pt loads; you can log in as admin; Cobranças and Famílias e inscrições load.
@@ -219,11 +221,13 @@ Only after §2 and §3 pass on dev.
 4. Merge. The merge re-deploys and triggers the staging sync. If the sync fails again (#80), merge
    `main` into `staging` by hand like #86.
 
-**FinHub (manual: its prod job is disabled):**
-1. Decide Q1 and Q2 below first.
-2. Deploy from `main` after the KidClub merge, with the **prod** build, not `build:staging`:
-   `pnpm --filter finances build && firebase deploy --only hosting:finances --project=rainbow-prod-2454b`
-   Check the bundle says `projectId:"rainbow-prod-2454b"` before deploying.
+**FinHub (automatic with KidClub, once #88 is in `staging`):**
+1. Decide Q1 below **before opening the `staging` → `main` PR**: opening it deploys FinHub to
+   prod too. Check #88 is in that PR's commit list. Without it, FinHub doesn't deploy; run
+   "Deploy Finances" on `main` after the merge instead.
+2. The deploy job builds FinHub with the prod build and refuses to deploy if the bundle's
+   `projectId` isn't `rainbow-prod-2454b`. In the run's log: ✅ "Check both builds target
+   rainbow-prod-2454b" and "Deploy FinHub Hosting" are green.
 3. Smoke test `https://rainbow-prod-2454b-finhub.web.app`: log in; the picker shows; Contas
    loads your accounts.
 
@@ -236,9 +240,9 @@ Functions: revert the merge on `main` (a PR), which redeploys the previous code.
    dev. If your real accounts, contracts and recurring entries are on dev, prod FinHub would open
    empty, and the data would need copying or re-entering. (You're re-entering recurring entries
    anyway after the VAT work.)
-2. **FinHub prod deploys from now on:** turn the disabled prod job back on (manual
-   `workflow_dispatch` on `main`), or keep deploying by hand? Recommendation: turn it on, so the
-   build mode can't be mixed up.
+2. ~~**FinHub prod deploys from now on**~~ — answered 2026-10-12: automatic, in the same pipeline as
+   KidClub (#88). `deploy-finances.yml` stays as a manual fallback (dev from `staging`, prod
+   from `main`).
 3. **Firebase Storage on prod:** needed for payment proofs (KidClub) and insurance documents
    (FinHub). Enable it before relying on those in prod? It also needs the stricter storage rule
    flagged in `apps/noisysource/finances/HANDOFF-email-expenses.md` §3.4.

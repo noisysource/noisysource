@@ -141,6 +141,19 @@ All data lives under `finances_entities/{entityId}/` sub-collections in the **(d
 
 ---
 
+## Deploy
+Automatic, together with KidClub (root CLAUDE.md, "Branch → environment pipeline"): a PR into
+`staging` deploys this app's hosting to `kidclub-dev` (`kidclub-dev-finhub.web.app`); the
+`staging` → `main` promotion PR deploys it to prod. You don't run these by hand in the normal
+flow. `.github/workflows/deploy-finances.yml` is the manual fallback (dev from `staging`, prod
+from `main`). For a local one-off dev deploy, always the staging build:
+```bash
+pnpm --filter finances build:staging   # never plain `build` for dev: it bakes in prod's config
+firebase deploy --only hosting:finances --project=kidclub-dev
+```
+
+---
+
 ## Notes
 - IAP setup reference: `../../../infra/gcp/`
 - Firestore database: `(default)` — same database as KidClub (scoped by collection prefix)

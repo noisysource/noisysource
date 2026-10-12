@@ -6,8 +6,8 @@ description: Use before deploying any app (kidclub, finances, functions) to the 
 # Deploy to dev checklist
 
 **Prefer the automatic path first**: opening or updating a PR against `staging` now deploys
-KidClub (app + Firestore rules/indexes + functions + terraform) to `kidclub-dev`
-automatically — see root CLAUDE.md's "Branch → environment pipeline". Use the manual steps
+KidClub (app + Firestore rules/indexes + functions + terraform) and FinHub (hosting) to
+`kidclub-dev` automatically — see root CLAUDE.md's "Branch → environment pipeline". Use the manual steps
 below only when you need a one-off dev deploy outside that flow (e.g. debugging a CI failure
 by reproducing it locally).
 

@@ -1,7 +1,8 @@
 name: Deploy to Dev
 
-# Any PR targeting staging (open/update) deploys a live preview to
-# kidclub-dev, so Renato can review real behavior before promoting.
+# Any PR targeting staging (open/update) deploys a live preview of KidClub
+# and FinHub to kidclub-dev, so Renato can review real behavior before
+# promoting.
 # Also re-runs on push to staging (i.e. right after a PR merges), since a
 # merge commit is a separate event from the PR's own commits.
 on:
@@ -23,6 +24,7 @@ jobs:
       firebase_project: kidclub-dev
       service_account: gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com
       build_command: pnpm --filter kidclub build:staging
+      finances_build_command: pnpm --filter finances build:staging
       tf_var_file: env/kidclub-dev.tfvars
       # storage.rules (payment proofs, FinHub insurances). Prod stays off
       # until Storage is active there — see _deploy-kidclub-env.yml.

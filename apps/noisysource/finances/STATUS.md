@@ -18,12 +18,16 @@ cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 ## Release to prod (2026-10-12)
 `RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
 and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
-2026-07-31; its prod deploy job is disabled (`if: false`).** First question to settle: does the
-real FinHub data live on dev or prod?
+2026-07-31.** **#88, FinHub deploy pipeline** (`agent/finhub-deploy-pipeline`, worktree
+`.claude/worktrees/finhub-deploy-pipeline`) → `staging`, open: it deploys FinHub with KidClub (a
+PR into `staging` → dev, the `staging` → `main` PR → prod, no manual runs). Its own dev run is the
+first real test: "Check both builds target kidclub-dev" and "Deploy FinHub Hosting" must be green.
+The prod half is only exercised by the next `staging` → `main` PR. First question to settle,
+before that promotion PR: does the real FinHub data live on dev or prod?
 
 ## VAT convention for both apps (decided 2026-10-11)
-`packages/shared/HANDOFF-vat-convention.md`. **PR 1 (shared helper + FinHub) is #87 → `staging`,
-open for review (2026-10-12).** Renato re-enters all recurring entries afterwards (no migration;
+`packages/shared/HANDOFF-vat-convention.md`. **PR 1 (shared helper + FinHub) is #87, merged into
+`staging` 2026-10-12.** Renato re-enters all recurring entries afterwards (no migration;
 `RELEASE-TEST-PLAN.md` §6 V1). PR 2 (KidClub) not started. The reconciliation and email work
 below must follow the same rule: bank-transaction amounts are VAT-inclusive, with a VAT code from
 `packages/shared/lib/vat.ts`.
@@ -76,9 +80,8 @@ only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one sh
 the Dashboard flips while loading (pass the entity explicitly instead).
 
 ## Currently working on
-**VAT PR 1, #87** (`agent/finhub-vat`, worktree `.claude/worktrees/finhub-vat`) → `staging`:
-done, tested on dev, waiting for Renato's review. Nothing else in progress. (Reconciliation
-step 1 was merged as #85.)
+**#88, FinHub deploy pipeline** → `staging`, open (see "Release to prod" above). VAT PR 1 (#87)
+merged into `staging` 2026-10-12; Renato is testing it on dev. Nothing else in progress.
 
 Lesson kept from #76 (2026-10-11): after merging the base of a stacked PR, retarget the stacked PR
 to `staging` *before* merging it (#76 merged into its old base instead and was re-landed as #82).
@@ -144,16 +147,16 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 - Reconciliation handoff written and agreed with Renato (2026-10-11).
 
 ## Next step
-1. **Review #87 (VAT PR 1)** with `RELEASE-TEST-PLAN.md` §6 V1–V5 on
-   `kidclub-dev-finhub.web.app` (already serving #87's build). Merge into `staging`, then run
-   `deploy-finances.yml` on `staging` so dev serves `staging` again. Then re-enter the recurring
-   entries (V1) wherever the real FinHub data lives (release plan §5 Q1). Remove the
-   `finhub-vat` worktree after the merge (`.claude/skills/worktree-cleanup`).
-   Then: **confirm EasyPay's % is before VAT** from one real EasyPay fee invoice (handoff Q3).
+1. **Test #87 (VAT) on dev** with `RELEASE-TEST-PLAN.md` §6 V1–V5 once #88's dev run is green
+   (it deploys `staging` + #88, which includes #87, to `kidclub-dev-finhub.web.app`). Merge #88.
+   Then re-enter the recurring entries (V1) wherever the real FinHub data lives (release plan
+   §5 Q1), and **confirm EasyPay's % is before VAT** from one real EasyPay fee invoice
+   (handoff Q3).
 2. **Before the first prod PDF import:** check whether the NoisyPhocus BPI account already has
    XLSX-imported movements (`.claude/skills/prod-data-check`). The import now refuses an overlap,
    but if old XLSX data exists Renato has to decide whether to delete it or keep using XLSX for
-   those months. FinHub's prod deploy job is disabled (`if: false` in `deploy-finances.yml`).
+   those months. Once the pipeline branch above is merged, FinHub deploys to prod with the
+   `staging` → `main` PR.
 3. **KidClub reconciliation, step 2** (read-only matching, Sem fatura flag, monthly check page),
    per `HANDOFF-kidclub-reconciliation.md` §4 and §6. New `agent/` branch off `staging` after the
    step 1 PR merges. It reads Vendus documents: run the sandbox-first and metered-API checklists.
@@ -188,11 +191,12 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
-- **#87 open** (`agent/finhub-vat` → `staging`). Its automatic `deploy-dev.yml` run deploys
-  KidClub to `kidclub-dev`; #87 only adds a shared file KidClub's build includes, no KidClub
-  code. Nothing deployed to prod.
-- **`kidclub-dev-finhub.web.app` serves #87's branch build** (hand-deployed 2026-10-12), not
-  `staging`, until `deploy-finances.yml` runs on `staging` after the merge.
+- **#88 open** (pipeline change, `.github/workflows/`). Its dev run is the first run of the new
+  steps; if it fails, dev FinHub keeps the hand-deployed #87 build (same code as `staging`).
+  The prod half first runs on the next `staging` → `main` PR, which will now deploy FinHub to
+  prod too.
+- **Branch protection on `main` isn't enforced** (private repo, GitHub Free; root CLAUDE.md).
+  Check a deploy is green before merging.
 - **Local Firebase CLI login expired** (2026-10-12). That deploy used your gcloud session:
   `GOOGLE_CLOUD_QUOTA_PROJECT=kidclub-dev firebase deploy --only hosting:finances
   --project=kidclub-dev --token "$(gcloud auth print-access-token)"` (the quota variable is

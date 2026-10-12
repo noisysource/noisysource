@@ -1,7 +1,13 @@
-name: Deploy KidClub Environment (reusable)
+name: Deploy KidClub + FinHub Environment (reusable)
 
 # Shared deploy logic for one environment (dev or prod). Called by
 # deploy-dev.yml (PR/push to staging) and deploy-prod.yml (push to main).
+# Deploys KidClub (app, rules, indexes, functions, hosting) and FinHub's
+# hosting. FinHub has no rules/functions of its own: it shares this
+# project's Firestore rules and the /functions codebase deployed below.
+#
+# Both apps are built before anything deploys, so a broken FinHub build
+# stops the run before KidClub goes out half-updated, and vice versa.
 #
 # Order: terraform first, then rules/indexes, then functions/hosting.
 # Terraform owns IAM (e.g. which secrets the deploy SA can read) — running
@@ -29,6 +35,13 @@ on:
         type: string
       build_command:
         description: "Command that builds the KidClub app for this environment"
+        required: true
+        type: string
+      finances_build_command:
+        description: >
+          Command that builds FinHub for this environment: build:staging for
+          kidclub-dev, build for prod. The other mode bakes in the wrong
+          Firebase config, which breaks login; the check step below catches it.
         required: true
         type: string
       tf_var_file:
@@ -60,7 +73,7 @@ on:
 
 jobs:
   deploy:
-    name: "Deploy KidClub (${{ inputs.environment }})"
+    name: "Deploy KidClub + FinHub (${{ inputs.environment }})"
     # One deploy at a time per environment. Both dev PRs and staging pushes
     # run `terraform apply` against the same GCS state prefix, so two
     # overlapping runs collide on the state lock and the later one dies with
@@ -100,6 +113,22 @@ jobs:
 
       - name: Build KidClub app
         run: ${{ inputs.build_command }}
+
+      - name: Build FinHub app
+        run: ${{ inputs.finances_build_command }}
+
+      # A bundle built in the wrong mode (dev config in prod or the reverse)
+      # deploys fine and then breaks login. Each Vite bundle contains its
+      # Firebase config once as projectId:"<id>"; refuse to deploy unless it's
+      # this environment's project.
+      - name: Check both builds target ${{ inputs.firebase_project }}
+        run: |
+          for app in apps/noisyphocus/kidclub apps/noisysource/finances; do
+            if ! grep -rqF 'projectId:"${{ inputs.firebase_project }}"' "$app/dist/assets"; then
+              echo "::error::$app was built for another Firebase project (expected ${{ inputs.firebase_project }}). Check its build command (build:staging = kidclub-dev, build = prod)."
+              exit 1
+            fi
+          done
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -155,3 +184,6 @@ jobs:
 
       - name: Deploy KidClub Hosting
         run: firebase deploy --only hosting:kidclub --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy FinHub Hosting
+        run: firebase deploy --only hosting:finances --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
