@@ -17,8 +17,9 @@
 
 **FinHub, new in this release.** Prod FinHub still runs a **build from 2026-07-31** (it still has
 Cash Flow). Its prod deploy job (`deploy-finances.yml`) was disabled (`if: false`) from the April
-repo migration until **#88**, which puts FinHub in the same pipeline as KidClub: the
-`staging` → `main` PR now deploys FinHub to prod too. So this is FinHub's first real release in
+repo migration. **`agent/finhub-deploy-pipeline`** (PR into `staging` opened after #87 merges)
+puts FinHub in the same pipeline as KidClub: once it's in `staging`, the `staging` → `main` PR
+deploys FinHub to prod too. So this is FinHub's first real release in
 months:
 - **#75 Cost model:** Fixo/Comissão recurring costs (EasyPay = % of KidClub's paid volume),
   recibo verde contracts, Payroll limited to the selected company, `/noisyphocus/costs`
@@ -201,10 +202,11 @@ Only after §2 and §3 pass on dev.
 4. Merge. The merge re-deploys and triggers the staging sync. If the sync fails again (#80), merge
    `main` into `staging` by hand like #86.
 
-**FinHub (automatic with KidClub, once #88 is in `staging`):**
+**FinHub (automatic with KidClub, once `agent/finhub-deploy-pipeline` is in `staging`):**
 1. Decide Q1 below **before opening the `staging` → `main` PR**: opening it deploys FinHub to
-   prod too. Check #88 is in that PR's commit list. Without #88, FinHub doesn't deploy; run
-   "Deploy Finances" on `main` after the merge instead.
+   prod too. Check the PR's commits include "ci: deploy FinHub with KidClub in the staging/main
+   pipeline". Without it, FinHub doesn't deploy; run "Deploy Finances" on `main` after the
+   merge instead.
 2. The deploy job builds FinHub with the prod build and refuses to deploy if the bundle's
    `projectId` isn't `rainbow-prod-2454b`. In the run's log: ✅ "Check both builds target
    rainbow-prod-2454b" and "Deploy FinHub Hosting" are green.
@@ -221,7 +223,7 @@ Functions: revert the merge on `main` (a PR), which redeploys the previous code.
    empty, and the data would need copying or re-entering. (You're re-entering recurring entries
    anyway after the VAT work.)
 2. ~~**FinHub prod deploys from now on**~~ — answered 2026-10-12: automatic, in the same pipeline as
-   KidClub (#88). `deploy-finances.yml` stays as a manual fallback (dev from `staging`, prod
+   KidClub (`agent/finhub-deploy-pipeline`). `deploy-finances.yml` stays as a manual fallback (dev from `staging`, prod
    from `main`).
 3. **Firebase Storage on prod:** needed for payment proofs (KidClub) and insurance documents
    (FinHub). Enable it before relying on those in prod? It also needs the stricter storage rule

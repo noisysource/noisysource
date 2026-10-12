@@ -18,9 +18,16 @@ cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 ## Release to prod (2026-10-12)
 `RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
 and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
-2026-07-31.** **#88 (2026-10-12) deploys FinHub with KidClub**: a PR into `staging` → dev, the
-`staging` → `main` PR → prod, no manual runs. First question to settle, before that promotion PR:
-does the real FinHub data live on dev or prod?
+2026-07-31.** **FinHub deploy pipeline (2026-10-12), branch `agent/finhub-deploy-pipeline`
+(worktree `.claude/worktrees/finhub-deploy-pipeline`), pushed, PR not opened yet:** it deploys
+FinHub with KidClub (a PR into `staging` → dev, the `staging` → `main` PR → prod, no manual
+runs). **Open its PR only after #87 merges** (Renato's call): a PR into `staging` redeploys dev
+FinHub from `staging` + the branch, which would replace #87's build that's on dev for testing.
+To open it: `gh pr create --base staging --head agent/finhub-deploy-pipeline`, then check its
+dev run shows green "Check both builds target kidclub-dev" and "Deploy FinHub Hosting", and that
+`kidclub-dev-finhub.web.app` serves `staging` (with the VAT work). The prod half is only
+exercised by the next `staging` → `main` PR. First question to settle, before that promotion
+PR: does the real FinHub data live on dev or prod?
 
 ## VAT convention for both apps (decided 2026-10-11)
 `packages/shared/HANDOFF-vat-convention.md`. PR 1 there (shared helper + FinHub) fixes the
@@ -127,7 +134,8 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 2. **Before the first prod PDF import:** check whether the NoisyPhocus BPI account already has
    XLSX-imported movements (`.claude/skills/prod-data-check`). The import now refuses an overlap,
    but if old XLSX data exists Renato has to decide whether to delete it or keep using XLSX for
-   those months. FinHub now deploys to prod with the `staging` → `main` PR (#88).
+   those months. Once the pipeline branch above is merged, FinHub deploys to prod with the
+   `staging` → `main` PR.
 3. **KidClub reconciliation, step 2** (read-only matching, Sem fatura flag, monthly check page),
    per `HANDOFF-kidclub-reconciliation.md` §4 and §6. New `agent/` branch off `staging` after the
    step 1 PR merges. It reads Vendus documents: run the sandbox-first and metered-API checklists.
