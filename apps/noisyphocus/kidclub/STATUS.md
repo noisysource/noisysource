@@ -90,6 +90,12 @@ stay for families that never actively chose.
   using it: `createOrUpdateClient(familyId, payload, knownClientId)` PATCHes the family's `vendusClientId`
   (only a Vendus 404 falls through), else looks up by NIF, else creates (still 50/day capped). It never sends
   `external_reference`; `findClientByRef` is gone. Issued invoices are certified and can't change.
+- **NIF added after the first invoice** (real: family `8pPhu4JCvGUrpBxsaOeY`, no-NIF client 365352238 → NIF already on
+  364285165; prod code re-linked her, she's fine). In #91 a "duplicado" on the known client's PATCH re-links to the
+  client holding the NIF. Any other failure, or no client with that NIF, is stored as `vendusSyncError` on the family →
+  red badge "Vendus: sincronização falhou" in Inscrições (message in the tooltip). The badge clears on the next
+  successful sync, which only runs when a synced field changes; after a manual fix, delete the field by hand.
+  Still unverified: whether Vendus refuses a NIF change on a client that already has documents.
 - **Follow-up, only AFTER that hotfix is deployed: clear `external_reference` on the 31 prod clients that
   have it** (of 37 linked families). Needs Renato's OK; one-off, not app code.
   - Test first on Renato's own client (family `Hi1iPRih3G6yXHrNsaAd`): does a PATCH with an empty value
