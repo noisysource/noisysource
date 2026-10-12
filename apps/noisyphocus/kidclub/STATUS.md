@@ -82,7 +82,7 @@ manual-deploy, so likely unnoticed). `studyRoomService.uploadFile` is dead code 
 notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default
 stay for families that never actively chose.
 
-## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — #84 in prod since 2026-10-11 23:02 UTC; follow-up `hotfix/vendus-drop-external-ref` → `main` OPEN
+## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — #84 in prod since 2026-10-11 23:02 UTC; follow-up `hotfix/vendus-drop-external-ref`, PR #91 → `main` OPEN, not merged
 
 **Update 2026-10-12 — read this first.**
 - **Invoice printing.** Vendus prints a client's `external_reference` next to the name on every invoice
