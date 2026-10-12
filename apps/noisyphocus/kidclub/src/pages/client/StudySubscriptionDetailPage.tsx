@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
-import { Child, Family, StudyRoomEntry, normalizeStatus } from '@shared/models';
+import { Child, Family, StudyRoomEntry, normalizeStatus, kidclubVatNote } from '@shared/models';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { coerceSubscriptionDate, normalizeSubStatus } from '../../lib/utils';
@@ -303,6 +303,7 @@ export default function StudySubscriptionDetailPage() {
             <span className="text-2xl font-bold text-gray-900">€{(subscription.monthlyPrice ?? 0).toFixed(2)}</span>
             <span className="text-base font-normal text-gray-500">/mês</span>
           </div>
+          <p className="text-xs text-gray-400">IVA incluído · {kidclubVatNote(subscription.monthlyPrice ?? 0, 'study')}</p>
         </div>
 
         {!editingSchedule ? (
