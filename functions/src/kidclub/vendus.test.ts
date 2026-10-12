@@ -80,6 +80,54 @@ describe("createOrUpdateClient", () => {
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
+  // Real case (family 8pPhu4JCvGUrpBxsaOeY): linked to a no-NIF client, then
+  // added a NIF that an older client already held.
+  const DUPLICATE_NIF: Reply = { status: 400, body: { errors: [{ code: "A002", message: "NIF duplicado" }] } };
+
+  it("known vendusClientId, PATCH with NIF says duplicado: re-links to the client holding the NIF (no create, no cap)", async () => {
+    const calls = stubFetch([
+      DUPLICATE_NIF,                             // PATCH /clients/365352238/ rejected
+      { body: [client(364285165, "123456789")] }, // GET by NIF
+      { body: { id: 364285165 } },              // PATCH /clients/364285165/
+    ]);
+
+    const id = await createOrUpdateClient("8pPhu4JCvGUrpBxsaOeY", { name: "C", fiscal_id: "123456789" }, 365352238);
+
+    expect(id).toBe(364285165);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET", "PATCH"]);
+    expect(calls[0].url).toMatch(/\/clients\/365352238\/$/);
+    expect(calls[1].url).toContain("/clients/?fiscal_id=123456789");
+    expect(calls[2].url).toMatch(/\/clients\/364285165\/$/);
+    expect(calls[2].body).toEqual({ name: "C", fiscal_id: "123456789" });
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId, duplicado but no client with that NIF found (empty list or 404): throws, never creates", async () => {
+    for (const lookup of [{ body: [] }, NOT_FOUND]) {
+      const calls = stubFetch([DUPLICATE_NIF, lookup]);
+
+      await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/duplicado/);
+      expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET"]);
+    }
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId, duplicado and the NIF lookup returns that same client: throws, never creates", async () => {
+    const calls = stubFetch([DUPLICATE_NIF, { body: [client(42, "123456789")] }]);
+
+    await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/duplicado/);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET"]);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known vendusClientId, PATCH rejected for another reason (e.g. NIF change refused): throws, no lookup, no create", async () => {
+    const calls = stubFetch([{ status: 400, body: { errors: [{ message: "Não é possível alterar o NIF" }] } }]);
+
+    await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/failed \(400\)/);
+    expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
   it("known vendusClientId 404 (deleted), with NIF: falls through to NIF lookup and PATCHes that client", async () => {
     const calls = stubFetch([
       NOT_FOUND,                          // PATCH /clients/42/
