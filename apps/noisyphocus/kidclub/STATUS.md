@@ -4,7 +4,7 @@
 
 **Last updated:** 2026-10-13
 
-## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR → `staging`, NOT in prod
+## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, NOT in prod
 
 **Decision (Renato, 2026-10-13): option B**, chosen over keeping named NIF-less clients (background: the
 2026-10-11 client-loop section below and its "Update 2026-10-12"). A family without a NIF is invoiced to
