@@ -2,7 +2,80 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-13
+
+## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR → `staging`, NOT in prod
+
+**Decision (Renato, 2026-10-13): option B**, chosen over keeping named NIF-less clients (background: the
+2026-10-11 client-loop section below and its "Update 2026-10-12"). A family without a NIF is invoiced to
+"Consumidor final", with no Vendus client. **Legacy NIF-less families are now Consumidor final too**,
+including the ~10 holding an old NIF-less `vendusClientId` (the id stays on the doc, unused; nothing is
+deleted in Vendus). **Verified on live Vendus 2026-10-13, before this branch:** a test-mode `POST /documents/`
+(`type: FR`, `mode: tests`, no `client`) returned 201, document `FR T01P2026/1`, `client: null`, and the
+client count didn't change. Vendus accepts it and doesn't create a client.
+
+**What the PR does**
+- `billing.ts`: no NIF → `createInvoice(null, …)`, no `client` field, nothing created or updated in Vendus,
+  family doc untouched. NIF → as before (ensure the client if there's no `vendusClientId`, invoice it). "No NIF"
+  = `nif` missing, blank or `999999990` (`familyInvoiceNif`); the old placeholder logic is gone. A stored
+  *invalid* NIF still goes the NIF way and fails at Vendus with `invoiceError`, as before (not silently
+  Consumidor final).
+- `syncVendusClient`: families without a NIF are skipped, no Vendus call; a stale `vendusSyncError` on them is
+  deleted. #91's change detection, `vendusSyncError` and write-back-only-if-changed are unchanged.
+- NIF added later (`createOrUpdateClient`): with a NIF and a `vendusClientId`, it first reads that client
+  (`GET /clients/{id}/`). If it has no NIF **or a different one**, it's left alone: NIF lookup → link, else
+  create (50/day cap); the sync write-back re-links the family. A NIF is never PATCHed onto a client that has
+  none, so the unverified "Vendus refuses a NIF change" case is gone. Cost: one Vendus GET per sync of a family
+  with a NIF and a client (syncs only run when a synced field changes). #91's "duplicado → re-link" stays as a
+  fallback.
+- Profile (setup, A minha conta): NIF required unless "Não pretendo NIF na fatura" → `nifOptOut: true` and
+  `nif` deleted; saving a NIF deletes `nifOptOut`. Nobody is sent back through setup (the gate is still
+  `profileComplete`); legacy families choose on their next save of A minha conta. Admin "Dados da família":
+  same checkbox, clearing a NIF needs it, legacy families still save without touching the NIF; the panel shows
+  "Sem NIF / Não pretende (Consumidor final)".
+- Pagamentos: no NIF and no opt-out → amber banner "Adicione o seu NIF antes de pagar para que conste na
+  fatura" → A minha conta. Payment isn't blocked.
+- After a Consumidor final invoice is recorded: a "Fatura disponível" email (emailOutbox) with the Pagamentos
+  link and a line asking for the NIF. Only for Consumidor final invoices; failing to queue it never affects the
+  invoice.
+- Tests: functions 221/221 (new `billing.test.ts`, `syncVendusClient.test.ts`; `vendus.test.ts` updated for the
+  GET-first flow). App typecheck: the same 11 old errors; build OK. No Vendus calls, no prod access.
+
+**How parents get invoices (finding, from the code only):**
+- **Vendus email:** only through a client with `send_email: "yes"`. Billing sets it only on clients it creates
+  or links at invoice time (family without `vendusClientId`). `syncVendusClient` creates most clients (at
+  profile completion) and never sends `send_email`, so those have Vendus's default, not checked here. If that
+  default is "no", families *with* a NIF get no invoice email today either.
+- **Portal:** Pagamentos → "Descarregar fatura" on every invoiced bill (`getInvoicePdf`: bill → `vendusId`,
+  cached, 100/day cap). Works with or without a client.
+- **emailOutbox:** parents only get "Pagamento pendente" notices. No payment-confirmation or invoice email from
+  the EasyPay webhook or `markBillingPaid`.
+- So Consumidor final invoices would only be in the portal; hence the "Fatura disponível" email.
+- **Open for Renato:** read `send_email` on 2–3 sync-created prod clients. If "no": add `send_email: "yes"` to
+  the sync payload (one line, applies at each family's next sync), or send "Fatura disponível" for every
+  invoice (drop the `consumidorFinal` condition in `createVendusInvoiceForBilling`).
+
+**How to test on dev.** Dev skips Vendus entirely (invoicing throws on `kidclub-dev`, the sync returns early), so
+the invoice path, the late-NIF re-link and the email can only run on prod.
+1. `parent-test@kidclub.pt` (`TEST-FAMILY-QA`, `nif: "999999990"`, which now counts as no NIF) → Pagamentos
+   shows the banner; the pay buttons are still there.
+2. A minha conta → Guardar → asks to tick the box. Tick "Não pretendo NIF na fatura" → Guardar → doc has
+   `nifOptOut: true` and no `nif`; banner gone. Untick, type `123456789` → saves, `nifOptOut` removed. An
+   invalid NIF → red error, button disabled.
+3. Setup page: set `profileComplete: false` on the QA family in the dev console, reload: same rules.
+4. Admin Inscrições → the family → Editar: the checkbox; clearing the NIF without it → error.
+
+**After promotion to prod, check (read-only):**
+- The first invoice for a family without a NIF shows "Consumidor final"; the bill has `invoiceNumber`/`vendusId`;
+  log `[Vendus] invoice created … client=Consumidor final`; its "Fatura disponível" outbox doc is sent.
+- **No new Vendus client appears** for that family (client count unchanged by that invoice).
+- A family with a NIF still invoices to its client (log `client=<id>`).
+- The first legacy family that adds a NIF: log `client X has NIF "", not …`, then link or create; its
+  `vendusClientId` changes; the old client is untouched.
+- Cross-app: root `CLAUDE.md` → "Cross-App Data Contracts": FinHub must link invoices by `invoiceNumber`/
+  `vendusId`, never the Vendus client name.
+
+(#91 is merged: in `main`, and in `staging` via #92. The 2026-10-11 section's header below still says OPEN.)
 
 ## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, NOT in prod
 
