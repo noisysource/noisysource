@@ -65,6 +65,10 @@ export interface VendusDocument {
   errors?: Array<{ code: string; message: string }>;
 }
 
+// No `external_reference` here, on purpose: Vendus prints a client's
+// external_reference next to its name on every invoice (customers saw
+// "Name (family:<id>)"). Clients are identified by the family doc's
+// `vendusClientId` instead. Don't add it back.
 export interface VendusClientPayload {
   name: string;
   email?: string;
@@ -73,7 +77,6 @@ export interface VendusClientPayload {
   address?: string;
   postalcode?: string;
   city?: string;
-  external_reference?: string;
   send_email?: "yes" | "no";
 }
 
@@ -85,18 +88,14 @@ export interface VendusClientRecord {
   external_reference: string;
 }
 
-/** Find client by external_reference (Firebase family ID). Returns null if not found. */
-export async function findClientByRef(externalRef: string): Promise<VendusClientRecord | null> {
-  try {
-    const results = await request<VendusClientRecord[]>(
-      "GET", `/clients/?external_reference=${encodeURIComponent(externalRef)}`
-    );
-    if (!Array.isArray(results) || results.length === 0) return null;
-    return results[0];
-  } catch (err: any) {
-    if (err.message?.includes("(404)")) return null;
-    throw err;
-  }
+/** True when a request() error is a Vendus 404 (e.g. the client was deleted). */
+function isNotFound(err: any): boolean {
+  return typeof err?.message === "string" && err.message.includes("failed (404)");
+}
+
+/** True when Vendus rejected a client write because the NIF is already on another client. */
+function isDuplicateNif(err: any): boolean {
+  return typeof err?.message === "string" && err.message.includes("duplicado");
 }
 
 /** Find client by NIF (fiscal_id). Returns null if not found. */
@@ -116,11 +115,11 @@ async function findClientByNif(fiscalId: string): Promise<VendusClientRecord | n
 /**
  * Create a new Vendus client. Every creation goes through the daily cap first
  * (vendusClientCap.ts); over the cap, or if the counter can't be updated, this
- * throws without calling Vendus.
+ * throws without calling Vendus. `label` only identifies the caller in logs.
  */
-export async function createClient(payload: VendusClientPayload): Promise<VendusClientRecord> {
+export async function createClient(payload: VendusClientPayload, label?: string): Promise<VendusClientRecord> {
   assertExternalCallsAllowed("Vendus"); // don't count a call the guard would block anyway
-  await reserveVendusClientCreation(payload.external_reference || payload.name || "(unnamed)");
+  await reserveVendusClientCreation(label || payload.name || "(unnamed)");
   return request<VendusClientRecord>("POST", "/clients/", payload);
 }
 
@@ -130,33 +129,70 @@ export async function updateClient(id: number, payload: Partial<VendusClientPayl
 }
 
 /**
- * Create or update a Vendus client by Firebase family ID, keyed in Vendus by
- * external_reference "family:<familyId>" (set on create and on the NIF re-link).
- * Falls back to NIF lookup when creation fails with duplicate NIF.
- * Returns the Vendus client ID.
+ * Create or update the Vendus client for a family. Returns the Vendus client ID.
+ *
+ * 1. `knownClientId` (the family doc's `vendusClientId`) set: PATCH that client.
+ *    - Vendus says the NIF is a duplicate (the family added a NIF that an older
+ *      client already holds): PATCH that older client and return ITS id, so
+ *      the caller re-links the family. If no client with that NIF is found,
+ *      throw (never create here).
+ *    - 404 (client deleted in Vendus): fall through to the steps below.
+ *    - Any other error: throw, so a family that has a client never creates
+ *      another one by accident.
+ * 2. Payload has a NIF: look the client up by NIF and PATCH it if found.
+ * 3. Otherwise create it (daily-capped, see createClient). If Vendus rejects a
+ *    duplicate NIF, re-link the existing client found by NIF.
+ *
+ * Never sends `external_reference`: Vendus prints it on invoices.
  */
-export async function createOrUpdateClient(familyId: string, payload: VendusClientPayload): Promise<number> {
-  const ref = `family:${familyId}`;
+export async function createOrUpdateClient(
+  familyId: string,
+  payload: VendusClientPayload,
+  knownClientId?: number | null,
+): Promise<number> {
+  // Belt and braces for untyped callers: VendusClientPayload has no
+  // external_reference, and it must never reach Vendus.
+  const { external_reference: _dropped, ...body } = payload as VendusClientPayload & { external_reference?: unknown };
 
-  const existing = await findClientByRef(ref);
-  if (existing) {
-    await updateClient(existing.id, payload);
-    return existing.id;
+  if (knownClientId) {
+    try {
+      await updateClient(knownClientId, body);
+      return knownClientId;
+    } catch (err: any) {
+      if (body.fiscal_id && isDuplicateNif(err)) {
+        // e.g. a NIF added after the first invoice, already held by an older
+        // client (family 8pPhu4JCvGUrpBxsaOeY, 2026-10). Re-link to that client.
+        const byNif = await findClientByNif(body.fiscal_id);
+        if (byNif && byNif.id !== knownClientId) {
+          console.log(`[Vendus] NIF ${body.fiscal_id} is on client ${byNif.id}; re-linking family ${familyId} from client ${knownClientId}`);
+          await updateClient(byNif.id, body);
+          return byNif.id;
+        }
+        throw err;
+      }
+      if (!isNotFound(err)) throw err;
+      console.warn(`[Vendus] client ${knownClientId} for family ${familyId} not found (404), looking it up again`);
+    }
+  }
+
+  if (body.fiscal_id) {
+    const byNif = await findClientByNif(body.fiscal_id);
+    if (byNif) {
+      await updateClient(byNif.id, body);
+      return byNif.id;
+    }
   }
 
   try {
-    // Always tag the new client with the family ref, so the findClientByRef
-    // above finds it next time. Without it, every call for a family with no
-    // NIF created another client (2026-10-11 prod loop: 904 in ~7 minutes).
-    const created = await createClient({ ...payload, external_reference: ref });
+    const created = await createClient(body, `family:${familyId}`);
     return created.id;
   } catch (err: any) {
     // Vendus rejects duplicate NIFs — find the existing client and re-link it
-    if (payload.fiscal_id && err.message?.includes("duplicado")) {
-      console.log(`[Vendus] duplicate NIF ${payload.fiscal_id}, looking up existing client`);
-      const byNif = await findClientByNif(payload.fiscal_id);
+    if (body.fiscal_id && isDuplicateNif(err)) {
+      console.log(`[Vendus] duplicate NIF ${body.fiscal_id}, looking up existing client`);
+      const byNif = await findClientByNif(body.fiscal_id);
       if (byNif) {
-        await updateClient(byNif.id, { ...payload, external_reference: ref });
+        await updateClient(byNif.id, body);
         return byNif.id;
       }
     }

@@ -97,6 +97,9 @@ export interface FamilyDoc {
   defaultPaymentMethod?: string;
   profileComplete?: boolean;
   notes?: string;
+  /** Set by the syncVendusClient function when the Vendus client sync failed;
+   *  deleted by the next successful sync. Server-written only. */
+  vendusSyncError?: { message?: string; at?: unknown };
 }
 
 /** The children/{id} fields this page needs beyond what a SubItem carries. */

@@ -1,14 +1,15 @@
-import { SubItem, isUnlinked, needsAdminReview } from './model';
+import { SubItem, isUnlinked, needsAdminReview, toDate } from './model';
 import { FamilyInfo } from './listModel';
 import { StatusBadge, CLIENT_ACTION_BADGE } from './badges';
 
 const tag = 'text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap';
 
-/** Family-level state: billing problems, a bad NIF, a duplicate account. */
+/** Family-level state: billing problems, a bad NIF, a failed Vendus sync, a duplicate account. */
 export function FamilyTags({ fam }: { fam: FamilyInfo }) {
   const overdueTotal = fam.overdue.reduce((s, b) => s + b.total, 0);
   const noAccount = !fam.familyId && !fam.key.startsWith('child:');
-  if (!fam.invoiceErrors.length && !fam.nifInvalid && !fam.overdue.length && !fam.duplicate && !noAccount) return null;
+  const syncError = fam.family?.vendusSyncError;
+  if (!fam.invoiceErrors.length && !fam.nifInvalid && !syncError && !fam.overdue.length && !fam.duplicate && !noAccount) return null;
   return (
     <span className="inline-flex flex-wrap gap-1.5">
       {fam.invoiceErrors.length > 0 && (
@@ -17,6 +18,12 @@ export function FamilyTags({ fam }: { fam: FamilyInfo }) {
         </span>
       )}
       {fam.nifInvalid && <span className={`${tag} bg-red-100 text-red-800`}>NIF inválido</span>}
+      {syncError && (
+        <span className={`${tag} bg-red-100 text-red-800`}
+          title={`${syncError.at ? `${toDate(syncError.at).toLocaleString('pt-PT')}: ` : ''}${syncError.message ?? ''}`}>
+          Vendus: sincronização falhou
+        </span>
+      )}
       {fam.overdue.length > 0 && (
         <span className={`${tag} bg-red-50 text-red-700 border border-red-200`}
           title={fam.overdue.map(b => `${b.periodLabel}: €${b.total.toFixed(2)}`).join('\n')}>
