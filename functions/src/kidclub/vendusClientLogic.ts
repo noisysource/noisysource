@@ -46,3 +46,35 @@ export function vendusClientFieldsChanged(before: DocData, after: DocData): bool
   const b = vendusSyncFields(after);
   return (Object.keys(a) as (keyof VendusSyncFields)[]).some((k) => a[k] !== b[k]);
 }
+
+/** Longest Vendus error message kept on the family doc. */
+export const VENDUS_SYNC_ERROR_MAX_LENGTH = 500;
+
+/**
+ * What syncVendusClient writes back on the family doc after calling Vendus,
+ * or null when nothing changed (no write, so no extra trigger run).
+ *
+ * - Success: `vendusClientId` if it differs, and delete `vendusSyncError` if
+ *   present (so the admin badge clears).
+ * - Failure: `vendusSyncError: { message, at }`, shown as a badge in the admin.
+ *
+ * Neither field is a synced field (see vendusSyncFields), so this write
+ * re-fires the trigger but vendusClientFieldsChanged returns false: no loop.
+ * `del` / `now` are the Firestore FieldValue.delete() / serverTimestamp()
+ * sentinels, passed in to keep this file free of firebase-admin.
+ */
+export function vendusSyncWriteback(
+  data: DocData,
+  outcome: { clientId: number } | { error: unknown },
+  sentinels: { del: unknown; now: unknown },
+): Record<string, unknown> | null {
+  if ("error" in outcome) {
+    const e = outcome.error;
+    const message = (e instanceof Error ? e.message : String(e)).slice(0, VENDUS_SYNC_ERROR_MAX_LENGTH);
+    return { vendusSyncError: { message, at: sentinels.now } };
+  }
+  const update: Record<string, unknown> = {};
+  if (data?.vendusClientId !== outcome.clientId) update.vendusClientId = outcome.clientId;
+  if (data?.vendusSyncError !== undefined) update.vendusSyncError = sentinels.del;
+  return Object.keys(update).length ? update : null;
+}

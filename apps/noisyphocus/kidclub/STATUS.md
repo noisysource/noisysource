@@ -158,7 +158,40 @@ manual-deploy, so likely unnoticed). `studyRoomService.uploadFile` is dead code 
 notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default
 stay for families that never actively chose.
 
-## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — hotfix `hotfix/vendus-client-loop`, PR #84 → `main` OPEN, not merged
+## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — #84 in prod since 2026-10-11 23:02 UTC; follow-up `hotfix/vendus-drop-external-ref`, PR #91 → `main` OPEN, not merged
+
+**Update 2026-10-12 — read this first.**
+- **Invoice printing.** Vendus prints a client's `external_reference` next to the name on every invoice
+  (customers saw "Renato Lopes (family:Hi1iPRih3G6yXHrNsaAd)"). So `hotfix/vendus-drop-external-ref` stops
+  using it: `createOrUpdateClient(familyId, payload, knownClientId)` PATCHes the family's `vendusClientId`
+  (only a Vendus 404 falls through), else looks up by NIF, else creates (still 50/day capped). It never sends
+  `external_reference`; `findClientByRef` is gone. Issued invoices are certified and can't change.
+- **NIF added after the first invoice** (real: family `8pPhu4JCvGUrpBxsaOeY`, no-NIF client 365352238 → NIF already on
+  364285165; prod code re-linked her, she's fine). In #91 a "duplicado" on the known client's PATCH re-links to the
+  client holding the NIF. Any other failure, or no client with that NIF, is stored as `vendusSyncError` on the family →
+  red badge "Vendus: sincronização falhou" in Inscrições (message in the tooltip). The badge clears on the next
+  successful sync, which only runs when a synced field changes; after a manual fix, delete the field by hand.
+  Still unverified: whether Vendus refuses a NIF change on a client that already has documents.
+- **Follow-up, only AFTER that hotfix is deployed: clear `external_reference` on the 31 prod clients that
+  have it** (of 37 linked families). Needs Renato's OK; one-off, not app code.
+  - Test first on Renato's own client (family `Hi1iPRih3G6yXHrNsaAd`): does a PATCH with an empty value
+    actually clear it? If not, ask Vendus support.
+  - Sandra Abreu's client 368953853 (family `nnBmdqT7MEL3tNeTQqbM`) carries her old duplicate family's ref
+    `family:2InLz9GcyGy2HeOwAdmT`.
+  - Not before the deploy: the #84 code still looks clients up by ref, so a NIF-less family would get a
+    duplicate client and a family with a NIF would just get the ref set again.
+- **Check before/after the deploy (read-only):** each family whose duplicates were deleted must have
+  `vendusClientId` = its kept client. The new code PATCHes that id; if it points at a deleted client, the next
+  sync (only when a synced field changes) gets a 404 and, without a NIF, creates one new client.
+- **Duplicate cleanup progress.** thaise.ps07 (904) and Patrícia Tavares (803) duplicates: fully deleted.
+  Ana Bento: ~197,000 of ~264,000 deleted as of 2026-10-12 19:50 local, by `Claude outputs/delete-ana-bento-duplicates.mjs`
+  (untracked, outside git), running on Renato's machine and refilling its own batches. The kept clients
+  (377476996, 381268108, 382752714) were tagged with family refs on 2026-10-12, so they're among the 31 to clear.
+- **Staging sync.** After #84 the "Sync staging with main" job failed as predicted (run 38182393792; the prod
+  deploy job in that run succeeded). Fixed by hand: PR #86 merged `main` into `staging` on 2026-10-12, so
+  branch `sync/main-to-staging-38182393792` is redundant and can be deleted. The repo setting is still off
+  (`can_approve_pull_request_reviews: false`), so expect the same failure after this hotfix merges: open a
+  `main` → `staging` sync PR by hand.
 
 **Symptom.** Prod Vendus `/clients/` reports 10,000 items, which is the API's pagination ceiling. ~9,995 of them
 are copies of "Ana Bento" created 2026-09-23 (no NIF, no external_reference). On 2026-10-11 21:38:54–21:45:28 UTC,
@@ -181,7 +214,8 @@ memory limit. Found by a read-only investigation the same night. Nothing in Vend
 
 **Fix.** Three independent layers, each one enough to stop the loop on its own:
 - `vendus.ts`: `createOrUpdateClient` always sends `external_reference: "family:<id>"` on create, so the next
-  lookup finds it. Fixes the billing.ts path too.
+  lookup finds it. Fixes the billing.ts path too. (Superseded by `hotfix/vendus-drop-external-ref`, see the
+  update above: no ref any more, keyed by `vendusClientId`.)
 - `syncVendusClient.ts`: returns early unless the doc is new or a field it sends changed (`profileComplete`,
   `nif`, `primaryContact.name/email/phone`). Its own `vendusClientId` write-back no longer calls Vendus. The
   check is `vendusClientFieldsChanged` in `vendusClientLogic.ts`.
@@ -204,6 +238,7 @@ memory limit. Found by a read-only investigation the same night. Nothing in Vend
 - Not verifiable without a Vendus call: that `POST /clients/` stores `external_reference`. The existing
   duplicate-NIF path already relies on it via PATCH, and the other two layers stop the loop regardless.
   Read-only check after the next new family: `GET /clients/?external_reference=family:<id>` returns 1 client.
+  (Obsolete once `hotfix/vendus-drop-external-ref` is deployed: new clients get no ref.)
 
 **Deploy.** A hotfix PR into `main` doesn't deploy when opened. It deploys on merge, and Renato merges. No
 manual steps after (no new function, no new callable, no IAM).
