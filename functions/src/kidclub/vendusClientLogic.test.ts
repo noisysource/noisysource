@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   vendusClientFieldsChanged, vendusSyncFields, vendusSyncWriteback, VENDUS_SYNC_ERROR_MAX_LENGTH,
+  familyInvoiceNif, realNif, vendusSkipWriteback,
 } from "./vendusClientLogic";
 
 const family = (overrides: Record<string, any> = {}) => ({
@@ -117,5 +118,43 @@ describe("vendusSyncWriteback", () => {
     expect(vendusSyncWriteback(family(), { error: "boom" }, sentinels)).toEqual({ vendusSyncError: { message: "boom", at: "<NOW>" } });
     const long = vendusSyncWriteback(family(), { error: new Error("x".repeat(5000)) }, sentinels) as any;
     expect(long.vendusSyncError.message).toHaveLength(VENDUS_SYNC_ERROR_MAX_LENGTH);
+  });
+});
+
+describe("familyInvoiceNif / realNif", () => {
+  it("returns the NIF without spaces", () => {
+    expect(familyInvoiceNif(family({ nif: "123456789" }))).toBe("123456789");
+    expect(familyInvoiceNif(family({ nif: " 123 456 789 " }))).toBe("123456789");
+  });
+
+  it("null when the family has no NIF: missing, null, blank, or the Consumidor final NIF", () => {
+    for (const nif of [undefined, null, "", "   ", "999999990", "999 999 990"]) {
+      expect(familyInvoiceNif(family({ nif }))).toBeNull();
+    }
+    expect(familyInvoiceNif(undefined)).toBeNull();
+  });
+
+  it("the opt-out flag alone doesn't decide: only `nif` does", () => {
+    expect(familyInvoiceNif(family({ nif: "", nifOptOut: true }))).toBeNull();
+    expect(familyInvoiceNif(family({ nif: "", nifOptOut: false }))).toBeNull();
+  });
+
+  it("realNif: '' for a client with no NIF of its own", () => {
+    expect(realNif("")).toBe("");
+    expect(realNif(null)).toBe("");
+    expect(realNif("999999990")).toBe("");
+    expect(realNif("123456789")).toBe("123456789");
+  });
+});
+
+describe("vendusSkipWriteback (family skipped for having no NIF)", () => {
+  it("clears a stale vendusSyncError, and touches nothing else", () => {
+    expect(vendusSkipWriteback(family({ vendusClientId: 1, vendusSyncError: { message: "x", at: 1 } }), "<DELETE>"))
+      .toEqual({ vendusSyncError: "<DELETE>" });
+  });
+
+  it("writes nothing when there's no error on file (keeps an old vendusClientId as is)", () => {
+    expect(vendusSkipWriteback(family({ vendusClientId: 1 }), "<DELETE>")).toBeNull();
+    expect(vendusSkipWriteback(family(), "<DELETE>")).toBeNull();
   });
 });

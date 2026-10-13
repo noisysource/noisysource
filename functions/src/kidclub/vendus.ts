@@ -1,5 +1,6 @@
 import { assertExternalCallsAllowed } from "../externalGuard";
 import { reserveVendusClientCreation } from "./vendusClientCap";
+import { realNif } from "./vendusClientLogic";
 
 const BASE_URL = "https://www.vendus.pt/ws/v1.1";
 
@@ -128,15 +129,29 @@ export async function updateClient(id: number, payload: Partial<VendusClientPayl
   return request<VendusClientRecord>("PATCH", `/clients/${id}/`, payload);
 }
 
+/** Read one Vendus client. Returns null on a 404 (e.g. deleted in Vendus). */
+export async function getClient(id: number): Promise<VendusClientRecord | null> {
+  try {
+    return await request<VendusClientRecord>("GET", `/clients/${id}/`);
+  } catch (err: any) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+}
+
 /**
  * Create or update the Vendus client for a family. Returns the Vendus client ID.
  *
- * 1. `knownClientId` (the family doc's `vendusClientId`) set: PATCH that client.
- *    - Vendus says the NIF is a duplicate (the family added a NIF that an older
- *      client already holds): PATCH that older client and return ITS id, so
- *      the caller re-links the family. If no client with that NIF is found,
- *      throw (never create here).
- *    - 404 (client deleted in Vendus): fall through to the steps below.
+ * 1. `knownClientId` (the family doc's `vendusClientId`) set:
+ *    - Payload has a NIF: read the known client first (one GET). If it holds a
+ *      different NIF or none, don't touch it: go to step 2 as if there were no
+ *      known client, and return the client that holds the NIF (the caller
+ *      re-links the family). A NIF is never PATCHed onto a client that has
+ *      another one or none (Renato, 2026-10-13): that client already has
+ *      invoices without it, and Vendus may refuse the change anyway.
+ *    - Otherwise PATCH it. If Vendus still says the NIF is a duplicate,
+ *      re-link to the client holding it, or throw (never create here).
+ *    - 404 (client deleted in Vendus), on the GET or the PATCH: go to step 2.
  *    - Any other error: throw, so a family that has a client never creates
  *      another one by accident.
  * 2. Payload has a NIF: look the client up by NIF and PATCH it if found.
@@ -154,14 +169,28 @@ export async function createOrUpdateClient(
   // external_reference, and it must never reach Vendus.
   const { external_reference: _dropped, ...body } = payload as VendusClientPayload & { external_reference?: unknown };
 
-  if (knownClientId) {
+  let patchKnown = !!knownClientId;
+  if (knownClientId && body.fiscal_id) {
+    const known = await getClient(knownClientId);
+    if (!known) {
+      console.warn(`[Vendus] client ${knownClientId} for family ${familyId} not found (404), looking it up again`);
+      patchKnown = false;
+    } else if (realNif(known.fiscal_id) !== realNif(body.fiscal_id)) {
+      // e.g. family 8pPhu4JCvGUrpBxsaOeY (2026-10): linked to a NIF-less
+      // client, then added a NIF. Find or create the client for that NIF.
+      console.log(`[Vendus] client ${knownClientId} has NIF "${realNif(known.fiscal_id)}", not ${body.fiscal_id}; not changing it, finding the client for that NIF for family ${familyId}`);
+      patchKnown = false;
+    }
+  }
+
+  if (knownClientId && patchKnown) {
     try {
       await updateClient(knownClientId, body);
       return knownClientId;
     } catch (err: any) {
       if (body.fiscal_id && isDuplicateNif(err)) {
-        // e.g. a NIF added after the first invoice, already held by an older
-        // client (family 8pPhu4JCvGUrpBxsaOeY, 2026-10). Re-link to that client.
+        // Shouldn't happen after the NIF check above; kept so a surprise
+        // "duplicado" still re-links instead of failing.
         const byNif = await findClientByNif(body.fiscal_id);
         if (byNif && byNif.id !== knownClientId) {
           console.log(`[Vendus] NIF ${body.fiscal_id} is on client ${byNif.id}; re-linking family ${familyId} from client ${knownClientId}`);
@@ -234,8 +263,14 @@ export async function getDocumentFull(id: number): Promise<VendusDocumentFull> {
   return request<VendusDocumentFull>("GET", `/documents/${id}/`);
 }
 
+/**
+ * Issue a Fatura-Recibo. `client` null: no `client` field at all, so Vendus
+ * issues it to "Consumidor final" (families without a NIF). Verified on live
+ * Vendus 2026-10-13: a test-mode FR with no client returned 201 with
+ * `client: null`, and no client was created.
+ */
 export async function createInvoice(
-  client: VendusClient,
+  client: VendusClient | null,
   items: VendusLineItem[],
   date: string,
   paymentMethodId: number,
@@ -246,7 +281,7 @@ export async function createInvoice(
     type: "FR",
     date,
     register_id: registerId(),
-    client,
+    ...(client ? { client } : {}),
     items,
     payments: [{ id: paymentMethodId, amount }],
     ...(notes ? { notes } : {}),

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../externalGuard", () => ({ assertExternalCallsAllowed: vi.fn() }));
 vi.mock("./vendusClientCap", () => ({ reserveVendusClientCreation: vi.fn(async () => {}) }));
 
-import { createOrUpdateClient, VendusClientPayload } from "./vendus";
+import { createInvoice, createOrUpdateClient, VendusClientPayload } from "./vendus";
 import { reserveVendusClientCreation } from "./vendusClientCap";
 
 type Reply = { status?: number; body: unknown };
@@ -35,6 +35,7 @@ const client = (id: number, fiscal_id = "") => ({ id, name: "X", email: "", fisc
 beforeEach(() => {
   recorded = [];
   vi.stubEnv("VENDUS_API_KEY", "test-key-not-real");
+  vi.stubEnv("VENDUS_REGISTER_ID", "123");
   vi.mocked(reserveVendusClientCreation).mockReset().mockResolvedValue(undefined);
 });
 
@@ -62,13 +63,15 @@ describe("createOrUpdateClient", () => {
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
-  it("known vendusClientId with a NIF still PATCHes it directly (no NIF lookup)", async () => {
-    const calls = stubFetch([{ body: { id: 42 } }]);
+  it("known vendusClientId already holding the same NIF: reads it, then PATCHes it (no NIF lookup, no create)", async () => {
+    const calls = stubFetch([{ body: client(42, "123456789") }, { body: { id: 42 } }]);
 
-    const id = await createOrUpdateClient("fam1", { name: "A", fiscal_id: "123456789" }, 42);
+    const id = await createOrUpdateClient("fam1", { name: "A", fiscal_id: "123 456 789" }, 42);
 
     expect(id).toBe(42);
-    expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
+    expect(calls[0].url).toMatch(/\/clients\/42\/$/);
+    expect(calls[1].url).toMatch(/\/clients\/42\/$/);
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
@@ -84,53 +87,129 @@ describe("createOrUpdateClient", () => {
   // added a NIF that an older client already held.
   const DUPLICATE_NIF: Reply = { status: 400, body: { errors: [{ code: "A002", message: "NIF duplicado" }] } };
 
-  it("known vendusClientId, PATCH with NIF says duplicado: re-links to the client holding the NIF (no create, no cap)", async () => {
+  // Real case (family 8pPhu4JCvGUrpBxsaOeY, 2026-10): linked to a NIF-less
+  // client, then added a NIF that an older client already held. Since
+  // 2026-10-13 a NIF is never PATCHed onto a NIF-less client: it's looked up.
+  it("late NIF, known client has no NIF, another client holds it: re-links to that client, never PATCHes the known one", async () => {
     const calls = stubFetch([
-      DUPLICATE_NIF,                             // PATCH /clients/365352238/ rejected
+      { body: client(365352238, "") },            // GET /clients/365352238/: no NIF
       { body: [client(364285165, "123456789")] }, // GET by NIF
-      { body: { id: 364285165 } },              // PATCH /clients/364285165/
+      { body: { id: 364285165 } },                // PATCH /clients/364285165/
     ]);
 
     const id = await createOrUpdateClient("8pPhu4JCvGUrpBxsaOeY", { name: "C", fiscal_id: "123456789" }, 365352238);
 
     expect(id).toBe(364285165);
-    expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET", "PATCH"]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "PATCH"]);
     expect(calls[0].url).toMatch(/\/clients\/365352238\/$/);
     expect(calls[1].url).toContain("/clients/?fiscal_id=123456789");
     expect(calls[2].url).toMatch(/\/clients\/364285165\/$/);
     expect(calls[2].body).toEqual({ name: "C", fiscal_id: "123456789" });
+    expect(calls.some((c) => c.method === "PATCH" && /\/clients\/365352238\/$/.test(c.url))).toBe(false);
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
-  it("known vendusClientId, duplicado but no client with that NIF found (empty list or 404): throws, never creates", async () => {
+  it("late NIF, known client has no NIF, nobody holds it: creates a client with the NIF and returns the new id (no PATCH at all)", async () => {
     for (const lookup of [{ body: [] }, NOT_FOUND]) {
-      const calls = stubFetch([DUPLICATE_NIF, lookup]);
+      vi.mocked(reserveVendusClientCreation).mockClear();
+      const calls = stubFetch([
+        { body: client(365352238, "") },       // GET known: no NIF
+        lookup,                                // GET by NIF: none
+        { status: 201, body: { id: 900 } },    // POST /clients/
+      ]);
+
+      const id = await createOrUpdateClient("famLate", { name: "C", email: "c@example.com", fiscal_id: "123456789" }, 365352238);
+
+      expect(id).toBe(900);
+      expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "POST"]);
+      expect(calls[2].url).toMatch(/\/clients\/$/);
+      expect(calls[2].body).toEqual({ name: "C", email: "c@example.com", fiscal_id: "123456789" });
+      expect(reserveVendusClientCreation).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("known client shows the Consumidor final NIF (999999990): treated as no NIF, never PATCHed", async () => {
+    const calls = stubFetch([
+      { body: client(42, "999999990") },
+      { body: [] },
+      { status: 201, body: { id: 901 } },
+    ]);
+
+    const id = await createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42);
+
+    expect(id).toBe(901);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "POST"]);
+  });
+
+  it("known client holds a different NIF: not changed; links/creates the client for the new NIF", async () => {
+    const calls = stubFetch([
+      { body: client(42, "111111111") },       // GET known: other NIF
+      { body: [client(77, "123456789")] },     // GET by NIF
+      { body: { id: 77 } },                    // PATCH /clients/77/
+    ]);
+
+    const id = await createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42);
+
+    expect(id).toBe(77);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "PATCH"]);
+    expect(calls[2].url).toMatch(/\/clients\/77\/$/);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("reading the known client fails with a non-404 error: throws, no lookup, no create", async () => {
+    const calls = stubFetch([{ status: 500, body: { errors: [{ message: "boom" }] } }]);
+
+    await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/GET \/clients\/42\/ failed \(500\)/);
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  // Defensive path from #91, kept: the known client holds the NIF and Vendus
+  // still answers "duplicado" on the PATCH.
+  it("known client holds the NIF, PATCH still says duplicado: re-links to the client holding the NIF (no create, no cap)", async () => {
+    const calls = stubFetch([
+      { body: client(42, "123456789") },  // GET known
+      DUPLICATE_NIF,                      // PATCH /clients/42/ rejected
+      { body: [client(77, "123456789")] }, // GET by NIF
+      { body: { id: 77 } },               // PATCH /clients/77/
+    ]);
+
+    const id = await createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42);
+
+    expect(id).toBe(77);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH", "GET", "PATCH"]);
+    expect(reserveVendusClientCreation).not.toHaveBeenCalled();
+  });
+
+  it("known client holds the NIF, duplicado but no other client with that NIF found (empty list or 404): throws, never creates", async () => {
+    for (const lookup of [{ body: [] }, NOT_FOUND]) {
+      const calls = stubFetch([{ body: client(42, "123456789") }, DUPLICATE_NIF, lookup]);
 
       await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/duplicado/);
-      expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET"]);
+      expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH", "GET"]);
     }
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
-  it("known vendusClientId, duplicado and the NIF lookup returns that same client: throws, never creates", async () => {
-    const calls = stubFetch([DUPLICATE_NIF, { body: [client(42, "123456789")] }]);
+  it("known client holds the NIF, duplicado and the NIF lookup returns that same client: throws, never creates", async () => {
+    const calls = stubFetch([{ body: client(42, "123456789") }, DUPLICATE_NIF, { body: [client(42, "123456789")] }]);
 
     await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/duplicado/);
-    expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET"]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH", "GET"]);
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
-  it("known vendusClientId, PATCH rejected for another reason (e.g. NIF change refused): throws, no lookup, no create", async () => {
-    const calls = stubFetch([{ status: 400, body: { errors: [{ message: "Não é possível alterar o NIF" }] } }]);
+  it("known client holds the NIF, PATCH rejected for another reason: throws, no lookup, no create", async () => {
+    const calls = stubFetch([{ body: client(42, "123456789") }, { status: 400, body: { errors: [{ message: "Erro" }] } }]);
 
     await expect(createOrUpdateClient("fam1", { name: "C", fiscal_id: "123456789" }, 42)).rejects.toThrow(/failed \(400\)/);
-    expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
   });
 
   it("known vendusClientId 404 (deleted), with NIF: falls through to NIF lookup and PATCHes that client", async () => {
     const calls = stubFetch([
-      NOT_FOUND,                          // PATCH /clients/42/
+      NOT_FOUND,                          // GET /clients/42/
       { body: [client(77, "123456789")] }, // GET by NIF
       { body: { id: 77 } },               // PATCH /clients/77/
     ]);
@@ -138,7 +217,7 @@ describe("createOrUpdateClient", () => {
     const id = await createOrUpdateClient("fam1", { name: "A", fiscal_id: "123456789" }, 42);
 
     expect(id).toBe(77);
-    expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET", "PATCH"]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "PATCH"]);
     expect(calls[1].url).toContain("/clients/?fiscal_id=123456789");
     expect(calls[2].url).toMatch(/\/clients\/77\/$/);
     expect(reserveVendusClientCreation).not.toHaveBeenCalled();
@@ -226,5 +305,29 @@ describe("createOrUpdateClient", () => {
     const patched = stubFetch([{ body: { id: 2 } }]);
     await createOrUpdateClient("fam1", sneaky, 2);
     expect(patched[0].body).toEqual({ name: "A" });
+  });
+});
+
+describe("createInvoice", () => {
+  const items = [{ id: 286916222, title: "Sala de estudo", qty: 1, gross_price: 100 }];
+
+  it("no client (family without a NIF): the body has no client field at all, so Vendus issues it to Consumidor final", async () => {
+    const calls = stubFetch([{ status: 201, body: { id: 1, number: "FR T01P2026/1" } }]);
+
+    await createInvoice(null, items, "2026-10-13", 286783134, 100, "Período: Outubro 2026");
+
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+    expect(calls[0].url).toMatch(/\/documents\/$/);
+    expect(calls[0].body).not.toHaveProperty("client");
+    expect(calls[0].body).toMatchObject({ type: "FR", date: "2026-10-13", register_id: 123, items, payments: [{ id: 286783134, amount: 100 }] });
+  });
+
+  it("with a client: sends it as given", async () => {
+    const calls = stubFetch([{ status: 201, body: { id: 2, number: "FR 01P2026/2" } }]);
+
+    await createInvoice({ id: 42 }, items, "2026-10-13", 286783130, 100);
+
+    expect(calls[0].body.client).toEqual({ id: 42 });
+    expect(calls[0].body).not.toHaveProperty("notes");
   });
 });
