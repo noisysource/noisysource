@@ -6,6 +6,7 @@ import { createMbwayPayment, createMultibancoPayment, createCardPayment, Easypay
 import { appCol } from "./db";
 import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 import { partyDepositAmount } from "./partyDepositLogic";
+import { familyInvoiceNif } from "./vendusClientLogic";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -229,8 +230,9 @@ export async function createVendusInvoiceForBilling(billingId: string): Promise<
   if (!billing) return;
 
   let vendusDoc: VendusDocument;
+  let consumidorFinal: boolean;
   try {
-    vendusDoc = await issueVendusInvoice(billing);
+    ({ vendusDoc, consumidorFinal } = await issueVendusInvoice(billing));
   } catch (err: any) {
     // Vendus did not issue it: release the claim so a retry can run.
     await billingRef.update({
@@ -260,9 +262,14 @@ export async function createVendusInvoiceForBilling(billingId: string): Promise<
     }).catch(() => {});
     throw err;
   }
+
+  // Vendus emails an invoice only through a client with send_email "yes", and
+  // a Consumidor final invoice has no client: point the parent to the portal.
+  if (consumidorFinal) await queueInvoiceReadyEmail(billingId, billing, vendusDoc);
 }
 
-async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData): Promise<VendusDocument> {
+// Exported for billing.test.ts only.
+export async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData): Promise<{ vendusDoc: VendusDocument; consumidorFinal: boolean }> {
   const currentProject = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
   if (DEV_PROJECTS_WITHOUT_VENDUS_SANDBOX.has(currentProject)) {
     throw new Error(
@@ -276,23 +283,31 @@ async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData): Prom
 
   const famSnap = await appCol("families").doc(familyId).get();
   const fam = famSnap.data() ?? {};
-  const clientNif: string = fam.nif ?? "999999990";
 
-  let vendusClientId: number | null = fam.vendusClientId ?? null;
-  console.log(`[Vendus] vendusClientId=${vendusClientId ?? "none"} nif=${clientNif}`);
-
-  if (!vendusClientId) {
-    vendusClientId = await createOrUpdateClient(familyId, {
-      name: billingName,
-      email: billingEmail,
-      send_email: "yes",
-      ...(clientNif !== "999999990" ? { fiscal_id: clientNif } : {}),
-    }, null); // only reached when the family has no vendusClientId yet
-    await appCol("families").doc(familyId).update({ vendusClientId });
-    console.log(`[Vendus] client created/synced vendusClientId=${vendusClientId}`);
+  // With a NIF: the family's Vendus client, created/linked on first use.
+  // Without one: no client at all, so Vendus issues it to "Consumidor final".
+  // That includes families still holding an old NIF-less vendusClientId: it's
+  // no longer used (Renato, option B, 2026-10-13). Nothing is created or
+  // updated in Vendus for them.
+  const nif = familyInvoiceNif(fam);
+  let vendusClient: VendusClient | null = null;
+  if (nif) {
+    let vendusClientId: number | null = fam.vendusClientId ?? null;
+    console.log(`[Vendus] vendusClientId=${vendusClientId ?? "none"} nif=${nif}`);
+    if (!vendusClientId) {
+      vendusClientId = await createOrUpdateClient(familyId, {
+        name: billingName,
+        email: billingEmail,
+        send_email: "yes",
+        fiscal_id: nif,
+      }, null); // only reached when the family has no vendusClientId yet
+      await appCol("families").doc(familyId).update({ vendusClientId });
+      console.log(`[Vendus] client created/synced vendusClientId=${vendusClientId}`);
+    }
+    vendusClient = { id: vendusClientId };
+  } else {
+    console.log(`[Vendus] family ${familyId} has no NIF — invoicing Consumidor final, no client (ignoring vendusClientId=${fam.vendusClientId ?? "none"})`);
   }
-
-  const vendusClient: VendusClient = { id: vendusClientId };
   const isCampBilling = billing.type === "camp_deposit" || billing.type === "camp_balance";
   const vendusProductId = (title: string): number => {
     if (isCampBilling) return PRODUCT_STUDY;
@@ -323,8 +338,30 @@ async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData): Prom
     throw new Error(vendusDoc.errors.map((e: any) => e.message).join("; "));
   }
 
-  console.log(`[Vendus] invoice created — number=${vendusDoc.number} id=${vendusDoc.id} atcud=${vendusDoc.atcud}`);
-  return vendusDoc;
+  console.log(`[Vendus] invoice created — number=${vendusDoc.number} id=${vendusDoc.id} atcud=${vendusDoc.atcud} client=${vendusClient ? vendusClient.id : "Consumidor final"}`);
+  return { vendusDoc, consumidorFinal: !vendusClient };
+}
+
+// "Fatura disponível" email for a Consumidor final invoice (see the caller).
+// Never throws: the invoice is already issued and recorded.
+async function queueInvoiceReadyEmail(billingId: string, billing: FirebaseFirestore.DocumentData, vendusDoc: VendusDocument): Promise<void> {
+  if (!billing.billingEmail) return;
+  try {
+    await appCol("emailOutbox").add({
+      to: billing.billingEmail,
+      subject: `Fatura disponível — ${COMPANY_NAME} — ${billing.periodLabel}`,
+      html: buildInvoiceReadyEmail({
+        clientName: billing.billingName ?? "",
+        periodLabel: billing.periodLabel ?? "",
+        total: Number(billing.total ?? 0),
+        invoiceNumber: vendusDoc.number,
+      }),
+      status: "queued",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (err: any) {
+    console.error(`[Vendus] invoice ${vendusDoc.number} issued for billing ${billingId}, but the "fatura disponível" email could not be queued:`, err.message);
+  }
 }
 
 // ── Compute line items for a group ────────────────────────────────────────────
@@ -1554,3 +1591,40 @@ function buildPaymentNoticeEmail(opts: {
 </body></html>`;
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]!));
+}
+
+// Same layout as buildPaymentNoticeEmail. Sent only for Consumidor final
+// invoices (no NIF), so it also asks for the NIF for next time.
+function buildInvoiceReadyEmail(opts: {
+  clientName: string;
+  periodLabel: string;
+  total: number;
+  invoiceNumber: string;
+}): string {
+  const clientName = escapeHtml(opts.clientName);
+  const periodLabel = escapeHtml(opts.periodLabel);
+  const invoiceNumber = escapeHtml(opts.invoiceNumber);
+  return `<!DOCTYPE html><html lang="pt"><body style="margin:0;padding:0;background:#f9fafb;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:32px 0;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+<tr><td style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:32px 40px;text-align:center;">
+  <h1 style="margin:0;color:#fff;font-size:24px;">${COMPANY_NAME}</h1>
+  <p style="margin:8px 0 0;color:#c4b5fd;font-size:14px;">Pagamento recebido — ${periodLabel}</p>
+</td></tr>
+<tr><td style="padding:32px 40px;">
+  <p style="font-size:16px;color:#374151;">Olá${clientName ? `, <strong>${clientName}</strong>` : ""},</p>
+  <p style="font-size:14px;color:#6b7280;">Recebemos o pagamento de <strong>${periodLabel}</strong> (€${opts.total.toFixed(2)}). A fatura <strong>${invoiceNumber}</strong> está disponível na sua área de cliente, em Pagamentos.</p>
+  <p style="text-align:center;margin:28px 0;">
+    <a href="https://kidclub.pt/client/payments" style="background:#4f46e5;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">Ver fatura</a>
+  </p>
+  <p style="font-size:12px;color:#9ca3af;">Esta fatura foi emitida sem NIF (Consumidor final). Se quiser o seu NIF nas próximas faturas, adicione-o em <a href="https://kidclub.pt/client/account" style="color:#4f46e5;">A minha conta</a>.</p>
+</td></tr>
+<tr><td style="background:#f9fafb;padding:20px 40px;text-align:center;border-top:1px solid #e5e7eb;">
+  <p style="margin:0;font-size:12px;color:#9ca3af;">${COMPANY_NAME} · NIF 518942120 · Avenida da Guarda Inglesa, Lote E, Coimbra</p>
+</td></tr>
+</table></td></tr></table>
+</body></html>`;
+}
