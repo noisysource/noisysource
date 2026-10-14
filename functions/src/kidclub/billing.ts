@@ -299,10 +299,11 @@ export async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData
     let vendusClientId: number | null = fam.vendusClientId ?? null;
     console.log(`[Vendus] vendusClientId=${vendusClientId ?? "none"} nif=${nif}`);
     if (!vendusClientId) {
+      // No send_email: Vendus's own invoice emails stay off, the app sends
+      // "Fatura disponível" instead (Renato, 2026-10-14; no double email).
       vendusClientId = await createOrUpdateClient(familyId, {
         name: billingName,
         email: billingEmail,
-        send_email: "yes",
         fiscal_id: nif,
       }, null); // only reached when the family has no vendusClientId yet
       await appCol("families").doc(familyId).update({ vendusClientId });

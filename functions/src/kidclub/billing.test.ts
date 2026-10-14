@@ -192,8 +192,10 @@ describe("issueVendusInvoice — who the invoice goes to", () => {
 
     expect(res.consumidorFinal).toBe(false);
     expect(createOrUpdateClient).toHaveBeenCalledWith("fam1", {
-      name: "Ana Silva", email: "ana@example.com", send_email: "yes", fiscal_id: "123456789",
+      name: "Ana Silva", email: "ana@example.com", fiscal_id: "123456789",
     }, null);
+    // Vendus's own invoice emails stay off: the app emails instead (no double email).
+    expect(vi.mocked(createOrUpdateClient).mock.calls[0][1]).not.toHaveProperty("send_email");
     expect(state.log).toEqual([{ op: "update", path: "families/fam1", data: { vendusClientId: 777 } }]);
     expect(vi.mocked(createInvoice).mock.calls[0][0]).toEqual({ id: 777 });
   });
