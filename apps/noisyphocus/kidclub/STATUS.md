@@ -57,12 +57,10 @@ client count didn't change. Vendus accepts it and doesn't create a client.
   `vendusId`, cached, 100/day cap; works with or without a client). The only emails parents got were
   "Pagamento pendente"; neither the EasyPay webhook nor `markBillingPaid` emails them.
 - **Renato's decision: option 1.** The app sends its own "Fatura disponível" email for every invoice, from this
-  PR. Vendus's own emails stay off: `send_email` isn't changed on clients or in the sync payload.
-- **Open, small:** billing's own client path (a family with a NIF but no `vendusClientId` at invoice time) still
-  sends `send_email: "yes"` when it creates or links the client, as it did before #93. If Vendus honours it,
-  that family would get two emails (Vendus's and ours). The 5 clients sampled had "no", so either Vendus
-  ignores it or none came through that path. Left alone here (`send_email` untouched, per the decision);
-  dropping it from billing's payload is a one-line follow-up if Renato wants it.
+  PR. Vendus's own emails stay off: nothing sets `send_email` on Vendus clients (the sync payload never did).
+- `send_email: "yes"` in billing's own client create/link payload (a family with a NIF but no `vendusClientId`
+  at invoice time) is **removed (Renato, 2026-10-14)**, so that path can't cause a second email from Vendus.
+  Existing clients keep whatever `send_email` they have; the 5 sampled had "no".
 
 **How to test on dev.** Dev skips Vendus entirely (invoicing throws on `kidclub-dev`, the sync returns early), so
 the invoice path, the late-NIF re-link and the email can only run on prod.
