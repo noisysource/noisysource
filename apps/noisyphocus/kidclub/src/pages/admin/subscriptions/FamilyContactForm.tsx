@@ -16,8 +16,13 @@ import { SubItem, FamilyGroup, FamilyDoc, subCollection } from './model';
 //
 // Only what actually changed is written. Every subscription write fires three
 // backend triggers, and every families/ write fires syncVendusClient, which
-// upserts the client in the LIVE Vendus account (prod only — it skips dev). So
-// changing only the NIF is one families/ write and zero subscription writes.
+// upserts the client in the LIVE Vendus account (prod only — it skips dev, and
+// skips families without a NIF). So changing only the NIF is one families/
+// write and zero subscription writes.
+//
+// NIF: a family without one is invoiced to "Consumidor final" (no Vendus
+// client). Clearing a NIF requires ticking "Não pretende NIF na fatura";
+// families from before that option (neither set) can be saved as they are.
 export default function FamilyContactForm({ group, onSaved, onCancel }: {
   group: FamilyGroup;
   onSaved: (patch: Partial<SubItem>, familyPatch: Partial<FamilyDoc>) => void;
@@ -29,6 +34,7 @@ export default function FamilyContactForm({ group, onSaved, onCancel }: {
     email: group.contactEmail ?? '',
     phone: group.contactPhone ?? '',
     nif: fam?.nif ?? '',
+    nifOptOut: !fam?.nif && !!fam?.nifOptOut,
     street: fam?.billingAddress?.street ?? '',
     city: fam?.billingAddress?.city ?? '',
     postalCode: fam?.billingAddress?.postalCode ?? '',
@@ -36,14 +42,20 @@ export default function FamilyContactForm({ group, onSaved, onCancel }: {
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  type TextField = Exclude<keyof typeof form, 'nifOptOut'>;
+  const set = (k: TextField) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
+  const setNifOptOut = (nifOptOut: boolean) =>
+    setForm(prev => ({ ...prev, nifOptOut, nif: nifOptOut ? '' : prev.nif }));
 
-  const t = (k: keyof typeof form) => form[k].trim();
+  const t = (k: TextField) => form[k].trim();
   const contactChanged = t('name') !== initial.name.trim()
     || normalizeEmail(t('email')) !== normalizeEmail(initial.email.trim())
     || t('phone') !== initial.phone.trim();
   const nifChanged = normalizeNif(form.nif) !== normalizeNif(initial.nif);
+  const optOutChanged = form.nifOptOut !== initial.nifOptOut;
+  // Removing a NIF (or unticking the opt-out) needs an explicit choice.
+  const nifMissing = (nifChanged || optOutChanged) && !form.nifOptOut && !normalizeNif(form.nif);
   const addressChanged = t('street') !== initial.street.trim() || t('city') !== initial.city.trim()
     || t('postalCode') !== initial.postalCode.trim();
   const nifError = form.nif.trim() && !isValidNif(form.nif) ? 'NIF inválido (falha o dígito de controlo).' : null;
@@ -54,11 +66,12 @@ export default function FamilyContactForm({ group, onSaved, onCancel }: {
   const submit = async () => {
     if (!t('email')) { setSaveError('Email do encarregado é obrigatório.'); return; }
     if (nifError) { setSaveError(nifError); return; }
+    if (nifMissing) { setSaveError('Indique o NIF ou marque "Não pretende NIF na fatura".'); return; }
     const anyAddress = t('street') || t('city') || t('postalCode');
     if (anyAddress && !(t('street') && t('city') && t('postalCode'))) {
       setSaveError('Morada de faturação incompleta: rua, localidade e código postal.'); return;
     }
-    if (!contactChanged && !nifChanged && !addressChanged) { onCancel(); return; }
+    if (!contactChanged && !nifChanged && !optOutChanged && !addressChanged) { onCancel(); return; }
 
     setSaving(true);
     setSaveError(null);
@@ -83,6 +96,10 @@ export default function FamilyContactForm({ group, onSaved, onCancel }: {
           const nif = normalizeNif(form.nif);
           update.nif = nif || deleteField();
           familyPatch.nif = nif || undefined;
+        }
+        if (optOutChanged) {
+          update.nifOptOut = form.nifOptOut || deleteField();
+          familyPatch.nifOptOut = form.nifOptOut || undefined;
         }
         if (addressChanged) {
           const billingAddress = anyAddress
@@ -168,11 +185,18 @@ export default function FamilyContactForm({ group, onSaved, onCancel }: {
         {group.familyId && (
           <div>
             <label className="block text-xs text-gray-500 mb-1">NIF</label>
-            <input type="text" inputMode="numeric" value={form.nif} onChange={set('nif')}
-              className={`${fieldCls} ${nifError ? 'border-red-400 focus:ring-red-200' : ''}`} />
+            <input type="text" inputMode="numeric" value={form.nif} onChange={set('nif')} disabled={form.nifOptOut}
+              className={`${fieldCls} disabled:bg-gray-50 ${nifError ? 'border-red-400 focus:ring-red-200' : ''}`} />
             {nifError
               ? <p className="text-xs text-red-600 mt-1">{nifError}</p>
               : storedNifInvalid && !nifChanged && <p className="text-xs text-red-600 mt-1">O NIF guardado é inválido — o Vendus recusa as faturas.</p>}
+            <label className="flex items-center gap-2 mt-1.5 text-xs text-gray-600 cursor-pointer">
+              <input type="checkbox" checked={form.nifOptOut} onChange={e => setNifOptOut(e.target.checked)} />
+              Não pretende NIF na fatura
+            </label>
+            {!normalizeNif(form.nif) && (
+              <p className="text-xs text-gray-500 mt-1">Sem NIF: faturas emitidas a Consumidor final, sem cliente no Vendus.</p>
+            )}
           </div>
         )}
       </div>
@@ -191,7 +215,7 @@ export default function FamilyContactForm({ group, onSaved, onCancel }: {
           Os contactos novos são copiados para as {group.count} inscrição{group.count !== 1 ? 'ões' : ''} desta família.
         </p>
       )}
-      {group.familyId && fam?.profileComplete && (contactChanged || nifChanged || addressChanged) && (
+      {group.familyId && fam?.profileComplete && !!normalizeNif(form.nif) && (contactChanged || nifChanged || addressChanged) && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
           Ao guardar, o cliente é atualizado no Vendus (conta real, em produção).
         </p>

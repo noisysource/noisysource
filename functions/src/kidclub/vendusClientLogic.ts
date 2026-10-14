@@ -21,6 +21,34 @@ export interface VendusSyncFields {
 
 const str = (v: unknown): string => (v === undefined || v === null ? "" : String(v));
 
+/** The NIF of AT's "Consumidor final". Stored on a family it means "no NIF"
+ *  (the dev seed family has it); on a Vendus client it means the client has
+ *  no NIF of its own. */
+export const CONSUMIDOR_FINAL_NIF = "999999990";
+
+/** A NIF with the spaces people type into it stripped; "" when there is none
+ *  (missing, blank, or the Consumidor final NIF). */
+export function realNif(v: unknown): string {
+  const nif = str(v).replace(/\s+/g, "");
+  return nif === CONSUMIDOR_FINAL_NIF ? "" : nif;
+}
+
+/**
+ * The NIF a family's invoices carry, or null when the family has none.
+ *
+ * Without a NIF the invoice is issued to "Consumidor final", with no Vendus
+ * client at all, and the family is never synced to Vendus (Renato, option B,
+ * 2026-10-13). Only `nif` decides: the profile pages delete it when the parent
+ * ticks "Não pretendo NIF na fatura" (`nifOptOut`), which is UI-only.
+ *
+ * No checksum here, on purpose: the forms already validate it, and a stored
+ * invalid NIF keeps failing at Vendus with a visible error (invoiceError /
+ * vendusSyncError), rather than silently turning into Consumidor final.
+ */
+export function familyInvoiceNif(data: DocData): string | null {
+  return realNif(data?.nif) || null;
+}
+
 export function vendusSyncFields(data: DocData): VendusSyncFields {
   const contact = data?.primaryContact ?? {};
   return {
@@ -77,4 +105,15 @@ export function vendusSyncWriteback(
   if (data?.vendusClientId !== outcome.clientId) update.vendusClientId = outcome.clientId;
   if (data?.vendusSyncError !== undefined) update.vendusSyncError = sentinels.del;
   return Object.keys(update).length ? update : null;
+}
+
+/**
+ * What syncVendusClient writes on a family it skips because it has no NIF:
+ * only the deletion of a stale `vendusSyncError` (that family has no Vendus
+ * client to get wrong any more, so the badge would be misleading), else
+ * nothing. `vendusClientId` is left alone: an old NIF-less client is simply
+ * no longer used (see createOrUpdateClient for a NIF added later).
+ */
+export function vendusSkipWriteback(data: DocData, del: unknown): Record<string, unknown> | null {
+  return data?.vendusSyncError !== undefined ? { vendusSyncError: del } : null;
 }

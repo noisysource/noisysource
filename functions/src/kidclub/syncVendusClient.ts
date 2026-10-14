@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { createOrUpdateClient } from "./vendus";
-import { vendusClientFieldsChanged, vendusSyncWriteback } from "./vendusClientLogic";
+import { familyInvoiceNif, vendusClientFieldsChanged, vendusSkipWriteback, vendusSyncWriteback } from "./vendusClientLogic";
 import { appCol } from "./db";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -10,9 +10,11 @@ const db = admin.firestore();
 /**
  * Syncs a family to Vendus as a client whenever their profile is saved.
  * Fires on create and update of /families/{familyId}.
- * Only runs when profileComplete is true and contact data is present, and
- * only when a synced field (profileComplete, nif, primaryContact
- * name/email/phone) changed — see vendusClientFieldsChanged.
+ * Only runs when profileComplete is true, contact data is present and the
+ * family has a NIF, and only when a synced field (profileComplete, nif,
+ * primaryContact name/email/phone) changed — see vendusClientFieldsChanged.
+ * Families without a NIF never get a Vendus client: their invoices go to
+ * "Consumidor final" (Renato, option B, 2026-10-13).
  * A failure is stored on the family as `vendusSyncError: { message, at }`
  * (admin badge); the next successful sync deletes it.
  */
@@ -42,9 +44,26 @@ export const syncVendusClient = onDocumentWritten(
     const clientName: string = contact.name || "";
     const clientEmail: string = contact.email || "";
     const clientPhone: string = contact.phone || "";
-    const clientNif: string = data.nif || "";
 
     if (!clientName && !clientEmail) return;
+
+    const sentinels = {
+      del: admin.firestore.FieldValue.delete(),
+      now: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // No NIF: no Vendus client, no Vendus call. Only a stale vendusSyncError
+    // is cleared (not a synced field, so that write doesn't re-sync).
+    const clientNif = familyInvoiceNif(data);
+    if (!clientNif) {
+      console.log(`Skipping Vendus client sync for family ${familyId} — no NIF, invoiced as Consumidor final`);
+      const cleared = vendusSkipWriteback(data, sentinels.del);
+      if (cleared) {
+        await appCol("families").doc(familyId).update(cleared).catch((err) =>
+          console.error(`Failed to clear vendusSyncError on family ${familyId}:`, err));
+      }
+      return;
+    }
 
     // dev and prod currently share the exact same live Vendus account — no
     // sandbox exists yet. Creating "clients" there from every test family
@@ -56,19 +75,16 @@ export const syncVendusClient = onDocumentWritten(
       return;
     }
 
-    const sentinels = {
-      del: admin.firestore.FieldValue.delete(),
-      now: admin.firestore.FieldValue.serverTimestamp(),
-    };
     let outcome: { clientId: number } | { error: unknown };
     try {
-      // A family that already has a Vendus client only ever PATCHes it; see
-      // createOrUpdateClient for when it re-links or creates instead.
+      // A family whose Vendus client already holds this NIF only PATCHes it;
+      // see createOrUpdateClient for when it re-links or creates instead
+      // (e.g. a NIF added to a family linked to a NIF-less client).
       const knownClientId = Number(data.vendusClientId) || null;
       const clientId = await createOrUpdateClient(familyId, {
         name: clientName,
         email: clientEmail || undefined,
-        ...(clientNif ? { fiscal_id: clientNif } : {}),
+        fiscal_id: clientNif,
         ...(clientPhone ? { phone: clientPhone } : {}),
       }, knownClientId);
       outcome = { clientId };

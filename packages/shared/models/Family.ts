@@ -16,6 +16,11 @@ export interface Family {
 
   // Billing information
   nif?: string; // Portuguese tax ID
+  // The parent ticked "Não pretendo NIF na fatura": the profile pages require a
+  // NIF unless this is set, and delete `nif` when it is. UI-only: billing reads
+  // `nif` alone, and invoices a family without one to "Consumidor final", with
+  // no Vendus client. Families from before 2026-10-13 may have neither.
+  nifOptOut?: boolean;
   billingAddress?: {
     street: string;
     city: string;
