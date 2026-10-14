@@ -263,9 +263,13 @@ export async function createVendusInvoiceForBilling(billingId: string): Promise<
     throw err;
   }
 
-  // Vendus emails an invoice only through a client with send_email "yes", and
-  // a Consumidor final invoice has no client: point the parent to the portal.
-  if (consumidorFinal) await queueInvoiceReadyEmail(billingId, billing, vendusDoc);
+  // Every recorded invoice gets one "Fatura disponível" email (Renato,
+  // 2026-10-14): Vendus emails none (the prod clients sampled all have
+  // send_email "no", and a Consumidor final invoice has no client at all).
+  // Only the run that issued and recorded this invoice gets here (the claim
+  // and status checks above), and the outbox doc id is keyed on the invoice,
+  // so the same invoice can never be queued twice.
+  await queueInvoiceReadyEmail(billingId, billing, vendusDoc, consumidorFinal);
 }
 
 // Exported for billing.test.ts only.
@@ -342,12 +346,18 @@ export async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData
   return { vendusDoc, consumidorFinal: !vendusClient };
 }
 
-// "Fatura disponível" email for a Consumidor final invoice (see the caller).
-// Never throws: the invoice is already issued and recorded.
-async function queueInvoiceReadyEmail(billingId: string, billing: FirebaseFirestore.DocumentData, vendusDoc: VendusDocument): Promise<void> {
+/** emailOutbox doc id of an invoice's "Fatura disponível" email: one per
+ *  Vendus document. (A bill deliberately re-invoiced with retryVendusInvoice
+ *  `force` gets a new document, so its new invoice is emailed too.) */
+export const invoiceReadyEmailId = (vendusId: number) => `invoiceReady_${vendusId}`;
+
+// "Fatura disponível" email (see the caller). create() fails if the doc already
+// exists, so a second attempt for the same invoice queues nothing. Never
+// throws: the invoice is already issued and recorded.
+async function queueInvoiceReadyEmail(billingId: string, billing: FirebaseFirestore.DocumentData, vendusDoc: VendusDocument, consumidorFinal: boolean): Promise<void> {
   if (!billing.billingEmail) return;
   try {
-    await appCol("emailOutbox").add({
+    await appCol("emailOutbox").doc(invoiceReadyEmailId(vendusDoc.id)).create({
       to: billing.billingEmail,
       subject: `Fatura disponível — ${COMPANY_NAME} — ${billing.periodLabel}`,
       html: buildInvoiceReadyEmail({
@@ -355,12 +365,20 @@ async function queueInvoiceReadyEmail(billingId: string, billing: FirebaseFirest
         periodLabel: billing.periodLabel ?? "",
         total: Number(billing.total ?? 0),
         invoiceNumber: vendusDoc.number,
+        consumidorFinal,
       }),
       status: "queued",
+      billingId,
+      familyId: billing.familyId ?? null,
+      tags: ["invoice"],
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
   } catch (err: any) {
-    console.error(`[Vendus] invoice ${vendusDoc.number} issued for billing ${billingId}, but the "fatura disponível" email could not be queued:`, err.message);
+    if (err?.code === 6 || /already exists/i.test(err?.message ?? "")) {
+      console.log(`[Vendus] "fatura disponível" email for invoice ${vendusDoc.number} (id ${vendusDoc.id}) already queued, not queuing again`);
+      return;
+    }
+    console.error(`[Vendus] invoice ${vendusDoc.number} issued for billing ${billingId}, but the "fatura disponível" email could not be queued:`, err?.message ?? err);
   }
 }
 
@@ -1595,13 +1613,14 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]!));
 }
 
-// Same layout as buildPaymentNoticeEmail. Sent only for Consumidor final
-// invoices (no NIF), so it also asks for the NIF for next time.
+// Same layout as buildPaymentNoticeEmail. A Consumidor final invoice (no NIF)
+// also asks for the NIF for next time.
 function buildInvoiceReadyEmail(opts: {
   clientName: string;
   periodLabel: string;
   total: number;
   invoiceNumber: string;
+  consumidorFinal: boolean;
 }): string {
   const clientName = escapeHtml(opts.clientName);
   const periodLabel = escapeHtml(opts.periodLabel);
@@ -1620,7 +1639,7 @@ function buildInvoiceReadyEmail(opts: {
   <p style="text-align:center;margin:28px 0;">
     <a href="https://kidclub.pt/client/payments" style="background:#4f46e5;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">Ver fatura</a>
   </p>
-  <p style="font-size:12px;color:#9ca3af;">Esta fatura foi emitida sem NIF (Consumidor final). Se quiser o seu NIF nas próximas faturas, adicione-o em <a href="https://kidclub.pt/client/account" style="color:#4f46e5;">A minha conta</a>.</p>
+  ${opts.consumidorFinal ? `<p style="font-size:12px;color:#9ca3af;">Esta fatura foi emitida sem NIF (Consumidor final). Se quiser o seu NIF nas próximas faturas, adicione-o em <a href="https://kidclub.pt/client/account" style="color:#4f46e5;">A minha conta</a>.</p>` : ""}
 </td></tr>
 <tr><td style="background:#f9fafb;padding:20px 40px;text-align:center;border-top:1px solid #e5e7eb;">
   <p style="margin:0;font-size:12px;color:#9ca3af;">${COMPANY_NAME} · NIF 518942120 · Avenida da Guarda Inglesa, Lote E, Coimbra</p>
