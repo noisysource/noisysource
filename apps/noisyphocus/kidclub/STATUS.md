@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-13
+**Last updated:** 2026-10-14
 
 ## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, NOT in prod
 
@@ -35,25 +35,34 @@ client count didn't change. Vendus accepts it and doesn't create a client.
   "Sem NIF / Não pretende (Consumidor final)".
 - Pagamentos: no NIF and no opt-out → amber banner "Adicione o seu NIF antes de pagar para que conste na
   fatura" → A minha conta. Payment isn't blocked.
-- After a Consumidor final invoice is recorded: a "Fatura disponível" email (emailOutbox) with the Pagamentos
-  link and a line asking for the NIF. Only for Consumidor final invoices; failing to queue it never affects the
-  invoice.
-- Tests: functions 221/221 (new `billing.test.ts`, `syncVendusClient.test.ts`; `vendus.test.ts` updated for the
-  GET-first flow). App typecheck: the same 11 old errors; build OK. No Vendus calls, no prod access.
+- **Every** recorded invoice gets one "Fatura disponível" email (emailOutbox) with the Pagamentos link (Renato,
+  2026-10-14, after testing #93 on dev). Consumidor final invoices add a line asking for the NIF. Failing to
+  queue it never affects the invoice.
+  - **One per invoice:** only the run that issued and recorded the invoice queues it (the existing
+    `invoiceClaimedAt` claim + "already invoiced" check, and the webhook's paid transaction), and the outbox doc
+    id is `invoiceReady_<vendusId>`, written with `create()`: a second attempt for the same invoice gets
+    ALREADY_EXISTS and queues nothing. A bill re-invoiced on purpose (`retryVendusInvoice` with `force`) is a
+    new Vendus document, so that new invoice is emailed too.
+  - An invoice issued but not recorded ("criada mas não registada") gets no email; the admin sorts it out.
+- Tests: functions 226/226 (new `billing.test.ts`, incl. the webhook's two calls, retries and an outbox failure;
+  `syncVendusClient.test.ts`; `vendus.test.ts` updated for the GET-first flow). App typecheck: the same 11 old
+  errors; build OK. No Vendus calls, no prod access.
 
-**How parents get invoices (finding, from the code only):**
-- **Vendus email:** only through a client with `send_email: "yes"`. Billing sets it only on clients it creates
-  or links at invoice time (family without `vendusClientId`). `syncVendusClient` creates most clients (at
-  profile completion) and never sends `send_email`, so those have Vendus's default, not checked here. If that
-  default is "no", families *with* a NIF get no invoice email today either.
-- **Portal:** Pagamentos → "Descarregar fatura" on every invoiced bill (`getInvoicePdf`: bill → `vendusId`,
-  cached, 100/day cap). Works with or without a client.
-- **emailOutbox:** parents only get "Pagamento pendente" notices. No payment-confirmation or invoice email from
-  the EasyPay webhook or `markBillingPaid`.
-- So Consumidor final invoices would only be in the portal; hence the "Fatura disponível" email.
-- **Open for Renato:** read `send_email` on 2–3 sync-created prod clients. If "no": add `send_email: "yes"` to
-  the sync payload (one line, applies at each family's next sync), or send "Fatura disponível" for every
-  invoice (drop the `consumidorFinal` condition in `createVendusInvoiceForBilling`).
+**How parents get invoices — finding and decision (2026-10-14):**
+- **Until this PR, no parent got invoice emails from Vendus, with or without a NIF.** A read-only check of 5 prod
+  clients, all families with a NIF (381648011, 379980008, 364285165, 374090954, 291428847), found
+  `send_email: "no"` on every one. Vendus only emails through a client with `send_email: "yes"`, and
+  `syncVendusClient`, which creates most clients, never sends it.
+- The only way to get an invoice was the portal (Pagamentos → "Descarregar fatura", `getInvoicePdf`: bill →
+  `vendusId`, cached, 100/day cap; works with or without a client). The only emails parents got were
+  "Pagamento pendente"; neither the EasyPay webhook nor `markBillingPaid` emails them.
+- **Renato's decision: option 1.** The app sends its own "Fatura disponível" email for every invoice, from this
+  PR. Vendus's own emails stay off: `send_email` isn't changed on clients or in the sync payload.
+- **Open, small:** billing's own client path (a family with a NIF but no `vendusClientId` at invoice time) still
+  sends `send_email: "yes"` when it creates or links the client, as it did before #93. If Vendus honours it,
+  that family would get two emails (Vendus's and ours). The 5 clients sampled had "no", so either Vendus
+  ignores it or none came through that path. Left alone here (`send_email` untouched, per the decision);
+  dropping it from billing's payload is a one-line follow-up if Renato wants it.
 
 **How to test on dev.** Dev skips Vendus entirely (invoicing throws on `kidclub-dev`, the sync returns early), so
 the invoice path, the late-NIF re-link and the email can only run on prod.
@@ -67,7 +76,10 @@ the invoice path, the late-NIF re-link and the email can only run on prod.
 
 **After promotion to prod, check (read-only):**
 - The first invoice for a family without a NIF shows "Consumidor final"; the bill has `invoiceNumber`/`vendusId`;
-  log `[Vendus] invoice created … client=Consumidor final`; its "Fatura disponível" outbox doc is sent.
+  log `[Vendus] invoice created … client=Consumidor final`; outbox doc `invoiceReady_<vendusId>` is sent and
+  asks for the NIF.
+- The first invoice for a family with a NIF: one `invoiceReady_<vendusId>` email, sent, without the NIF line,
+  and no Vendus email alongside it.
 - **No new Vendus client appears** for that family (client count unchanged by that invoice).
 - A family with a NIF still invoices to its client (log `client=<id>`).
 - The first legacy family that adds a NIF: log `client X has NIF "", not …`, then link or create; its
