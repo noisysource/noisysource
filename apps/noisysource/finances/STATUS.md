@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-15
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -78,12 +78,33 @@ only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one sh
 the Dashboard flips while loading (pass the entity explicitly instead).
 
 ## Currently working on
-**Next session: real data for FinHub — read `HANDOFF-finhub-data.md` (same folder).** FinHub has
-no real data anywhere yet. Plan (Renato, 2026-10-12): copy KidClub's prod billing into dev
-(pseudonymised), build a seed file from the dev draft + Renato's documents and answers, an
-importer in Dev Tools, check everything on dev, then release and import on prod. The review of
-dev's data (5 conflicts, gaps) is in `prodata/finhub-data-review.md` (local only). #87 (VAT) and
-#88 (FinHub in the deploy pipeline) are merged into `staging`.
+**Real data for FinHub (2026-10-15): branch `agent/finhub-real-data`, worktree
+`.claude/worktrees/finhub-real-data`.** Follows `HANDOFF-finhub-data.md` (same folder), changed by
+Renato's decisions of 2026-10-15:
+- **The documents in `prodata/` are the blueprint**: payslips, bank statements, Renato's answers.
+  Dev's draft data, `scripts/seed-finhub.js` and `createInitialSetup()` are **not** sources.
+  Evidence and the source of every value: `prodata/finhub-seed-sources.md` (local only).
+- **History starts 2026-01-01.** Every change seen in the documents becomes a dated version
+  (employment contract, income source, EC contract) in force from its month onwards; earlier
+  months keep the earlier values.
+- **Added to the importer PR (Renato's OK):** FinHub honours start/end dates everywhere. Today
+  the Payroll page and Custos do mês count every active contract in every month, income sources
+  have no end date, and Dashboard/Previsão use only the first active EC contract. Real payslips
+  are seeded as `payrollRuns`. `scripts/seed-finhub.js` deleted (2768d0c: real values in code,
+  could write to prod).
+- **Not in this PR:** a per-month EC timesheet ("Folha de horas", redesign step 3). Until then the
+  EC contract counts down its contracted days with the existing days-off calendar.
+
+Progress:
+- **Step 1, prod billing → dev:** `scripts/copy-prod-billing-to-dev.mjs` committed (02683d7),
+  tested offline only. **Blocked on Renato:** his gcloud login expired (`gcloud auth login`), and
+  the session's prod-read entry in `.claude/settings.local.json` isn't added yet. Next: `--inspect`
+  on prod → agree the pseudonymised field list → dry run → his OK → `--write`.
+- **Step 2, seed draft:** evidence gathered from the payslips and statements. Waiting on
+  documents (NoisySource payslips for Jan and Mar 2026, Marisa's ASFD payslips) and answers.
+- **Step 3, importer + date fixes:** not started.
+
+#87 (VAT) and #88 (FinHub in the deploy pipeline) are merged into `staging`.
 
 Lesson kept from #76 (2026-10-11): after merging the base of a stacked PR, retarget the stacked PR
 to `staging` *before* merging it (#76 merged into its old base instead and was re-landed as #82).
@@ -172,6 +193,13 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 6. Then Phase 7 (IRC estimation).
 
 ## Open questions for Renato
+- **Real data (2026-10-15), still open** (values in `prodata/finhub-seed-sources.md`):
+  - EC contract at the current day rate: how many days are contracted in total, and which past
+    days were not worked? The bank shows days paid per month, not which dates (Malt timesheets
+    would settle it); the days-off calendar needs dates.
+  - Exquisite Talent: did it start in February 2026 (first payment) rather than January? Does its
+    childcare voucher land on the same card as NoisySource's (one card per person)?
+  - Employer Social Security rate per employee (not on the payslips), especially for a gerente.
 - **Found 2026-10-12, not fixed (existing behaviour, XLSX too):** every statement import sets the
   account's `balanceCents` / `balanceAsOf` to that statement's closing balance, even when the
   statement is older than the current `balanceAsOf`. Importing August after September would put
@@ -191,6 +219,9 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
+- **`scripts/copy-prod-billing-to-dev.mjs` reads prod** (branch `agent/finhub-real-data`, not
+  merged). Run it only with the session's opt-in entry in `.claude/settings.local.json`, and
+  remove that entry once step 1 is done. It writes only to `kidclub-dev`.
 - **The next `staging` → `main` PR deploys FinHub to prod too** (#88), not just KidClub. Its
   prod half hasn't run yet.
 - **`prodata/` holds real personal and financial data** (statements, the dev export, the data
