@@ -196,16 +196,13 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 - **Real data (2026-10-15), still open** (values in `prodata/finhub-seed-sources.md`). Answered:
   employer SS 23.75% for everyone; Exquisite Talent from 1 Jan, separate childcare card; the EC
   contract's total days and past days off. Open:
-  - **Social Security, Feb–May payroll:** the monthly TSU charge on the NoisySource statement
-    equals only the employees' 11%; the company's 23.75% isn't there (Dec, Jan, Jul, Aug match the
-    full 34.75% exactly). June's TSU charge isn't in the statements at all. Exemption, or paid
-    another way? Decides what the seeded payroll runs record as employer SS.
-  - **EC days:** one July day off is missing from Renato's list (Malt paid one day less than the
-    list implies). April and May match once the client's public holidays are counted; do the
-    upcoming client holidays (Nov, Christmas week) go in the days-off calendar too? That's what
-    makes FinHub's end date match Malt's estimate.
-  - **Marisa's ASFD pay before July:** only July's payslip exists; it carries a June retroactive,
-    so the terms may have changed in June.
+  - **Social Security:** NoisySource had a one-off exemption from the company's share this year
+    (Renato), which explains Feb–May. Seeded payroll runs record what was actually charged. Open:
+    June's TSU charge isn't in the statements at all; was June exempt too?
+  - **Marisa's ASFD salary changed this year** (Renato): from which month, and what was it before?
+    Only July's payslip exists.
+  - Answered: the July EC day (a public holiday); upcoming client holidays go in the days-off
+    calendar (editable); income sources will count cash benefits in the net (fix approved).
 - **Found 2026-10-12, not fixed (existing behaviour, XLSX too):** every statement import sets the
   account's `balanceCents` / `balanceAsOf` to that statement's closing balance, even when the
   statement is older than the current `balanceAsOf`. Importing August after September would put
