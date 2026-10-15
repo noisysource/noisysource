@@ -141,7 +141,7 @@ const FIELD_RULES = [
   ["lineItems[].multiTripDiscountAmount", KEEP], ["lineItems[].siblingDiscountAmount", KEEP],
   ["lineItems[].institutionalDiscountAmount", KEEP], ["lineItems[].institutionalDiscountPct", KEEP],
   ["lineItems[].legacyPricing", KEEP], ["lineItems[].absenceCount", KEEP], ["lineItems[].absenceCreditAmount", KEEP],
-  ["lineItems[].absenceDates[]", KEEP], ["lineItems[].absenceCreditDates[]", KEEP],
+  ["lineItems[].absenceDates[]", KEEP], ["lineItems[].absenceCreditDates[]", KEEP], ["lineItems[].excludedDates[]", KEEP],
   ["lineItems[].appliedDiscounts[].*", KEEP], // discount rule id/name, %, when, auto/admin
   ["manualPayment.at", KEEP],
   // Pseudonymised.
@@ -152,7 +152,7 @@ const FIELD_RULES = [
   // Dropped: references into the real EasyPay/Vendus accounts, payment links, uploaded proofs, free text.
   ["easypayId", DROP], ["previousEasypayIds", DROP], ["duplicatePaymentEasypayIds", DROP],
   ["multibancoEntity", DROP], ["multibancoReference", DROP], ["paymentLink", DROP],
-  ["paymentProofs", DROP], ["vendusId", DROP], ["manualPayment.note", DROP], [TAG, DROP],
+  ["paymentProofs", DROP], ["vendusId", DROP], ["manualPayment.note", DROP], ["mbwayPhone", DROP], [TAG, DROP],
 ].map(([path, rule]) => [new RegExp(`^${path.replace(/[.[\]]/g, "\\$&").replace(/\*/g, "[^.\\[\\]]+")}$`), rule, path]);
 
 const ruleFor = (path) => FIELD_RULES.find(([re]) => re.test(path))?.[1];
@@ -199,7 +199,7 @@ const lisbonYM = (v) => (v?.timestampValue
   ? new Date(v.timestampValue).toLocaleDateString("sv-SE", { timeZone: "Europe/Lisbon" }).slice(0, 7)
   : "(sem data)");
 
-/** Masks every token that isn't common across `values`, so a shape shows without names or numbers. */
+/** Masks every token that isn't common across `values`. Only for fields kept as-is (meant to hold no personal data). */
 function masker(values) {
   const freq = new Map();
   for (const v of values) for (const t of new Set(String(v).split(/\s+/))) freq.set(t, (freq.get(t) ?? 0) + 1);
@@ -208,6 +208,24 @@ function masker(values) {
     .map(t => (freq.get(t) >= min && !/@|\d{6,}/.test(t) ? t : "▒"))
     .join(" ").replace(/(▒ )+▒/g, "▒…");
 }
+
+const MONTHS = "Janeiro Fevereiro Março Abril Maio Junho Julho Agosto Setembro Outubro Novembro Dezembro";
+const TITLE_WORDS = new Set(`— Sala de Estudo Transporte Escolar Taxa Inscrição Seguro Campo Sinal 50% Festa ${MONTHS}`.split(" "));
+/** Keeps only title vocabulary, weekday abbreviations and years: names never show. */
+const strictMask = (t) => String(t).split(/\s+/)
+  .map(w => (TITLE_WORDS.has(w) || /^\(?[2-6]ª[,)]?$/.test(w) || /^\d{4}$/.test(w) ? w : "▒"))
+  .join(" ").replace(/(▒ )+▒/g, "▒…");
+/** A title's shape with the child replaced by ▒ when the format is known. */
+function titleShape(t) {
+  for (const re of TITLE_FORMATS) {
+    const m = t.match(re);
+    if (m) return strictMask(`${m.groups.pre}${m.groups.child ? "▒" : ""}${m.groups.post ?? ""}`);
+  }
+  return `UNKNOWN FORMAT: ${strictMask(t)}`;
+}
+const charClass = (strings) => [
+  strings.some(s => /@/.test(s)) && "emails", strings.some(s => /\d/.test(s)) && "digits", strings.some(s => /[A-Za-zÀ-ÿ]/.test(s)) && "letters",
+].filter(Boolean).join("+");
 
 function leaves(value, path, out) {
   if (value.mapValue) {
@@ -242,13 +260,11 @@ function inspect(docs) {
     const nums = vs.filter(v => v.type === "integerValue" || v.type === "doubleValue").map(v => Number(v.raw));
     const times = vs.filter(v => v.type === "timestampValue").map(v => lisbonYM({ timestampValue: v.raw }));
     if (strings.length) {
-      const distinct = [...new Set(strings)];
-      const mask = masker(strings);
-      shape = `distinct ${distinct.length}, max length ${Math.max(...strings.map(s => s.length))}`;
-      if (strings.some(s => s.includes("@"))) shape += ", has emails";
-      const shapes = [...new Set(strings.map(mask))];
-      if (shapes.length <= 12) shape += ` · ${shapes.map(s => JSON.stringify(s)).join(" ")}`;
-      else shape += ` · ${shapes.length} shapes`;
+      shape = `distinct ${new Set(strings).size}, max length ${Math.max(...strings.map(s => s.length))}, ${charClass(strings)}`;
+      if (ruleFor(p) === KEEP) { // values of pseudonymised, dropped or unclassified fields are never shown
+        const shapes = [...new Set(strings.map(masker(strings)))];
+        shape += shapes.length <= 12 ? ` · ${shapes.map(s => JSON.stringify(s)).join(" ")}` : ` · ${shapes.length} shapes`;
+      }
     }
     if (nums.length) shape += `${shape ? " · " : ""}${Math.min(...nums)} … ${Math.max(...nums)}`;
     if (times.length) shape += `${shape ? " · " : ""}${times.sort()[0]} … ${times.at(-1)}`;
@@ -256,10 +272,9 @@ function inspect(docs) {
   }
   const titles = byPath.get("lineItems[].title")?.map(v => v.raw) ?? [];
   if (titles.length) {
-    const mask = masker(titles);
     const counts = new Map();
-    for (const t of titles) counts.set(mask(t), (counts.get(mask(t)) ?? 0) + 1);
-    line(`\nLine titles by shape (▒ = masked):`);
+    for (const t of titles) counts.set(titleShape(t), (counts.get(titleShape(t)) ?? 0) + 1);
+    line(`\nLine titles by shape (▒ = child's name or other masked text):`);
     for (const [s, n] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 30)) line(`  ${String(n).padStart(5)}  ${s}`);
   }
 }
@@ -319,8 +334,7 @@ line(`\nCopies: ${copies.length} records, ${eur(copyTotal)} ${copyTotal === sour
 const blockers = [];
 if (shared.unclassified.size) blockers.push(`fields with no rule: ${[...shared.unclassified].sort().join(", ")}`);
 if (shared.badTitles.length) {
-  const mask = masker(shared.badTitles);
-  blockers.push(`${shared.badTitles.length} line titles in an unknown format, e.g. ${[...new Set(shared.badTitles.map(mask))].slice(0, 5).map(s => JSON.stringify(s)).join(" ")}`);
+  blockers.push(`${shared.badTitles.length} line titles in an unknown format, e.g. ${[...new Set(shared.badTitles.map(strictMask))].slice(0, 5).map(s => JSON.stringify(s)).join(" ")}`);
 }
 if (copyTotal !== sourceTotal) blockers.push("copy totals differ from the source");
 
