@@ -112,12 +112,18 @@ Progress:
     versions, payslips that don't add up, EC end date ≠ FinHub's projection) block the import; a
     `"TODO"` refuses only that record and whatever references it (**Renato's choice, 2026-10-16**).
     Check the real file locally: `SEED_FILE=~/dev/noisysource/prodata/finhub-seed.json pnpm --filter finances test`.
-  - **Seed draft: started.** Question batch 1 (accounts) answered, recorded in
-    `prodata/finhub-seed-sources.md`. Next: the remaining question batches, then
-    `prodata/finhub-seed.json`.
-  - **Open, Renato:** may the Dev Tools wipe also clear `incomeSources`, `creditContracts`, `loans`,
-    `insurances`, `costSummary` and the bank transactions/imports? Today it skips them, so step 4's
-    "wipe" wouldn't leave a clean slate.
+  - **Seed draft: part 1 done, validates with 0 errors** (`prodata/finhub-seed.json`, local only):
+    people, companies, accounts, NS contracts (versions), 27 payroll runs generated from the parsed
+    payslips (every one adds up), income sources, the EC contract in two versions (FinHub's projection
+    reproduces the client's estimated end date). Batches 1–3 answered (accounts, contracts); answers and
+    the source of every value in `prodata/finhub-seed-sources.md`. Only refused record: Marisa's ASFD
+    Jan–May version (no payslip before July).
+  - **Next questions:** batch 4 credits (original amounts; the statements give rates, balances, dates),
+    then insurances (policies seen in the statements), recurring costs per entity, categories, IRS config,
+    the ad hoc NoisySource client seen in May, Bernardo's missing holiday-subsidy payslip.
+  - **Wipe (Renato, 2026-10-16): yes**, the Dev Tools wipe will clear every FinHub collection
+    (today it skips `incomeSources`, `creditContracts`, `loans`, `insurances`, `costSummary` and the
+    bank transactions/imports). Goes in the importer PR.
   - Importer and date fixes: not started. tsc baseline on this branch: 22 errors (finances app).
   Original suggested order: seed schema first (so the draft fits it), then the seed draft with
   Renato, then the rest of the importer and the date fixes.
