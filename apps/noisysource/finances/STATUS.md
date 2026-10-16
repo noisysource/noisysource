@@ -105,9 +105,32 @@ Progress:
   `prodata/kidclub-dev-billing-backup-2026-10-16.json` (`--restore <file> --write` puts them back).
   Refresh later: `node scripts/copy-prod-billing-to-dev.mjs --replace --backup <new file under prodata/> --write`.
   **Renato to check:** FinHub dev → NoisyPhocus → KidClub, monthly totals vs prod's Cobranças.
-- **Step 2, seed draft:** evidence gathered from the payslips and statements. Waiting on
-  documents (NoisySource payslips for Jan and Mar 2026, Marisa's ASFD payslips) and answers.
-- **Step 3, importer + date fixes:** not started.
+- **Steps 2–3: NEXT SESSION STARTS HERE.** Suggested order: seed schema first (so the draft fits
+  it), then the seed draft with Renato, then the rest of the importer and the date fixes.
+  - **Seed schema** (`@shared` zod) + committed `finhub-seed.example.json` (made-up values). Beyond
+    handoff §2 it must hold: several **versions** per person/client (contracts and income sources
+    with start/end dates), **payroll runs** (one per person per payslip month: supersedes the
+    handoff's "not seeded"), EC contract `nonWorkingDays`, benefits with or without a card account.
+  - **Seed draft** `prodata/finhub-seed.json`. Already settled, with sources, in
+    `prodata/finhub-seed-sources.md` ("Versions for the seed"): NoisySource contracts (Renato two
+    versions, Marisa, Bernardo), Exquisite Talent, ASFD from June (Jan–May `TODO`), the EC contract
+    in two versions with every day off incl. the client's public holidays (past and the upcoming
+    ones), employer SS 23.75% except the exempt months, payroll runs Jan–Sep 2026 from the payslips.
+    **Still to ask Renato, in small batches** (dev's data is dropped, so these need his answers or
+    documents): every account and voucher card (IBANs; which card each voucher lands on: Renato
+    has two childcare cards, NoisySource and Exquisite Talent), credit contracts and the Casa
+    loans ledger, insurances, recurring costs per entity (the statements show most of them:
+    accountant, health insurance, telecoms, tolls, voucher top-ups, car loans, EasyPay, Vendus),
+    an ad hoc NoisySource client seen in May, IRS config, categories. Unknown stays `TODO`.
+  - **Importer** (handoff §3): validate → preview → import through the api domains and syncs,
+    deterministic ids; remove `createInitialSetup()` and `backups.ts`; tests.
+  - **Date fixes (Renato's OK, same PR):** (1) Payroll page and `costSummary` use only contracts in
+    force that month; (2) income sources get an optional end date (model, form, `contractSync`,
+    `generateIncomeSourceEvents`); (3) Dashboard and Previsão use every EC contract in force by date,
+    not the first active one; (4) income sources count cash benefits (no card account) in the net,
+    as employment contracts already do (Marisa's ASFD meal allowance is paid in cash).
+  - Then PR into `staging` (deploys to dev) → step 4 (wipe FinHub dev, import seed, import the 27
+    statements per account oldest first) → Renato checks → release.
 
 #87 (VAT) and #88 (FinHub in the deploy pipeline) are merged into `staging`.
 
