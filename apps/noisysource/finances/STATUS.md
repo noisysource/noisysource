@@ -129,12 +129,21 @@ Progress:
   - **Wipe (Renato, 2026-10-16): yes**, the Dev Tools wipe will clear every FinHub collection
     (today it skips `incomeSources`, `creditContracts`, `loans`, `insurances`, `costSummary` and the
     bank transactions/imports). Goes in the importer PR.
-  - **NEXT: importer and date fixes** (code; same branch).
+  - **Importer + date fixes: DONE (2026-10-16), PR into `staging` opened** (see "Anything risky").
+    Dev Tools → Importar seed (validate → preview per entity → import through the api domains +
+    the forms' syncs; re-import changes nothing), wipe covers every FinHub collection,
+    `createInitialSetup()` and `backups.ts` removed, `contractType` now saved, insurance sync
+    shared. Date fixes: payroll/Custos do mês only contracts in force; income sources end date +
+    cash benefits in the net; Dashboard/Previsão every EC contract by date. Tests: 87 (finances).
+    tsc unchanged (22, same files). RELEASE-TEST-PLAN §6 "Real data for FinHub" = the checks.
+  - **NEXT (step 4, needs Renato's OK):** once the PR's dev deploy is green: Dev Tools on dev →
+    wipe Global + all entities → Importar seed (`prodata/finhub-seed.json`) → preview → import →
+    preview again (all "sem alterações") → Contas: import the 27 statements per account, oldest
+    first. Then Renato checks with RELEASE-TEST-PLAN §3, §6.
   - **Future feature (Renato, 2026-10-16), not this PR:** the IRS page fills itself as months go by,
     from payroll runs (NoisySource, exact), income-source versions (ET, ASFD) and confirmed bank
     movements, with deductions from the health/education/housing categories. Today `irsConfig` is a
     manual annual form only.
-  - Importer and date fixes: not started. tsc baseline on this branch: 22 errors (finances app).
   Original suggested order: seed schema first (so the draft fits it), then the seed draft with
   Renato, then the rest of the importer and the date fixes.
   - **Seed schema** (`@shared` zod) + committed `finhub-seed.example.json` (made-up values). Beyond
@@ -280,6 +289,14 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   needs a category filter if rent or insurance ever get entered as recurring.
 
 ## Anything risky in flight
+- **Real-data PR (`agent/finhub-real-data` → `staging`) deploys FinHub + KidClub to dev** when
+  opened/updated. It changes no data by itself; the wipe and the seed import are manual (step 4).
+  The importer writes to whatever project the build points at: on prod it is Renato's step 5.
+- **Payroll page "Confirmar" saves runs with random ids:** confirming a month that the seed already
+  holds (Jan–Sep 2026) would duplicate it. Not fixed in this PR.
+- **NoisyPhocus contracts don't reach Dashboard/Previsão** (both load NoisySource's employment
+  contracts only; known bug in "Redesign plan"). The seeded green-receipt contract shows on
+  Contratos, Salários and Custos do mês only.
 - **`scripts/copy-prod-billing-to-dev.mjs` reads prod** (branch `agent/finhub-real-data`, not
   merged). Run it only with a session's opt-in entry in `.claude/settings.local.json`, removed
   after. It writes only to `kidclub-dev`.
