@@ -26,6 +26,8 @@ export type PayrollRow = {
   contractId: string;
   companyId: string;
   personId: string;
+  /** "YYYY-MM" this row pays. */
+  yearMonth: string;
   monthLabel: string;
   payDateISO: string;
 
@@ -137,7 +139,10 @@ export function computeMonthlyPayroll(
   const monthDate = new Date(Date.UTC(y, m0, 1));
   const monthLabel = monthDate.toLocaleString(opts?.monthLabelLocale, { month: "long", year: "numeric" });
   const payDay = typeof contract.payDay === "number" ? contract.payDay : 25;
-  const payDateISO = new Date(Date.UTC(y, m0, payDay)).toISOString().slice(0, 10);
+  // Day 30 in February is the 28th, not 2 March.
+  const lastDay = new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate();
+  const payDateISO = new Date(Date.UTC(y, m0, Math.min(payDay, lastDay))).toISOString().slice(0, 10);
+  const yearMonth = `${y}-${String(month1to12).padStart(2, "0")}`;
 
   // Suggested flows (source optional; UI can show "—" if missing)
   const flows: MoneyFlow[] = [];
@@ -165,6 +170,7 @@ export function computeMonthlyPayroll(
     contractId: contract.id!,
     companyId: contract.companyId!,
     personId: contract.personId!,
+    yearMonth,
     monthLabel,
     payDateISO,
 
@@ -256,4 +262,21 @@ export function buildPayrollPreview(
     }
   }
   return out;
+}
+
+/**
+ * Firestore id of a confirmed payroll run: one per company, person and month, so a month can't be
+ * confirmed twice (the Payroll page and the seed import use the same id).
+ */
+export const payrollRunId = (companyId: string, personId: string, yearMonth: string) =>
+  `${companyId}-${personId}-${yearMonth}`;
+
+/** Rows of a preview split into those still to confirm and those whose month already has a run. */
+export function splitConfirmedRows<R extends Pick<PayrollRow, "companyId" | "personId" | "yearMonth">>(
+  rows: readonly R[],
+  runs: ReadonlyArray<{ companyId: string; personId: string; year: number; month: number }>,
+): { pending: R[]; confirmed: R[] } {
+  const done = new Set(runs.map(r => `${r.companyId}|${r.personId}|${r.year}-${String(r.month).padStart(2, "0")}`));
+  const isDone = (r: R) => done.has(`${r.companyId}|${r.personId}|${r.yearMonth}`);
+  return { pending: rows.filter(r => !isDone(r)), confirmed: rows.filter(isDone) };
 }

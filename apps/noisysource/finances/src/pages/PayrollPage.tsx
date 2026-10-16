@@ -10,8 +10,11 @@ import { formatEUR } from "@shared/lib/money";
 
 import {
   buildPayrollPreview,
+  payrollRunId,
+  splitConfirmedRows,
   type PayrollRow as PreviewRow,
 } from "@shared/lib/payroll";
+import type { PayrollRunDoc } from "@shared/models/PayrollRun";
 import { where } from "firebase/firestore";
 import { useEntity } from "../hooks/EntityContext";
 
@@ -104,6 +107,10 @@ export default function PayrollPage() {
   const [span, setSpan] = useState<number>(1);
 
   const [rows, setRows] = useState<PreviewRow[]>([]);
+  // Runs already stored for the company: their months can't be confirmed again.
+  const [runs, setRuns] = useState<PayrollRunDoc[]>([]);
+  const { pending, confirmed } = useMemo(() => splitConfirmedRows(rows, runs), [rows, runs]);
+  const confirmedKeys = useMemo(() => new Set(confirmed.map(r => r.key)), [confirmed]);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -143,7 +150,10 @@ export default function PayrollPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const contracts = (await api.contracts.list([where("companyId", "==", companyId)])) as EmploymentContractDoc[];
+      const [contracts, companyRuns] = await Promise.all([
+        api.contracts.list([where("companyId", "==", companyId)]) as Promise<EmploymentContractDoc[]>,
+        api.payrollRuns.listByCompany(companyId),
+      ]);
       const [yy, mm] = month.split("-").map(Number);
 
       // All math happens in shared helper; this page only renders & creates planned
@@ -155,7 +165,10 @@ export default function PayrollPage() {
       });
 
       setRows(preview);
-      setMsg(`Loaded ${contracts.length} contract(s), built ${preview.length} row(s).`);
+      setRuns(companyRuns);
+      const done = splitConfirmedRows(preview, companyRuns).confirmed.length;
+      setMsg(`Loaded ${contracts.length} contract(s), built ${preview.length} row(s)` +
+        (done ? `; ${done} already confirmed.` : "."));
     } catch (e: any) {
       setMsg(e?.message ?? "Failed to load payroll preview");
     } finally {
@@ -175,15 +188,21 @@ export default function PayrollPage() {
       setMsg("Load payroll for a company first.");
       return;
     }
-    if (!confirm(`Confirm ${rows.length} payroll row(s) for ${month}? This saves them as payroll run records.`)) return;
+    if (!pending.length) {
+      setMsg("Every row shown is already confirmed.");
+      return;
+    }
+    const skipped = confirmed.length ? ` ${confirmed.length} already confirmed will be skipped.` : "";
+    if (!confirm(`Confirm ${pending.length} payroll row(s)? This saves them as payroll run records.${skipped}`)) return;
 
     setBusy(true);
     setMsg(null);
     try {
-      const [yy, mm] = month.split("-").map(Number);
+      // One run per company, person and month (same id as the seed import), each under its own month.
       await Promise.all(
-        rows.map(r =>
-          api.payrollRuns.save({
+        pending.map(r => {
+          const [yy, mm] = r.yearMonth.split("-").map(Number);
+          return api.payrollRuns.upsertWithId(payrollRunId(r.companyId, r.personId, r.yearMonth), {
             contractId: r.contractId,
             companyId: r.companyId,
             personId: r.personId,
@@ -199,10 +218,11 @@ export default function PayrollPage() {
             cashOutCents: r.totals.cashOutCents,
             confirmedAt: new Date(),
             sourceAccountId: sourceAccountId || undefined,
-          })
-        )
+          });
+        })
       );
-      setMsg(`Confirmed ${rows.length} payroll run(s) for ${month} ✔`);
+      setRuns(await api.payrollRuns.listByCompany(companyId));
+      setMsg(`Confirmed ${pending.length} payroll run(s) ✔`);
     } catch (e: any) {
       setMsg(e?.message ?? "Failed to confirm payroll");
     } finally {
@@ -266,8 +286,8 @@ export default function PayrollPage() {
         <Button onClick={loadPreview} disabled={busy}>
           Load payroll
         </Button>
-        <Button onClick={confirmPayroll} disabled={busy || !rows.length} variant="secondary">
-          Confirm payroll
+        <Button onClick={confirmPayroll} disabled={busy || !pending.length} variant="secondary">
+          Confirm payroll{rows.length ? ` (${pending.length})` : ""}
         </Button>
       </div>
 
@@ -309,7 +329,12 @@ export default function PayrollPage() {
                       </button>
                     </td>
                     <td className="px-3 py-2">{show(empName)}</td>
-                    <td className="px-3 py-2">{show(r.monthLabel)}</td>
+                    <td className="px-3 py-2">
+                      {show(r.monthLabel)}
+                      {confirmedKeys.has(r.key) && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-300">confirmado</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2">{show(r.payDateISO)}</td>
                     <td className="px-3 py-2">{showEUR(r.grossCents)}</td>
                     <td className="px-3 py-2">

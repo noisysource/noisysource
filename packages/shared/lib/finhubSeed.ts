@@ -18,6 +18,7 @@
 import { z } from 'zod';
 import { isVatCode, type VatCode } from './vat';
 import { computeEcProjection } from './ecProjection';
+import { payrollRunId } from './payroll';
 
 export const SEED_VERSION = 1;
 export const TODO = 'TODO';
@@ -409,9 +410,8 @@ export type SeedRecordRef = {
 
 export type SeedRecord = SeedRecordRef & { data: any };
 
-/** Firestore id of a payroll run: one per company, person and month. */
-export const payrollRunId = (companyKey: string, personKey: string, month: string) =>
-  `${companyKey}-${personKey}-${month}`;
+/** Firestore id of a payroll run: one per company, person and month (shared with the Payroll page). */
+export { payrollRunId };
 
 /** Every record in file order, global first, then entity by entity. */
 export function flattenSeed(seed: Seed): SeedRecord[] {
