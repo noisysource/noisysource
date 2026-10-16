@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-16
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
@@ -105,8 +105,22 @@ Progress:
   `prodata/kidclub-dev-billing-backup-2026-10-16.json` (`--restore <file> --write` puts them back).
   Refresh later: `node scripts/copy-prod-billing-to-dev.mjs --replace --backup <new file under prodata/> --write`.
   **Renato to check:** FinHub dev → NoisyPhocus → KidClub, monthly totals vs prod's Cobranças.
-- **Steps 2–3: NEXT SESSION STARTS HERE.** Suggested order: seed schema first (so the draft fits
-  it), then the seed draft with Renato, then the rest of the importer and the date fixes.
+- **Steps 2–3: IN PROGRESS (2026-10-16).**
+  - **Seed schema: DONE** (dca1c6d). `packages/shared/lib/finhubSeed.ts` (zod + validation),
+    example with made-up values `apps/noisysource/finances/seed/finhub-seed.example.json`, tests in
+    `src/lib/seedImport/finhubSeed.test.ts`. Errors (shape, duplicate/unknown keys, overlapping
+    versions, payslips that don't add up, EC end date ≠ FinHub's projection) block the import; a
+    `"TODO"` refuses only that record and whatever references it (**Renato's choice, 2026-10-16**).
+    Check the real file locally: `SEED_FILE=~/dev/noisysource/prodata/finhub-seed.json pnpm --filter finances test`.
+  - **Seed draft: started.** Question batch 1 (accounts) answered, recorded in
+    `prodata/finhub-seed-sources.md`. Next: the remaining question batches, then
+    `prodata/finhub-seed.json`.
+  - **Open, Renato:** may the Dev Tools wipe also clear `incomeSources`, `creditContracts`, `loans`,
+    `insurances`, `costSummary` and the bank transactions/imports? Today it skips them, so step 4's
+    "wipe" wouldn't leave a clean slate.
+  - Importer and date fixes: not started. tsc baseline on this branch: 22 errors (finances app).
+  Original suggested order: seed schema first (so the draft fits it), then the seed draft with
+  Renato, then the rest of the importer and the date fixes.
   - **Seed schema** (`@shared` zod) + committed `finhub-seed.example.json` (made-up values). Beyond
     handoff §2 it must hold: several **versions** per person/client (contracts and income sources
     with start/end dates), **payroll runs** (one per person per payslip month: supersedes the
