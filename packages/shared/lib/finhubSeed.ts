@@ -229,7 +229,8 @@ const CreditContractSchema = z.strictObject({
   loanAmountCents: orTodo(cents.positive()),
   startYearMonth: orTodo(yearMonth),
   termMonths: orTodo(z.number().int().positive()),
-  rateType: z.enum(['fixed', 'variable']),
+  rateType: orTodo(z.enum(['fixed', 'variable'])),
+  /** Rate in force from startYearMonth; later changes go in rateHistory (FinHub's engine reads both). */
   annualRatePct: orTodo(z.number().nonnegative()),
   spreadPct: orTodo(z.number()).optional(),
   rateHistory: z.array(z.strictObject({
@@ -237,10 +238,14 @@ const CreditContractSchema = z.strictObject({
     annualRatePct: orTodo(z.number().nonnegative()),
     note: z.string().optional(),
   })).optional(),
+  /**
+   * The bank's outstanding balance at the START of syncYearMonth, before that month's payment (a
+   * statement's "capital vincendo" after the 1 Sep instalment is the balance for "2026-10"). FinHub
+   * restarts the schedule from the latest one; the importer fills in what FinHub had computed.
+   */
   balanceSyncs: z.array(z.strictObject({
     syncYearMonth: yearMonth,
-    actualOutstandingCents: orTodo(cents),
-    computedOutstandingCents: orTodo(cents),
+    actualOutstandingCents: orTodo(cents.nonnegative()),
     note: z.string().optional(),
   })).optional(),
   interestOnlyPhase: z.boolean().optional(),

@@ -68,7 +68,10 @@
         {
           "key": "private-carro", "type": "auto", "description": "Carro", "creditor": "Financeira Exemplo",
           "loanAmountCents": 2000000, "startYearMonth": "2025-06", "termMonths": 84,
-          "rateType": "fixed", "annualRatePct": 6.5, "account": "private-banco1", "dayOfMonth": 10
+          "rateType": "variable", "annualRatePct": 6.5, "spreadPct": 1.5,
+          "rateHistory": [{ "effectiveYearMonth": "2026-03", "annualRatePct": 6.1, "note": "Euribor review" }],
+          "balanceSyncs": [{ "syncYearMonth": "2026-10", "actualOutstandingCents": 1610000, "note": "statement 09/09" }],
+          "account": "private-banco1", "dayOfMonth": 10
         }
       ],
       "loans": [
