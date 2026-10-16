@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { findTodos, payrollRunId, validateSeed } from '@shared/lib/finhubSeed';
+import { planSeedImport } from './plan';
 
 const EXAMPLE_PATH = new URL('../../../seed/finhub-seed.example.json', import.meta.url);
 const example = () => JSON.parse(readFileSync(EXAMPLE_PATH, 'utf8'));
@@ -34,6 +35,10 @@ describe.skipIf(!process.env.SEED_FILE)('finhub seed — local file from SEED_FI
     const v = validateSeed(JSON.parse(readFileSync(process.env.SEED_FILE!, 'utf8')));
     for (const r of v.refused) console.log(`refused ${r.path} (${r.id}): ${r.reasons.join('; ')}`);
     expect(v.errors.map(e => `${e.path}: ${e.message}`)).toEqual([]);
+    const writes = planSeedImport(v.seed!, v.importable);
+    const counts: Record<string, number> = {};
+    for (const w of writes) counts[`${w.entityId ?? 'global'}/${w.collection}`] = (counts[`${w.entityId ?? 'global'}/${w.collection}`] ?? 0) + 1;
+    console.log(`plan: ${writes.length} writes`, counts);
   });
 });
 
