@@ -138,10 +138,13 @@ Progress:
     shared. Date fixes: payroll/Custos do mês only contracts in force; income sources end date +
     cash benefits in the net; Dashboard/Previsão every EC contract by date. Tests: 87 (finances).
     tsc unchanged (22, same files). RELEASE-TEST-PLAN §6 "Real data for FinHub" = the checks.
-  - **NEXT (step 4, needs Renato's OK):** once the PR's dev deploy is green: Dev Tools on dev →
-    wipe Global + all entities → Importar seed (`prodata/finhub-seed.json`) → preview → import →
-    preview again (all "sem alterações") → Contas: import the 27 statements per account, oldest
-    first. Then Renato checks with RELEASE-TEST-PLAN §3, §6.
+  - **Step 4 on dev: DONE (2026-10-16, Renato's OK).** Wiped FinHub dev (74 docs), imported the
+    seed (129 records; second preview all "sem alterações"), imported the 27 statements (every one
+    "Saldos verificados", account numbers matching, 0 duplicates). Closing balances match the
+    September statements for all three BPI accounts. Smoke-checked: Custos do mês grouped by
+    category, Salários Jul–Sep all "confirmado", Previsão shows the NoisyPhocus green receipt.
+  - **NEXT: Renato checks dev** with RELEASE-TEST-PLAN §3 and §6 (S2–S5), then merge #94 into
+    `staging`, then the `staging` → `main` release (step 5: Renato imports the seed on prod).
   - **Future feature (Renato, 2026-10-16), not this PR:** the IRS page fills itself as months go by,
     from payroll runs (NoisySource, exact), income-source versions (ET, ASFD) and confirmed bank
     movements, with deductions from the health/education/housing categories. Today `irsConfig` is a
@@ -291,6 +294,11 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   Give Vendus and EasyPay the "Software" category when entering them.
 
 ## Anything risky in flight
+- **Dev hosting race:** a PR into `staging` deploys its own build of KidClub + FinHub to dev, so
+  another open PR (e.g. `agent/domotics-pi-ip-fix`, 2026-10-16 20:20 UTC) can put the old FinHub
+  back on dev. Data is unaffected. FinHub hosting was redeployed by hand from this branch
+  (2026-10-16, `hosting:finances` only, build:staging, kidclub-dev). If Dev Tools shows "Initial
+  Setup" again, redeploy FinHub hosting from `agent/finhub-real-data` the same way.
 - **Real-data PR (`agent/finhub-real-data` → `staging`) deploys FinHub + KidClub to dev** when
   opened/updated. It changes no data by itself; the wipe and the seed import are manual (step 4).
   The importer writes to whatever project the build points at: on prod it is Renato's step 5.
