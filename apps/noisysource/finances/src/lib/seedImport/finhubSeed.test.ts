@@ -87,6 +87,12 @@ describe('finhub seed — errors block the import', () => {
     ]);
   });
 
+  it('needs the net pay account of a household contract', () => {
+    const seed = example();
+    seed.entities.noisysource.employmentContracts[0].netPayAccount = null;
+    expect(messages(seed)).toEqual(['entities.noisysource.employmentContracts[0].netPayAccount: flowToPrivate needs the netPayAccount the salary lands on']);
+  });
+
   it('rejects a payroll run outside its contract version', () => {
     const seed = example();
     seed.entities.noisysource.payrollRuns[0].month = '2026-05';

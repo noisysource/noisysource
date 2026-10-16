@@ -135,7 +135,10 @@ const BenefitSchema = z.strictObject({
   daysPerMonth: orTodo(z.number().nonnegative()).optional(),
   subjectToIRS: z.boolean(),
   subjectToSS: z.boolean(),
-  /** Voucher card it lands on, or null when it's paid in cash with the salary. Required. */
+  /**
+   * Voucher card it lands on, or null: paid in cash with the salary, or a card FinHub doesn't track
+   * (an employee outside the household). Required, so a missing card is never silently cash.
+   */
   account: ref.nullable(),
   expenseCategory: ref.optional(),
   payableCategory: ref.optional(),
@@ -158,7 +161,8 @@ const EmploymentContractSchema = z.strictObject({
   ssEmpPct: orTodo(pct),
   ssErPct: orTodo(pct),
   payDay: orTodo(day),
-  netPayAccount: ref,
+  /** Where the net pay lands; null for an account FinHub doesn't track (an employee outside the household). */
+  netPayAccount: ref.nullable(),
   /** true → net salary and voucher credits also appear as Casa income. */
   flowToPrivate: z.boolean(),
   benefits: z.array(BenefitSchema),
@@ -207,7 +211,8 @@ const EcContractSchema = z.strictObject({
   ...versionDates,
   dailyRateCents: orTodo(cents.positive()),
   totalDays: orTodo(z.number().positive()),
-  expectedDaysPerMonth: orTodo(z.number().nonnegative()),
+  /** Only a fallback in FinHub when start date or total days are missing. Absent: the projection's average. */
+  expectedDaysPerMonth: orTodo(z.number().nonnegative()).optional(),
   daysToPayment: orTodo(z.number().int().nonnegative()).optional(),
   paymentAccount: ref.optional(),
   vatCode,
@@ -687,6 +692,7 @@ export function validateSeed(input: unknown): SeedValidation {
       if (company && known(company.data.name) && normName(String(company.data.name)) !== normName(entityName)) {
         err(`a contract under ${r.entityId} must be with the company named "${entityName}" (FinHub matches by name)`, 'company');
       }
+      if (d.flowToPrivate && d.netPayAccount === null) err('flowToPrivate needs the netPayAccount the salary lands on', 'netPayAccount');
       if (d.contractType === 'green_receipt' && (d.ssEmpPct !== 0 || d.ssErPct !== 0 || d.benefits.length)) {
         err('a green-receipt contract has no SS and no benefits');
       }

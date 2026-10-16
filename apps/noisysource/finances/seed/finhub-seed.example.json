@@ -131,8 +131,11 @@
           "key": "ns-carla", "person": "carla", "company": "noisysource",
           "from": "2026-01-01",
           "grossMonthlyCents": 90000, "irsRatePct": 2, "ssEmpPct": 11, "ssErPct": 23.75, "payDay": 28,
-          "netPayAccount": "noisysource-banco1", "flowToPrivate": false, "benefits": [],
-          "comment": "her own bank isn't tracked; netPayAccount is where the transfer leaves from"
+          "netPayAccount": null, "flowToPrivate": false,
+          "benefits": [
+            { "type": "CHILDCARE", "perMonthCents": 15000, "subjectToIRS": false, "subjectToSS": false, "account": null }
+          ],
+          "comment": "not household: her bank and her card aren't tracked (null)"
         }
       ],
       "payrollRuns": [
