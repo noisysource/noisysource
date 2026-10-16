@@ -141,12 +141,13 @@ describe('finhub seed — errors block the import', () => {
     ]);
   });
 
-  it('requires a VAT code on income and expense entries, and none on transfers', () => {
+  it('requires a VAT code on company income and expense entries (not Casa), and none on transfers', () => {
     const seed = example();
     delete seed.entities.noisysource.recurring[0].vatCode;
+    delete seed.entities.private.recurring[0].vatCode;
     seed.entities.noisyphocus.recurring[1].vatCode = 23;
     expect(messages(seed)).toEqual([
-      'entities.noisysource.recurring[0].vatCode: income and expense need a vatCode ("por_confirmar" if unknown)',
+      'entities.noisysource.recurring[0].vatCode: company income and expense need a vatCode ("por_confirmar" if unknown)',
       'entities.noisyphocus.recurring[1].vatCode: transfers have no VAT',
     ]);
   });

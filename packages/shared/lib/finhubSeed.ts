@@ -312,7 +312,7 @@ const RecurringSchema = z.strictObject({
   startYearMonth: orTodo(yearMonth).optional(),
   endYearMonth: orTodo(yearMonth).optional(),
   onceYearMonth: orTodo(yearMonth).optional(),
-  /** Required for income and expense ("por_confirmar" is a valid answer); not for transfers. */
+  /** Required for company income and expense ("por_confirmar" is a valid answer); optional for Casa; none on transfers. */
   vatCode: orTodo(vatCode).optional(),
   reimbursable: z.boolean().optional(),
   paidByAccount: ref.optional(),
@@ -743,7 +743,10 @@ export function validateSeed(input: unknown): SeedValidation {
     }
 
     if (r.collection === 'recurring') {
-      if (d.type !== 'transfer' && d.vatCode === undefined) err('income and expense need a vatCode ("por_confirmar" if unknown)', 'vatCode');
+      // Casa has no VAT (the form doesn't show it); company income and expense always say theirs.
+      if (d.type !== 'transfer' && d.vatCode === undefined && r.entityId !== 'private') {
+        err('company income and expense need a vatCode ("por_confirmar" if unknown)', 'vatCode');
+      }
       if (d.type === 'transfer' && d.vatCode !== undefined) err('transfers have no VAT', 'vatCode');
       if (d.type === 'transfer' && !d.toAccount) err('a transfer needs toAccount', 'toAccount');
       if (d.frequency === 'annual' && d.monthOfYear === undefined) err('annual needs monthOfYear', 'monthOfYear');
