@@ -96,10 +96,15 @@ Renato's decisions of 2026-10-15:
   EC contract counts down its contracted days with the existing days-off calendar.
 
 Progress:
-- **Step 1, prod billing → dev:** `scripts/copy-prod-billing-to-dev.mjs` committed (02683d7),
-  tested offline only. **Blocked on Renato:** his gcloud login expired (`gcloud auth login`), and
-  the session's prod-read entry in `.claude/settings.local.json` isn't added yet. Next: `--inspect`
-  on prod → agree the pseudonymised field list → dry run → his OK → `--write`.
+- **Step 1, prod billing → dev: DONE 2026-10-16.** `scripts/copy-prod-billing-to-dev.mjs --replace`
+  (Renato's choice): dev's billing is now exactly prod's 310 bills (copies tagged `_copiedFromProd`;
+  names, emails, user ids and children's names pseudonymised; EasyPay/Vendus/MB references
+  dropped; `familyId` kept, it is part of the bill id). Why replace: bill ids are
+  `<familyId>_<month>` and dev's families were copied from prod with the same ids, so 228 of the
+  310 collided with dev's own bills. Dev's own 312 bills are backed up in
+  `prodata/kidclub-dev-billing-backup-2026-10-16.json` (`--restore <file> --write` puts them back).
+  Refresh later: `node scripts/copy-prod-billing-to-dev.mjs --replace --backup <new file under prodata/> --write`.
+  **Renato to check:** FinHub dev → NoisyPhocus → KidClub, monthly totals vs prod's Cobranças.
 - **Step 2, seed draft:** evidence gathered from the payslips and statements. Waiting on
   documents (NoisySource payslips for Jan and Mar 2026, Marisa's ASFD payslips) and answers.
 - **Step 3, importer + date fixes:** not started.
@@ -223,8 +228,11 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
 
 ## Anything risky in flight
 - **`scripts/copy-prod-billing-to-dev.mjs` reads prod** (branch `agent/finhub-real-data`, not
-  merged). Run it only with the session's opt-in entry in `.claude/settings.local.json`, and
-  remove that entry once step 1 is done. It writes only to `kidclub-dev`.
+  merged). Run it only with a session's opt-in entry in `.claude/settings.local.json`, removed
+  after. It writes only to `kidclub-dev`.
+- **Dev's KidClub billing is a copy of prod's (2026-10-16).** Don't use payment or invoice actions
+  on those bills in dev's KidClub admin. Changing a family's subscriptions on dev recomputes that
+  family's bills (dev's own pipeline), replacing its copies; re-run the script to re-sync.
 - **The next `staging` → `main` PR deploys FinHub to prod too** (#88), not just KidClub. Its
   prod half hasn't run yet.
 - **`prodata/` holds real personal and financial data** (statements, the dev export, the data
