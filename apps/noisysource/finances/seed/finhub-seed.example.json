@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "comment": "Made-up values. Shape of prodata/finhub-seed.json (packages/shared/lib/finhubSeed.ts). Dev Tools → Importar seed.",
+  "people": [
+    { "key": "ana", "name": "Ana", "email": "ana@example.com" },
+    { "key": "bruno", "name": "Bruno" },
+    { "key": "carla", "name": "Carla", "comment": "employee, not part of the household" }
+  ],
+  "companies": [
+    { "key": "noisysource", "name": "NoisySource", "shortCode": "NS", "taxNumber": "500000001" },
+    { "key": "noisyphocus", "name": "NoisyPhocus", "shortCode": "NP", "taxNumber": "500000002" },
+    { "key": "outra-sa", "name": "Outra SA" }
+  ],
+  "entities": {
+    "private": {
+      "accounts": [
+        {
+          "key": "private-banco1", "type": "bank", "name": "Banco 1 (conjunta)", "code": "PV:B1",
+          "owner": "person:ana", "jointOwners": ["bruno"],
+          "bankName": "Banco 1", "iban": "PT50000000000000000000001", "bic": "BANKPTPL"
+        },
+        {
+          "key": "private-banco2", "type": "bank", "name": "Banco 2", "owner": "person:bruno",
+          "bankName": "Banco 2", "iban": "TODO", "bic": "TODO",
+          "comment": "IBAN unknown: this account, and everything paid into it, is skipped until it's filled in"
+        },
+        {
+          "key": "private-ana-creche-ns", "type": "voucher", "voucherType": "childcare", "name": "Creche Ana (NS)",
+          "owner": "person:ana", "provider": "Edenred", "issuingEmployer": "noisysource"
+        },
+        {
+          "key": "private-ana-refeicao-ns", "type": "voucher", "voucherType": "meal", "name": "Refeição Ana (NS)",
+          "owner": "person:ana", "provider": "Edenred", "issuingEmployer": "noisysource"
+        }
+      ],
+      "categories": [
+        { "key": "private-casa", "name": "Casa", "type": "EXPENSE" },
+        { "key": "private-casa-telecom", "name": "Telecomunicações", "type": "EXPENSE", "parent": "private-casa" }
+      ],
+      "incomeSources": [
+        {
+          "key": "outra-bruno-v1", "person": "bruno", "employerName": "Outra SA",
+          "from": "2026-01-01", "to": "2026-05-31",
+          "grossMonthlyCents": 100000, "irsRatePct": 5, "ssEmpPct": 11, "payDay": 28,
+          "netPayAccount": "private-banco1",
+          "benefits": [
+            { "type": "MEAL", "perDayCents": 600, "daysPerMonth": 21, "subjectToIRS": false, "subjectToSS": false, "account": null }
+          ]
+        },
+        {
+          "key": "outra-bruno-v2", "person": "bruno", "employerName": "Outra SA",
+          "from": "2026-06-01",
+          "grossMonthlyCents": 110000, "irsRatePct": 5, "ssEmpPct": 11, "payDay": 28,
+          "netPayAccount": "private-banco1",
+          "benefits": [
+            { "type": "MEAL", "perDayCents": 600, "daysPerMonth": 21, "subjectToIRS": false, "subjectToSS": false, "account": null }
+          ]
+        },
+        {
+          "key": "outra-bruno-extra", "person": "bruno", "employerName": "Loja Exemplo",
+          "from": "2026-03-01",
+          "grossMonthlyCents": 20000, "irsRatePct": 0, "ssEmpPct": 11, "payDay": 5,
+          "netPayAccount": "private-banco2", "benefits": [],
+          "comment": "refused with private-banco2 (its IBAN is TODO)"
+        }
+      ],
+      "creditContracts": [
+        {
+          "key": "private-carro", "type": "auto", "description": "Carro", "creditor": "Financeira Exemplo",
+          "loanAmountCents": 2000000, "startYearMonth": "2025-06", "termMonths": 84,
+          "rateType": "fixed", "annualRatePct": 6.5, "account": "private-banco1", "dayOfMonth": 10
+        }
+      ],
+      "loans": [
+        { "key": "loan-joao-1", "counterparty": "João", "kind": "lent", "amountCents": 50000, "description": "Empréstimo", "date": "2026-02-14" },
+        { "key": "loan-joao-2", "counterparty": "João", "kind": "repayment_in", "amountCents": 20000, "description": "Devolveu parte", "date": "2026-04-01" }
+      ],
+      "insurances": [
+        {
+          "key": "private-saude", "name": "Saúde família", "type": "health", "insurer": "Seguradora Exemplo",
+          "premiumCents": 4500, "frequency": "monthly", "renewalDate": "2027-01-01"
+        }
+      ],
+      "recurring": [
+        {
+          "key": "private-internet", "type": "expense", "description": "Internet + TV", "amountCents": 4999,
+          "vatCode": 23, "account": "private-banco1", "category": "private-casa-telecom",
+          "frequency": "monthly", "dayOfMonth": 20
+        }
+      ],
+      "irsConfig": [
+        {
+          "year": 2026,
+          "incomes": [
+            { "person": "bruno", "employerName": "Outra SA", "grossAnnualCents": 1470000, "irsWithheldCents": 73500, "ssEmployeeCents": 161700 }
+          ],
+          "deductions": { "healthCents": 0, "educationCents": 0, "housingCents": 0 }
+        }
+      ]
+    },
+    "noisysource": {
+      "accounts": [
+        {
+          "key": "noisysource-banco1", "type": "bank", "name": "Banco 1 NoisySource", "code": "NS:B1",
+          "owner": "company:noisysource", "bankName": "Banco 1", "iban": "PT50000000000000000000002", "bic": "BANKPTPL"
+        }
+      ],
+      "employmentContracts": [
+        {
+          "key": "ns-ana-v1", "person": "ana", "company": "noisysource", "contractType": "employee",
+          "from": "2026-01-01", "to": "2026-04-30",
+          "grossMonthlyCents": 150000, "irsRatePct": 10, "ssEmpPct": 11, "ssErPct": 23.75, "payDay": 28,
+          "netPayAccount": "private-banco1", "flowToPrivate": true,
+          "benefits": [
+            { "type": "CHILDCARE", "perMonthCents": 20000, "subjectToIRS": false, "subjectToSS": false, "account": "private-ana-creche-ns" },
+            { "type": "MEAL_CARD", "perDayCents": 1020, "daysPerMonth": 21, "subjectToIRS": false, "subjectToSS": false, "account": "private-ana-refeicao-ns" }
+          ]
+        },
+        {
+          "key": "ns-ana-v2", "person": "ana", "company": "noisysource", "contractType": "employee",
+          "from": "2026-05-01",
+          "grossMonthlyCents": 150000, "irsRatePct": 12, "ssEmpPct": 11, "ssErPct": 23.75, "payDay": 28,
+          "netPayAccount": "private-banco1", "flowToPrivate": true,
+          "benefits": [
+            { "type": "CHILDCARE", "perMonthCents": 30000, "subjectToIRS": false, "subjectToSS": false, "account": "private-ana-creche-ns" },
+            { "type": "MEAL_CARD", "perDayCents": 1020, "daysPerMonth": 21, "subjectToIRS": false, "subjectToSS": false, "account": "private-ana-refeicao-ns" },
+            { "type": "EXPENSE_ALLOWANCE", "perMonthCents": 50000, "subjectToIRS": false, "subjectToSS": false, "account": null }
+          ]
+        },
+        {
+          "key": "ns-carla", "person": "carla", "company": "noisysource",
+          "from": "2026-01-01",
+          "grossMonthlyCents": 90000, "irsRatePct": 2, "ssEmpPct": 11, "ssErPct": 23.75, "payDay": 28,
+          "netPayAccount": "noisysource-banco1", "flowToPrivate": false, "benefits": [],
+          "comment": "her own bank isn't tracked; netPayAccount is where the transfer leaves from"
+        }
+      ],
+      "payrollRuns": [
+        {
+          "contract": "ns-ana-v1", "month": "2026-02",
+          "grossCents": 150000, "irsCents": 15000, "ssEmpCents": 16500, "ssErCents": 0,
+          "voucherBenefitsCents": 34280, "cashBenefitsCents": 0, "netPaidCents": 118500,
+          "sourceAccount": "noisysource-banco1", "comment": "employer SS exempt this month"
+        },
+        {
+          "contract": "ns-ana-v2", "month": "2026-06",
+          "grossCents": 150000, "irsCents": 18000, "ssEmpCents": 16500, "ssErCents": 35625,
+          "voucherBenefitsCents": 51420, "cashBenefitsCents": 41325, "netPaidCents": 156825,
+          "sourceAccount": "noisysource-banco1"
+        }
+      ],
+      "ecContracts": [
+        {
+          "key": "ec-cliente-x-v1", "clientName": "Cliente X", "from": "2026-01-05", "to": "2026-02-02",
+          "dailyRateCents": 50000, "totalDays": 20, "expectedDaysPerMonth": 20, "daysToPayment": 10,
+          "paymentAccount": "noisysource-banco1", "vatCode": "isento",
+          "nonWorkingDays": ["2026-01-06"], "halfDays": []
+        },
+        {
+          "key": "ec-cliente-x-v2", "clientName": "Cliente X", "from": "2026-02-03",
+          "dailyRateCents": 52000, "totalDays": 60, "expectedDaysPerMonth": 20, "daysToPayment": 10,
+          "paymentAccount": "noisysource-banco1", "vatCode": "isento",
+          "nonWorkingDays": ["2026-04-03"], "halfDays": ["2026-02-13"],
+          "comment": "rate change: a new version from the day it applies; FinHub computes the end date"
+        }
+      ],
+      "recurring": [
+        {
+          "key": "ns-contabilista", "type": "expense", "description": "Contabilista", "amountCents": 24600,
+          "vatCode": 23, "account": "noisysource-banco1", "frequency": "monthly", "dayOfMonth": 5
+        },
+        {
+          "key": "ns-iva-trimestral", "type": "expense", "description": "Exemplo trimestral", "amountCents": 10000,
+          "vatCode": "por_confirmar", "account": "noisysource-banco1", "frequency": "quarterly", "dayOfMonth": 15,
+          "startYearMonth": "2026-02"
+        }
+      ]
+    },
+    "noisyphocus": {
+      "accounts": [
+        {
+          "key": "noisyphocus-banco1", "type": "bank", "name": "Banco 1 NoisyPhocus", "code": "NP:B1",
+          "owner": "company:noisyphocus", "bankName": "Banco 1", "iban": "PT50000000000000000000003", "bic": "BANKPTPL"
+        }
+      ],
+      "recurring": [
+        {
+          "key": "np-pagamentos", "type": "expense", "description": "Comissão pagamentos", "amountCents": 3000,
+          "vatCode": 23, "costModel": "commission", "commissionPct": 1.5, "commissionVolumeSource": "kidclub_billing",
+          "account": "noisyphocus-banco1", "frequency": "monthly", "dayOfMonth": 1
+        },
+        {
+          "key": "np-transfer-ns", "type": "transfer", "description": "Reembolso à NoisySource", "amountCents": 10000,
+          "account": "noisyphocus-banco1", "toAccount": "noisysource-banco1", "frequency": "once", "dayOfMonth": 15,
+          "onceYearMonth": "2026-11"
+        }
+      ]
+    }
+  }
+}
