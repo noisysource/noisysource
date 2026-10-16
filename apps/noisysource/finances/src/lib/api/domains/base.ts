@@ -13,34 +13,7 @@ import {
   type QueryConstraint,
 } from "firebase/firestore";
 import { db } from "../../firebase";
-
-/** ---------- helpers (deep clean) ---------- */
-const stripUndefinedDeep = <T>(v: T): T => {
-  if (Array.isArray(v)) return v.map(stripUndefinedDeep) as any;
-  if (v instanceof Date) return v;
-  if (v && typeof v === "object") {
-    const out: any = {};
-    for (const [k, val] of Object.entries(v as any)) {
-      if (val === undefined) continue;
-      out[k] = stripUndefinedDeep(val as any);
-    }
-    return out;
-  }
-  return v;
-};
-
-const nullsToUndefinedDeep = <T>(v: T): T => {
-  if (Array.isArray(v)) return v.map(nullsToUndefinedDeep) as any;
-  if (v instanceof Date) return v;
-  if (v && typeof v === "object") {
-    const out: any = {};
-    for (const [k, val] of Object.entries(v as any)) {
-      out[k] = val === null ? undefined : nullsToUndefinedDeep(val as any);
-    }
-    return out;
-  }
-  return v === null ? (undefined as any) : v;
-};
+import { diffPayload, nullsToUndefinedDeep, stripUndefinedDeep, type PayloadDiff } from "../payload";
 
 /** Signature to map Firestore doc -> model */
 export type DocFromFn<TModel> = (raw: any, id: string) => TModel;
@@ -95,11 +68,28 @@ export function makeGlobalCRUD<TSave extends { id?: string }, TModel>(
     return ref.id;
   }
 
+  const toPayload = (input: TSave) => stripUndefinedDeep(nullsToUndefinedDeep(to(input)));
+
+  /** Idempotent upsert by known id (merge: fields not in the input are kept). */
+  async function upsertWithId(id: string, input: Omit<TSave, "id">): Promise<string> {
+    const ref = docRef(id);
+    const exists = (await getDoc(ref)).exists();
+    const payload = toPayload(input as TSave);
+    await setDoc(ref, exists ? payload : { createdAt: serverTimestamp(), ...payload }, { merge: true });
+    return id;
+  }
+
+  /** What upsertWithId(id, input) would change, without writing. */
+  async function diffWithId(id: string, input: Omit<TSave, "id">): Promise<PayloadDiff> {
+    const snap = await getDoc(docRef(id));
+    return diffPayload(snap.exists() ? snap.data() : undefined, toPayload(input as TSave));
+  }
+
   async function remove(id: string): Promise<void> {
     await deleteDoc(docRef(id));
   }
 
-  return { list, get, save, delete: remove };
+  return { list, get, save, delete: remove, upsertWithId, diffWithId };
 }
 
 /**
@@ -182,6 +172,13 @@ export function makeOrgCRUD<TSave extends { id?: string }, TModel>(
     return id;
   }
 
+  /** What upsertWithId(id, input) would change, without writing (the seed import's preview). */
+  async function diffWithId(id: string, input: Omit<TSave, "id">): Promise<PayloadDiff> {
+    const snap = await getDoc(orgDoc(getOrgId(), opts.collectionPath, id));
+    const payload = stripUndefinedDeep(nullsToUndefinedDeep(to(input as TSave)));
+    return diffPayload(snap.exists() ? snap.data() : undefined, payload);
+  }
+
   async function remove(id: string): Promise<void> {
     await deleteDoc(orgDoc(getOrgId(), opts.collectionPath, id));
   }
@@ -193,6 +190,7 @@ export function makeOrgCRUD<TSave extends { id?: string }, TModel>(
     create,
     update,
     delete: remove,
-    upsertWithId, // <-- new
+    upsertWithId,
+    diffWithId,
   };
 }

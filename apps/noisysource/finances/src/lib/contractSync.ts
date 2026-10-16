@@ -9,12 +9,15 @@
  *
  * EC contract (NoisySource entity) → one recurring entry:
  *   1. NoisySource income: dailyRate × expectedDaysPerMonth
+ *
+ * Insurance (any entity) → one recurring expense: the premium, VAT-exempt.
  */
 
 import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { EcContractDoc } from "@shared/models/EcContract";
 import { ecContractVatCode } from "@shared/models/EcContract";
 import type { IncomeSourceDoc } from "@shared/models/IncomeSource";
+import type { InsuranceDoc } from "@shared/models/Insurance";
 import { incomeSourceMonth } from "@shared/models/IncomeSource";
 import { computeMonthlyPayroll } from "@shared/lib/payroll";
 import { computeEcProjection } from "@shared/lib/ecProjection";
@@ -217,4 +220,34 @@ export async function deactivateIncomeSourceRecurring(sourceId: string): Promise
   api.setEntity("private");
   await api.recurring.deactivateBySourceId(`inc:${sourceId}`);
   api.setEntity(prevEntity);
+}
+
+// ── Insurance ────────────────────────────────────────────────────────────────
+
+/**
+ * The premium as a recurring expense in the current entity (InsurancesPage and the seed import).
+ * Annual premiums fall in the renewal month; the renewal day is the day of the month.
+ */
+export async function syncInsuranceRecurring(
+  insurance: Pick<InsuranceDoc, "id" | "name" | "insurer" | "premiumCents" | "frequency" | "renewalDate" | "active">,
+): Promise<void> {
+  const sourceId = `insurance:${insurance.id}`;
+  if (insurance.active && insurance.premiumCents > 0) {
+    const renewalDate = insurance.renewalDate ? new Date(`${insurance.renewalDate}T00:00:00`) : null;
+    const dayOfMonth = renewalDate ? renewalDate.getDate() : 1;
+    const monthOfYear = renewalDate && insurance.frequency === "annual" ? renewalDate.getMonth() + 1 : undefined;
+    await api.recurring.upsertBySourceId(sourceId, {
+      type: "expense",
+      description: `${insurance.name} (${insurance.insurer})`,
+      amountCents: insurance.premiumCents,
+      vatCode: "isento", // insurance premiums are VAT-exempt (CIVA art. 9)
+      frequency: insurance.frequency,
+      dayOfMonth,
+      monthOfYear,
+      active: true,
+      sourceId,
+    });
+  } else if (!insurance.active) {
+    await api.recurring.deactivateBySourceId(sourceId);
+  }
 }

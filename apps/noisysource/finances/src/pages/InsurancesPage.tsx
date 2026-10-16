@@ -6,6 +6,7 @@ import { formatEUR } from "@shared/lib/money";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/api";
+import { syncInsuranceRecurring } from "../lib/contractSync";
 import { useEntity } from "../hooks/EntityContext";
 import {
   Plus, Pencil, Trash2, Paperclip, Download, X,
@@ -154,25 +155,15 @@ function InsuranceModal({
       } as any);
 
       // Auto-link to recurring expenses
-      const sourceId = `insurance:${savedId}`;
-      if (form.active && premiumCents > 0) {
-        const renewalDate = form.renewalDate ? new Date(`${form.renewalDate}T00:00:00`) : null;
-        const dayOfMonth = renewalDate ? renewalDate.getDate() : 1;
-        const monthOfYear = renewalDate && form.frequency === "annual" ? renewalDate.getMonth() + 1 : undefined;
-        await api.recurring.upsertBySourceId(sourceId, {
-          type: "expense",
-          description: `${form.name.trim()} (${form.insurer.trim()})`,
-          amountCents: premiumCents,
-          vatCode: "isento", // insurance premiums are VAT-exempt (CIVA art. 9)
-          frequency: form.frequency,
-          dayOfMonth,
-          monthOfYear,
-          active: true,
-          sourceId,
-        });
-      } else if (!form.active) {
-        await api.recurring.deactivateBySourceId(sourceId);
-      }
+      await syncInsuranceRecurring({
+        id: savedId,
+        name: form.name.trim(),
+        insurer: form.insurer.trim(),
+        premiumCents,
+        frequency: form.frequency,
+        renewalDate: form.renewalDate || undefined,
+        active: form.active,
+      });
 
       await onSaved();
       onClose();

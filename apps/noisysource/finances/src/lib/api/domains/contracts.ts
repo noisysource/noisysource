@@ -34,6 +34,7 @@ const from = (raw: any, id: string): EmploymentContractDoc => ({
   companyId: raw?.companyId,
   personId: raw?.personId,
   active: raw?.active !== false,
+  contractType: raw?.contractType === "green_receipt" ? "green_receipt" : raw?.contractType === "employee" ? "employee" : undefined,
 
   grossMonthlyCents: Number.isFinite(raw?.grossMonthlyCents) ? raw.grossMonthlyCents : 0,
   irsRatePct: Number.isFinite(raw?.irsRatePct) ? raw.irsRatePct : 0,
@@ -56,6 +57,7 @@ const to = (doc: EmploymentContractDoc) =>
     companyId: doc.companyId,
     personId: doc.personId,
     active: doc.active !== false,
+    contractType: doc.contractType,
 
     grossMonthlyCents: doc.grossMonthlyCents ?? 0,
     irsRatePct: doc.irsRatePct ?? 0,
