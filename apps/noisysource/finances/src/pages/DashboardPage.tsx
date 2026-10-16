@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { EcContractDoc } from '@shared/models/EcContract';
+import { ecContractInForce } from '@shared/models/EcContract';
 import type { EmploymentContractDoc } from '@shared/models/Employment';
 import type { IncomeSourceDoc } from '@shared/models/IncomeSource';
 import type { FinanceEvent, ComputedEvent, FinanceEntityId } from '@shared/models/FinanceEvent';
@@ -89,7 +90,9 @@ const EVENT_META: Record<string, { icon: string; bg: string; text: string; label
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  // `contract` is the one in force today: its days off are what the calendar edits.
   const [contract, setContract] = useState<EcContractDoc | null>(null);
+  const [ecContracts, setEcContracts] = useState<EcContractDoc[]>([]);
   const [storedEvents, setStoredEvents] = useState<FinanceEvent[]>([]);
   const [accounts, setAccounts] = useState<TaggedAccount[]>([]);
   const [employmentContracts, setEmploymentContracts] = useState<EmploymentContractDoc[]>([]);
@@ -117,15 +120,16 @@ export default function DashboardPage() {
     const load = async () => {
       setLoading(true);
       try {
-        // Find active EC contract across all entities
-        let active: EcContractDoc | null = null;
-        let contractEntity = 'noisysource';
+        // Every active EC contract across all entities; the calendar edits the one in force today
+        const ecAll: EcContractDoc[] = [];
+        const ecEntity = new Map<string, string>();
         for (const entityId of ['noisysource', 'private', 'noisyphocus']) {
           api.setEntity(entityId);
           const list = await api.ecContracts.list();
-          const found = list.find(c => c.active);
-          if (found) { active = found; contractEntity = entityId; break; }
+          for (const c of list) if (c.active) { ecAll.push(c); ecEntity.set(c.id, entityId); }
         }
+        const active = ecContractInForce(ecAll, new Date());
+        const contractEntity = (active && ecEntity.get(active.id)) || 'noisysource';
         contractEntityRef.current = contractEntity;
 
         const events = await api.financeEvents.listAll();
@@ -167,6 +171,7 @@ export default function DashboardPage() {
         api.setEntity(contractEntity);
 
         setContract(active);
+        setEcContracts(ecAll);
         contractRef.current = active;
         setAccounts(allAccounts);
         setEmploymentContracts(empContracts);
@@ -206,13 +211,13 @@ export default function DashboardPage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const computedEvents = useMemo(() => {
-    const ec = contract ? generateEcEvents(contract, new Date()) : [];
+    const ec = ecContracts.flatMap(c => generateEcEvents(c, new Date()));
     const emp = generateEmploymentEvents(employmentContracts, peopleMap, '2024-01', 60);
     const inc = generateIncomeSourceEvents(incomeSources, '2024-01', 60);
     const rec  = generateRecurringEvents(allRecurring, '2024-01', 60);
     const cred = generateCreditEvents(allCredits, '2024-01', 60);
     return [...ec, ...emp, ...inc, ...rec, ...cred];
-  }, [contract, nwd, half, employmentContracts, incomeSources, peopleMap, allRecurring, allCredits]);
+  }, [ecContracts, contract, nwd, half, employmentContracts, incomeSources, peopleMap, allRecurring, allCredits]);
 
   const [monthStart, monthEnd] = useMemo(() => ymBounds(viewMonth), [viewMonth]);
 

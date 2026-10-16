@@ -101,7 +101,7 @@ export default function ForecastPage() {
   const [allAccounts, setAllAccounts]               = useState<{ account: Account; entityId: FinanceEntityId }[]>([]);
   const [employmentContracts, setEmploymentContracts] = useState<EmploymentContractDoc[]>([]);
   const [incomeSources, setIncomeSources]           = useState<IncomeSourceDoc[]>([]);
-  const [ecContract, setEcContract]                 = useState<EcContractDoc | null>(null);
+  const [ecContracts, setEcContracts]               = useState<EcContractDoc[]>([]);
   const [peopleMap, setPeopleMap]                   = useState<Map<string, string>>(new Map());
   const [kidclubBilling, setKidclubBilling]         = useState<KidclubBillingRecord[]>([]);
   const [loading, setLoading]                       = useState(true);
@@ -130,13 +130,13 @@ export default function ForecastPage() {
           for (const a of accs) accountsAll.push({ account: a, entityId: eid });
         }
 
-        // Active EC contract
-        let activeEc: EcContractDoc | null = null;
+        // Every active EC contract: each one only generates events inside its own dates, so a
+        // rate change (a new contract from that day) and the contract it replaces both count.
+        const ecAll: EcContractDoc[] = [];
         for (const eid of ENTITY_IDS) {
           api.setEntity(eid);
           const list = await api.ecContracts.list();
-          const found = list.find((c: EcContractDoc) => c.active);
-          if (found) { activeEc = found; break; }
+          ecAll.push(...list.filter((c: EcContractDoc) => c.active));
         }
 
         api.setEntity('noisysource');
@@ -155,7 +155,7 @@ export default function ForecastPage() {
         setAllAccounts(accountsAll);
         setEmploymentContracts(empContracts);
         setIncomeSources(sources);
-        setEcContract(activeEc);
+        setEcContracts(ecAll);
         setPeopleMap(new Map(people.map(p => [p.id, p.name])));
         setKidclubBilling(billing);
       } catch (e) {
@@ -174,9 +174,9 @@ export default function ForecastPage() {
     const cred = generateCreditEvents(allCredits, startYM, MONTHS);
     const emp  = generateEmploymentEvents(employmentContracts, peopleMap, startYM, MONTHS);
     const inc  = generateIncomeSourceEvents(incomeSources, startYM, MONTHS);
-    const ec   = ecContract ? generateEcEvents(ecContract) : [];
+    const ec   = ecContracts.flatMap(c => generateEcEvents(c));
     return [...rec, ...cred, ...emp, ...inc, ...ec, ...kc];
-  }, [allRecurring, allCredits, employmentContracts, incomeSources, ecContract, peopleMap, kidclubBilling, startYM]);
+  }, [allRecurring, allCredits, employmentContracts, incomeSources, ecContracts, peopleMap, kidclubBilling, startYM]);
 
   const startingBalance = useMemo(() =>
     allAccounts
