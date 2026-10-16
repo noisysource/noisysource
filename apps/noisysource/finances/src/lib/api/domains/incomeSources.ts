@@ -14,6 +14,7 @@ const from = (raw: any, id: string): IncomeSourceDoc => ({
   active: raw?.active !== false,
   benefits: Array.isArray(raw?.benefits) ? raw.benefits : [],
   startDate: raw?.startDate ?? undefined,
+  endDate: raw?.endDate ?? undefined,
   notes: raw?.notes ?? undefined,
   createdAt: raw?.createdAt,
 });
@@ -30,6 +31,7 @@ const to = (doc: IncomeSourceDoc) =>
     active: doc.active !== false,
     benefits: Array.isArray(doc.benefits) ? doc.benefits.map((b) => stripUndefined(b)) : [],
     startDate: doc.startDate || undefined,
+    endDate: doc.endDate || undefined,
     notes: doc.notes || undefined,
   });
 

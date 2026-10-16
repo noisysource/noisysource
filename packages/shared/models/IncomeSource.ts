@@ -11,9 +11,53 @@ export interface IncomeSourceDoc {
   netPayAccountId: string;
   active: boolean;
   benefits: BenefitConfig[];
-  startDate?: string;        // ISO "YYYY-MM-DD"
+  startDate?: string;        // ISO "YYYY-MM-DD" — first month it pays
+  /** ISO "YYYY-MM-DD" — last month it pays (inclusive). A raise is a new source from the next month. */
+  endDate?: string;
   notes?: string;
   createdAt?: any;
 }
 
 export type { BenefitConfig };
+
+/** A benefit's monthly total: per month + per day × days (no days = 0, unlike employment contracts). */
+function benefitTotalCents(b: BenefitConfig): number {
+  const perMonth = (b as any).perMonthCents ?? 0;
+  const perDay = (b as any).perDayCents ?? 0;
+  const days = (b as any).daysPerMonth ?? 0;
+  return perMonth + perDay * days;
+}
+
+export type IncomeSourceMonth = {
+  grossCents: number;
+  irsCents: number;
+  ssCents: number;
+  /** gross − IRS − SS */
+  netCents: number;
+  /** Benefits with no card account, paid in cash with the salary (e.g. a meal allowance). */
+  cashBenefitsCents: number;
+  /** What lands in netPayAccountId: net + cash benefits. */
+  netPayCents: number;
+  /** Benefits loaded on a card account, each credited to that account. */
+  cardBenefits: Array<{ type: string; totalCents: number; benefitAccountId: string }>;
+};
+
+/**
+ * One month of an external income source. IRS and SS on the gross only, as before; cash benefits
+ * are added to the transfer like employment contracts already do (the ASFD meal allowance).
+ */
+export function incomeSourceMonth(source: IncomeSourceDoc): IncomeSourceMonth {
+  const grossCents = source.grossMonthlyCents;
+  const irsCents = Math.round(grossCents * (source.irsRatePct ?? 0) / 100);
+  const ssCents = Math.round(grossCents * (source.ssEmpPct ?? 11) / 100);
+  const netCents = grossCents - irsCents - ssCents;
+  let cashBenefitsCents = 0;
+  const cardBenefits: IncomeSourceMonth["cardBenefits"] = [];
+  for (const b of source.benefits ?? []) {
+    const totalCents = benefitTotalCents(b);
+    if (totalCents <= 0) continue;
+    if (b.benefitAccountId) cardBenefits.push({ type: b.type, totalCents, benefitAccountId: b.benefitAccountId });
+    else cashBenefitsCents += totalCents;
+  }
+  return { grossCents, irsCents, ssCents, netCents, cashBenefitsCents, netPayCents: netCents + cashBenefitsCents, cardBenefits };
+}

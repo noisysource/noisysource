@@ -15,6 +15,7 @@ import { recurringMonthlyAmountCents } from '../models/RecurringEntry';
 import { grossFromNet } from './vat';
 import type { EmploymentContractDoc } from '../models/Employment';
 import type { IncomeSourceDoc } from '../models/IncomeSource';
+import { incomeSourceMonth } from '../models/IncomeSource';
 import type { CreditContractDoc } from '../models/CreditContract';
 import type { ComputedEvent, FinanceEntityId } from '../models/FinanceEvent';
 
@@ -244,8 +245,9 @@ export function generateEmploymentEvents(
 // ── Income source generator ───────────────────────────────────────────────────
 
 /**
- * Generate net income + benefit credit events from external income sources.
- * These are incomes from employers NoisySource does not manage payroll for.
+ * Generate net income + benefit credit events from external income sources, from their start
+ * month to their end month (inclusive). These are incomes from employers NoisySource does not
+ * manage payroll for. Cash benefits are part of the net pay transfer (incomeSourceMonth).
  */
 export function generateIncomeSourceEvents(
   sources: IncomeSourceDoc[],
@@ -258,25 +260,25 @@ export function generateIncomeSourceEvents(
     if (!source.active) continue;
 
     const sourceStartYM = source.startDate ? source.startDate.slice(0, 7) : undefined;
-    const gross = source.grossMonthlyCents;
-    const irs = Math.round(gross * (source.irsRatePct ?? 0) / 100);
-    const ss = Math.round(gross * (source.ssEmpPct ?? 11) / 100);
-    const net = gross - irs - ss;
+    const sourceEndYM = source.endDate ? source.endDate.slice(0, 7) : undefined;
+    const month = incomeSourceMonth(source);
     const payDay = source.payDay ?? 28;
 
     for (const ym of ymWindow(startYM, months)) {
       if (sourceStartYM && ym < sourceStartYM) continue;
+      if (sourceEndYM && ym > sourceEndYM) continue;
 
       const day = clampDay(ym, payDay);
       const date = `${ym}-${String(day).padStart(2, '0')}`;
 
+      // Net pay plus benefits paid in cash with it (no card account)
       events.push({
         key: `inc_sal:${source.id}:${ym}`,
         computed: true,
         entityId: 'private' as FinanceEntityId,
         type: 'income',
         date,
-        amountCents: net,
+        amountCents: month.netPayCents,
         status: 'planned',
         description: `${source.employerName} — ${source.personName}`,
         accountId: source.netPayAccountId || undefined,
@@ -284,26 +286,20 @@ export function generateIncomeSourceEvents(
         sourceId: source.id,
       });
 
-      for (const benefit of source.benefits ?? []) {
-        if (!benefit.benefitAccountId) continue;
-        const perMonth = (benefit as any).perMonthCents ?? 0;
-        const perDay = (benefit as any).perDayCents ?? 0;
-        const days = (benefit as any).daysPerMonth ?? 0;
-        const totalCents = perMonth + (perDay * days);
-        if (totalCents <= 0) continue;
-        const label = benefit.type === 'MEAL_CARD' ? 'Cartão Refeição'
-          : benefit.type === 'CHILDCARE' ? 'Cheque Creche'
-          : benefit.type ?? 'Benefício';
+      for (const b of month.cardBenefits) {
+        const label = b.type === 'MEAL_CARD' ? 'Cartão Refeição'
+          : b.type === 'CHILDCARE' ? 'Cheque Creche'
+          : b.type ?? 'Benefício';
         events.push({
-          key: `inc_ben:${source.id}:${benefit.type}:${ym}`,
+          key: `inc_ben:${source.id}:${b.type}:${ym}`,
           computed: true,
           entityId: 'private' as FinanceEntityId,
           type: 'income',
           date,
-          amountCents: totalCents,
+          amountCents: b.totalCents,
           status: 'planned',
           description: `${label} — ${source.personName}`,
-          accountId: benefit.benefitAccountId,
+          accountId: b.benefitAccountId,
           sourceType: 'employment_contract',
           sourceId: source.id,
         });

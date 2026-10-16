@@ -42,6 +42,7 @@ const EMPTY_FORM = {
   payDay: "25",
   netPayAccountId: "",
   startDate: "",
+  endDate: "",
   notes: "",
   active: true,
   benefits: [] as BenefitConfig[],
@@ -215,10 +216,14 @@ function IncomeSourceModal({
               onChange={v => set("benefits", v)} />
           </div>
 
-          <div className="grid sm:grid-cols-2 gap-3">
+          <div className="grid sm:grid-cols-3 gap-3">
             <div>
               <div className="text-xs text-zinc-400 mb-1">Data de início</div>
               <Input type="date" value={form.startDate} onChange={e => set("startDate", e.target.value)} />
+            </div>
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">Data de fim (opcional)</div>
+              <Input type="date" value={form.endDate} onChange={e => set("endDate", e.target.value)} />
             </div>
             <div>
               <div className="text-xs text-zinc-400 mb-1">Notas</div>
@@ -295,6 +300,7 @@ export default function IncomeSourcesPage() {
       payDay: String(src.payDay ?? "25"),
       netPayAccountId: src.netPayAccountId ?? "",
       startDate: src.startDate ?? "",
+      endDate: src.endDate ?? "",
       notes: src.notes ?? "",
       active: src.active !== false,
       benefits: Array.isArray(src.benefits) ? src.benefits : [],
@@ -313,6 +319,7 @@ export default function IncomeSourcesPage() {
       payDay: Math.max(1, Math.min(31, parseInt(form.payDay || "25", 10))),
       netPayAccountId: form.netPayAccountId || "",
       startDate: form.startDate || undefined,
+      endDate: form.endDate || undefined,
       notes: form.notes || undefined,
       active: form.active,
       benefits: form.benefits,
@@ -508,6 +515,11 @@ export default function IncomeSourcesPage() {
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{s.employerName}</span>
+                          {(s.startDate || s.endDate) && (
+                            <span className="text-xs text-zinc-500">
+                              {s.startDate ?? "…"} → {s.endDate ?? "atual"}
+                            </span>
+                          )}
                           {s.active === false && (
                             <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500">inativo</span>
                           )}
