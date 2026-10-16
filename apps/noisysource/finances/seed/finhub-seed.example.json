@@ -90,15 +90,6 @@
           "vatCode": 23, "account": "private-banco1", "category": "private-casa-telecom",
           "frequency": "monthly", "dayOfMonth": 20
         }
-      ],
-      "irsConfig": [
-        {
-          "year": 2026,
-          "incomes": [
-            { "person": "bruno", "employerName": "Outra SA", "grossAnnualCents": 1470000, "irsWithheldCents": 73500, "ssEmployeeCents": 161700 }
-          ],
-          "deductions": { "healthCents": 0, "educationCents": 0, "housingCents": 0 }
-        }
       ]
     },
     "noisysource": {

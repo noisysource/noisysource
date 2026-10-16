@@ -323,28 +323,14 @@ const RecurringSchema = z.strictObject({
   comment,
 });
 
-const IrsConfigSchema = z.strictObject({
-  year: z.number().int().min(2000).max(2100),
-  incomes: z.array(z.strictObject({
-    person: ref,
-    employerName: orTodo(text),
-    grossAnnualCents: orTodo(cents.nonnegative()),
-    irsWithheldCents: orTodo(cents.nonnegative()),
-    ssEmployeeCents: orTodo(cents.nonnegative()),
-  })),
-  deductions: z.strictObject({
-    healthCents: orTodo(cents.nonnegative()),
-    educationCents: orTodo(cents.nonnegative()),
-    housingCents: orTodo(cents.nonnegative()),
-  }),
-  comment,
-});
-
 // ── sections ─────────────────────────────────────────────────────────────────
 
 const list = <T extends z.ZodType>(s: T) => z.array(s).optional();
 
-/** Casa: no payroll, no EC contracts. Income sources, loans and IRS live only here. */
+/**
+ * Casa: no payroll, no EC contracts. Income sources and loans live only here. No IRS config: the IRS
+ * page is to fill itself from payroll runs and income sources (future feature, Renato 2026-10-16).
+ */
 const PrivateSectionSchema = z.strictObject({
   accounts: list(AccountSchema),
   categories: list(CategorySchema),
@@ -353,7 +339,6 @@ const PrivateSectionSchema = z.strictObject({
   loans: list(LoanSchema),
   insurances: list(InsuranceSchema),
   recurring: list(RecurringSchema),
-  irsConfig: list(IrsConfigSchema),
 });
 
 const companySection = {
@@ -396,7 +381,6 @@ export type SeedCreditContract = z.infer<typeof CreditContractSchema>;
 export type SeedLoan = z.infer<typeof LoanSchema>;
 export type SeedInsurance = z.infer<typeof InsuranceSchema>;
 export type SeedRecurring = z.infer<typeof RecurringSchema>;
-export type SeedIrsConfig = z.infer<typeof IrsConfigSchema>;
 
 /** A record with every "TODO" ruled out: what the importer maps once a record isn't refused. */
 export type Known<T> = T extends typeof TODO
@@ -411,14 +395,13 @@ export type Known<T> = T extends typeof TODO
 
 export type SeedCollection =
   | 'people' | 'companies' | 'accounts' | 'categories' | 'employmentContracts' | 'payrollRuns'
-  | 'incomeSources' | 'ecContracts' | 'creditContracts' | 'loans' | 'insurances' | 'recurring'
-  | 'irsConfig';
+  | 'incomeSources' | 'ecContracts' | 'creditContracts' | 'loans' | 'insurances' | 'recurring';
 
 /** Where a record lives: global (people, companies) or one entity. */
 export type SeedRecordRef = {
   collection: SeedCollection;
   entityId: SeedEntityId | null;
-  /** Firestore id: the record's key, derived for payroll runs and IRS config. */
+  /** Firestore id: the record's key; derived for payroll runs. */
   id: string;
   /** Path in the file, for messages: e.g. "entities.noisysource.employmentContracts[2]". */
   path: string;
@@ -453,8 +436,6 @@ export function flattenSeed(seed: Seed): SeedRecord[] {
         if (collection === 'payrollRuns') {
           const c = contracts.get(data.contract);
           id = payrollRunId(String(c?.company ?? '?'), String(c?.person ?? '?'), data.month);
-        } else if (collection === 'irsConfig') {
-          id = String(data.year);
         }
         out.push({ collection: collection as SeedCollection, entityId, id, path, data });
       });
@@ -543,9 +524,6 @@ function referencesOf(r: SeedRecord): Array<[string, RefKind, string]> {
       add('toAccount', 'account', d.toAccount);
       add('category', 'category', d.category);
       add('paidByAccount', 'account', d.paidByAccount);
-      break;
-    case 'irsConfig':
-      (d.incomes ?? []).forEach((inc: any, i: number) => add(`incomes[${i}].person`, 'person', inc.person));
       break;
   }
   return out;
@@ -641,13 +619,13 @@ export function validateSeed(input: unknown): SeedValidation {
     else byKey.set(k, r);
   }
 
-  // Derived ids (payroll runs, IRS years) are unique per collection and entity.
+  // Payroll run ids are derived: one per company, person and month.
   const derivedSeen = new Map<string, SeedRecord>();
   for (const r of records) {
-    if (r.collection !== 'payrollRuns' && r.collection !== 'irsConfig') continue;
-    const id = `${r.entityId}/${r.collection}/${r.id}`;
+    if (r.collection !== 'payrollRuns') continue;
+    const id = `${r.entityId}/${r.id}`;
     const prev = derivedSeen.get(id);
-    if (prev) errors.push({ path: r.path, message: `same ${r.collection === 'irsConfig' ? 'year' : 'person and month'} as ${prev.path}` });
+    if (prev) errors.push({ path: r.path, message: `same person and month as ${prev.path}` });
     else derivedSeen.set(id, r);
   }
 

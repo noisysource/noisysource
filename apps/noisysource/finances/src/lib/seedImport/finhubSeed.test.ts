@@ -21,11 +21,9 @@ describe('finhub seed — the committed example', () => {
     expect(v.importable.some(r => r.id === 'ns-ana-v1')).toBe(true);
   });
 
-  it('derives payroll run and IRS ids', () => {
-    const ids = validateSeed(example()).importable
-      .filter(r => r.collection === 'payrollRuns' || r.collection === 'irsConfig')
-      .map(r => r.id);
-    expect(ids).toEqual(['2026', 'noisysource-ana-2026-02', 'noisysource-ana-2026-06']);
+  it('derives payroll run ids from company, person and month', () => {
+    const ids = validateSeed(example()).importable.filter(r => r.collection === 'payrollRuns').map(r => r.id);
+    expect(ids).toEqual(['noisysource-ana-2026-02', 'noisysource-ana-2026-06']);
     expect(payrollRunId('noisysource', 'ana', '2026-02')).toBe('noisysource-ana-2026-02');
   });
 });
