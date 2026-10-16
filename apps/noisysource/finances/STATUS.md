@@ -112,23 +112,28 @@ Progress:
     versions, payslips that don't add up, EC end date ≠ FinHub's projection) block the import; a
     `"TODO"` refuses only that record and whatever references it (**Renato's choice, 2026-10-16**).
     Check the real file locally: `SEED_FILE=~/dev/noisysource/prodata/finhub-seed.json pnpm --filter finances test`.
-  - **Seed draft: nearly complete, validates with 0 errors** (`prodata/finhub-seed.json`, local
+  - **Seed draft: COMPLETE (2026-10-16), validates with 0 errors** (`prodata/finhub-seed.json`, local
     only; answers and the source of every value in `prodata/finhub-seed-sources.md`). Batches 1–9
     answered: accounts, NS contracts (versions) + 27 payroll runs from the payslips (every one adds
     up), income sources, the EC contract (FinHub's projection reproduces the client's end date),
     credits (Casa ×3 + NoisySource; instalments match the bank), insurances (several marked
     "PRECISA DE MAIS DADOS" in their notes), recurring costs per entity (latest bill or a Jan–Sep
-    average, Renato's rules). Only refused record: Marisa's ASFD Jan–May version.
+    average, Renato's rules), categories (OK'd, every recurring entry linked). IRS config not seeded
+    (see the future feature below). Only refused record: Marisa's ASFD Jan–May version.
   - **Left for Renato to enter by hand later:** balances (cards, CGD, Revolut), the van's loan data
     (seeded as a fixed monthly expense until then), Colégio São José, Revolut shares/stocks, EasyPay
     and Vendus (paid personally; invoices to sort out first).
-  - **Last questions:** IRS config 2026 and categories (both optional).
   - **Heads-up, not changed:** NoisyPhocus's Custos do mês counts every recurring expense under its
     software subtotal (`costSummary.ts`), so rent, utilities and the van land there now; the total is
     right. Needs a category filter (STATUS open item below).
   - **Wipe (Renato, 2026-10-16): yes**, the Dev Tools wipe will clear every FinHub collection
     (today it skips `incomeSources`, `creditContracts`, `loans`, `insurances`, `costSummary` and the
     bank transactions/imports). Goes in the importer PR.
+  - **NEXT: importer and date fixes** (code; same branch).
+  - **Future feature (Renato, 2026-10-16), not this PR:** the IRS page fills itself as months go by,
+    from payroll runs (NoisySource, exact), income-source versions (ET, ASFD) and confirmed bank
+    movements, with deductions from the health/education/housing categories. Today `irsConfig` is a
+    manual annual form only.
   - Importer and date fixes: not started. tsc baseline on this branch: 22 errors (finances app).
   Original suggested order: seed schema first (so the draft fits it), then the seed draft with
   Renato, then the rest of the importer and the date fixes.
