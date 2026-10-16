@@ -3,7 +3,6 @@ import { makePeopleDomain, type Person } from "./domains/people";
 import { makeAccountsDomain } from "./domains/accounts";
 import { makeContractsDomain } from "./domains/contracts";
 import { makeCategoriesDomain } from "./domains/categories";
-import { makeBackupDomain } from "./domains/backups";
 import { makeEcContractsDomain } from "./domains/ecContracts";
 import { makePayrollRunsDomain } from "./domains/payrollRuns";
 import { makeRecurringDomain } from "./domains/recurring";
@@ -32,7 +31,6 @@ export const api = (() => {
     accounts: makeAccountsDomain(getEntityId),
     contracts: makeContractsDomain(getEntityId),
     categories: makeCategoriesDomain(getEntityId),
-    backup: makeBackupDomain(getEntityId),
     ecContracts: makeEcContractsDomain(getEntityId),
     payrollRuns: makePayrollRunsDomain(getEntityId),
     recurring: makeRecurringDomain(getEntityId),
