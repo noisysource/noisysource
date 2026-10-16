@@ -143,6 +143,7 @@ const FIELD_RULES = [
   ["lineItems[].legacyPricing", KEEP], ["lineItems[].absenceCount", KEEP], ["lineItems[].absenceCreditAmount", KEEP],
   ["lineItems[].absenceDates[]", KEEP], ["lineItems[].absenceCreditDates[]", KEEP], ["lineItems[].excludedDates[]", KEEP],
   ["lineItems[].appliedDiscounts[].*", KEEP], // discount rule id/name, %, when, auto/admin
+  ["lineItems[].frozenMidPeriodCancellation", KEEP],
   ["manualPayment.at", KEEP],
   // Pseudonymised.
   ["familyId", pseudoId], ["userId", pseudoId], ["billingName", familyName], ["billingEmail", familyEmail],
@@ -150,14 +151,23 @@ const FIELD_RULES = [
   ["manualPayment.by", () => str("admin")],
   ["invoiceError", () => str("erro copiado de prod")],
   // Dropped: references into the real EasyPay/Vendus accounts, payment links, uploaded proofs, free text.
-  ["easypayId", DROP], ["previousEasypayIds", DROP], ["duplicatePaymentEasypayIds", DROP],
+  ["easypayId", DROP], ["paidEasypayId", DROP], ["previousEasypayIds", DROP], ["duplicatePaymentEasypayIds", DROP],
   ["multibancoEntity", DROP], ["multibancoReference", DROP], ["paymentLink", DROP],
   ["paymentProofs", DROP], ["vendusId", DROP], ["manualPayment.note", DROP], ["mbwayPhone", DROP], [TAG, DROP],
 ].map(([path, rule]) => [new RegExp(`^${path.replace(/[.[\]]/g, "\\$&").replace(/\*/g, "[^.\\[\\]]+")}$`), rule, path]);
 
 const ruleFor = (path) => FIELD_RULES.find(([re]) => re.test(path))?.[1];
+/** The rule transform() applies to a leaf: the first rule found walking down from the top-level field. */
+const effectiveRule = (path) => {
+  const cuts = [...path.matchAll(/\.|\[\]/g)].flatMap(m => (m[0] === "[]" ? [m.index, m.index + 2] : [m.index]));
+  for (const end of [...cuts, path.length]) {
+    const r = ruleFor(path.slice(0, end));
+    if (r !== undefined) return r;
+  }
+  return undefined;
+};
 const ruleLabel = (path) => {
-  const r = ruleFor(path);
+  const r = effectiveRule(path);
   return r === KEEP ? "keep" : r === DROP ? "drop" : typeof r === "function" ? "pseudonymise" : "UNCLASSIFIED";
 };
 
@@ -261,7 +271,7 @@ function inspect(docs) {
     const times = vs.filter(v => v.type === "timestampValue").map(v => lisbonYM({ timestampValue: v.raw }));
     if (strings.length) {
       shape = `distinct ${new Set(strings).size}, max length ${Math.max(...strings.map(s => s.length))}, ${charClass(strings)}`;
-      if (ruleFor(p) === KEEP) { // values of pseudonymised, dropped or unclassified fields are never shown
+      if (effectiveRule(p) === KEEP) { // values of pseudonymised, dropped or unclassified fields are never shown
         const shapes = [...new Set(strings.map(masker(strings)))];
         shape += shapes.length <= 12 ? ` · ${shapes.map(s => JSON.stringify(s)).join(" ")}` : ` · ${shapes.length} shapes`;
       }
