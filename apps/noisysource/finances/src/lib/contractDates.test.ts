@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildPayrollPreview, contractInForce } from '@shared/lib/payroll';
-import { generateIncomeSourceEvents } from '@shared/lib/eventGenerators';
+import { buildPayrollPreview, computeMonthlyPayroll, contractInForce, payrollRunId, splitConfirmedRows } from '@shared/lib/payroll';
+import { generateEmploymentEvents, generateIncomeSourceEvents } from '@shared/lib/eventGenerators';
 import { incomeSourceMonth, type IncomeSourceDoc } from '@shared/models/IncomeSource';
 import { ecContractInForce, type EcContractDoc } from '@shared/models/EcContract';
 import type { EmploymentContractDoc } from '@shared/models/Employment';
@@ -18,7 +18,7 @@ describe('payroll counts only the contracts in force that month', () => {
 
   it('takes one version per month across a raise', () => {
     const rows = buildPayrollPreview([v1, v2], { year: 2026, month1to12: 3, span: 4 });
-    expect(rows.map(r => [r.contractId, r.monthLabel !== undefined && r.payDateISO.slice(0, 7)])).toEqual([
+    expect(rows.map(r => [r.contractId, r.yearMonth])).toEqual([
       ['v1', '2026-03'], ['v1', '2026-04'], ['v2', '2026-05'], ['v2', '2026-06'],
     ]);
   });
@@ -83,5 +83,37 @@ describe('the EC contract in force on a day', () => {
   it('falls back to the next one to start, ignores inactive ones, else null', () => {
     expect(ecContractInForce([v1, v2], new Date(2025, 11, 1))?.id).toBe('v1');
     expect(ecContractInForce([v1, { ...v2, active: false }], new Date(2026, 5, 1))).toBeNull();
+  });
+});
+
+describe('a payroll month is confirmed once', () => {
+  const c = contract({ id: 'v1', payDay: 30 });
+
+  it('pays day 30 of February on the 28th, and says which month a row is', () => {
+    const row = computeMonthlyPayroll(c, 2026, 2);
+    expect(row.yearMonth).toBe('2026-02');
+    expect(row.payDateISO).toBe('2026-02-28');
+  });
+
+  it('leaves out rows whose company, person and month already have a run', () => {
+    const rows = buildPayrollPreview([c], { year: 2026, month1to12: 1, span: 3 });
+    const runs = [{ companyId: 'acme', personId: 'ana', year: 2026, month: 2 }];
+    const { pending, confirmed } = splitConfirmedRows(rows, runs);
+    expect(pending.map(r => r.yearMonth)).toEqual(['2026-01', '2026-03']);
+    expect(confirmed.map(r => r.yearMonth)).toEqual(['2026-02']);
+    expect(payrollRunId('acme', 'ana', '2026-02')).toBe('acme-ana-2026-02');
+  });
+});
+
+describe('employment events land in the contract\'s company', () => {
+  it('files a NoisyPhocus green receipt under NoisyPhocus', () => {
+    const teacher = { ...contract({ id: 't', contractType: 'green_receipt', ssErPct: 0, ssEmpPct: 0, irsRatePct: 0, flowToPrivate: false }), entityId: 'noisyphocus' as const };
+    const events = generateEmploymentEvents([teacher], new Map([['ana', 'Ana']]), '2026-10', 1);
+    expect(events.map(e => [e.entityId, e.description, e.amountCents])).toEqual([['noisyphocus', 'Recibo Verde — Ana', -100000]]);
+  });
+
+  it('keeps untagged contracts under NoisySource', () => {
+    const events = generateEmploymentEvents([contract({ flowToPrivate: false })], new Map(), '2026-10', 1);
+    expect(events[0].entityId).toBe('noisysource');
   });
 });

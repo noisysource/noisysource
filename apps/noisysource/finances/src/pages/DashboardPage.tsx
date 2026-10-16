@@ -95,7 +95,7 @@ export default function DashboardPage() {
   const [ecContracts, setEcContracts] = useState<EcContractDoc[]>([]);
   const [storedEvents, setStoredEvents] = useState<FinanceEvent[]>([]);
   const [accounts, setAccounts] = useState<TaggedAccount[]>([]);
-  const [employmentContracts, setEmploymentContracts] = useState<EmploymentContractDoc[]>([]);
+  const [employmentContracts, setEmploymentContracts] = useState<Array<EmploymentContractDoc & { entityId: FinanceEntityId }>>([]);
   const [incomeSources, setIncomeSources] = useState<IncomeSourceDoc[]>([]);
   const [peopleMap, setPeopleMap] = useState<Map<string, string>>(new Map());
   const [allRecurring, setAllRecurring] = useState<{ entry: RecurringEntryDoc; entityId: FinanceEntityId }[]>([]);
@@ -142,9 +142,12 @@ export default function DashboardPage() {
           for (const a of accs) allAccounts.push({ ...a, entityId });
         }
 
-        // Load employment contracts + income sources for calendar event generation
-        api.setEntity('noisysource');
-        const empContracts = await api.contracts.list();
+        // Load employment contracts (both companies, tagged by entity) + income sources for calendar event generation
+        const empContracts: Array<EmploymentContractDoc & { entityId: FinanceEntityId }> = [];
+        for (const eid of ['noisysource', 'noisyphocus'] as FinanceEntityId[]) {
+          api.setEntity(eid);
+          for (const c of await api.contracts.list()) empContracts.push({ ...c, entityId: eid });
+        }
         api.setEntity('private');
         const sources = await api.incomeSources.list();
         const peopleList = await api.people.list() as { id: string; name: string }[];

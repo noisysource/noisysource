@@ -99,7 +99,7 @@ export default function ForecastPage() {
   const [allRecurring, setAllRecurring]             = useState<{ entry: RecurringEntryDoc; entityId: FinanceEntityId }[]>([]);
   const [allCredits, setAllCredits]                 = useState<{ contract: CreditContractDoc; entityId: FinanceEntityId }[]>([]);
   const [allAccounts, setAllAccounts]               = useState<{ account: Account; entityId: FinanceEntityId }[]>([]);
-  const [employmentContracts, setEmploymentContracts] = useState<EmploymentContractDoc[]>([]);
+  const [employmentContracts, setEmploymentContracts] = useState<Array<EmploymentContractDoc & { entityId: FinanceEntityId }>>([]);
   const [incomeSources, setIncomeSources]           = useState<IncomeSourceDoc[]>([]);
   const [ecContracts, setEcContracts]               = useState<EcContractDoc[]>([]);
   const [peopleMap, setPeopleMap]                   = useState<Map<string, string>>(new Map());
@@ -139,8 +139,13 @@ export default function ForecastPage() {
           ecAll.push(...list.filter((c: EcContractDoc) => c.active));
         }
 
-        api.setEntity('noisysource');
-        const empContracts = await api.contracts.list() as EmploymentContractDoc[];
+        // Employment contracts of both companies, tagged so each salary lands in its own entity
+        const empContracts: Array<EmploymentContractDoc & { entityId: FinanceEntityId }> = [];
+        for (const eid of ['noisysource', 'noisyphocus'] as FinanceEntityId[]) {
+          api.setEntity(eid);
+          const list = await api.contracts.list() as EmploymentContractDoc[];
+          for (const c of list) empContracts.push({ ...c, entityId: eid });
+        }
 
         api.setEntity('private');
         const [sources, people] = await Promise.all([

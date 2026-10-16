@@ -149,13 +149,17 @@ function ymWindow(startYM: string, months: number): string[] {
   });
 }
 
+/** Company entity → the name used in salary descriptions. */
+const COMPANY_LABEL: Partial<Record<FinanceEntityId, string>> = { noisysource: 'NoisySource', noisyphocus: 'NoisyPhocus' };
+
 /**
  * Generate salary credit + benefit credit events from employment contracts.
  * Only contracts with flowToPrivate=true generate private income events.
- * Also generates the NoisySource payroll expense event for each contract.
+ * Also generates the payroll expense event for each contract, under the company entity the
+ * contract belongs to (`entityId`; untagged = NoisySource, as before).
  */
 export function generateEmploymentEvents(
-  contracts: EmploymentContractDoc[],
+  contracts: ReadonlyArray<EmploymentContractDoc & { entityId?: FinanceEntityId }>,
   people: ReadonlyMap<string, string>,
   startYM: string,
   months: number,
@@ -169,6 +173,8 @@ export function generateEmploymentEvents(
     const contractEndYM = contract.endDate ? tsToYM(contract.endDate) : undefined;
     const personName = (people.get(contract.personId) ?? contract.personId).split(' ')[0];
     const payDay = contract.payDay ?? 25;
+    const companyEntity: FinanceEntityId = contract.entityId ?? 'noisysource';
+    const expenseLabel = contract.contractType === 'green_receipt' ? 'Recibo Verde' : 'Encargos Salariais';
 
     // Compute payroll using current month — rates don't change month-to-month in this model
     const now = new Date();
@@ -181,16 +187,16 @@ export function generateEmploymentEvents(
       const day = clampDay(ym, payDay);
       const date = `${ym}-${String(day).padStart(2, '0')}`;
 
-      // NoisySource payroll burden (gross + SS employer)
+      // The company's payroll burden (gross + SS employer)
       events.push({
         key: `emp_exp:${contract.id}:${ym}`,
         computed: true,
-        entityId: 'noisysource' as FinanceEntityId,
+        entityId: companyEntity,
         type: 'expense',
         date,
         amountCents: -(row.grossCents + row.ssErCents),
         status: 'planned',
-        description: `Encargos Salariais — ${personName}`,
+        description: `${expenseLabel} — ${personName}`,
         sourceType: 'employment_contract',
         sourceId: contract.id,
       });
@@ -210,7 +216,7 @@ export function generateEmploymentEvents(
         date,
         amountCents: row.netCents + cashBenefitsCents,
         status: 'planned',
-        description: `Salário NoisySource — ${personName}`,
+        description: `Salário ${COMPANY_LABEL[companyEntity] ?? companyEntity} — ${personName}`,
         accountId: contract.netPayAccountId || undefined,
         sourceType: 'employment_contract',
         sourceId: contract.id,
