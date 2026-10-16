@@ -369,3 +369,47 @@ prices, VAT inside, so **no billed amount changes**; only what the pages say.
 **Still open (not a bug):** insurance is invoiced at 23% (its Vendus product). Ask the accountant
 whether it should be exempt (`isento`); if so, that's a Vendus product change plus one line in
 `KIDCLUB_VAT` (`packages/shared/models/kidclubVat.ts`).
+
+### Real data for FinHub — seed import and date fixes (`agent/finhub-real-data`)
+
+Changes F3, F4 and F5 above: FinHub's data now comes from `prodata/finhub-seed.json` (local only)
+through Dev Tools → **Importar seed**, and FinHub honours start/end dates. `HANDOFF-finhub-data.md`
+steps 3–4.
+
+#### S1. Wipe dev and import the seed
+1. Dev Tools → Danger Zone: tick **Global data** and the three entities, type DELETE. ✅ The text
+   names project **kidclub-dev**. ✅ "Done. N documents deleted." KidClub's Cobranças still lists
+   its bills (the wipe only touches FinHub).
+2. Dev Tools → Importar seed → pick `prodata/finhub-seed.json`. ✅ "Válido: N registos a importar",
+   no red errors; the amber list holds only records with a TODO, each with its reason.
+3. Pré-visualizar. ✅ Every row is "criar".
+4. Importar para kidclub-dev, confirm. ✅ Progress to N/N, then "Importados N registos".
+5. Pré-visualizar again. ✅ Every row "sem alterações". Import once more and preview: ✅ still
+   "sem alterações", and no list (contracts, recorrentes, seguros) shows anything twice.
+
+#### S2. Every page shows the seeded data
+1. Casa: Contas (banks with IBAN, Edenred cards, no balance until statements or by hand),
+   Rendimentos (each source with its dates "início → fim"), Créditos (outstanding and next
+   instalment match the bank's latest statement), Seguros, Recorrentes (hand-entered, plus the
+   derived salaries, vouchers and premiums), Categorias.
+2. NoisySource: Contratos (a raise shows as two contracts with consecutive dates), Clientes (a
+   rate change shows as two EC contracts), Salários, Recorrentes ("EC — …" once per EC contract,
+   each with its own months).
+3. NoisyPhocus: Contratos (the teacher as Recibo Verde), Recorrentes, Custos do mês. Known, not
+   fixed here: every recurring expense is counted under the "software" subtotal (rent too); the
+   total is right.
+
+#### S3. Dates are honoured (the four fixes)
+1. Salários: a month before a raise and a month after, for that person. ✅ One row each month,
+   with that month's version. A month before a contract starts: ✅ no row for it.
+2. Custos do mês (NoisyPhocus), a month before a contract starts. ✅ No line for it.
+3. Previsão: an income source with an end date. ✅ It stops after that month; the next version
+   starts the month after. A source with a meal allowance paid in cash: ✅ the monthly amount is
+   net pay + the allowance.
+4. Dashboard: ✅ the calendar's title is the EC contract in force today; Previsão shows EC payments
+   for every version, each inside its own dates.
+
+#### S4. Bank statements on Contas
+1. Contas → each bank account → import its statements oldest first (the import sets the balance
+   to the statement's closing balance, so the newest must come last). ✅ Every statement imports
+   with "Saldos verificados"; the account's balance = the last statement's closing balance.
