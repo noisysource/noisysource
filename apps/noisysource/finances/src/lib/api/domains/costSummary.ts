@@ -9,7 +9,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../firebase";
 import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { RecurringEntryDoc } from "@shared/models/RecurringEntry";
-import type { CostSummaryBreakdownLine, CostSummaryDoc } from "@shared/models/CostSummary";
+import type { CostSummaryBreakdownLine, CostSummaryDoc, CostSummaryGroup } from "@shared/models/CostSummary";
 import { buildPayrollPreview } from "@shared/lib/payroll";
 import { recurringVatCode } from "@shared/models/RecurringEntry";
 import { splitGross } from "@shared/lib/vat";
@@ -31,6 +31,23 @@ export interface ComputeCostSummaryInput {
   kidclubVolumeCentsForMonth?: number;
   /** Optional personId -> display name, purely for nicer breakdown labels. */
   peopleById?: Record<string, string>;
+  /** The entity's categories: each recurring cost is grouped under its top-level category. */
+  categories?: ReadonlyArray<{ id: string; name: string; parentId?: string }>;
+}
+
+export const PAYROLL_GROUP = "Pessoal";
+export const UNCATEGORISED_GROUP = "Sem categoria";
+const isSoftware = (group: string) => group.trim().toLowerCase() === "software";
+
+/** Name of a category's top-level ancestor (itself if it has no parent). */
+function topCategoryName(
+  categoryId: string | undefined,
+  byId: ReadonlyMap<string, { name: string; parentId?: string }>,
+): string {
+  let c = categoryId ? byId.get(categoryId) : undefined;
+  if (!c) return UNCATEGORISED_GROUP;
+  for (let i = 0; i < 10 && c.parentId && byId.has(c.parentId); i++) c = byId.get(c.parentId)!;
+  return c.name;
 }
 
 export type ComputedCostSummary = Omit<CostSummaryDoc, "computedAt">;
@@ -59,18 +76,17 @@ export function computeNoisyphocusCostSummary(input: ComputeCostSummaryInput): C
       const label = contract?.contractType === "green_receipt"
         ? `Recibo Verde — ${personLabel}`
         : `Contrato — ${personLabel}`;
-      breakdown.push({ label, amountCents: row.totals.costToEmployerCents, netCents: row.totals.costToEmployerCents });
+      breakdown.push({ label, group: PAYROLL_GROUP, amountCents: row.totals.costToEmployerCents, netCents: row.totals.costToEmployerCents });
     }
   }
 
-  // ── Software/tooling: active expense recurring entries for this entity ──
-  // NoisyPhocus's payroll lives in employmentContracts (above), not `recurring`
-  // — so every other active expense recurring entry here is, by construction,
-  // a software/tooling cost (Vendus, EasyPay, ...). If a non-software recurring
-  // expense is ever added for NoisyPhocus, this will need a real categoryId
-  // filter — see STATUS.md.
+  // ── Recurring costs: every active expense entry, grouped by its top-level category ──
+  // (rent, utilities, the van, software…). Only the "Software" category counts as software.
   // Amounts are VAT-inclusive (VAT convention): the VAT is split out of them
   // into the "sem IVA" column, never added on top.
+  const categoriesById = new Map((input.categories ?? []).map(c => [c.id, c]));
+  let recurringCostCents = 0;
+  let recurringNetCents = 0;
   let softwareCostCents = 0;
   let softwareNetCents = 0;
   let vatCents = 0;
@@ -89,23 +105,43 @@ export function computeNoisyphocusCostSummary(input: ComputeCostSummaryInput): C
     const split = splitGross(amountCents, vatCode);
     if (!split) unconfirmedVatCount++;
     const netCents = split ? split.netCents : amountCents;
-    softwareCostCents += amountCents;
-    softwareNetCents += netCents;
+    const group = topCategoryName(r.categoryId, categoriesById);
+    recurringCostCents += amountCents;
+    recurringNetCents += netCents;
+    if (isSoftware(group)) {
+      softwareCostCents += amountCents;
+      softwareNetCents += netCents;
+    }
     vatCents += split ? split.vatCents : 0;
-    breakdown.push({ label: r.description, amountCents, netCents, vatCode });
+    breakdown.push({ label: r.description, group, amountCents, netCents, vatCode });
   }
 
-  const totalCostCents = payrollCostCents + softwareCostCents;
-  const totalNetCents = payrollCostCents + softwareNetCents;
+  // Subtotals: payroll first, then the largest group.
+  const byGroup = new Map<string, CostSummaryGroup>();
+  for (const line of breakdown) {
+    const name = line.group ?? UNCATEGORISED_GROUP;
+    const g = byGroup.get(name) ?? { name, amountCents: 0, netCents: 0 };
+    g.amountCents += line.amountCents;
+    g.netCents += line.netCents ?? line.amountCents;
+    byGroup.set(name, g);
+  }
+  const groups = [...byGroup.values()].sort((a, b) =>
+    (b.name === PAYROLL_GROUP ? 1 : 0) - (a.name === PAYROLL_GROUP ? 1 : 0) || b.amountCents - a.amountCents);
+
+  const totalCostCents = payrollCostCents + recurringCostCents;
+  const totalNetCents = payrollCostCents + recurringNetCents;
 
   return {
     payrollCostCents,
+    recurringCostCents,
+    recurringNetCents,
     softwareCostCents,
     softwareNetCents,
     vatCents,
     totalCostCents,
     totalNetCents,
     unconfirmedVatCount,
+    groups,
     breakdown,
   };
 }

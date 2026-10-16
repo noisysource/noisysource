@@ -95,8 +95,8 @@ describe("computeNoisyphocusCostSummary", () => {
       kidclubVolumeCentsForMonth: 200000,
     });
     // Vendus 18.45 + EasyPay 36.90 + Claude 20.00
-    expect(s.softwareCostCents).toBe(7535);
-    expect(s.softwareNetCents).toBe(1500 + 3000 + 2000);
+    expect(s.recurringCostCents).toBe(7535);
+    expect(s.recurringNetCents).toBe(1500 + 3000 + 2000);
     expect(s.vatCents).toBe(345 + 690);
     expect(s.totalCostCents).toBe(7535);
     expect(s.totalNetCents).toBe(6500);
@@ -115,8 +115,31 @@ describe("computeNoisyphocusCostSummary", () => {
       contracts: [],
       recurring: [entry({ description: "Encargos Salariais — X", amountCents: 120000, sourceId: "emp:c1:ns" })],
     });
-    expect(s.softwareCostCents).toBe(0);
+    expect(s.recurringCostCents).toBe(0);
     expect(s.breakdown).toEqual([]);
+  });
+  it("groups recurring costs by top-level category; only the Software category is software", () => {
+    const categories = [
+      { id: "soft", name: "Software" },
+      { id: "casa", name: "Instalações" },
+      { id: "renda", name: "Renda", parentId: "casa" },
+    ];
+    const s = computeNoisyphocusCostSummary({
+      yearMonth: "2026-10",
+      contracts: [],
+      categories,
+      recurring: [
+        { ...vendus, categoryId: "soft" },
+        entry({ description: "Renda", amountCents: 50000, vatCode: "isento", categoryId: "renda" }),
+        entry({ description: "Água", amountCents: 2000, vatCode: 6 }),
+      ],
+    });
+    expect(s.softwareCostCents).toBe(1845);
+    expect(s.recurringCostCents).toBe(1845 + 50000 + 2000);
+    expect(s.groups?.map(g => [g.name, g.amountCents])).toEqual([
+      ["Instalações", 50000], ["Sem categoria", 2000], ["Software", 1845],
+    ]);
+    expect(s.breakdown?.find(l => l.label === "Renda")?.group).toBe("Instalações");
   });
 });
 

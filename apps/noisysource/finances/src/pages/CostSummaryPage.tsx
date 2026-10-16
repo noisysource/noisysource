@@ -62,11 +62,12 @@ export default function CostSummaryPage() {
         // Both salaried and green-receipt/freelance NoisyPhocus workers come
         // from api.contracts (employmentContracts) — see costSummary.ts for
         // why EC-contracts (a different, income-direction model) isn't used.
-        const [contracts, recurring, people, volumeCents] = await Promise.all([
+        const [contracts, recurring, people, volumeCents, categories] = await Promise.all([
           api.contracts.list(),
           api.recurring.list(),
           api.people.list(),
           api.kidclub.monthlyProcessedVolumeCents(yearMonth),
+          api.categories.list(),
         ]);
 
         const peopleById: Record<string, string> = {};
@@ -78,6 +79,7 @@ export default function CostSummaryPage() {
           recurring,
           kidclubVolumeCentsForMonth: volumeCents,
           peopleById,
+          categories,
         });
 
         if (cancelled) return;
@@ -108,7 +110,8 @@ export default function CostSummaryPage() {
       <div>
         <h1 className="text-xl font-bold">Custos — NoisyPhocus</h1>
         <p className="text-xs text-zinc-500 mt-0.5">
-          Total mensal (payroll + software), com e sem IVA, usado pelo KidClub no Resumo Financeiro.
+          Total mensal (pessoal + custos fixos por categoria), com e sem IVA, usado pelo KidClub no Resumo Financeiro.
+          Cada custo recorrente conta na sua categoria (Recorrentes → Categoria).
         </p>
       </div>
 
@@ -142,15 +145,15 @@ export default function CostSummaryPage() {
           <Card className="p-4">
             <div className="grid grid-cols-3 gap-3 text-center">
               <div>
-                <div className="text-xs text-zinc-400 mb-1">Payroll</div>
+                <div className="text-xs text-zinc-400 mb-1">Pessoal</div>
                 <div className="text-base font-bold text-zinc-100">{formatEUR(summary.payrollCostCents)}</div>
                 <div className="text-[10px] text-zinc-600 mt-0.5">sem IVA aplicável</div>
               </div>
               <div>
-                <div className="text-xs text-zinc-400 mb-1">Software</div>
-                <div className="text-base font-bold text-zinc-100">{formatEUR(summary.softwareCostCents)}</div>
+                <div className="text-xs text-zinc-400 mb-1">Custos fixos</div>
+                <div className="text-base font-bold text-zinc-100">{formatEUR(summary.recurringCostCents ?? summary.softwareCostCents)}</div>
                 <div className="text-[10px] text-zinc-500 mt-0.5">
-                  sem IVA {formatEUR(summary.softwareNetCents ?? summary.softwareCostCents)} · IVA {formatEUR(summary.vatCents)}
+                  sem IVA {formatEUR(summary.recurringNetCents ?? summary.softwareNetCents ?? summary.softwareCostCents)} · IVA {formatEUR(summary.vatCents)}
                 </div>
               </div>
               <div>
@@ -176,20 +179,31 @@ export default function CostSummaryPage() {
                 Sem dados — falta configurar contratos/recorrentes de NoisyPhocus (ver STATUS.md).
               </div>
             )}
-            {(summary.breakdown ?? []).map((line, i) => (
-              <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-zinc-800/50">
-                <span className="text-zinc-400 min-w-0 truncate pr-2">
-                  {line.label}
-                  {line.vatCode !== undefined && (
-                    <span className={`ml-1.5 ${line.vatCode === "por_confirmar" ? "text-amber-400" : "text-zinc-600"}`}>
-                      {vatCodeLabel(line.vatCode)}
+            {(summary.groups ?? []).map(g => (
+              <div key={g.name} className="pt-1">
+                <div className="flex items-center justify-between text-xs py-1 font-semibold text-zinc-300">
+                  <span>{g.name}</span>
+                  <span className="flex gap-3">
+                    <span className="w-24 text-right tabular-nums">{formatEUR(g.amountCents)}</span>
+                    <span className="w-24 text-right tabular-nums text-zinc-400">{formatEUR(g.netCents)}</span>
+                  </span>
+                </div>
+                {(summary.breakdown ?? []).filter(line => (line.group ?? "") === g.name).map((line, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs py-1 pl-3 border-b border-zinc-800/50">
+                    <span className="text-zinc-400 min-w-0 truncate pr-2">
+                      {line.label}
+                      {line.vatCode !== undefined && (
+                        <span className={`ml-1.5 ${line.vatCode === "por_confirmar" ? "text-amber-400" : "text-zinc-600"}`}>
+                          {vatCodeLabel(line.vatCode)}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-                <span className="flex gap-3 shrink-0">
-                  <span className="w-24 text-right text-zinc-200 tabular-nums">{formatEUR(line.amountCents)}</span>
-                  <span className="w-24 text-right text-zinc-400 tabular-nums">{formatEUR(line.netCents ?? line.amountCents)}</span>
-                </span>
+                    <span className="flex gap-3 shrink-0">
+                      <span className="w-24 text-right text-zinc-200 tabular-nums">{formatEUR(line.amountCents)}</span>
+                      <span className="w-24 text-right text-zinc-400 tabular-nums">{formatEUR(line.netCents ?? line.amountCents)}</span>
+                    </span>
+                  </div>
+                ))}
               </div>
             ))}
             <div className="flex items-center justify-between text-xs pt-1 font-semibold">

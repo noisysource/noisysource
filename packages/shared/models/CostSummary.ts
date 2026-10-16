@@ -20,6 +20,8 @@ import type { VatCode } from '../lib/vat';
  */
 export interface CostSummaryBreakdownLine {
   label: string;
+  /** Group it's shown under: "Pessoal" for payroll, else the top-level category of the recurring entry. */
+  group?: string;
   /** Com IVA. */
   amountCents: number;
   /** Sem IVA. Equal to amountCents when no VAT applies (payroll, exempt) or it's unknown. */
@@ -28,13 +30,27 @@ export interface CostSummaryBreakdownLine {
   vatCode?: VatCode;
 }
 
+/** Subtotal of one group (a top-level category, "Pessoal", or "Sem categoria"). */
+export interface CostSummaryGroup {
+  name: string;
+  amountCents: number;
+  netCents: number;
+}
+
 export interface CostSummaryDoc {
   payrollCostCents: number;
-  /** Recurring costs, com IVA. */
+  /** Every recurring cost (rent, utilities, software, …), com IVA. */
+  recurringCostCents?: number;
+  /** Every recurring cost, sem IVA. */
+  recurringNetCents?: number;
+  /**
+   * Recurring costs in the "Software" category only, com IVA. Docs computed before 2026-10-16 counted
+   * every recurring cost here (no categories then).
+   */
   softwareCostCents: number;
-  /** Recurring costs, sem IVA. */
+  /** The same, sem IVA. */
   softwareNetCents?: number;
-  /** VAT inside the recurring costs (dedutível). Already part of softwareCostCents, not extra. */
+  /** VAT inside the recurring costs (dedutível). Already part of recurringCostCents, not extra. */
   vatCents: number;
   /** payroll + recurring costs, com IVA. */
   totalCostCents: number;
@@ -43,5 +59,7 @@ export interface CostSummaryDoc {
   /** Recurring costs with "IVA por confirmar", counted at face value in both totals. */
   unconfirmedVatCount?: number;
   computedAt: Timestamp;
+  /** Subtotals per group, payroll ("Pessoal") first, then the largest. */
+  groups?: CostSummaryGroup[];
   breakdown?: CostSummaryBreakdownLine[];
 }

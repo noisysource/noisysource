@@ -56,6 +56,7 @@ type Form = {
   amountEUR: string;
   accountId: string;
   toAccountId: string;
+  categoryId: string;
   frequency: RecurringFrequency;
   dayOfMonth: string;
   monthOfYear: string;
@@ -78,7 +79,7 @@ type Form = {
 };
 const emptyForm = (): Form => ({
   type: 'expense', description: '', amountEUR: '',
-  accountId: '', toAccountId: '', frequency: 'monthly',
+  accountId: '', toAccountId: '', categoryId: '', frequency: 'monthly',
   dayOfMonth: '1', monthOfYear: '1', startYearMonth: '',
   endYearMonth: '', onceYearMonth: '', active: true,
   reimbursable: false, paidByAccountId: '',
@@ -90,7 +91,7 @@ function fromDoc(d: RecurringEntryDoc): Form {
   return {
     type: d.type, description: d.description,
     amountEUR: (d.amountCents / 100).toFixed(2),
-    accountId: d.accountId ?? '', toAccountId: d.toAccountId ?? '',
+    accountId: d.accountId ?? '', toAccountId: d.toAccountId ?? '', categoryId: d.categoryId ?? '',
     frequency: d.frequency, dayOfMonth: String(d.dayOfMonth),
     monthOfYear: String(d.monthOfYear ?? 1),
     startYearMonth: d.startYearMonth ?? '', endYearMonth: d.endYearMonth ?? '',
@@ -120,6 +121,8 @@ function formAmountCents(form: Form, isPrivate: boolean): number {
 }
 
 type AccountOpt = { id: string; name: string; entityId: string };
+/** The entity's categories, labelled "Parent › Child" and filtered by entry type in the form. */
+type CategoryOpt = { id: string; label: string; type: string };
 type CrossEntityEntry = RecurringEntryDoc & { ownerEntityId: string; ownerEntityName: string };
 
 // ── Form modal ─────────────────────────────────────────────────────────────────
@@ -130,6 +133,7 @@ function RecurringFormModal({
   isPrivate,
   accounts,
   crossAccounts,
+  categories,
   onSave,
   onClose,
 }: {
@@ -138,6 +142,7 @@ function RecurringFormModal({
   isPrivate: boolean;
   accounts: AccountOpt[];
   crossAccounts: AccountOpt[];
+  categories: CategoryOpt[];
   onSave: (form: Form, id: string | null) => Promise<void>;
   onClose: () => void;
 }) {
@@ -324,6 +329,18 @@ function RecurringFormModal({
               {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
+          {form.type !== 'transfer' && (
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">Categoria</div>
+              <select value={form.categoryId} onChange={e => set('categoryId', e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1 text-sm">
+                <option value="">— sem categoria —</option>
+                {categories
+                  .filter(c => c.type === (form.type === 'income' ? 'INCOME' : 'EXPENSE') || c.id === form.categoryId)
+                  .map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+            </div>
+          )}
           {form.type === 'transfer' && (
             <div>
               <div className="text-xs text-zinc-400 mb-1">Conta de destino</div>
@@ -403,6 +420,7 @@ export default function RecurringPage() {
   const [rows, setRows]             = useState<RecurringEntryDoc[]>([]);
   const [accounts, setAccounts]     = useState<AccountOpt[]>([]);
   const [crossAccounts, setCrossAccounts] = useState<AccountOpt[]>([]);
+  const [categories, setCategories] = useState<CategoryOpt[]>([]);
   const [crossOwed, setCrossOwed]   = useState<CrossEntityEntry[]>([]);
   const [busy, setBusy]             = useState(false);
   const [msg, setMsg]               = useState<string | null>(null);
@@ -415,9 +433,17 @@ export default function RecurringPage() {
   async function reload() {
     try {
       api.setEntity(selectedEntity.id);
-      const [rs, as] = await Promise.all([api.recurring.list(), api.accounts.list()]);
+      const [rs, as, cats] = await Promise.all([api.recurring.list(), api.accounts.list(), api.categories.list()]);
       setRows(rs);
       setAccounts(as.map(a => ({ id: a.id, name: a.name, entityId: selectedEntity.id })));
+      const catName = new Map(cats.map(c => [c.id, c.name]));
+      setCategories(cats
+        .map(c => ({
+          id: c.id,
+          label: c.parentId && catName.has(c.parentId) ? `${catName.get(c.parentId)} › ${c.name}` : c.name,
+          type: (c.type ?? '').toUpperCase(),
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)));
 
       if (!isPrivate) {
         api.setEntity('private');
@@ -470,6 +496,7 @@ export default function RecurringPage() {
       vatCode: formVatEditable(form, isPrivate) ? form.vatCode : undefined,
       accountId: form.accountId || undefined,
       toAccountId: form.type === 'transfer' ? (form.toAccountId || undefined) : undefined,
+      categoryId: form.type !== 'transfer' ? (form.categoryId || undefined) : undefined,
       frequency: form.frequency,
       dayOfMonth: parseInt(form.dayOfMonth || '1', 10),
       monthOfYear: form.frequency === 'annual' ? parseInt(form.monthOfYear || '1', 10) : undefined,
@@ -804,6 +831,7 @@ export default function RecurringPage() {
           isPrivate={isPrivate}
           accounts={accounts}
           crossAccounts={crossAccounts}
+          categories={categories}
           onSave={handleSave}
           onClose={() => { setModalOpen(false); setEditingId(null); }}
         />
