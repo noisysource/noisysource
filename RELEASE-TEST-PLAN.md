@@ -395,9 +395,10 @@ steps 3–4.
 2. NoisySource: Contratos (a raise shows as two contracts with consecutive dates), Clientes (a
    rate change shows as two EC contracts), Salários, Recorrentes ("EC — …" once per EC contract,
    each with its own months).
-3. NoisyPhocus: Contratos (the teacher as Recibo Verde), Recorrentes, Custos do mês. Known, not
-   fixed here: every recurring expense is counted under the "software" subtotal (rent too); the
-   total is right.
+3. NoisyPhocus: Contratos (the teacher as Recibo Verde), Recorrentes (each entry with its
+   Categoria), Custos do mês: ✅ cards Pessoal / Custos fixos / Total; the detail grouped by
+   category with subtotals (Pessoal, Renda, Água luz e telecomunicações, Viatura, Comissões
+   bancárias); nothing under Software until Vendus/EasyPay are entered with that category.
 
 #### S3. Dates are honoured (the four fixes)
 1. Salários: a month before a raise and a month after, for that person. ✅ One row each month,
@@ -408,6 +409,18 @@ steps 3–4.
    net pay + the allowance.
 4. Dashboard: ✅ the calendar's title is the EC contract in force today; Previsão shows EC payments
    for every version, each inside its own dates.
+5. Previsão, filter NoisyPhocus. ✅ "Recibo Verde — <teacher>" every month (it was missing: only
+   NoisySource contracts were loaded).
+
+#### S5. A payroll month is confirmed once
+1. NoisySource → Salários, a seeded month (e.g. last month), Load payroll. ✅ Every row reads
+   "confirmado"; "Confirm payroll (0)" is disabled.
+2. Pick a 3-month period that ends in a month not yet confirmed. ✅ Only that month's rows count
+   in the button; confirm. ✅ Load again: all "confirmado"; Firestore has one run per person and
+   month (ids company-person-YYYY-MM), each under its own month.
+3. A pay day of 30 in February. ✅ Pay date 28 Feb (it used to show 2 March).
+4. Recorrentes → new expense. ✅ A Categoria picker (expense categories, "Pai › Filho"); not shown
+   for transfers.
 
 #### S4. Bank statements on Contas
 1. Contas → each bank account → import its statements oldest first (the import sets the balance

@@ -73,9 +73,9 @@ deploy:
 5. **Resumo do mês** — generalise `/noisyphocus/costs` to every company (income − team − fixed
    costs − taxes).
 
-Known bugs to fix along the way: Dashboard + Forecast load employment contracts from NoisySource
-only (NoisyPhocus salaries missing from the forecast); `api.setEntity` is one shared global that
-the Dashboard flips while loading (pass the entity explicitly instead).
+Known bugs to fix along the way: `api.setEntity` is one shared global that the Dashboard flips
+while loading (pass the entity explicitly instead). (Fixed 2026-10-16 on `agent/finhub-real-data`:
+Dashboard + Forecast now load employment contracts of both companies.)
 
 ## Currently working on
 **Real data for FinHub (2026-10-15): branch `agent/finhub-real-data`, worktree
@@ -123,9 +123,11 @@ Progress:
   - **Left for Renato to enter by hand later:** balances (cards, CGD, Revolut), the van's loan data
     (seeded as a fixed monthly expense until then), Colégio São José, Revolut shares/stocks, EasyPay
     and Vendus (paid personally; invoices to sort out first).
-  - **Heads-up, not changed:** NoisyPhocus's Custos do mês counts every recurring expense under its
-    software subtotal (`costSummary.ts`), so rent, utilities and the van land there now; the total is
-    right. Needs a category filter (STATUS open item below).
+  - **Also fixed in the PR (Renato asked, 2026-10-16, before step 4):** a payroll month can only be
+    confirmed once (runs get the seed's id; confirmed months are skipped; multi-month periods saved
+    every row under the first month; pay day 30 fell in March for February); NoisyPhocus contracts
+    now show in Dashboard and Previsão under NoisyPhocus; Custos do mês groups recurring costs by
+    category (software = the Software category only) and Recorrentes has a Categoria picker.
   - **Wipe (Renato, 2026-10-16): yes**, the Dev Tools wipe will clear every FinHub collection
     (today it skips `incomeSources`, `creditContracts`, `loans`, `insurances`, `costSummary` and the
     bank transactions/imports). Goes in the importer PR.
@@ -284,19 +286,14 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   `packages/shared/models/RecurringEntry.ts` (one line) and its test.
 - The recurring-amount VAT bug (found 2026-10-09) and the forecast ignoring the commission %
   are fixed by #87. EC contracts: no PT VAT, `isento` (Renato, 2026-10-12).
-- `softwareCostCents` counts **every** active NoisyPhocus recurring expense as software, because
-  the form doesn't expose `categoryId`. Fine while the only entries are Vendus and EasyPay; it
-  needs a category filter if rent or insurance ever get entered as recurring.
+- Fixed 2026-10-16 (`agent/finhub-real-data`): `softwareCostCents` counted every NoisyPhocus
+  recurring expense; Custos do mês now groups by category and Recorrentes has a Categoria picker.
+  Give Vendus and EasyPay the "Software" category when entering them.
 
 ## Anything risky in flight
 - **Real-data PR (`agent/finhub-real-data` → `staging`) deploys FinHub + KidClub to dev** when
   opened/updated. It changes no data by itself; the wipe and the seed import are manual (step 4).
   The importer writes to whatever project the build points at: on prod it is Renato's step 5.
-- **Payroll page "Confirmar" saves runs with random ids:** confirming a month that the seed already
-  holds (Jan–Sep 2026) would duplicate it. Not fixed in this PR.
-- **NoisyPhocus contracts don't reach Dashboard/Previsão** (both load NoisySource's employment
-  contracts only; known bug in "Redesign plan"). The seeded green-receipt contract shows on
-  Contratos, Salários and Custos do mês only.
 - **`scripts/copy-prod-billing-to-dev.mjs` reads prod** (branch `agent/finhub-real-data`, not
   merged). Run it only with a session's opt-in entry in `.claude/settings.local.json`, removed
   after. It writes only to `kidclub-dev`.
