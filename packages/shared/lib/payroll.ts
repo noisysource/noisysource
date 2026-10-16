@@ -196,7 +196,40 @@ export function computeMonthlyPayroll(
 }
 
 /**
- * Build a preview for a set of contracts across N months.
+ * "YYYY-MM" of a contract date. The form saves ISO "YYYY-MM-DD" strings (read by slicing, so no
+ * time zone can move the month); older docs may hold a Firestore Timestamp or a Date.
+ */
+export function contractDateYM(d: unknown): string | undefined {
+  if (!d) return undefined;
+  if (typeof d === "string") return /^\d{4}-\d{2}/.test(d) ? d.slice(0, 7) : undefined;
+  const date: Date | null =
+    typeof (d as any).toDate === "function" ? (d as any).toDate() : d instanceof Date ? d : null;
+  if (!date || isNaN(date.getTime())) return undefined;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * True when an active contract is in force at some point in that month: start and end dates
+ * inclusive, by month. A contract with versions (a raise, a new rate) is several docs with
+ * consecutive dates, so each month counts exactly one of them.
+ */
+export function contractInForce(
+  contract: Pick<EmploymentContractDoc, "active" | "startDate" | "endDate">,
+  year: number,
+  month1to12: number,
+): boolean {
+  if (contract.active === false) return false;
+  const ym = `${year}-${String(month1to12).padStart(2, "0")}`;
+  const startYM = contractDateYM(contract.startDate);
+  const endYM = contractDateYM(contract.endDate);
+  if (startYM && ym < startYM) return false;
+  if (endYM && ym > endYM) return false;
+  return true;
+}
+
+/**
+ * Build a preview for a set of contracts across N months: one row per contract in force in each
+ * month (contractInForce), so ended contracts and later versions don't double up.
  * The UI can call this directly; no calculations should be done in components.
  */
 export function buildPayrollPreview(
@@ -213,6 +246,7 @@ export function buildPayrollPreview(
   for (const c of contracts) {
     for (let i = 0; i < opts.span; i++) {
       const d = new Date(Date.UTC(opts.year, opts.month1to12 - 1 + i, 1));
+      if (!contractInForce(c, d.getUTCFullYear(), d.getUTCMonth() + 1)) continue;
       out.push(
         computeMonthlyPayroll(c, d.getUTCFullYear(), d.getUTCMonth() + 1, {
           monthLabelLocale: opts.monthLabelLocale,
