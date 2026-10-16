@@ -230,7 +230,10 @@ const CreditContractSchema = z.strictObject({
   startYearMonth: orTodo(yearMonth),
   termMonths: orTodo(z.number().int().positive()),
   rateType: orTodo(z.enum(['fixed', 'variable'])),
-  /** Rate in force from startYearMonth; later changes go in rateHistory (FinHub's engine reads both). */
+  /**
+   * Current TAN, as the Credits page keeps it. FinHub's engine also applies it to every month before
+   * the first rateHistory entry, so list every known rate change in rateHistory.
+   */
   annualRatePct: orTodo(z.number().nonnegative()),
   spreadPct: orTodo(z.number()).optional(),
   rateHistory: z.array(z.strictObject({
