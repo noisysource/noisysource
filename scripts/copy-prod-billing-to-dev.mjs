@@ -13,21 +13,30 @@
  * payment or invoice actions on the copies in dev's KidClub admin.
  *
  * Every field is classified in FIELD_RULES: kept exactly (amounts, dates, statuses, line types),
- * pseudonymised (names, emails, ids, the child's name inside line titles) or dropped (references
+ * pseudonymised (names, emails, user/subscription ids, the child's name inside line titles) or dropped (references
  * into EasyPay/Vendus, payment links, uploaded proofs). A field the rules don't cover, or a line
  * title in an unknown format, stops the run before anything is written; --inspect lists them
  * without printing values.
  *
  * Copies keep the prod id and carry `_copiedFromProd: "<YYYY-MM-DD>"`. A refresh rewrites the
- * tagged copies and deletes tagged copies whose prod record is gone. A dev record without the tag
- * is never touched: an id collision is reported and skipped. Pseudonyms come from a random key per
- * run: within a run a family keeps one pseudonym (all its bills match), and names can't be
+ * tagged copies and deletes tagged copies whose prod record is gone. Pseudonyms come from a random
+ * key per run: within a run a family keeps one pseudonym (all its bills match), and names can't be
  * recovered by hashing guesses.
+ *
+ * Bill ids are `<familyId>_<yyyy-mm>`, and dev's families were copied from prod with the same ids
+ * (copy-prod-data-to-dev.js), so dev's own bills collide with the copies. familyId is therefore
+ * kept as is: it is in the id anyway, and those families already exist on dev. Without --replace
+ * a dev record without the tag is never touched (collisions are skipped). With --replace (Renato,
+ * 2026-10-16) dev's billing becomes exactly prod's: dev's own records are saved to --backup (a file
+ * under prodata/, real data) and then replaced or deleted, so FinHub on dev matches prod to the
+ * cent. --restore <backup> puts them back (and removes the copies).
  *
  * DRY RUN BY DEFAULT.
  *   node scripts/copy-prod-billing-to-dev.mjs --inspect   # field paths, types, shapes; no values
  *   node scripts/copy-prod-billing-to-dev.mjs             # dry run: counts and totals per month × status
  *   node scripts/copy-prod-billing-to-dev.mjs --write     # write the copies to kidclub-dev
+ *   node scripts/copy-prod-billing-to-dev.mjs --replace --backup ~/dev/noisysource/prodata/<file>.json [--write]
+ *   node scripts/copy-prod-billing-to-dev.mjs --restore ~/dev/noisysource/prodata/<file>.json [--write]
  *   add --from kidclub-dev to try --inspect or the dry run on dev's own records (no prod read)
  *
  * Auth: `gcloud auth print-access-token`: read on prod, write on dev. Prod access is opt-in per
@@ -37,6 +46,8 @@
 
 import { execSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
 
 const PROD = "rainbow-prod-2454b";
 const DEV = "kidclub-dev";
@@ -48,10 +59,20 @@ const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] :
 const FROM = opt("--from", PROD);
 const INSPECT = flag("--inspect");
 const WRITE = flag("--write");
+const REPLACE = flag("--replace");
+const BACKUP = opt("--backup", null);
+const RESTORE = opt("--restore", null);
 const TODAY = new Date().toISOString().slice(0, 10);
 
-if (![PROD, DEV].includes(FROM)) { console.error(`--from must be ${PROD} or ${DEV}.`); process.exit(1); }
-if (WRITE && (INSPECT || FROM !== PROD)) { console.error(`--write copies ${PROD} → ${DEV}; it takes no other flag.`); process.exit(1); }
+const fail = (msg) => { console.error(msg); process.exit(1); };
+if (![PROD, DEV].includes(FROM)) fail(`--from must be ${PROD} or ${DEV}.`);
+if (WRITE && (INSPECT || FROM !== PROD)) fail(`--write copies ${PROD} → ${DEV}; it doesn't combine with --inspect or --from.`);
+if (REPLACE && WRITE && !BACKUP) fail("--replace --write needs --backup <file under prodata/>: dev's own records are saved there first.");
+// Backups hold real data: only in the main checkout's gitignored prodata/, never inside a worktree.
+const PRODATA = resolve(execSync("git rev-parse --path-format=absolute --git-common-dir", { encoding: "utf8" }).trim(), "..", "prodata") + sep;
+for (const f of [BACKUP, RESTORE]) {
+  if (f && !resolve(f).startsWith(PRODATA)) fail(`${f}: backups live in ${PRODATA} and nowhere else.`);
+}
 
 const TOKEN = execSync("gcloud auth print-access-token", { encoding: "utf8" }).trim();
 const API = "https://firestore.googleapis.com/v1";
@@ -146,7 +167,8 @@ const FIELD_RULES = [
   ["lineItems[].frozenMidPeriodCancellation", KEEP],
   ["manualPayment.at", KEEP],
   // Pseudonymised.
-  ["familyId", pseudoId], ["userId", pseudoId], ["billingName", familyName], ["billingEmail", familyEmail],
+  ["familyId", KEEP], // in the record id anyway; dev already has these families (see header)
+  ["userId", pseudoId], ["billingName", familyName], ["billingEmail", familyEmail],
   ["lineItems[].title", pseudoTitle], ["lineItems[].subscriptionId", pseudoSubscriptionId],
   ["manualPayment.by", () => str("admin")],
   ["invoiceError", () => str("erro copiado de prod")],
@@ -324,9 +346,36 @@ function summary(docs, label) {
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 
+const mode = INSPECT ? "INSPECT" : RESTORE ? "RESTORE" : REPLACE ? "REPLACE" : "COPY";
 line("=".repeat(78));
-line(`copy-prod-billing-to-dev.mjs   ${FROM}  →  ${DEV}   ${INSPECT ? "INSPECT" : WRITE ? "WRITE" : "DRY RUN"}`);
+line(`copy-prod-billing-to-dev.mjs   ${RESTORE ? RESTORE : FROM}  →  ${DEV}   ${mode} ${WRITE ? "WRITE" : "DRY RUN"}`);
 line("=".repeat(78));
+
+const devFor = async () => {
+  const dev = await listBilling(DEV);
+  const copiesOnDev = dev.filter(d => d.fields[TAG]);
+  return { dev, copiesOnDev, ownOnDev: dev.filter(d => !d.fields[TAG]) };
+};
+
+if (RESTORE) {
+  // Puts back dev's own records saved by --replace and removes every copy.
+  const backup = JSON.parse(readFileSync(RESTORE, "utf8"));
+  if (backup.project !== DEV || !Array.isArray(backup.records)) fail(`${RESTORE} is not a ${DEV} billing backup.`);
+  const { dev, copiesOnDev } = await devFor();
+  const backupIds = new Set(backup.records.map(r => r.id));
+  const writes = [
+    ...copiesOnDev.filter(d => !backupIds.has(d.id)).map(d => ({ delete: `${DEV_BILLING}${d.id}`, currentDocument: { updateTime: d.updateTime } })),
+    ...backup.records.map(r => ({ update: { name: `${DEV_BILLING}${r.id}`, fields: r.fields } })),
+  ];
+  line(`\n${DEV} now: ${dev.length} records (${copiesOnDev.length} copies). Backup of ${backup.takenAt}: ${backup.records.length} records.`);
+  line(`Plan: write back ${backup.records.length} · delete copies not in the backup ${writes.length - backup.records.length}`);
+  if (WRITE) {
+    await commitDev(writes);
+    const after = await devFor();
+    line(`\nRESTORED: ${DEV} has ${after.dev.length} records, ${after.copiesOnDev.length} copies.`);
+  } else line(`\nDRY RUN: nothing written.`);
+  process.exit(0);
+}
 
 const source = await listBilling(FROM);
 if (INSPECT) {
@@ -351,35 +400,45 @@ if (copyTotal !== sourceTotal) blockers.push("copy totals differ from the source
 if (FROM === DEV) {
   line(`\nSource is ${DEV} itself (pipeline test): no dev-side plan.`);
 } else {
-  const dev = await listBilling(DEV);
+  const { dev, ownOnDev } = await devFor();
   const devById = new Map(dev.map(d => [d.id, d]));
   const prodIds = new Set(source.map(d => d.id));
-  const own = dev.filter(d => !d.fields[TAG]);
   const writes = [];
-  let created = 0, refreshed = 0;
-  const collisions = [];
+  const n = { created: 0, refreshed: 0, replaced: 0, deletedOwn: 0, stale: 0, skipped: 0 };
   for (const c of copies) {
     const existing = devById.get(c.id);
-    const name = `${DEV_BILLING}${c.id}`;
-    if (!existing) { writes.push({ update: { name, fields: c.fields }, currentDocument: { exists: false } }); created++; }
-    else if (existing.fields[TAG]) { writes.push({ update: { name, fields: c.fields }, currentDocument: { updateTime: existing.updateTime } }); refreshed++; }
-    else collisions.push(c.id);
+    const update = { name: `${DEV_BILLING}${c.id}`, fields: c.fields };
+    if (!existing) { writes.push({ update, currentDocument: { exists: false } }); n.created++; }
+    else if (existing.fields[TAG]) { writes.push({ update, currentDocument: { updateTime: existing.updateTime } }); n.refreshed++; }
+    else if (REPLACE) { writes.push({ update, currentDocument: { updateTime: existing.updateTime } }); n.replaced++; }
+    else n.skipped++;
   }
-  const stale = dev.filter(d => d.fields[TAG] && !prodIds.has(d.id));
-  for (const d of stale) writes.push({ delete: `${DEV_BILLING}${d.id}`, currentDocument: { updateTime: d.updateTime } });
+  for (const d of dev) {
+    if (prodIds.has(d.id)) continue;
+    if (d.fields[TAG]) { writes.push({ delete: `${DEV_BILLING}${d.id}`, currentDocument: { updateTime: d.updateTime } }); n.stale++; }
+    else if (REPLACE) { writes.push({ delete: `${DEV_BILLING}${d.id}`, currentDocument: { updateTime: d.updateTime } }); n.deletedOwn++; }
+  }
 
-  line(`\n## ${DEV} now: ${dev.length} billing records (${own.length} dev's own, ${dev.length - own.length} earlier copies)`);
-  line(`Plan: create ${created} · refresh ${refreshed} · delete stale copies ${stale.length} · id collisions skipped ${collisions.length}`);
-  if (collisions.length) line(`  collisions (dev's own record has a prod id, left alone): ${collisions.join(", ")}`);
-  line(`dev's own records are not touched.`);
+  line(`\n## ${DEV} now: ${dev.length} billing records (${ownOnDev.length} dev's own, ${dev.length - ownOnDev.length} copies)`);
+  line(`Plan: create ${n.created} · refresh copies ${n.refreshed} · delete stale copies ${n.stale}` +
+    (REPLACE ? ` · replace dev's own ${n.replaced} · delete dev's own ${n.deletedOwn} (all ${ownOnDev.length} saved to --backup first)`
+             : ` · dev's own records left alone, ${n.skipped} copies skipped on id collision (see --replace)`));
 
   if (WRITE) {
-    if (blockers.length) {
-      console.error(`\nNOT WRITTEN:\n  - ${blockers.join("\n  - ")}`);
-      process.exit(1);
+    if (blockers.length) fail(`\nNOT WRITTEN:\n  - ${blockers.join("\n  - ")}`);
+    if (REPLACE && ownOnDev.length) {
+      writeFileSync(BACKUP, JSON.stringify({ project: DEV, collection: "_apps/arcoiris/billing", takenAt: new Date().toISOString(),
+        records: ownOnDev.map(d => ({ id: d.id, updateTime: d.updateTime, fields: d.fields })) }));
+      if (JSON.parse(readFileSync(BACKUP, "utf8")).records.length !== ownOnDev.length) fail(`Backup ${BACKUP} didn't read back: nothing written.`);
+      line(`\nBackup: ${ownOnDev.length} dev records saved to ${BACKUP}`);
     }
     await commitDev(writes);
-    line(`\nWRITTEN to ${DEV}: ${created} created, ${refreshed} refreshed, ${stale.length} deleted.`);
+    const after = await devFor();
+    const afterTotal = after.copiesOnDev.reduce((a, d) => a + cents(d.fields.total), 0);
+    const ok = after.copiesOnDev.length === source.length && afterTotal === sourceTotal;
+    line(`\nWRITTEN to ${DEV}: ${JSON.stringify(n)}`);
+    line(`Check: ${DEV} has ${after.dev.length} records, ${after.copiesOnDev.length} copies totalling ${eur(afterTotal)} ${ok ? "= prod ✓" : "!! DIFFERS FROM PROD"}`);
+    if (!ok) process.exit(1);
   }
 }
 
