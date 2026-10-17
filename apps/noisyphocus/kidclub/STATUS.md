@@ -144,9 +144,12 @@ it. `retryVendusInvoice` only refused `invoiced && !invoiceError`, so on that bi
 have reset it to `paid`, deleted the number and issued a **second real Fatura-Recibo**. The admin UI offered the
 button on it.
 
-**Prod data fix, 2026-10-17 (by hand, before this PR).** The stale `invoiceError` was deleted from
-`oK6GHA7D0f4cRVM3RNZW_2026-09`. FR 01P2026/226 is its only invoice; no duplicate was issued. It was the only one of
-the 34 paid/invoiced bills with this combination.
+**Prod data fix: NOT DONE YET (as of 2026-10-17).** The stale `invoiceError` is still on
+`oK6GHA7D0f4cRVM3RNZW_2026-09`. Renato approved deleting that one field, but the agent's prod write was blocked by
+Claude Code's auto-mode classifier, so Renato runs it himself. Until then, or until #101 is in prod, **don't click
+"Tentar faturar novamente" on that bill**. FR 01P2026/226 is its only invoice; no duplicate was issued. It was the
+only one of the 34 paid/invoiced bills with this combination (checked 2026-10-17). Once #101 is in prod the badge
+already hides itself (an invoice number is recorded), so deleting the field is then just tidying.
 
 **What #101 changes**
 - `retryVendusInvoice` refuses (`already-exists`, naming the invoice) whenever the bill has an `invoiceNumber` or
