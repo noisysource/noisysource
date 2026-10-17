@@ -10,6 +10,7 @@ import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
+import { familyService } from '../../services/familyService';
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -97,15 +98,18 @@ export default function TransportSubscriptionDetailPage() {
       // Sibling rank: count active transport subs in the same family, sorted by
       // childName. Uses the subscriptions' own copies deliberately — this only
       // needs a stable ordering across siblings, not display-accurate names.
-      if (sub.familyId) {
-        const famSnap = await getDocs(
-          query(col('transportationSubscriptions'), where('familyId', '==', sub.familyId), where('status', '==', 'active'))
-        );
-        const siblings = famSnap.docs
-          .map(d => ({ id: d.id, childName: d.data().childName as string }))
+      // Through familyService (a parent may only query subscriptions by their own
+      // userId) and best-effort: the rank is cosmetic and must not fail the page.
+      if (sub.familyId) try {
+        const { transport } = await familyService.getFamilySubscriptions(sub.familyId, user?.uid);
+        const siblings = transport
+          .filter(t => t.status === 'active')
+          .map(t => ({ id: t.id, childName: (t.childName ?? '') as string }))
           .sort((a, b) => a.childName.localeCompare(b.childName));
         const rank = siblings.findIndex(s => s.id === id) + 1;
         setSiblingRank(rank > 0 ? rank : 1);
+      } catch (err) {
+        console.warn('[TransportSubscriptionDetailPage] sibling rank read failed:', err);
       }
 
       const schoolYearEnd: Date | null =
@@ -130,14 +134,18 @@ export default function TransportSubscriptionDetailPage() {
       // leg. Keying by direction collided: no schedule entry carries one, so
       // both legs of a day resolved to the same occurrence and cancelling one
       // cancelled both.
-      const eventsSnap = await getDocs(
+      // familyId first: firestore.rules only let a parent read their own family's
+      // events, and a query must prove that up front (subscriptionId alone is
+      // denied). Events copy the subscription's familyId; a sub without one has none.
+      const eventsSnap = sub.familyId ? await getDocs(
         query(
           col('reservationEvents'),
+          where('familyId', '==', sub.familyId),
           where('subscriptionId', '==', id),
           where('date', '>=', format(today, 'yyyy-MM-dd')),
           where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
         ),
-      );
+      ) : { docs: [] };
       const eventByDateLeg: Record<string, { id: string; status: string }> = {};
       eventsSnap.docs.forEach(d => {
         const data = d.data();

@@ -110,12 +110,16 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
           ? new Date(`${calSnap.data().yearEndDate}T23:59:59`) : null;
         const effectiveEnd = schoolYearEnd ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd) : rangeEnd;
 
-        const eventsSnap = await getDocs(query(
+        // familyId first: firestore.rules only let a parent read their own family's
+        // events, and a query must prove that up front (subscriptionId alone is
+        // denied). Events copy the subscription's familyId; a sub without one has none.
+        const eventsSnap = sub.familyId ? await getDocs(query(
           col('reservationEvents'),
+          where('familyId', '==', sub.familyId),
           where('subscriptionId', '==', id),
           where('date', '>=', format(today, 'yyyy-MM-dd')),
           where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
-        ));
+        )) : { docs: [] };
         const eventByDate: Record<string, { id: string; status: string }> = {};
         eventsSnap.docs.forEach(d => {
           const data = d.data();
