@@ -84,7 +84,7 @@ export type RecurringItemsInput = {
   contracts?: readonly EmploymentContractDoc[];
 };
 
-function kindOf(sourceId: string | undefined): { kind: RecurringItemKind; ref?: string } {
+export function kindOf(sourceId: string | undefined): { kind: RecurringItemKind; ref?: string } {
   const s = sourceId ?? "";
   const part = s.split(":");
   if (s.startsWith("emp:")) {
@@ -98,7 +98,7 @@ function kindOf(sourceId: string | undefined): { kind: RecurringItemKind; ref?: 
   return { kind: "manual" };
 }
 
-function topCategory(id: string | undefined, byId: ReadonlyMap<string, { name: string; parentId?: string }>): string {
+export function topCategory(id: string | undefined, byId: ReadonlyMap<string, { name: string; parentId?: string }>): string {
   let c = id ? byId.get(id) : undefined;
   if (!c) return UNCATEGORISED;
   for (let i = 0; i < 10 && c.parentId && byId.has(c.parentId); i++) c = byId.get(c.parentId)!;

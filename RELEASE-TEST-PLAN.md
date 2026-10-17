@@ -441,3 +441,15 @@ steps 3–4.
 5. NoisySource → Recorrentes → Pessoal → "Encargos Salariais — Renato" ▸. ✅ Bruto, SS patronal,
    encargos, each voucher (pago à parte), custo total, líquido.
 6. Typed entries keep Editar/Apagar; derived ones show "Contrato ↗ / Seguro ↗ / Cliente ↗".
+
+#### R2. Despesas do mês, every entity
+1. Casa / NoisySource / NoisyPhocus → Despesas do mês. ✅ Year buttons (2026, 2027), months January →
+   December, the current month open and outlined; total of the year, average, this month.
+2. NoisySource → a month Jan–Sep. ✅ Badge "salários processados"; Pessoal shows each person's
+   processed cost (bruto · SS patronal · benefícios). October onwards: "previsto" from the contract
+   in force (Renato's May version, not April's).
+3. Casa → any month. ✅ Créditos (each instalment with capital · juros), Seguros (Obras e Montagens
+   gone after the seed re-import), Habitação…; no sem IVA column.
+4. NoisyPhocus → a month. ✅ Pessoal (Recibo verde), Renda, Viatura, Água luz e telecomunicações,
+   Comissões; "IVA por confirmar (1)" for the rent. Firestore `costSummary/{yyyy-mm}` updated for the
+   months up to now.

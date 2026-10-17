@@ -45,7 +45,7 @@ export const ENTITY_NAV: NavGroup[] = [
     title: 'Despesas',
     items: [
       { feature: 'recurring', label: 'Recorrentes',   icon: RefreshCw, entities: ALL },
-      { feature: 'costs',     label: 'Custos do mês', icon: PiggyBank, entities: ['noisyphocus'] },
+      { feature: 'costs',     label: 'Despesas do mês', icon: PiggyBank, entities: ALL },
     ],
   },
   {

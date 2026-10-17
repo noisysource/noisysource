@@ -46,7 +46,8 @@
      client, rate.
    - Derived items are read-only with a link to their page; hand-entered ones keep Editar/Apagar.
    - Pure builder (`src/lib/recurringItems.ts`) + tests; the page only renders.
-2. **Despesas do mês, every entity.** Year filter; January → December; each month expandable by
+2. **Despesas do mês, every entity.** **DONE 2026-10-18** (`src/lib/monthlyExpenses.ts` + tests,
+   `MonthlyExpensesPage.tsx` replaces `CostSummaryPage.tsx`; RELEASE-TEST-PLAN §6 R2). Year filter; January → December; each month expandable by
    group with its lines (same grouping as Recorrentes). Past months use the confirmed payroll runs
    for salaries, future months the contracts. NoisyPhocus keeps writing `costSummary/{yyyy-mm}`
    (KidClub's future Resumo Financeiro reads it; CLAUDE.md Cross-App Data Contracts).

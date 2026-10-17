@@ -29,7 +29,7 @@ import NoisyPhocusRevenuePage from './pages/NoisyPhocusRevenuePage';
 import LoansPage from './pages/LoansPage';
 import VatPage from './pages/VatPage';
 import InsurancesPage from './pages/InsurancesPage';
-import CostSummaryPage from './pages/CostSummaryPage';
+import MonthlyExpensesPage from './pages/MonthlyExpensesPage';
 
 // Admin
 import AdminUsersPage from './pages/admin/Users';
@@ -72,7 +72,7 @@ export default function App() {
               <Route path="revenue"      element={<NoisyPhocusRevenuePage />} />
               <Route path="loans"        element={<LoansPage />} />
               <Route path="vat"          element={<VatPage />} />
-              <Route path="costs"        element={<CostSummaryPage />} />
+              <Route path="costs"        element={<MonthlyExpensesPage />} />
               <Route path="irs"          element={<IRSPage />} />
               <Route path="recurring"    element={<RecurringPage />} />
               <Route path="credits"     element={<CreditsPage />} />
