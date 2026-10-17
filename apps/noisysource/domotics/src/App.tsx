@@ -7,6 +7,7 @@ import type {
 import type { FloorPlan, InfraItem, PlanRoom, Room, Wall } from '@shared/models/Room';
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
+import { DEMO, demoClimate, demoLegrand } from './data/demoData';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
 import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
@@ -144,6 +145,12 @@ export default function App() {
     }
   }
 
+  /** Every Legrand write goes through here, so demo mode can keep it on screen. */
+  async function legrandSet(payload: Parameters<typeof setStateFn>[0]) {
+    if (DEMO) return;
+    await setStateFn(payload);
+  }
+
   function legrandFailed(err: unknown) {
     console.error('Legrand setstate failed:', err);
     const code = (err as { code?: string })?.code;
@@ -177,6 +184,11 @@ export default function App() {
   const uid = user?.uid;
   useEffect(() => {
     if (gated) return;
+    if (DEMO) {
+      setDevices(demoLegrand());
+      setDeviceStatus('ok');
+      return;
+    }
     let cancelled = false;
     let loadedAt = 0;
 
@@ -270,6 +282,12 @@ export default function App() {
    */
   useEffect(() => {
     if (gated) return;
+    if (DEMO) {
+      setTuyaDevices(demoClimate());
+      setBridgeUpdatedAt(Date.now());
+      setBridgeStatus('ok');
+      return;
+    }
     let cancelled = false;
     let failures = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -427,14 +445,25 @@ export default function App() {
       : command.action === 'setOn'
       ? command.on
       : command.brightness > 0;
+    // Only dimmers take a level; zero means off, and the last level is kept so
+    // switching back on doesn't jump to full.
+    const dimmable = current?.type === 'light' && current.state.dimmable;
+    const brightness = command.action === 'setBrightness' && dimmable && command.brightness > 0
+      ? Math.round(Math.min(100, command.brightness))
+      : undefined;
 
     setDevices(prev => prev.map(d =>
       d.id !== deviceId || d.type !== 'light' ? d
-        : { ...d, state: { ...d.state, on } }
+        : { ...d, state: { ...d.state, on, ...(brightness !== undefined ? { brightness } : {}) } }
     ));
 
     try {
-      await setStateFn({ modules: [{ id: deviceId, bridge: current?.bridge, on }] });
+      await legrandSet({
+        modules: [{
+          id: deviceId, bridge: current?.bridge, on,
+          ...(brightness !== undefined ? { brightness } : {}),
+        }],
+      });
     } catch (err) {
       legrandFailed(err);
       restoreDevices([deviceId]);
@@ -469,7 +498,7 @@ export default function App() {
 
     if (target_position !== undefined) {
       try {
-        await setStateFn({
+        await legrandSet({
           modules: [{ id: deviceId, bridge: blindDev?.bridge, target_position }],
         });
       } catch (err) {
@@ -492,7 +521,7 @@ export default function App() {
       d.type !== 'light' || !ids.has(d.id) ? d : { ...d, state: { ...d.state, on } }
     ));
     try {
-      await setStateFn({ modules: targets.map(d => ({ id: d.id, bridge: d.bridge, on })) });
+      await legrandSet({ modules: targets.map(d => ({ id: d.id, bridge: d.bridge, on })) });
     } catch (err) {
       legrandFailed(err);
       restoreDevices(deviceIds);
@@ -508,7 +537,7 @@ export default function App() {
       d.type !== 'blind' || !ids.has(d.id) ? d : { ...d, state: { ...d.state, position } }
     ));
     try {
-      await setStateFn({
+      await legrandSet({
         modules: targets.map(d => ({ id: d.id, bridge: d.bridge, target_position: position })),
       });
     } catch (err) {
@@ -535,7 +564,7 @@ export default function App() {
     try {
       // The bridge answers with freshly read state, so the optimistic guess is
       // replaced by the truth immediately rather than at the next poll.
-      const state = await sendBridgeCommand(deviceId, commands);
+      const state = DEMO ? null : await sendBridgeCommand(deviceId, commands);
       if (state) setTuyaDevices(buildTuyaDevices(state.devices));
     } catch (err) {
       console.error('Bridge command failed:', err);
@@ -550,7 +579,7 @@ export default function App() {
     ));
 
     try {
-      const state = await sendBridgeCommand(deviceId, [{ code: 'switch', value: command.on }]);
+      const state = DEMO ? null : await sendBridgeCommand(deviceId, [{ code: 'switch', value: command.on }]);
       if (state) setTuyaDevices(buildTuyaDevices(state.devices));
     } catch (err) {
       console.error('Bridge command failed:', err);

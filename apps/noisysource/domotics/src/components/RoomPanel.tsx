@@ -87,26 +87,12 @@ export default function RoomPanel({
           </div>
           <div className="grid grid-cols-2 gap-2">
             {lights.map(l => (
-              <button
+              <LightTile
                 key={l.id}
-                data-device-id={l.id}
-                onClick={() => onLightCommand(l.id, { action: 'toggle' })}
-                aria-pressed={l.state.on}
-                disabled={l.online === false}
-                className={`flex items-center gap-2.5 rounded-xl border px-3 py-3 text-left transition active:scale-[0.97] disabled:opacity-40 ${
-                  l.state.on
-                    ? 'bg-amber-400/15 border-amber-400/50 text-amber-100'
-                    : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
-                } ${ring(l.id)}`}
-              >
-                {l.state.on
-                  ? <Lightbulb size={20} className="shrink-0 text-amber-300" fill="#fbbf24" />
-                  : <LightbulbOff size={20} className="shrink-0 text-zinc-500" />}
-                <span className="min-w-0 flex flex-col">
-                  <span className="truncate text-sm">{l.name}</span>
-                  <span className="text-[11px] text-zinc-500">{l.state.on ? 'Acesa' : 'Apagada'}</span>
-                </span>
-              </button>
+                light={l}
+                className={ring(l.id)}
+                onCommand={cmd => onLightCommand(l.id, cmd)}
+              />
             ))}
           </div>
         </section>
@@ -162,7 +148,70 @@ export default function RoomPanel({
   );
 }
 
-function BlindRow({ device, onCommand }: { device: BlindDevice; onCommand: (c: BlindCommand) => void }) {
+/** A light's tile: tap to switch; dimmers also get their level, like a blind. */
+function LightTile({ light, className, onCommand }: {
+  light: LightDevice;
+  className: string;
+  onCommand: (c: LightCommand) => void;
+}) {
+  // Local while dragging; one command on release, not one per pixel.
+  const [drag, setDrag] = useState<number | null>(null);
+  const on = light.state.on;
+  const level = drag ?? (on ? light.state.brightness : 0);
+
+  function commit() {
+    if (drag === null) return;
+    onCommand({ action: 'setBrightness', brightness: drag });
+    setDrag(null);
+  }
+
+  return (
+    <div
+      data-device-id={light.id}
+      className={`rounded-xl border transition ${
+        on ? 'bg-amber-400/15 border-amber-400/50' : 'bg-zinc-900 border-zinc-800'
+      } ${light.online === false ? 'opacity-40' : ''} ${className}`}
+    >
+      <button
+        onClick={() => onCommand({ action: 'toggle' })}
+        aria-pressed={on}
+        disabled={light.online === false}
+        className={`w-full flex items-center gap-2.5 px-3 py-3 text-left active:scale-[0.97] transition ${
+          on ? 'text-amber-100' : 'text-zinc-300'
+        }`}
+      >
+        {on
+          ? <Lightbulb size={20} className="shrink-0 text-amber-300" fill="#fbbf24" />
+          : <LightbulbOff size={20} className="shrink-0 text-zinc-500" />}
+        <span className="min-w-0 flex flex-col">
+          <span className="truncate text-sm">{light.name}</span>
+          <span className="text-[11px] text-zinc-500 tabular-nums">
+            {!on ? 'Apagada' : light.state.dimmable ? `Acesa · ${level}%` : 'Acesa'}
+          </span>
+        </span>
+      </button>
+      {light.state.dimmable && (
+        <div className="px-3 pb-2.5 -mt-1">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={level}
+            aria-label={`Intensidade de ${light.name}`}
+            onChange={e => setDrag(Number(e.target.value))}
+            onPointerUp={commit}
+            onKeyUp={commit}
+            onBlur={commit}
+            className="w-full cursor-pointer touch-none"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function BlindRow({ device, onCommand }: { device: BlindDevice; onCommand: (c: BlindCommand) => void }) {
   const { state } = device;
   /**
    * While the thumb is held we show the local value and send nothing — a range

@@ -82,6 +82,7 @@ export function roomStats(devices: Device[], roomId: string) {
     lit,
     blinds: blinds.length,
     temp: thermo?.state.current,
+    humidity: thermo?.state.humidity,
     target: thermo?.state.target,
     heating: thermo?.state.heating ?? false,
   };

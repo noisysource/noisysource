@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useRef, type ComponentProps } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { CameraControls, Edges, Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { AlertTriangle, Flame, Lightbulb, LightbulbOff } from 'lucide-react';
-import type { Device, DevicePlacement } from '@shared/models/Device';
+import { AlertTriangle, Lightbulb, LightbulbOff, X } from 'lucide-react';
+import type {
+  BlindCommand, BlindDevice, Device, DevicePlacement, LightCommand, LightDevice,
+  ThermostatCommand, ThermostatDevice,
+} from '@shared/models/Device';
 import type { FloorPlan, PlanRoom, Wall } from '@shared/models/Room';
 import { wallsFromRooms } from '../../data/walls';
-import { placeDevices, roomStats, type PlacedDevice } from '../../data/placement';
+import { placeDevices, roomStats } from '../../data/placement';
+import { ThermostatRow } from '../ClimatePanel';
+import { BlindRow } from '../RoomPanel';
 
 /**
  * The house as a cut-away dollhouse, built from the same floor plan the 2D
@@ -32,8 +37,10 @@ interface Props {
   mode: HouseMode;
   selectedRoomId: string | null;
   onSelectRoom: (roomId: string | null) => void;
-  onLightToggle: (deviceId: string) => void;
-  /** Non-light devices: bring their controls up in the side panel. */
+  onLightCommand: (deviceId: string, command: LightCommand) => void;
+  onBlindCommand: (deviceId: string, command: BlindCommand) => void;
+  onThermostatCommand: (deviceId: string, command: ThermostatCommand) => void;
+  /** The heat pump: its controls live in the side panel. */
   onDeviceOpen: (deviceId: string) => void;
 }
 
@@ -50,6 +57,8 @@ const BLIND_Y0 = 0.1;
 const POLAR = 0.7;
 /** A pointer that travelled further than this was orbiting, not tapping. */
 const TAP_SLOP_PX = 6;
+/** Press this long on a light or blind for its slider instead of a toggle. */
+const HOLD_MS = 450;
 
 const FLOOR = { room: '#4a505e', structural: '#30333b', outdoor: '#4a3f33' };
 
@@ -94,6 +103,13 @@ const MAT = {
   }),
   pump: new THREE.MeshStandardMaterial({ color: '#e4e4e7', roughness: 0.5 }),
 };
+/**
+ * Invisible, generous tap area around a small device. Drawn (so the raycaster
+ * finds it) but writes neither colour nor depth.
+ */
+const HIT_MAT = new THREE.MeshBasicMaterial({
+  transparent: true, opacity: 0, depthWrite: false, colorWrite: false,
+});
 // BoxGeometry face order: +x, -x, +y (top), -y, +z, -z.
 const WALL_FACES = [MAT.wall, MAT.wall, MAT.wallCut, MAT.wall, MAT.wall, MAT.wall];
 
@@ -281,13 +297,80 @@ function RoomFloor({
   );
 }
 
-function Bulb({ x, z, on, poolSize, night }: {
-  x: number; z: number; on: boolean; poolSize: number; night: boolean;
+/**
+ * Tap and press-and-hold on a 3D object.
+ *
+ * A tap is the everyday action (light on/off, blind open/close) and must not
+ * be mistaken for the end of an orbit drag; holding still opens the fine
+ * control (dimmer level, blind position). Either way the event stops here, so
+ * it never reaches the floor behind and selects the room as well.
+ */
+function usePress(onTap: () => void, onHold?: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const start = useRef<[number, number] | null>(null);
+  const held = useRef(false);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const cancel = () => clearTimeout(timer.current);
+
+  return {
+    onPointerDown(e: ThreeEvent<PointerEvent>) {
+      e.stopPropagation();
+      held.current = false;
+      start.current = [e.clientX, e.clientY];
+      cancel();
+      if (onHold) {
+        timer.current = setTimeout(() => {
+          held.current = true;
+          onHold();
+        }, HOLD_MS);
+      }
+    },
+    onPointerMove(e: ThreeEvent<PointerEvent>) {
+      const s = start.current;
+      if (s && Math.hypot(e.clientX - s[0], e.clientY - s[1]) > TAP_SLOP_PX) cancel();
+    },
+    onPointerUp: cancel,
+    onPointerOut: cancel,
+    onClick(e: ThreeEvent<MouseEvent>) {
+      e.stopPropagation();
+      if (held.current) {
+        held.current = false;
+        return;
+      }
+      if (tapped(e)) onTap();
+    },
+  };
+}
+
+function Bulb({ x, z, light, poolSize, night, onTap, onHold }: {
+  x: number;
+  z: number;
+  light: LightDevice;
+  poolSize: number;
+  night: boolean;
+  onTap: () => void;
+  onHold: () => void;
 }) {
+  const press = usePress(onTap, onHold);
+  const on = light.state.on;
+  // A dimmed light should look dimmed: plain switches report 100.
+  const level = on ? Math.max(0.15, light.state.brightness / 100) : 0;
   return (
     <group>
-      <mesh position={[x, BULB_Y, z]} material={on ? MAT.bulbOn : MAT.bulbOff}>
-        <sphereGeometry args={[0.11, 16, 12]} />
+      {on ? (
+        <mesh position={[x, BULB_Y, z]}>
+          <sphereGeometry args={[0.11, 16, 12]} />
+          <meshStandardMaterial color="#fef3c7" emissive="#fbbf24" emissiveIntensity={0.6 + 1.8 * level} />
+        </mesh>
+      ) : (
+        <mesh position={[x, BULB_Y, z]} material={MAT.bulbOff}>
+          <sphereGeometry args={[0.11, 16, 12]} />
+        </mesh>
+      )}
+      {/* Tap area: far bigger than the bulb, which is a few pixels across
+          when the whole house is in view. */}
+      <mesh position={[x, BULB_Y, z]} material={HIT_MAT} {...press}>
+        <sphereGeometry args={[0.42, 10, 8]} />
       </mesh>
       {on && (
         // A painted pool of light rather than a real light source: real lights
@@ -299,7 +382,7 @@ function Bulb({ x, z, on, poolSize, night }: {
             transparent
             depthWrite={false}
             blending={THREE.AdditiveBlending}
-            opacity={night ? 0.95 : 0.6}
+            opacity={(night ? 0.95 : 0.6) * level}
             toneMapped={false}
           />
         </mesh>
@@ -309,9 +392,15 @@ function Bulb({ x, z, on, poolSize, night }: {
 }
 
 /** A window shutter on the nearest wall: blue slats from the top for the closed part. */
-function Shutter({ room, cx, cy, position }: {
-  room: PlanRoom; cx: number; cy: number; position: number;
+function Shutter({ room, cx, cy, position, onTap, onHold }: {
+  room: PlanRoom;
+  cx: number;
+  cy: number;
+  position: number;
+  onTap: () => void;
+  onHold: () => void;
 }) {
+  const press = usePress(onTap, onHold);
   const at = onNearestEdge(room, cx, cy);
   const closed = Math.min(1, Math.max(0, 1 - position / 100));
   const slatH = BLIND_H * closed;
@@ -328,16 +417,43 @@ function Shutter({ room, cx, cy, position }: {
           <boxGeometry args={[BLIND_W, paneH, 0.03]} />
         </mesh>
       )}
+      <mesh position={[0, BLIND_Y0 + BLIND_H / 2, 0]} material={HIT_MAT} {...press}>
+        <boxGeometry args={[BLIND_W + 0.3, BLIND_H + 0.4, 0.6]} />
+      </mesh>
     </group>
   );
 }
 
-function HeatPumpUnit({ cx, cy, running, fault }: {
-  cx: number; cy: number; running: boolean; fault: boolean;
+/** Wall thermostat: a small puck, glowing orange while it calls for heat. */
+function ThermostatPuck({ x, z, device, onTap }: {
+  x: number; z: number; device: ThermostatDevice; onTap: () => void;
 }) {
+  const press = usePress(onTap);
+  const heating = device.online !== false && device.state.heating;
+  return (
+    <group position={[x, 1.0, z]}>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.1, 0.1, 0.05, 20]} />
+        <meshStandardMaterial
+          color={heating ? '#fdba74' : '#e4e4e7'}
+          emissive={heating ? '#f97316' : '#000000'}
+          emissiveIntensity={heating ? 0.8 : 0}
+        />
+      </mesh>
+      <mesh material={HIT_MAT} {...press}>
+        <sphereGeometry args={[0.35, 10, 8]} />
+      </mesh>
+    </group>
+  );
+}
+
+function HeatPumpUnit({ cx, cy, running, fault, onTap }: {
+  cx: number; cy: number; running: boolean; fault: boolean; onTap: () => void;
+}) {
+  const press = usePress(onTap);
   return (
     <group position={[cx, 0, cy]}>
-      <mesh position={[0, 0.5, 0]} material={MAT.pump}>
+      <mesh position={[0, 0.5, 0]} material={MAT.pump} {...press}>
         <boxGeometry args={[0.9, 1.0, 0.45]} />
       </mesh>
       <mesh position={[0, 0.55, 0.226]}>
@@ -353,11 +469,62 @@ function HeatPumpUnit({ cx, cy, running, fault }: {
 }
 
 /**
+ * Temperature and humidity painted on the room's floor, so the house reads at a
+ * glance without opening anything. Drawn into a texture rather than as DOM:
+ * it lies flat on the floor, turns with the house, and grows as you zoom in.
+ */
+function ClimateDecal({ room, temp, humidity, heating }: {
+  room: PlanRoom; temp: number; humidity?: number; heating: boolean;
+}) {
+  const gl = useThree(s => s.gl);
+  const texture = useMemo(() => {
+    const W = 512;
+    const H = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // A soft dark halo keeps it legible on any floor colour, climate mode included.
+    ctx.shadowColor = 'rgba(0,0,0,0.75)';
+    ctx.shadowBlur = 14;
+    const font = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillStyle = heating ? '#fdba74' : '#fafafa';
+    ctx.font = `600 124px ${font}`;
+    ctx.fillText(`${temp.toFixed(1)}°`, W / 2, humidity === undefined ? H / 2 : 96);
+    if (humidity !== undefined) {
+      ctx.fillStyle = '#a5f3fc';
+      ctx.font = `500 60px ${font}`;
+      ctx.fillText(`${Math.round(humidity)}% humidade`, W / 2, 202);
+    }
+    const t = new THREE.CanvasTexture(canvas);
+    t.colorSpace = THREE.SRGBColorSpace;
+    // Seen at a slant from the default camera; without this the text smears.
+    t.anisotropy = Math.min(8, gl.capabilities.getMaxAnisotropy());
+    return t;
+  }, [temp, humidity, heating, gl]);
+  useEffect(() => () => texture.dispose(), [texture]);
+
+  const w = Math.min(room.w * 0.75, room.h * 1.5, 2.8);
+  return (
+    <mesh
+      position={[room.x + room.w / 2, FLOOR_T + 0.02, room.y + room.h / 2]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      renderOrder={2}
+    >
+      <planeGeometry args={[w, w / 2]} />
+      <meshBasicMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
+    </mesh>
+  );
+}
+
+/**
  * DOM overlay pinned to a point in the scene.
  *
  * Its events must stop here. Overlays live inside the element the 3D scene
- * listens on, so a tap on a light chip would otherwise bubble on into the
- * scene, be raycast against the floor behind it, and also deselect the room —
+ * listens on, so a tap on a control would otherwise bubble on into the scene,
+ * be raycast against the floor behind it, and also select or deselect a room —
  * and a press would start an orbit drag.
  */
 function Overlay({ children, ...props }: ComponentProps<typeof Html>) {
@@ -371,119 +538,52 @@ function Overlay({ children, ...props }: ComponentProps<typeof Html>) {
   );
 }
 
-function RoomLabel({ room, stats, dimmed, onTap }: {
+/** Room name tag; tapping it zooms into the room. Climate is on the floor itself. */
+function RoomLabel({ room, lit, dimmed, onTap }: {
   room: PlanRoom;
-  stats: ReturnType<typeof roomStats>;
+  lit: number;
   dimmed: boolean;
   onTap: () => void;
 }) {
   return (
+    // Over the room's back wall rather than its middle, which is where the
+    // temperature is painted on the floor.
     <Overlay
-      position={[room.x + room.w / 2, WALL_H + 0.35, room.y + room.h / 2]}
+      position={[room.x + room.w / 2, WALL_H + 0.25, room.y + Math.min(0.5, room.h * 0.15)]}
       center
       zIndexRange={[20, 0]}
     >
-      {/* Stacked rather than one long pill: neighbouring small rooms (the
-          bedroom wing) sit ~100px apart on a tablet, and a single line with the
-          full name ran straight into the next label. */}
       <button
         onClick={onTap}
-        className={`flex flex-col items-center rounded-xl px-2 py-1 text-xs leading-tight backdrop-blur-sm border shadow-lg shadow-black/40 transition-opacity bg-zinc-950/75 border-zinc-700/70 text-zinc-200 ${
+        className={`flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] leading-tight backdrop-blur-sm border shadow-lg shadow-black/40 transition-opacity bg-zinc-950/70 border-zinc-700/70 text-zinc-200 ${
           dimmed ? 'opacity-40' : ''
         }`}
       >
-        <span className="flex items-center gap-1 whitespace-nowrap">
-          <span aria-hidden="true">{room.icon}</span>
-          {stats.temp !== undefined && (
-            <span className="tabular-nums text-zinc-50">{stats.temp.toFixed(1)}°</span>
-          )}
-          {stats.heating && <Flame size={11} className="text-orange-400" aria-label="a aquecer" />}
-          {stats.lit > 0 && (
-            <span className="flex items-center gap-0.5 text-amber-300">
-              <Lightbulb size={11} />{stats.lit}
-            </span>
-          )}
-        </span>
-        {/* On a phone the icon and the numbers carry it; the panel lists names. */}
-        <span className="hidden sm:block max-w-[6.5rem] truncate text-[10px] text-zinc-400">{room.name}</span>
+        <span aria-hidden="true">{room.icon}</span>
+        {/* On a phone the icon carries it; the panel lists names. */}
+        <span className="hidden sm:inline max-w-[7rem] truncate">{room.name}</span>
+        {lit > 0 && (
+          <span className="flex items-center gap-0.5 text-amber-300">
+            <Lightbulb size={10} />{lit}
+          </span>
+        )}
       </button>
     </Overlay>
   );
 }
 
-const chip = 'flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs border shadow-lg shadow-black/50 active:scale-95 transition-transform';
-
-/** Tappable control floating over a device in the room that's zoomed into. */
-function DeviceChip({ placed, room, onLightToggle, onDeviceOpen }: {
-  placed: PlacedDevice;
-  room: PlanRoom;
-  onLightToggle: (id: string) => void;
-  onDeviceOpen: (id: string) => void;
-}) {
-  const { device, cx, cy } = placed;
-  const offline = device.online === false;
-
-  if (device.type === 'light') {
-    const on = device.state.on;
-    return (
-      <Overlay position={[cx, BULB_Y + 0.45, cy]} center zIndexRange={[40, 21]}>
-        <div className="flex flex-col items-center gap-1">
-          <button
-            onClick={() => onLightToggle(device.id)}
-            aria-label={`${device.name}: ${on ? 'acesa' : 'apagada'}`}
-            aria-pressed={on}
-            className={`w-11 h-11 rounded-full flex items-center justify-center border shadow-lg shadow-black/50 active:scale-90 transition-transform ${
-              on ? 'bg-amber-400 border-amber-200 text-amber-950' : 'bg-zinc-900/90 border-zinc-600 text-zinc-400'
-            }`}
-          >
-            {on ? <Lightbulb size={20} /> : <LightbulbOff size={20} />}
-          </button>
-          <span className="max-w-[6rem] truncate rounded bg-zinc-950/70 px-1 text-[10px] text-zinc-300">
-            {device.name}
-          </span>
-        </div>
-      </Overlay>
-    );
-  }
-
-  if (device.type === 'blind') {
-    const at = onNearestEdge(room, cx, cy);
-    const pos = device.state.position;
-    return (
-      <Overlay position={[at.x, BLIND_Y0 + BLIND_H + 0.3, at.z]} center zIndexRange={[40, 21]}>
-        <button
-          onClick={() => onDeviceOpen(device.id)}
-          className={`${chip} bg-zinc-900/90 border-blue-500/60 text-blue-200`}
-          title={device.name}
-        >
-          <span className="inline-block w-2.5 h-3 rounded-sm border border-blue-300 overflow-hidden">
-            <span className="block bg-blue-400" style={{ height: `${100 - pos}%` }} />
-          </span>
-          {pos === 100 ? 'Aberto' : pos === 0 ? 'Fechado' : `${pos}%`}
-        </button>
-      </Overlay>
-    );
-  }
-
-  if (device.type === 'thermostat') {
-    const t = device.state;
-    return (
-      <Overlay position={[cx, 1.0, cy]} center zIndexRange={[40, 21]}>
-        <button
-          onClick={() => onDeviceOpen(device.id)}
-          className={`${chip} bg-zinc-900/90 ${t.heating ? 'border-orange-500/70 text-orange-200' : 'border-zinc-600 text-zinc-200'} ${offline ? 'opacity-50' : ''}`}
-          title={device.name}
-        >
-          {t.heating && <Flame size={12} className="text-orange-400" />}
-          <span className="tabular-nums">{offline ? '—' : `${t.current.toFixed(1)}°`}</span>
-          <span className="text-zinc-500 tabular-nums">→ {t.target.toFixed(1)}°</span>
-        </button>
-      </Overlay>
-    );
-  }
-
-  return null;
+/** Small name under each device of the room zoomed into. Never takes a tap. */
+function DeviceName({ position, text }: { position: [number, number, number]; text: string }) {
+  return (
+    <Html position={position} center zIndexRange={[15, 0]} pointerEvents="none">
+      <span className="block max-w-[7rem] truncate rounded bg-zinc-950/70 px-1 text-[10px] text-zinc-300 whitespace-nowrap">
+        {text}
+      </span>
+    </Html>
+  );
 }
+
+const chip = 'flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs border shadow-lg shadow-black/50 active:scale-95 transition-transform';
 
 /** Fault on the heat pump — always shown, zoomed in or not. */
 function FaultBadge({ cx, cy, codes, onTap }: {
@@ -499,8 +599,115 @@ function FaultBadge({ cx, cy, codes, onTap }: {
   );
 }
 
+/** Dimmer level and on/off, at the light. */
+function LightControls({ light, onCommand }: {
+  light: LightDevice;
+  onCommand: Props['onLightCommand'];
+}) {
+  // Local while dragging; one command on release, not one per pixel.
+  const [drag, setDrag] = useState<number | null>(null);
+  const on = light.state.on;
+  const level = drag ?? (on ? light.state.brightness : 0);
+  function commit() {
+    if (drag === null) return;
+    onCommand(light.id, { action: 'setBrightness', brightness: drag });
+    setDrag(null);
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {light.state.dimmable && (
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={level}
+            aria-label={`Intensidade de ${light.name}`}
+            onChange={e => setDrag(Number(e.target.value))}
+            onPointerUp={commit}
+            onKeyUp={commit}
+            onBlur={commit}
+            className="flex-1 min-w-0 cursor-pointer touch-none"
+          />
+          <span className="w-10 text-right text-sm tabular-nums text-amber-200">{level}%</span>
+        </div>
+      )}
+      <button
+        onClick={() => onCommand(light.id, { action: 'toggle' })}
+        className={`flex items-center justify-center gap-1.5 rounded-lg py-2 text-sm transition-colors ${
+          on ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200' : 'bg-amber-400 hover:bg-amber-300 text-amber-950 font-semibold'
+        }`}
+      >
+        {on ? <LightbulbOff size={15} /> : <Lightbulb size={15} />}
+        {on ? 'Apagar' : 'Acender'}
+      </button>
+    </div>
+  );
+}
+
+/** Fine control opened by holding a device (or tapping a thermostat), anchored above it. */
+function DevicePopover({ device, position, onClose, onLightCommand, onBlindCommand, onThermostatCommand, roomName }: {
+  device: Device;
+  position: [number, number, number];
+  roomName?: string;
+  onClose: () => void;
+  onLightCommand: Props['onLightCommand'];
+  onBlindCommand: Props['onBlindCommand'];
+  onThermostatCommand: Props['onThermostatCommand'];
+}) {
+  return (
+    <Overlay position={position} zIndexRange={[90, 80]}>
+      {/* Anchored by its bottom centre, just above the device, so it never covers it. */}
+      <div
+        style={{ transform: 'translate(-50%, calc(-100% - 14px))' }}
+        className="relative w-72 max-w-[85vw] shadow-2xl shadow-black/70 rounded-2xl"
+      >
+        {device.type === 'light' ? (
+          <div className="rounded-2xl border border-zinc-700 bg-zinc-950/95 backdrop-blur p-3 flex flex-col gap-2.5">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 min-w-0 truncate text-sm font-medium text-zinc-100">{device.name}</span>
+              <button onClick={onClose} className="text-zinc-400 hover:text-zinc-100" aria-label="Fechar"><X size={16} /></button>
+            </div>
+            <LightControls light={device} onCommand={onLightCommand} />
+          </div>
+        ) : (
+          <>
+            {/* These rows are already cards; a second frame around them only
+                added a border. The close button sits on the corner instead. */}
+            {device.type === 'blind' && (
+              <BlindRow device={device as BlindDevice} onCommand={cmd => onBlindCommand(device.id, cmd)} />
+            )}
+            {device.type === 'thermostat' && (
+              <ThermostatRow device={device as ThermostatDevice} room={roomName} onCommand={onThermostatCommand} />
+            )}
+            <button
+              onClick={onClose}
+              aria-label="Fechar"
+              className="absolute -top-2.5 -right-2.5 w-7 h-7 flex items-center justify-center rounded-full bg-zinc-800 border border-zinc-600 text-zinc-300 hover:text-white"
+            >
+              <X size={14} />
+            </button>
+          </>
+        )}
+      </div>
+    </Overlay>
+  );
+}
+
+/** Development builds only: the live scene on `window.__house3d`, for debugging from the console. */
+function DevHandle() {
+  const state = useThree();
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __house3d?: unknown }).__house3d = state;
+  }, [state]);
+  return null;
+}
+
 export default function House3D({
-  plan, devices, placements, mode, selectedRoomId, onSelectRoom, onLightToggle, onDeviceOpen,
+  plan, devices, placements, mode, selectedRoomId, onSelectRoom,
+  onLightCommand, onBlindCommand, onThermostatCommand, onDeviceOpen,
 }: Props) {
   const rooms = plan.rooms;
   const walls = useMemo(() => plan.walls?.length ? plan.walls : wallsFromRooms(rooms), [plan.walls, rooms]);
@@ -513,6 +720,18 @@ export default function House3D({
     : null;
   const night = isNight();
   const bg = night ? '#05060a' : '#0b0d12';
+  /** Device whose fine control is open, if any. */
+  const [popoverId, setPopoverId] = useState<string | null>(null);
+
+  // Moving to another room (or back to the house) closes a control left open.
+  useEffect(() => setPopoverId(null), [selectedRoomId]);
+
+  useEffect(() => {
+    if (!popoverId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPopoverId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [popoverId]);
 
   /** Rooms worth tapping: those with something in them to control or read. */
   const interactive = useMemo(() => {
@@ -533,13 +752,28 @@ export default function House3D({
   const cx = (house.x1 + house.x2) / 2;
   const cz = (house.z1 + house.z2) / 2;
 
+  /** Where a device's popover and name tag hang, by kind. */
+  function anchorOf(device: Device, x: number, y: number, room: PlanRoom): [number, number, number] {
+    if (device.type === 'blind') {
+      const at = onNearestEdge(room, x, y);
+      return [at.x, BLIND_Y0 + BLIND_H + 0.15, at.z];
+    }
+    if (device.type === 'light') return [x, BULB_Y + 0.2, y];
+    return [x, 1.2, y];
+  }
+
+  const open = popoverId ? placed.find(p => p.device.id === popoverId) : undefined;
+  const openRoom = open ? roomById.get(open.device.roomId) : undefined;
+
   return (
     <Canvas
       frameloop="demand"
       dpr={[1, 1.75]}
       gl={{ antialias: true, powerPreference: 'low-power' }}
       camera={{ fov: 40, near: 0.1, far: 400, position: [cx, 40, cz + 30] }}
-      className="touch-none"
+      // Holding a finger on a light must not bring up iOS's text callout.
+      className="touch-none select-none"
+      style={{ WebkitTouchCallout: 'none' }}
     >
       <color attach="background" args={[bg]} />
       <fog attach="fog" args={[bg, 70, 160]} />
@@ -547,13 +781,18 @@ export default function House3D({
       <directionalLight position={[cx - 12, 30, cz + 16]} intensity={night ? 0.35 : 1.5} />
 
       <CameraRig house={home} focus={focus} />
+      {import.meta.env.DEV && <DevHandle />}
 
       {/* Ground: tapping outside every room goes back to the whole house. */}
       <mesh
         position={[cx, -0.01, cz]}
         rotation={[-Math.PI / 2, 0, 0]}
         material={MAT.ground}
-        onClick={e => { if (tapped(e)) onSelectRoom(null); }}
+        onClick={e => {
+          if (!tapped(e)) return;
+          setPopoverId(null);
+          onSelectRoom(null);
+        }}
       >
         <planeGeometry args={[house.x2 - house.x1 + 40, house.z2 - house.z1 + 40]} />
       </mesh>
@@ -561,19 +800,24 @@ export default function House3D({
       {rooms.map(room => {
         const stats = roomStats(devices, room.id);
         return (
-          <RoomFloor
-            key={room.id}
-            room={room}
-            stats={stats}
-            mode={mode}
-            selected={room.id === selectedRoomId}
-            night={night}
-            onTap={e => {
-              if (!tapped(e)) return;
-              e.stopPropagation();
-              onSelectRoom(interactive.has(room.id) ? room.id : null);
-            }}
-          />
+          <group key={room.id}>
+            <RoomFloor
+              room={room}
+              stats={stats}
+              mode={mode}
+              selected={room.id === selectedRoomId}
+              night={night}
+              onTap={e => {
+                if (!tapped(e)) return;
+                e.stopPropagation();
+                setPopoverId(null);
+                onSelectRoom(interactive.has(room.id) ? room.id : null);
+              }}
+            />
+            {stats.temp !== undefined && (
+              <ClimateDecal room={room} temp={stats.temp} humidity={stats.humidity} heating={stats.heating} />
+            )}
+          </group>
         );
       })}
 
@@ -582,20 +826,39 @@ export default function House3D({
       {placed.map(({ device, cx: x, cy: y }) => {
         const room = roomById.get(device.roomId);
         if (!room) return null;
+        const hold = () => setPopoverId(device.id);
         if (device.type === 'light') {
           return (
             <Bulb
               key={device.id}
               x={x}
               z={y}
-              on={device.state.on}
+              light={device}
               poolSize={Math.min(3, Math.min(room.w, room.h) * 0.9)}
               night={night}
+              onTap={() => onLightCommand(device.id, { action: 'toggle' })}
+              onHold={hold}
             />
           );
         }
         if (device.type === 'blind') {
-          return <Shutter key={device.id} room={room} cx={x} cy={y} position={device.state.position} />;
+          return (
+            <Shutter
+              key={device.id}
+              room={room}
+              cx={x}
+              cy={y}
+              position={device.state.position}
+              // Mostly open closes, mostly closed opens — one tap, like a light.
+              onTap={() => onBlindCommand(device.id, {
+                action: 'setPosition', position: device.state.position >= 50 ? 0 : 100,
+              })}
+              onHold={hold}
+            />
+          );
+        }
+        if (device.type === 'thermostat') {
+          return <ThermostatPuck key={device.id} x={x} z={y} device={device} onTap={hold} />;
         }
         if (device.type === 'heatpump') {
           const p = device.state;
@@ -606,6 +869,7 @@ export default function House3D({
                 cy={y}
                 running={device.online !== false && p.on && (p.compressorHz ?? 0) > 0}
                 fault={p.faults.length > 0}
+                onTap={() => onDeviceOpen(device.id)}
               />
               {p.faults.length > 0 && (
                 <FaultBadge cx={x} cy={y} codes={p.faults} onTap={() => onDeviceOpen(device.id)} />
@@ -622,23 +886,41 @@ export default function House3D({
           <RoomLabel
             key={room.id}
             room={room}
-            stats={roomStats(devices, room.id)}
+            lit={roomStats(devices, room.id).lit}
             dimmed={selected !== null}
-            onTap={() => onSelectRoom(room.id)}
+            onTap={() => {
+              setPopoverId(null);
+              onSelectRoom(room.id);
+            }}
           />
         ))}
 
+      {/* Names only where they can be read: the room zoomed into. */}
       {selected && placed
-        .filter(p => p.device.roomId === selected.id)
-        .map(p => (
-          <DeviceChip
-            key={p.device.id}
-            placed={p}
-            room={selected}
-            onLightToggle={onLightToggle}
-            onDeviceOpen={onDeviceOpen}
-          />
-        ))}
+        .filter(p => p.device.roomId === selected.id && p.device.type !== 'heatpump' && p.device.id !== popoverId)
+        .map(({ device, cx: x, cy: y }) => {
+          const [ax, ay, az] = anchorOf(device, x, y, selected);
+          const dimmed = device.type === 'light' && device.state.on && device.state.dimmable && device.state.brightness < 100;
+          return (
+            <DeviceName
+              key={device.id}
+              position={[ax, ay - (device.type === 'light' ? 0.75 : 0.05), az]}
+              text={dimmed ? `${device.name} · ${device.state.brightness}%` : device.name}
+            />
+          );
+        })}
+
+      {open && openRoom && (
+        <DevicePopover
+          device={open.device}
+          position={anchorOf(open.device, open.cx, open.cy, openRoom)}
+          roomName={openRoom.name}
+          onClose={() => setPopoverId(null)}
+          onLightCommand={onLightCommand}
+          onBlindCommand={onBlindCommand}
+          onThermostatCommand={onThermostatCommand}
+        />
+      )}
     </Canvas>
   );
 }

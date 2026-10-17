@@ -170,7 +170,9 @@ export default function HouseScreen({
                 mode={mode}
                 selectedRoomId={selectedRoomId}
                 onSelectRoom={selectRoom}
-                onLightToggle={id => onLightCommand(id, { action: 'toggle' })}
+                onLightCommand={onLightCommand}
+                onBlindCommand={onBlindCommand}
+                onThermostatCommand={onThermostatCommand}
                 onDeviceOpen={openDevice}
               />
             </Suspense>
@@ -200,6 +202,11 @@ export default function HouseScreen({
           )}
 
           {mode === 'clima' && <TempLegend />}
+
+          {/* Holding is invisible until someone tells you; this is the telling. */}
+          <p className="absolute z-[60] bottom-3 right-3 pointer-events-none rounded-lg bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-400">
+            Tocar: ligar/desligar · Manter premido: ajustar
+          </p>
         </section>
 
         <aside
