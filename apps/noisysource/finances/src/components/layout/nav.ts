@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import {
-  Banknote, BarChart2, Briefcase, Calculator, CreditCard, FileText, Handshake,
+  Banknote, BarChart2, Briefcase, CreditCard, FileText, Handshake,
   PiggyBank, Receipt, RefreshCw, Shield, Store, TrendingUp,
 } from 'lucide-react';
 
@@ -37,8 +37,7 @@ export const ENTITY_NAV: NavGroup[] = [
   {
     title: 'Equipa',
     items: [
-      { feature: 'contracts', label: 'Contratos', icon: FileText,   entities: COMPANIES },
-      { feature: 'payroll',   label: 'Salários',  icon: Calculator, entities: COMPANIES },
+      { feature: 'contracts', label: 'Equipa', icon: FileText, entities: COMPANIES },
     ],
   },
   {

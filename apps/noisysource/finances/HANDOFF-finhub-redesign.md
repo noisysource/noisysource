@@ -51,7 +51,9 @@
    group with its lines (same grouping as Recorrentes). Past months use the confirmed payroll runs
    for salaries, future months the contracts. NoisyPhocus keeps writing `costSummary/{yyyy-mm}`
    (KidClub's future Resumo Financeiro reads it; CLAUDE.md Cross-App Data Contracts).
-3. **Equipa** (Contratos + Salários, per company). People list; each person expands to their
+3. **Equipa** (Contratos + Salários, per company). **DONE 2026-10-18** (`pages/TeamPage.tsx`,
+   `components/team/ContractFormModal.tsx` + `ProcessPayrollModal.tsx`, `lib/team.ts` + tests;
+   old `EmploymentContractsPage` / `PayrollPage` removed, `/:entity/payroll` redirects; §6 R3). People list; each person expands to their
    contract versions (em vigor / terminado, dates) and their payroll history (confirmed runs per
    month, each expandable). "Novo contrato" opens the form in a modal; "Processar mês" opens the
    preview + confirm (one run per company-person-month, `payrollRunId`).

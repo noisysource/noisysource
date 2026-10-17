@@ -14,7 +14,7 @@ import DashboardPage from './pages/DashboardPage';
 import PeoplePage from './pages/admin/PeoplePage';
 import CompaniesPage from './pages/admin/CompaniesPage';
 import AccountsPage from './pages/AccountsPage';
-import ContractsPage from './pages/EmploymentContractsPage';
+import TeamPage from './pages/TeamPage';
 import EcContractsPage from './pages/EcContractsPage';
 import IncomeSourcesPage from './pages/IncomeSourcesPage';
 
@@ -24,7 +24,6 @@ import CreditsPage from './pages/CreditsPage';
 import ForecastPage from './pages/ForecastPage';
 import IRSPage from './pages/IRSPage';
 import CategoriesPage from './pages/CategoriesPage';
-import PayrollPage from './pages/PayrollPage';
 import NoisyPhocusRevenuePage from './pages/NoisyPhocusRevenuePage';
 import LoansPage from './pages/LoansPage';
 import VatPage from './pages/VatPage';
@@ -67,8 +66,8 @@ export default function App() {
               <Route path="accounts"     element={<AccountsPage />} />
               <Route path="income"       element={<IncomeSourcesPage />} />
               <Route path="ec-contracts" element={<EcContractsPage />} />
-              <Route path="contracts"    element={<ContractsPage />} />
-              <Route path="payroll"      element={<PayrollPage />} />
+              <Route path="contracts"    element={<TeamPage />} />
+              <Route path="payroll"      element={<Navigate to="../contracts" replace />} />
               <Route path="revenue"      element={<NoisyPhocusRevenuePage />} />
               <Route path="loans"        element={<LoansPage />} />
               <Route path="vat"          element={<VatPage />} />
@@ -106,9 +105,9 @@ export default function App() {
             <Route path="cashflow"           element={<Navigate to="/noisysource/accounts" replace />} />
             <Route path="categories"         element={<Navigate to="/noisysource/categories" replace />} />
             <Route path="revenue"            element={<Navigate to="/noisysource/ec-contracts" replace />} />
-            <Route path="payroll"            element={<Navigate to="/noisysource/payroll" replace />} />
+            <Route path="payroll"            element={<Navigate to="/noisysource/contracts" replace />} />
             <Route path="employment/contracts" element={<Navigate to="/noisysource/contracts" replace />} />
-            <Route path="employment/payroll"   element={<Navigate to="/noisysource/payroll" replace />} />
+            <Route path="employment/payroll"   element={<Navigate to="/noisysource/contracts" replace />} />
             <Route path="admin/people"         element={<Navigate to="/setup/people" replace />} />
             <Route path="admin/companies"      element={<Navigate to="/setup/companies" replace />} />
           </Route>

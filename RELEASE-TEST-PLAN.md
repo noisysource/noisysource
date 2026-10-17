@@ -453,3 +453,15 @@ steps 3–4.
 4. NoisyPhocus → a month. ✅ Pessoal (Recibo verde), Renda, Viatura, Água luz e telecomunicações,
    Comissões; "IVA por confirmar (1)" for the rent. Firestore `costSummary/{yyyy-mm}` updated for the
    months up to now.
+
+#### R3. Equipa (Contratos + Salários in one page)
+1. NoisySource → Equipa (the menu has no "Salários" any more; old links land here). ✅ Header:
+   people with a contract in force, monthly cost, last month processed (September 2026).
+2. Renato ▸. ✅ Two versions: May → sem fim "em vigor", January → 30 April "terminada", each with
+   bruto, IRS, SS, pay day, net pay account and vouchers. Salários processados: September → January,
+   each ▸ with bruto, IRS, SS, SS empresa, benefícios, líquido, custo.
+3. "+ Nova versão" on someone. ✅ The form opens as a copy; a start date before the current version's
+   is refused. (Cancel unless you want to keep it: saving ends the previous version the day before.)
+4. "Processar mês" → September 2026. ✅ Every row "confirmado", "Confirmar 0" disabled. October:
+   rows "por confirmar". (This replaces S5 steps 1–2, which used the old Salários page.)
+5. NoisyPhocus → Equipa. ✅ Ana Sofia, "recibo verde", no payslips.
