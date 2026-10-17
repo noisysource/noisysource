@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-17
 
 ## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, NOT in prod
 
@@ -338,9 +338,12 @@ here. A later `staging` → `main` PR deploys its merge ref, which still include
 - **(b) Dangling `vendusClientId`s.** Family `qgQTaxxSpsUJl5bVpVR5` (thaise.ps07) and Ana Bento's family each
   point at one arbitrary duplicate. Decide which client to keep (or let (a) delete them all and the next sync
   make a fresh one with the ref), then fix the family docs to match.
-- **(c) Live Vendus key in `.claude/settings.local.json`.** It's hardcoded in always-allow permission rules,
-  including write calls. Remove those rules and rotate the key (then update the `VENDUS_API_KEY` secret on
-  prod). Renato's decision.
+- **(c) Live Vendus key in `.claude/settings.local.json`.** Rules removed 2026-10-17: every allow rule with
+  the key inline (34 rules, incl. document/client POST/PATCH/DELETE), the prod Easypay `notification`
+  calls, `Bash(gcloud secrets *)` and an old prod `backfill.js` run. **Still to do: rotate the key** — it sat in
+  that file and in old session transcripts for weeks. New key in Vendus, then
+  `firebase functions:secrets:set VENDUS_API_KEY --project rainbow-prod-2454b` (type it at the prompt, never
+  inline), then redeploy functions so they pick up the new version.
 
 ## Where things stand (2026-10-01, end of session)
 
@@ -406,7 +409,7 @@ here. A later `staging` → `main` PR deploys its merge ref, which still include
   - Low priority: transport `schedule[]` entries have no `direction` (0 of 23 active subs), so line items and
     events say "both" for single-trip days. Amounts are unaffected (gross counts schedule entries); only labels.
   - ✅ (same PR) The subscription card's price for **new-pricing** subs now comes from the bill line.
-- **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case).
+- **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case, since fixed by hand).
 - **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
 - **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
   real, pricing model (GO-LIVE §4), re-enabling card/Multibanco (needs an Easypay POS).
@@ -715,8 +718,16 @@ Email Center (`/admin/email-center`, now "Emails"). Tabs:
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
    charged, because the fee is keyed by child. Create the child in admin and link both subs.
    In the new admin page: his family → "✏️ Dados da criança" → Guardar creates the record and links both subs.
-5. **Mary Pratas' mis-paid period** (paid 2027-08 instead of 2026-09, Vendus FR 01P2026/195) needs a
-   credit note. Unchanged. The new pay-in-order rule stops it happening again.
+5. ~~Mary Pratas' mis-paid period~~ **Fixed in Firestore 2026-10-17, no credit note (Renato's call).** She paid
+   the 2027-08 bill (€142.80, FR 01P2026/195, 2026-09-18) instead of 2026-09 (€186), so the pay-in-order rule
+   blocked October onward. One atomic commit (preconditioned on both docs' updateTime): `Nk7GmFSkSm7zzLYdMD66_2026-09`
+   → `invoiced`, carrying that payment + invoice, lines/total = what FR/195 invoiced (€40.80 study + €102
+   transport, retitled Setembro 2026), the original €186 breakdown kept in its `correction` field; the
+   **€43.20 difference was waived** (Renato). `_2027-08` → `pending`, payment/invoice fields removed, a
+   `correction` note left; its lines were copied from 2027-07 (€120) until the next recompute. Verified after:
+   October 2026 (€120) is her first payable month. Vendus untouched: FR/195 still says "Período: Agosto 2027",
+   accepted as is. Also checked: her 15% "Aluno do ano anterior" (added on prod 2026-09-08) is on neither sub
+   any more, probably lost in the go-live promotion; Renato's call 2026-10-17 was to leave it off for now.
 6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
    She'd see nothing if she logged in with that email. In the new admin page: tick "Mostrar famílias sem
    inscrições", open it, "Eliminar família".
