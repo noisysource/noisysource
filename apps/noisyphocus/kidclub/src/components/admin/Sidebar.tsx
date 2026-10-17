@@ -60,6 +60,7 @@ export default function Sidebar() {
 
         <SidebarSection title="🛠️ Admin">
           <SidebarNavLink to="/admin/data-management">🗄️ Gestão de Dados</SidebarNavLink>
+          <SidebarNavLink to="/admin/client-errors">🚨 Erros dos clientes</SidebarNavLink>
         </SidebarSection>
       </nav>
     </aside>
