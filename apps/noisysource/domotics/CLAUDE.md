@@ -66,7 +66,7 @@ Both Netatmo and Tuya are metered cloud APIs — this is exactly the class of bu
 
 ## Notes
 - `domotics_config/netatmo` (OAuth client id/secret/refresh token) was **world-readable from 2026-08-05 to 2026-08-09** — confirm it's been rotated in the Netatmo console before treating those credentials as trustworthy; check `firestore.rules` covers `domotics_config` correctly before touching it.
-- The Pi is a 256MB Raspberry Pi 1 Model B Rev 2, MAC `b8:27:eb:bd:be:8c`, key-based SSH as `pi`. Every Tuya device sits behind a WiFi repeater and shares its MAC from the Pi's wired side — `deploy/pin-device-arp.sh` works around the repeater's proxy-ARP refusing some IPs. Remove that workaround if the MEO router's WiFi is ever split and devices move off the repeater.
+- The Pi is a 256MB Raspberry Pi 1 Model B Rev 2, MAC `b8:27:eb:bd:be:8c`, key-based SSH as `pi`. Five of the seven Tuya devices sit behind a WiFi repeater and share its MAC (`d6:35:38:f6:ea:21`) from the Pi's wired side; Sala and Master bedroom are on the main router's WiFi and answer with their own MACs. `deploy/pin-device-arp.sh` works around the repeater's proxy-ARP refusing some IPs, but its majority vote can elect a single device's own MAC (it did, 2026-10-16 — see STATUS.md). Device IPs are DHCP-assigned and do move; after a reshuffle, rerun `deploy/sync-tuya-keys.js --write`. Remove the ARP workaround if devices ever move off the repeater.
 - Previous energy monitoring work exists in a separate repo — review before building energy features, if that's ever picked back up.
 
 ---

@@ -180,6 +180,11 @@ function discover(ms = 25000) {
   }
   await setDoc('domotics_config/tuya_devices', { devices: merged });
   console.log('\nWritten to domotics_config/tuya_devices.');
+  // The restart makes the bridge reload this document and rewrite its local
+  // cache. The ARP pins are computed from that cache *before* the bridge
+  // starts, so on a restart they still reflect the old IPs — hence a second
+  // pin pass once the bridge has written the new list. No second restart is
+  // needed: the bridge's backoff retries any device that was unreachable.
   console.log('Now refresh the Pi:');
-  console.log('  ssh pi@192.168.1.125 "rm -f ~/domotics-bridge/device-cache.json && sudo systemctl restart domotics-bridge"');
+  console.log('  ssh pi@192.168.1.125 "sudo systemctl restart domotics-bridge && sleep 45 && sudo ~/domotics-bridge/deploy/pin-device-arp.sh"');
 })().catch(e => { console.error('failed:', e.message); process.exit(1); });
