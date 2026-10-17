@@ -1,5 +1,6 @@
 import { normalizeName, SubStatus } from '../../../lib/utils';
 import { isValidNif } from '../../../lib/nif';
+import { hasOpenInvoiceError } from '@shared/models/billingInvoiceState';
 import {
   SubItem, FamilyDoc, ChildDoc, BillRow, FamilyGroup, ChildGroup,
   familyKeyOf, locationStr, isOverdue, isUnlinked, needsAdminReview,
@@ -27,6 +28,7 @@ export interface FamilyInfo {
   contactEmail?: string;
   contactPhone?: string;
   bills: BillRow[];
+  /** Bills whose invoice is still owed after an error (hasOpenInvoiceError). */
   invoiceErrors: BillRow[];
   /** Unpaid bills past their due date. Future months don't count. */
   overdue: BillRow[];
@@ -80,7 +82,7 @@ export function buildFamilyIndex(src: ListSource): Map<string, FamilyInfo> {
       contactEmail: email,
       contactPhone: family?.primaryContact?.phone || fallback?.contactPhone,
       bills,
-      invoiceErrors: bills.filter(b => b.invoiceError),
+      invoiceErrors: bills.filter(hasOpenInvoiceError),
       overdue: bills.filter(b => isOverdue(b)),
       duplicate: !!family && (emailCount.get(email?.toLowerCase() ?? '') ?? 0) > 1,
       nifInvalid: !!family?.nif && !isValidNif(family.nif),

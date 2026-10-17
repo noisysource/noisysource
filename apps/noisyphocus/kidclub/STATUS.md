@@ -198,6 +198,37 @@ the invoice path, the late-NIF re-link and the email can only run on prod.
 
 (#91 is merged: in `main`, and in `staging` via #92. The 2026-10-11 section's header below still says OPEN.)
 
+## 🧾 "Tentar faturar novamente" can't issue a second invoice (2026-10-17): PR #101 (`agent/kidclub-retry-invoice-guard`) → `staging`, NOT in prod
+
+**The hazard.** Before #74's invoice claim, EasyPay's two concurrent webhook calls could both invoice one bill.
+For `oK6GHA7D0f4cRVM3RNZW_2026-09` (Maria Teresa Azevedo), one call got Vendus "A001 … too many documents
+simultaneously" and wrote `invoiceError`. The other issued **FR 01P2026/226** and set `invoiced` without clearing
+it. `retryVendusInvoice` only refused `invoiced && !invoiceError`, so on that bill "Tentar faturar novamente" would
+have reset it to `paid`, deleted the number and issued a **second real Fatura-Recibo**. The admin UI offered the
+button on it.
+
+**Prod data fix: NOT DONE YET (as of 2026-10-17).** The stale `invoiceError` is still on
+`oK6GHA7D0f4cRVM3RNZW_2026-09`. Renato approved deleting that one field, but the agent's prod write was blocked by
+Claude Code's auto-mode classifier, so Renato runs it himself. Until then, or until #101 is in prod, **don't click
+"Tentar faturar novamente" on that bill**. FR 01P2026/226 is its only invoice; no duplicate was issued. It was the
+only one of the 34 paid/invoiced bills with this combination (checked 2026-10-17). Once #101 is in prod the badge
+already hides itself (an invoice number is recorded), so deleting the field is then just tidying.
+
+**What #101 changes**
+- `retryVendusInvoice` refuses (`already-exists`, naming the invoice) whenever the bill has an `invoiceNumber` or
+  `vendusId`, whatever the status or `invoiceError`. The logic is in `retryInvoiceLogic.ts`, with tests.
+  `force` still overrides; no client sends it. "Fatura … criada mas não registada" is unaffected: its number
+  isn't on the bill, so it can still be retried after checking Vendus.
+- A successful invoice also deletes `invoiceError`.
+- Admin UI: an invoice error only counts as open when no invoice is recorded. One helper,
+  `hasOpenInvoiceError` in `packages/shared/models/billingInvoiceState.ts`, drives every place that shows it:
+  - the "erro de fatura" tag, count and filter, and the "Fatura por emitir" email audience
+  - the retry card in `FamilyBills`
+  - the Cobranças badge and its "Fatura por emitir" text
+- Tests: functions 246/246; the new guard tests fail on the old code.
+
+**Next step:** test on dev (steps in the PR body), then promote with the next `staging` → `main` PR.
+
 ## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, IN PROD (on `main` as of 2026-10-17; check its post-deploy steps were done)
 
 **What the check found (read-only, dev + prod + invoice FR 01P2026/202).** Families pay exactly the
@@ -449,12 +480,10 @@ here. A later `staging` → `main` PR deploys its merge ref, which still include
 - **(b) Dangling `vendusClientId`s.** Family `qgQTaxxSpsUJl5bVpVR5` (thaise.ps07) and Ana Bento's family each
   point at one arbitrary duplicate. Decide which client to keep (or let (a) delete them all and the next sync
   make a fresh one with the ref), then fix the family docs to match.
-- **(c) Live Vendus key in `.claude/settings.local.json`.** Rules removed 2026-10-17: every allow rule with
-  the key inline (34 rules, incl. document/client POST/PATCH/DELETE), the prod Easypay `notification`
-  calls, `Bash(gcloud secrets *)` and an old prod `backfill.js` run. **Still to do: rotate the key** — it sat in
-  that file and in old session transcripts for weeks. New key in Vendus, then
-  `firebase functions:secrets:set VENDUS_API_KEY --project rainbow-prod-2454b` (type it at the prompt, never
-  inline), then redeploy functions so they pick up the new version.
+- ~~**(c) Live Vendus key in `.claude/settings.local.json`.**~~ **Done 2026-10-17.** Rules removed: every allow
+  rule with the key inline (34 rules, incl. document/client POST/PATCH/DELETE), the prod Easypay `notification`
+  calls, `Bash(gcloud secrets *)` and an old prod `backfill.js` run. Rotating the key isn't needed (Renato,
+  2026-10-17).
 
 ## Where things stand (2026-10-01, end of session)
 
