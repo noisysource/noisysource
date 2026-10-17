@@ -144,9 +144,14 @@ Progress:
     "Saldos verificados", account numbers matching, 0 duplicates). Closing balances match the
     September statements for all three BPI accounts. Smoke-checked: Custos do mês grouped by
     category, Salários Jul–Sep all "confirmado", Previsão shows the NoisyPhocus green receipt.
-  - **NEXT: Renato checks dev** with RELEASE-TEST-PLAN §3 and §6 (S2–S5) and lists the data still
-    missing, then merge #94 into `staging`, then the `staging` → `main` release (step 5: Renato
-    imports the seed on prod).
+  - **2026-10-18, Renato's review on dev → REDESIGN FIRST, then release.** Plan, decisions and
+    traps: **`HANDOFF-finhub-redesign.md`** (same folder). Steps: 1 Recorrentes as the aggregator,
+    2 Despesas do mês for every entity, 3 Equipa (Contratos + Salários), 4 Movimentos (running
+    balances, matching), 5 IVA from Movimentos. All in #94, Renato tests each on dev.
+    Done so far: Rendimento counts only versions in force; insurance "Prémio recorrente" switch
+    (Obras e Montagens off: **re-import the seed on dev** to apply).
+  - After the redesign: merge #94 into `staging`, then the `staging` → `main` release (step 5:
+    Renato imports the seed on prod).
   - **2026-10-17:** dev data checked intact (27 payroll runs, 1,994 bank movements from 27 imports).
     #95 (domotics) had put the old FinHub back on dev; FinHub hosting redeployed by hand from this
     branch (same bundle as 2026-10-16). #94 still merges cleanly into `staging` (34 commits behind,
