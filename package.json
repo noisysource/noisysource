@@ -17,7 +17,8 @@
     "deploy:dev": "firebase deploy --project=dev",
     "terraform:init": "cd infra/gcp/terraform && terraform init",
     "terraform:plan": "cd infra/gcp/terraform && terraform plan",
-    "terraform:apply": "cd infra/gcp/terraform && terraform apply"
+    "terraform:apply": "cd infra/gcp/terraform && terraform apply",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-parent-portal.rules-test.cjs\""
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

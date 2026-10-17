@@ -29,6 +29,24 @@
       ]
     },
     {
+      "collectionGroup": "reservationEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "familyId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subscriptionId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "eventModifications",
       "queryScope": "COLLECTION",
       "fields": [
