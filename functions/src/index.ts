@@ -19,6 +19,7 @@ export { onStudyroomCreated, onTransportCreated, onStudyroomStatusNotify, onTran
 export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/discountRecalc";
 export { onStudyroomReservationEventsSync, onTransportReservationEventsSync, setReservationEventStatus, backfillReservationEvents } from "./kidclub/reservationEvents";
 export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
+export { clientErrorsDigest } from "./kidclub/clientErrorsDigest";
 export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
 export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";export { getKidclubVatSummary } from "./kidclub/vatSummary";
 export { getInvoicePdf } from "./kidclub/invoicePdf";
