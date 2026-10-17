@@ -1,5 +1,7 @@
 import {
   collection,
+  deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -11,10 +13,11 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../../firebase';
-import type { BankTransactionDoc, BankImportDoc } from '@shared/models/BankTransaction';
+import type { BankTransactionDoc, BankImportDoc, BankTransactionMatch } from '@shared/models/BankTransaction';
 import type { ParsedBpiStatement } from '../../parsers/bpiXlsx';
 import { bpiTxId } from '../../parsers/bpiXlsx';
 import { bpiPdfTxId } from '../../parsers/bpiPdf';
+import { stripUndefinedDeep } from '../payload';
 
 const TX_COL = 'finances_bank_transactions';
 const IMPORT_COL = 'finances_bank_imports';
@@ -47,6 +50,7 @@ function txFrom(raw: any, id: string): BankTransactionDoc {
     recurringId: raw.recurringId,
     notes: raw.notes,
     importedAt: toDate(raw.importedAt),
+    match: raw.match ?? undefined,
   };
 }
 
@@ -168,5 +172,30 @@ export function makeBankTransactionsDomain() {
     return { ...importRecord, id: importId, importedAt: new Date() };
   }
 
-  return { listByAccount, listImportsByAccount, importStatement };
+  /** Confirms what a line is (Movimentos), or clears it with null. */
+  async function setMatch(id: string, match: BankTransactionMatch | null): Promise<void> {
+    await updateDoc(doc(db, TX_COL, id), { match: match ? stripUndefinedDeep(match) : deleteField() });
+  }
+
+  /** A movement not on any statement (cash, a card, Revolut…), typed in Movimentos. */
+  async function addManual(input: {
+    accountId: string; entityId: string; date: string; description: string; amountCents: number; match?: BankTransactionMatch;
+  }): Promise<string> {
+    const ref = doc(collection(db, TX_COL));
+    await setDoc(ref, {
+      accountId: input.accountId, entityId: input.entityId, sourceType: 'manual', date: input.date,
+      description: input.description, amountCents: input.amountCents,
+      ...(input.match && { match: stripUndefinedDeep(input.match) }),
+      importedAt: serverTimestamp(),
+    });
+    return ref.id;
+  }
+
+  /** Only movements typed by hand can be deleted; statement lines come back with the next import. */
+  async function deleteManual(tx: BankTransactionDoc): Promise<void> {
+    if (tx.sourceType !== 'manual') throw new Error('Só se apagam movimentos manuais.');
+    await deleteDoc(doc(db, TX_COL, tx.id));
+  }
+
+  return { listByAccount, listImportsByAccount, importStatement, setMatch, addManual, deleteManual };
 }

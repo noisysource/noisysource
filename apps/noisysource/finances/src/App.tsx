@@ -15,6 +15,7 @@ import PeoplePage from './pages/admin/PeoplePage';
 import CompaniesPage from './pages/admin/CompaniesPage';
 import AccountsPage from './pages/AccountsPage';
 import TeamPage from './pages/TeamPage';
+import MovementsPage from './pages/MovementsPage';
 import EcContractsPage from './pages/EcContractsPage';
 import IncomeSourcesPage from './pages/IncomeSourcesPage';
 
@@ -64,6 +65,7 @@ export default function App() {
             {/* Entity-scoped routes — entity comes from URL param */}
             <Route path=":entity">
               <Route path="accounts"     element={<AccountsPage />} />
+              <Route path="movements"    element={<MovementsPage />} />
               <Route path="income"       element={<IncomeSourcesPage />} />
               <Route path="ec-contracts" element={<EcContractsPage />} />
               <Route path="contracts"    element={<TeamPage />} />

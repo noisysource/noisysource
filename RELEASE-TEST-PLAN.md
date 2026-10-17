@@ -465,3 +465,18 @@ steps 3–4.
 4. "Processar mês" → September 2026. ✅ Every row "confirmado", "Confirmar 0" disabled. October:
    rows "por confirmar". (This replaces S5 steps 1–2, which used the old Salários page.)
 5. NoisyPhocus → Equipa. ✅ Ana Sofia, "recibo verde", no payslips.
+
+#### R4. Movimentos (statement lines, matching, missing items)
+1. NoisySource → Movimentos (new, under Dinheiro). ✅ BPI NoisySource, the newest month with
+   movements (September 2026): saldo inicial / entradas / saídas / saldo final (= the statement's),
+   "Por classificar N de N", each line with its running balance.
+2. ✅ Suggestions "≈ …" with the reason (mesmo valor, n dia(s)…): the accountant (233,70), MEO,
+   the loan's capital line, salary transfers ("Salário — …", net up to net + benefits). Confirmar one
+   → "✓ … · previsto"; desfazer brings the suggestion back.
+3. A line with no suggestion → Classificar… → Despesa avulsa, category, IVA, "Lembrar". ✅ It shows
+   "✓ … · avulso"; the next month, a line with the same description is suggested (score 100).
+4. "Confirmar todas as sugestões (n)". ✅ Every suggested line confirmed in one click; none without one.
+5. "Esperado sem movimento": ✅ expected items 5+ days past their date with no confirmed line.
+6. Casa → Movimentos → BPI (conjunta) → "+ Movimento manual" (e.g. a cash expense). ✅ Line "manual",
+   classified, no balance; "apagar" removes it. Contas: a confirmed Dashboard payment dated on or
+   before the account's "saldo a" no longer adds to the balance.

@@ -57,7 +57,9 @@
    contract versions (em vigor / terminado, dates) and their payroll history (confirmed runs per
    month, each expandable). "Novo contrato" opens the form in a modal; "Processar mês" opens the
    preview + confirm (one run per company-person-month, `payrollRunId`).
-4. **Movimentos** (per account, under Dinheiro). Statement lines with the running balance; each
+4. **Movimentos** (per account, under Dinheiro). **DONE 2026-10-18** (`pages/MovementsPage.tsx`,
+   `lib/movementMatching.ts` + tests, `BankTransactionDoc.match`, `movementRules` per entity,
+   manual movements `sourceType: 'manual'`; double counting in Contas fixed; §6 R4). Statement lines with the running balance; each
    line matched to an expected Recorrentes item of that month (suggested by amount, date window,
    description; confirmed by a click) or classified ad hoc (category, VAT code); expected items with
    no line after their date are flagged "em falta"; "+ despesa" for spending not on a statement.

@@ -27,6 +27,7 @@ const ENTITY_COLLECTIONS = [
   "loans",
   "insurances",
   "costSummary",
+  "movementRules",
 ];
 
 /** Root collections whose documents belong to one entity (entityId field). */

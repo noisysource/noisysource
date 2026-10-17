@@ -273,9 +273,14 @@ export default function AccountsPage() {
         api.financeEvents.listByEntity(selectedEntity.id as any),
       ]);
       setAccounts(as as Account[]);
+      // A statement import sets balanceCents as of balanceAsOf: only events after that date add
+      // to it, or a payment confirmed for a day the statement already covers would count twice.
+      const asOf = new Map((as as Account[]).map(a => [(a as any).id as string, (a as any).balanceAsOf as string | undefined]));
       const balMap = new Map<string, number>();
       for (const e of events) {
         if (e.status === 'confirmed' && e.accountId) {
+          const since = asOf.get(e.accountId);
+          if (since && e.date <= since) continue;
           balMap.set(e.accountId, (balMap.get(e.accountId) ?? 0) + e.amountCents);
         }
       }

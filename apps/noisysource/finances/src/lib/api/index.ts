@@ -17,6 +17,7 @@ import { makeLoansDomain } from "./domains/loans";
 import { makeInsurancesDomain } from "./domains/insurances";
 import { makeNotificationsDomain } from "./domains/notifications";
 import { makeBankTransactionsDomain } from "./domains/bankTransactions";
+import { makeMovementRulesDomain } from "./domains/movementRules";
 
 export const api = (() => {
   let _entityId = "private";
@@ -43,6 +44,7 @@ export const api = (() => {
     insurances: makeInsurancesDomain(getEntityId),
     notifications: makeNotificationsDomain(),
     bankTransactions: makeBankTransactionsDomain(),
+    movementRules: makeMovementRulesDomain(getEntityId),
     kidclub: makeKidclubDomain(),
     costSummary: makeCostSummaryDomain(),
   };
