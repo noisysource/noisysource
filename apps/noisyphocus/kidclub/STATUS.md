@@ -2,7 +2,55 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-17
+
+## 🚨 Failed-action tracing (2026-10-17). Branch `agent/kidclub-failed-action-tracing`, PR → `staging`, NOT in prod
+
+**Why.** From 2026-09-18 to 2026-10-16 every parent enrollment failed silently (see the hotfix
+`hotfix/kidclub-enroll-permission-denied`, PR #96 → `main`). Nobody found out until a parent phoned.
+Renato asked for a way to see when parents try something and it doesn't land: subscriptions, payments and so on.
+
+**What it does.**
+- **`src/lib/clientErrors.ts`**, installed in `main.tsx`. It writes a report to
+  `_apps/arcoiris/clientErrors` whenever a signed-in user hits any of these:
+  - an unhandled promise rejection (the exact shape of the enrollment bug)
+  - an uncaught error from our own scripts
+  - a `console.error(…, err)` call with an error object among its arguments. That covers the existing
+    "catch and log" blocks without touching each page. After #96 merges, its enrollment catch blocks
+    report this way too.
+  - explicit `reportClientError()` calls, added where a catch only showed a message on screen: payments
+    (single and batch pay, proof upload), calendar day changes, profile save, subscription-page actions,
+    party booking and deposit/payment.
+
+  Fields: who, action label, error code and message, route, and whether an admin was impersonating.
+  **Cost guard:** at most 20 reports per page load, and the same error is deduped for 60 s.
+  Signed-out users aren't reported, because the rule needs `auth.uid`.
+- **Rules:** create-only for the signed-in user about themselves, in a fixed shape, with `createdAt` set
+  to server time. Only `rainbowAdmin`/`owner` can read or delete. `pnpm test:rules:client-errors` runs
+  10/10 in the emulator.
+- **Admin → 🛠️ Admin → "🚨 Erros dos clientes"** (`/admin/client-errors`) shows the last 200 reports.
+  "Só clientes" (on by default) hides the admin area and impersonation sessions.
+- **`clientErrorsDigest`**, a scheduled function that runs at 08:00 Lisbon time. It emails `admin@kidclub.pt`
+  the parent-facing failures from the last 24 h through `emailOutbox`, and sends nothing on a quiet day.
+  The logic is in `clientErrorsDigestLogic.ts`, with 6 tests.
+
+**How to test on dev (after this PR's deploy is green):**
+1. Sign in as a parent, or impersonate one. On a dev build, open the browser console and run
+   `console.error('[test] manual', Object.assign(new Error('boom'), { code: 'test' }))`.
+2. Admin → Erros dos clientes: turn "Só clientes" off if you were impersonating. The report shows up.
+3. A real failure: try "Enviar comprovativo" with a non-PDF/JPEG file, or any payment action on dev that errors.
+4. The digest only runs at 08:00. To check it sooner, run it from Cloud Scheduler on kidclub-dev
+   (`gcloud scheduler jobs run firebase-schedule-clientErrorsDigest-europe-west3 --location europe-west3
+   --project kidclub-dev`) and look for a new `emailOutbox` doc.
+
+**Open / follow-ups:**
+- **TTL is not enabled yet.** Each report has an `expireAt` 90 days out, but nothing deletes it until a TTL
+  policy exists. That's one command per project (Renato for prod):
+  `gcloud firestore fields ttls update expireAt --collection-group=clientErrors --enable-ttl --project <id>`.
+  Or add a `google_firestore_field` to Terraform.
+- Server-side function errors aren't covered; they're already in Cloud Logging. A Cloud Monitoring alert on
+  function error rate would be the server-side counterpart.
+- Wire `test:rules:*` into CI (needs Java on the runner).
 
 ## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, NOT in prod
 

@@ -27,6 +27,7 @@ import TransportPlannerPage from './pages/admin/TransportPlannerPage';
 import StudyRoomPlannerPage from './pages/admin/StudyRoomPlannerPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
 import DiscountsAdminPage from './pages/admin/DiscountsAdminPage';
+import ClientErrorsPage from './pages/admin/ClientErrorsPage';
 import PaymentsPage from './pages/client/PaymentsPage';
 
 // Client pages
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="hr/edit/:employeeId" element={<ProtectRoute requiredRole={Role.Owner}><EditEmployeePage /></ProtectRoute>} />
           <Route path="timesheets" element={<ProtectRoute requiredRole={Role.Owner}><TimesheetsPage /></ProtectRoute>} />
           <Route path="data-management" element={<DataManagementPage />} />
+          <Route path="client-errors" element={<ClientErrorsPage />} />
         </Route>
 
         {/* Client portal */}

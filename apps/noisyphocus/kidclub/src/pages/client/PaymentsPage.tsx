@@ -11,6 +11,7 @@ import { useBankTransferConfig, formatIban, transferDescription, BankTransferCon
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
 import { needsNifPrompt } from '../../lib/nif';
+import { reportClientError } from '../../lib/clientErrors';
 
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
@@ -257,6 +258,7 @@ export default function PaymentsPage() {
       setActionResult(prev => ({ ...prev, [record.id]: msg }));
       setActiveId(null);
     } catch (err: any) {
+      reportClientError(`[PaymentsPage] pay ${method} failed`, err, { billingId: record.id });
       setActionResult(prev => ({ ...prev, [record.id]: `Erro: ${err.message}` }));
     } finally {
       setActing(false);
@@ -280,6 +282,7 @@ export default function PaymentsPage() {
         else msg = await payCard(record);
         setBatchResults(prev => [...prev, { id: record.id, ok: true, msg }]);
       } catch (err: any) {
+        reportClientError(`[PaymentsPage] batch pay ${batchMethod} failed`, err, { billingId: record.id });
         setBatchResults(prev => [...prev, { id: record.id, ok: false, msg: err.message }]);
       }
     }

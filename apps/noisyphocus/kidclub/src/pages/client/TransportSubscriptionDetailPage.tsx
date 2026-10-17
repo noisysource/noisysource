@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
+import { reportClientError } from '../../lib/clientErrors';
 import { Child, Family, TransportationSubscription, kidclubVatNote } from '@shared/models';
 import { normalizeSubStatus , coerceSubscriptionDate } from '../../lib/utils';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
@@ -186,6 +187,7 @@ export default function TransportSubscriptionDetailPage() {
       await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } catch (err: any) {
+      reportClientError('[TransportSubscriptionDetailPage] action failed', err);
       setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);

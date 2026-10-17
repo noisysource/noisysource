@@ -5,6 +5,9 @@ import { auth, db, analytics } from './lib/firebase';
 import { UserProvider } from '@shared/hooks'
 import App from './App';
 import DevGate from './components/DevGate';
+import { installClientErrorReporting } from './lib/clientErrors';
+
+installClientErrorReporting();
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement)
   .render(

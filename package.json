@@ -11,6 +11,7 @@
     "dev:domotics:prod": "pnpm --filter domotics dev:prod",
     "build": "pnpm run -r build",
     "lint": "pnpm -r lint",
+    "test:rules:client-errors": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-client-errors.rules-test.cjs\"",
     "clean": "rm -rf dist apps/*/dist packages/*/dist && find . -name '*.tsbuildinfo' -delete && find . -name '*.js' -delete && find . -name '*.js.map' -delete && find . -name '*.d.ts' -delete && find . -name '*.d.ts.map' -delete",
     "deploy": "firebase deploy --project=dev",
     "deploy:prod": "firebase deploy --project=prod",
