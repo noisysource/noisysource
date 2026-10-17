@@ -5,6 +5,7 @@ import { familyService } from '../../services/familyService';
 import { nifFieldError, normalizeNif, NIF_OPT_OUT_LABEL } from '../../lib/nif';
 import { profilePaymentChoice } from '../../lib/paymentMethod';
 import { deleteField } from 'firebase/firestore';
+import { reportClientError } from '../../lib/clientErrors';
 
 interface SetupForm {
   name: string;
@@ -74,6 +75,7 @@ export default function FamilyProfileSetupPage({ family, onComplete }: { family:
       });
       onComplete();
     } catch (err: any) {
+      reportClientError('[FamilyProfileSetupPage] save profile failed', err);
       setError(err?.message || 'Erro ao guardar. Tente novamente.');
     } finally {
       setSaving(false);

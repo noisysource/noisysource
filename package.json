@@ -11,13 +11,15 @@
     "dev:domotics:prod": "pnpm --filter domotics dev:prod",
     "build": "pnpm run -r build",
     "lint": "pnpm -r lint",
+    "test:rules:client-errors": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-client-errors.rules-test.cjs\"",
     "clean": "rm -rf dist apps/*/dist packages/*/dist && find . -name '*.tsbuildinfo' -delete && find . -name '*.js' -delete && find . -name '*.js.map' -delete && find . -name '*.d.ts' -delete && find . -name '*.d.ts.map' -delete",
     "deploy": "firebase deploy --project=dev",
     "deploy:prod": "firebase deploy --project=prod",
     "deploy:dev": "firebase deploy --project=dev",
     "terraform:init": "cd infra/gcp/terraform && terraform init",
     "terraform:plan": "cd infra/gcp/terraform && terraform plan",
-    "terraform:apply": "cd infra/gcp/terraform && terraform apply"
+    "terraform:apply": "cd infra/gcp/terraform && terraform apply",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-parent-portal.rules-test.cjs\""
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

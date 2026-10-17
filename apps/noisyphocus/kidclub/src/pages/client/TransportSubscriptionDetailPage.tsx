@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
+import { reportClientError } from '../../lib/clientErrors';
 import { Child, Family, TransportationSubscription, kidclubVatNote } from '@shared/models';
 import { normalizeSubStatus , coerceSubscriptionDate } from '../../lib/utils';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
@@ -109,14 +110,18 @@ export default function TransportSubscriptionDetailPage() {
       // leg. Keying by direction collided: no schedule entry carries one, so
       // both legs of a day resolved to the same occurrence and cancelling one
       // cancelled both.
-      const eventsSnap = await getDocs(
+      // familyId first: firestore.rules only let a parent read their own family's
+      // events, and a query must prove that up front (subscriptionId alone is
+      // denied). Events copy the subscription's familyId; a sub without one has none.
+      const eventsSnap = sub.familyId ? await getDocs(
         query(
           col('reservationEvents'),
+          where('familyId', '==', sub.familyId),
           where('subscriptionId', '==', id),
           where('date', '>=', format(today, 'yyyy-MM-dd')),
           where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
         ),
-      );
+      ) : { docs: [] };
       const eventByDateLeg: Record<string, { id: string; status: string }> = {};
       eventsSnap.docs.forEach(d => {
         const data = d.data();
@@ -186,6 +191,7 @@ export default function TransportSubscriptionDetailPage() {
       await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } catch (err: any) {
+      reportClientError('[TransportSubscriptionDetailPage] action failed', err);
       setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
