@@ -35,7 +35,7 @@ interface Props {
   energy: EnergyReading | null;
   /** Where house consumption goes: the middle of the lived-in rooms. */
   homeCentre: { x: number; z: number };
-  /** Where the grid pylon stands, outside the house. */
+  /** Where the supply arrives: the pole by the gate on the road, in plan metres. */
   gridAt: { x: number; z: number };
   onOpen: () => void;
 }
@@ -211,12 +211,16 @@ function HouseNode({ x, z, colour }: { x: number; z: number; colour: string }) {
   );
 }
 
-/** A gentle arc between two points, so lines clear the cut walls instead of crossing them. */
+/**
+ * A gentle arc between two points, so lines clear the cut walls instead of
+ * crossing them. Longer runs rise higher — the supply from the road crosses
+ * the whole plot, and a flat arc that long would skim the rooftops.
+ */
 function arc(from: [number, number, number], to: [number, number, number], lift: number) {
   const a = new THREE.Vector3(...from);
   const b = new THREE.Vector3(...to);
   const mid = a.clone().lerp(b, 0.5);
-  mid.y = Math.max(a.y, b.y) + lift;
+  mid.y = Math.max(a.y, b.y) + lift + a.distanceTo(b) * 0.12;
   return new THREE.QuadraticBezierCurve3(a, mid, b).getPoints(32);
 }
 

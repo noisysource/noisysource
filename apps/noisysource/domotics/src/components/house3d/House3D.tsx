@@ -14,9 +14,13 @@ import { placeDevices, roomStats } from '../../data/placement';
 import { ThermostatRow } from '../ClimatePanel';
 import { BlindRow } from '../RoomPanel';
 import {
-  FLOOR_T, HIT_MAT, MAT, Overlay, WALL_H, chip, tapped, usePress,
+  FLOOR_T, HIT_MAT, MAT, Overlay, WALL_H, chip, getGlowTexture, planToWorld, tapped, usePress,
+  worldToPlan, mapToWorld, SITE_ROT,
 } from './common';
 import EnergyLayer, { type Equipment } from './EnergyLayer';
+import SiteLayer from './SiteLayer';
+import Sky, { computeSky } from './Sky';
+import { SITE } from '../../data/site';
 
 /**
  * The house as a cut-away dollhouse, built from the same floor plan the 2D
@@ -93,32 +97,8 @@ function tempColor(t: number) {
 // BoxGeometry face order: +x, -x, +y (top), -y, +z, -z.
 const WALL_FACES = [MAT.wall, MAT.wall, MAT.wallCut, MAT.wall, MAT.wall, MAT.wall];
 
-let glowTexture: THREE.Texture | null = null;
-/** Soft radial pool of light, drawn once and shared by every lit bulb. */
-function getGlowTexture() {
-  if (glowTexture) return glowTexture;
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d')!;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, 'rgba(255,214,140,1)');
-  g.addColorStop(0.35, 'rgba(255,190,90,0.45)');
-  g.addColorStop(1, 'rgba(255,170,60,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  glowTexture = new THREE.CanvasTexture(canvas);
-  glowTexture.colorSpace = THREE.SRGBColorSpace;
-  return glowTexture;
-}
-
 function isOutdoor(room: PlanRoom) {
   return /deck|exterior|jardim|terra[cç]o|varanda/i.test(room.name);
-}
-
-function isNight(date = new Date()) {
-  const h = date.getHours();
-  return h >= 20 || h < 7;
 }
 
 /**
@@ -174,6 +154,23 @@ function fitDistance(b: Box, azimuth: number, fovDeg: number, aspect: number) {
   const byHeight = projected / 2 / Math.tan(vfov / 2) + nearEdge;
   return Math.max(byWidth, byHeight);
 }
+
+/** A plan-frame box as the world-frame box that contains it, the house being turned. */
+function toWorldBox(b: Box): Box {
+  const pts = [
+    planToWorld(b.x1, b.z1), planToWorld(b.x2, b.z1),
+    planToWorld(b.x2, b.z2), planToWorld(b.x1, b.z2),
+  ];
+  return {
+    x1: Math.min(...pts.map(p => p[0])),
+    z1: Math.min(...pts.map(p => p[1])),
+    x2: Math.max(...pts.map(p => p[0])),
+    z2: Math.max(...pts.map(p => p[1])),
+  };
+}
+
+/** Radius of the sphere the sun and moon travel on: around the house, not at astronomical distance. */
+const SKY_R = 24;
 
 function CameraRig({ house, focus }: { house: Box; focus: Box | null }) {
   const ref = useRef<CameraControls>(null);
@@ -623,13 +620,20 @@ export default function House3D({
   const walls = useMemo(() => plan.walls?.length ? plan.walls : wallsFromRooms(rooms), [plan.walls, rooms]);
   const roomById = useMemo(() => new Map(rooms.map(r => [r.id, r])), [rooms]);
   const placed = useMemo(() => placeDevices(devices, roomById, placements), [devices, roomById, placements]);
-  const house = useMemo(() => boundsOf(rooms), [rooms]);
   const selected = selectedRoomId ? roomById.get(selectedRoomId) ?? null : null;
   const focus = selected
     ? { x1: selected.x, z1: selected.y, x2: selected.x + selected.w, z2: selected.y + selected.h }
     : null;
-  const night = isNight();
-  const bg = night ? '#05060a' : '#0b0d12';
+  /** The sky moves; once a minute is plenty for the sun, the moon and day/night. */
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const sky = useMemo(() => computeSky(now), [now]);
+  /** Lit rooms glow brighter once the sun is down. */
+  const night = sky.dusk;
+  const bg = sky.night ? '#05060a' : '#0b0d12';
   /** Device whose fine control is open, if any. */
   const [popoverId, setPopoverId] = useState<string | null>(null);
 
@@ -676,11 +680,9 @@ export default function House3D({
   }, [rooms, interactive]);
   /** Where house consumption is drawn going to. */
   const homeCentre = { x: (lived.x1 + lived.x2) / 2, z: (lived.z1 + lived.z2) / 2 };
-  /** The grid isn't on the plan: the pylon stands just outside, level with the inverter. */
-  const gridAt = {
-    x: house.x2 + 3.5,
-    z: equipment.inverters[0]?.y ?? homeCentre.z,
-  };
+  /** The supply comes in from the road, by the gate (`site.ts`), given here in plan metres. */
+  const [gridX, gridZ] = worldToPlan(...mapToWorld(SITE.gridPole.e, SITE.gridPole.n));
+  const gridAt = { x: gridX, z: gridZ };
 
   const home = useMemo(() => {
     const b = { ...lived };
@@ -698,8 +700,8 @@ export default function House3D({
     return b;
   }, [lived, mode, equipment, gridAt.x, gridAt.z]);
 
-  const cx = (house.x1 + house.x2) / 2;
-  const cz = (house.z1 + house.z2) / 2;
+  /** The middle of the lived-in house, in world coordinates. */
+  const [cx, cz] = planToWorld(homeCentre.x, homeCentre.z);
 
   /** Where a device's popover and name tag hang, by kind. */
   function anchorOf(device: Device, x: number, y: number, room: PlanRoom): [number, number, number] {
@@ -726,10 +728,9 @@ export default function House3D({
     >
       <color attach="background" args={[bg]} />
       <fog attach="fog" args={[bg, 70, 160]} />
-      <hemisphereLight args={['#dbeafe', '#1c1917', night ? 0.45 : 1.0]} />
-      <directionalLight position={[cx - 12, 30, cz + 16]} intensity={night ? 0.35 : 1.5} />
+      <Sky sky={sky} center={[cx, cz]} radius={SKY_R} />
 
-      <CameraRig house={home} focus={focus} />
+      <CameraRig house={toWorldBox(home)} focus={focus ? toWorldBox(focus) : null} />
       {import.meta.env.DEV && <DevHandle />}
 
       {/* Ground: tapping outside every room goes back to the whole house. */}
@@ -743,150 +744,155 @@ export default function House3D({
           onSelectRoom(null);
         }}
       >
-        <planeGeometry args={[house.x2 - house.x1 + 40, house.z2 - house.z1 + 40]} />
+        <planeGeometry args={[200, 200]} />
       </mesh>
 
-      {rooms.map(room => {
-        const stats = roomStats(devices, room.id);
-        return (
-          <group key={room.id}>
-            <RoomFloor
-              room={room}
-              stats={stats}
-              mode={mode}
-              selected={room.id === selectedRoomId}
-              night={night}
-              onTap={e => {
-                if (!tapped(e)) return;
-                e.stopPropagation();
-                setPopoverId(null);
-                onSelectRoom(interactive.has(room.id) ? room.id : null);
-              }}
-            />
-            {mode === 'clima' && stats.temp !== undefined && (
-              <ClimateDecal room={room} temp={stats.temp} humidity={stats.humidity} heating={stats.heating} />
-            )}
-          </group>
-        );
-      })}
+      <SiteLayer />
 
-      {walls.map(w => <WallMesh key={w.id} wall={w} />)}
-
-      {placed.map(({ device, cx: x, cy: y }) => {
-        const room = roomById.get(device.roomId);
-        if (!room) return null;
-        const hold = () => setPopoverId(device.id);
-        if (device.type === 'light' && mode === 'luzes') {
+      {/* The house itself, in plan coordinates, turned to its real orientation. */}
+      <group rotation={[0, SITE_ROT, 0]}>
+        {rooms.map(room => {
+          const stats = roomStats(devices, room.id);
           return (
-            <Bulb
-              key={device.id}
-              x={x}
-              z={y}
-              light={device}
-              poolSize={Math.min(3, Math.min(room.w, room.h) * 0.9)}
-              night={night}
-              onTap={() => onLightCommand(device.id, { action: 'toggle' })}
-              onHold={hold}
-            />
-          );
-        }
-        if (device.type === 'blind' && mode === 'luzes') {
-          return (
-            <Shutter
-              key={device.id}
-              room={room}
-              cx={x}
-              cy={y}
-              position={device.state.position}
-              // Mostly open closes, mostly closed opens — one tap, like a light.
-              onTap={() => onBlindCommand(device.id, {
-                action: 'setPosition', position: device.state.position >= 50 ? 0 : 100,
-              })}
-              onHold={hold}
-            />
-          );
-        }
-        if (device.type === 'thermostat' && mode === 'clima') {
-          return <ThermostatPuck key={device.id} x={x} z={y} device={device} onTap={hold} />;
-        }
-        if (device.type === 'heatpump') {
-          const p = device.state;
-          return (
-            <group key={device.id}>
-              {mode === 'clima' && (
-                <HeatPumpUnit
-                  cx={x}
-                  cy={y}
-                  running={device.online !== false && p.on && (p.compressorHz ?? 0) > 0}
-                  fault={p.faults.length > 0}
-                  onTap={() => onDeviceOpen(device.id)}
-                />
-              )}
-              {/* A fault shows whatever layer is up. */}
-              {p.faults.length > 0 && (
-                <FaultBadge cx={x} cy={y} codes={p.faults} onTap={() => onDeviceOpen(device.id)} />
+            <group key={room.id}>
+              <RoomFloor
+                room={room}
+                stats={stats}
+                mode={mode}
+                selected={room.id === selectedRoomId}
+                night={night}
+                onTap={e => {
+                  if (!tapped(e)) return;
+                  e.stopPropagation();
+                  setPopoverId(null);
+                  onSelectRoom(interactive.has(room.id) ? room.id : null);
+                }}
+              />
+              {mode === 'clima' && stats.temp !== undefined && (
+                <ClimateDecal room={room} temp={stats.temp} humidity={stats.humidity} heating={stats.heating} />
               )}
             </group>
           );
-        }
-        return null;
-      })}
-
-      {mode === 'energia' && (
-        <EnergyLayer
-          equipment={equipment}
-          energy={energy}
-          homeCentre={homeCentre}
-          gridAt={gridAt}
-          onOpen={onEnergyOpen}
-        />
-      )}
-
-      {mode !== 'energia' && rooms
-        .filter(r => interactive.has(r.id) && r.id !== selectedRoomId)
-        .map(room => (
-          <RoomLabel
-            key={room.id}
-            room={room}
-            lit={mode === 'luzes' ? roomStats(devices, room.id).lit : 0}
-            dimmed={selected !== null}
-            onTap={() => {
-              setPopoverId(null);
-              onSelectRoom(room.id);
-            }}
-          />
-        ))}
-
-      {/* Names only where they can be read: the room zoomed into. */}
-      {selected && placed
-        .filter(p => p.device.roomId === selected.id && p.device.id !== popoverId && (
-          mode === 'luzes' ? p.device.type === 'light' || p.device.type === 'blind'
-          : mode === 'clima' ? p.device.type === 'thermostat'
-          : false
-        ))
-        .map(({ device, cx: x, cy: y }) => {
-          const [ax, ay, az] = anchorOf(device, x, y, selected);
-          const dimmed = device.type === 'light' && device.state.on && device.state.dimmable && device.state.brightness < 100;
-          return (
-            <DeviceName
-              key={device.id}
-              position={[ax, ay - (device.type === 'light' ? 0.75 : 0.05), az]}
-              text={dimmed ? `${device.name} · ${device.state.brightness}%` : device.name}
-            />
-          );
         })}
 
-      {open && openRoom && (
-        <DevicePopover
-          device={open.device}
-          position={anchorOf(open.device, open.cx, open.cy, openRoom)}
-          roomName={openRoom.name}
-          onClose={() => setPopoverId(null)}
-          onLightCommand={onLightCommand}
-          onBlindCommand={onBlindCommand}
-          onThermostatCommand={onThermostatCommand}
-        />
-      )}
+        {walls.map(w => <WallMesh key={w.id} wall={w} />)}
+
+        {placed.map(({ device, cx: x, cy: y }) => {
+          const room = roomById.get(device.roomId);
+          if (!room) return null;
+          const hold = () => setPopoverId(device.id);
+          if (device.type === 'light' && mode === 'luzes') {
+            return (
+              <Bulb
+                key={device.id}
+                x={x}
+                z={y}
+                light={device}
+                poolSize={Math.min(3, Math.min(room.w, room.h) * 0.9)}
+                night={night}
+                onTap={() => onLightCommand(device.id, { action: 'toggle' })}
+                onHold={hold}
+              />
+            );
+          }
+          if (device.type === 'blind' && mode === 'luzes') {
+            return (
+              <Shutter
+                key={device.id}
+                room={room}
+                cx={x}
+                cy={y}
+                position={device.state.position}
+                // Mostly open closes, mostly closed opens — one tap, like a light.
+                onTap={() => onBlindCommand(device.id, {
+                  action: 'setPosition', position: device.state.position >= 50 ? 0 : 100,
+                })}
+                onHold={hold}
+              />
+            );
+          }
+          if (device.type === 'thermostat' && mode === 'clima') {
+            return <ThermostatPuck key={device.id} x={x} z={y} device={device} onTap={hold} />;
+          }
+          if (device.type === 'heatpump') {
+            const p = device.state;
+            return (
+              <group key={device.id}>
+                {mode === 'clima' && (
+                  <HeatPumpUnit
+                    cx={x}
+                    cy={y}
+                    running={device.online !== false && p.on && (p.compressorHz ?? 0) > 0}
+                    fault={p.faults.length > 0}
+                    onTap={() => onDeviceOpen(device.id)}
+                  />
+                )}
+                {/* A fault shows whatever layer is up. */}
+                {p.faults.length > 0 && (
+                  <FaultBadge cx={x} cy={y} codes={p.faults} onTap={() => onDeviceOpen(device.id)} />
+                )}
+              </group>
+            );
+          }
+          return null;
+        })}
+
+        {mode === 'energia' && (
+          <EnergyLayer
+            equipment={equipment}
+            energy={energy}
+            homeCentre={homeCentre}
+            gridAt={gridAt}
+            onOpen={onEnergyOpen}
+          />
+        )}
+
+        {mode !== 'energia' && rooms
+          .filter(r => interactive.has(r.id) && r.id !== selectedRoomId)
+          .map(room => (
+            <RoomLabel
+              key={room.id}
+              room={room}
+              lit={mode === 'luzes' ? roomStats(devices, room.id).lit : 0}
+              dimmed={selected !== null}
+              onTap={() => {
+                setPopoverId(null);
+                onSelectRoom(room.id);
+              }}
+            />
+          ))}
+
+        {/* Names only where they can be read: the room zoomed into. */}
+        {selected && placed
+          .filter(p => p.device.roomId === selected.id && p.device.id !== popoverId && (
+            mode === 'luzes' ? p.device.type === 'light' || p.device.type === 'blind'
+            : mode === 'clima' ? p.device.type === 'thermostat'
+            : false
+          ))
+          .map(({ device, cx: x, cy: y }) => {
+            const [ax, ay, az] = anchorOf(device, x, y, selected);
+            const dimmed = device.type === 'light' && device.state.on && device.state.dimmable && device.state.brightness < 100;
+            return (
+              <DeviceName
+                key={device.id}
+                position={[ax, ay - (device.type === 'light' ? 0.75 : 0.05), az]}
+                text={dimmed ? `${device.name} · ${device.state.brightness}%` : device.name}
+              />
+            );
+          })}
+
+        {open && openRoom && (
+          <DevicePopover
+            device={open.device}
+            position={anchorOf(open.device, open.cx, open.cy, openRoom)}
+            roomName={openRoom.name}
+            onClose={() => setPopoverId(null)}
+            onLightCommand={onLightCommand}
+            onBlindCommand={onBlindCommand}
+            onThermostatCommand={onThermostatCommand}
+          />
+        )}
+      </group>
     </Canvas>
   );
 }

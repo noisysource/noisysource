@@ -2,6 +2,7 @@ import { useEffect, useRef, type ComponentProps } from 'react';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
+import { SITE } from '../../data/site';
 
 /**
  * Pieces shared by the house scene and its layers: scale, materials, and how a
@@ -114,3 +115,50 @@ export function Overlay({ children, ...props }: ComponentProps<typeof Html>) {
 }
 
 export const chip = 'flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs border shadow-lg shadow-black/50 active:scale-95 transition-transform';
+
+let glowTexture: THREE.Texture | null = null;
+/** Soft radial pool of light, drawn once and shared by every lit bulb. */
+export function getGlowTexture() {
+  if (glowTexture) return glowTexture;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,214,140,1)');
+  g.addColorStop(0.35, 'rgba(255,190,90,0.45)');
+  g.addColorStop(1, 'rgba(255,170,60,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  glowTexture = new THREE.CanvasTexture(canvas);
+  glowTexture.colorSpace = THREE.SRGBColorSpace;
+  return glowTexture;
+}
+
+/**
+ * Three frames meet in the scene:
+ * - PLAN metres, as the floor plan is drawn (x right, y down the page);
+ * - WORLD, as three.js renders it: x east, z south, y up;
+ * - MAP metres from the plan origin: e east, n north (`src/data/site.ts`).
+ * The house is drawn in plan coordinates inside a group turned by SITE_ROT,
+ * which is what puts it at its real orientation; the site around it is drawn
+ * straight in world coordinates.
+ */
+export const SITE_ROT = (SITE.planRotationDeg * Math.PI) / 180;
+const COS = Math.cos(SITE_ROT);
+const SIN = Math.sin(SITE_ROT);
+
+/** Plan → world. Matches a three.js rotation of SITE_ROT about y. */
+export function planToWorld(x: number, y: number): [number, number] {
+  return [x * COS + y * SIN, -x * SIN + y * COS];
+}
+
+/** World → plan. */
+export function worldToPlan(x: number, z: number): [number, number] {
+  return [x * COS - z * SIN, x * SIN + z * COS];
+}
+
+/** Map (east, north) → world. */
+export function mapToWorld(e: number, n: number): [number, number] {
+  return [e, -n];
+}
