@@ -33,7 +33,8 @@
   (switch "Prémio recorrente", done 2026-10-18).
 
 ## Steps
-1. **Recorrentes as the aggregator** (per entity, `/:entity/recurring`).
+1. **Recorrentes as the aggregator** (per entity, `/:entity/recurring`). **DONE 2026-10-18**
+   (`src/lib/recurringItems.ts` + tests; RELEASE-TEST-PLAN §6 R1).
    - Items: every recurring entry (hand-entered and synced `emp:` / `inc:` / `ec:` / `insurance:`)
      plus **credit instalments** computed from `creditContracts` (`buildAmortizationSchedule`), which
      today appear nowhere in Recorrentes.

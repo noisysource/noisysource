@@ -9,6 +9,10 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { api } from "../lib/api";
 import { useEntity, ENTITIES } from "../hooks/EntityContext";
+import type { CreditContractDoc } from "@shared/models/CreditContract";
+import type { EmploymentContractDoc } from "@shared/models/Employment";
+import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { buildRecurringItems, groupRecurringItems, type RecurringItem, type RecurringItemKind } from "../lib/recurringItems";
 
 const TYPE_LABELS: Record<RecurringType, string> = {
   expense: 'Despesa', income: 'Rendimento', transfer: 'Transferência',
@@ -17,11 +21,11 @@ const FREQ_LABELS: Record<RecurringFrequency, string> = {
   monthly: 'Mensal', quarterly: 'Trimestral', annual: 'Anual', once: 'Única vez',
 };
 const MONTHS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-const GROUPS: { type: RecurringType; label: string; sign: string; color: string }[] = [
-  { type: 'expense',  label: 'Despesas',       sign: '−', color: 'text-red-400' },
-  { type: 'income',   label: 'Rendimentos',    sign: '+', color: 'text-emerald-400' },
-  { type: 'transfer', label: 'Transferências', sign: '⇄', color: 'text-blue-400' },
-];
+/** Badge for items Recorrentes shows but another page owns. */
+const KIND_LABEL: Partial<Record<RecurringItemKind, string>> = {
+  salary_cost: 'do contrato', salary: 'do contrato', benefit: 'do contrato', income_source: 'do rendimento',
+  ec: 'do cliente', insurance: 'do seguro', credit: 'do crédito',
+};
 const ENTITY_TABS = [
   { id: 'private',     label: 'Casa',        emoji: '🏠' },
   { id: 'noisysource', label: 'NoisySource',  emoji: '🏢' },
@@ -421,6 +425,12 @@ export default function RecurringPage() {
   const [accounts, setAccounts]     = useState<AccountOpt[]>([]);
   const [crossAccounts, setCrossAccounts] = useState<AccountOpt[]>([]);
   const [categories, setCategories] = useState<CategoryOpt[]>([]);
+  const [catDocs, setCatDocs]       = useState<Array<{ id: string; name: string; parentId?: string }>>([]);
+  const [credits, setCredits]       = useState<CreditContractDoc[]>([]);
+  const [contracts, setContracts]   = useState<EmploymentContractDoc[]>([]);
+  const [groupBy, setGroupBy]       = useState<'category' | 'account'>('category');
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [openItems, setOpenItems]   = useState<Set<string>>(new Set());
   const [crossOwed, setCrossOwed]   = useState<CrossEntityEntry[]>([]);
   const [busy, setBusy]             = useState(false);
   const [msg, setMsg]               = useState<string | null>(null);
@@ -433,8 +443,13 @@ export default function RecurringPage() {
   async function reload() {
     try {
       api.setEntity(selectedEntity.id);
-      const [rs, as, cats] = await Promise.all([api.recurring.list(), api.accounts.list(), api.categories.list()]);
+      const [rs, as, cats, crs, ctrs] = await Promise.all([
+        api.recurring.list(), api.accounts.list(), api.categories.list(), api.credits.list(), api.contracts.list(),
+      ]);
       setRows(rs);
+      setCredits(crs);
+      setContracts(ctrs as EmploymentContractDoc[]);
+      setCatDocs(cats.map(c => ({ id: c.id, name: c.name, parentId: c.parentId })));
       setAccounts(as.map(a => ({ id: a.id, name: a.name, entityId: selectedEntity.id })));
       const catName = new Map(cats.map(c => [c.id, c.name]));
       setCategories(cats
@@ -539,12 +554,29 @@ export default function RecurringPage() {
     } finally { setBusy(false); }
   }
 
+  // Everything that repeats (entries, derived entries, credit instalments); totals = in force this month.
+  const ym = currentYM();
+  const items = useMemo(
+    () => buildRecurringItems({ ym, entries: rows, credits, categories: catDocs, contracts }),
+    [ym, rows, credits, catDocs, contracts],
+  );
+  const accountLabel = (id?: string) =>
+    id ? ((accounts.find(a => a.id === id) ?? crossAccounts.find(a => a.id === id))?.name ?? id) : undefined;
+  const groups = useMemo(
+    () => groupRecurringItems(items, groupBy, id => accountLabel(id) ?? 'Sem conta'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, groupBy, accounts, crossAccounts],
+  );
+  const history = useMemo(() => items.filter(i => i.status !== 'current'), [items]);
   const totals = useMemo(() => {
-    const active = rows.filter(r => r.active && r.frequency === 'monthly');
-    const expense = active.filter(r => r.type === 'expense').reduce((s, r) => s + r.amountCents, 0);
-    const income  = active.filter(r => r.type === 'income').reduce((s, r) => s + r.amountCents, 0);
+    const cur = items.filter(i => i.status === 'current');
+    const expense = cur.filter(i => i.type === 'expense').reduce((s, i) => s + i.monthlyCents, 0);
+    const income  = cur.filter(i => i.type === 'income').reduce((s, i) => s + i.monthlyCents, 0);
     return { expense, income, net: income - expense };
-  }, [rows]);
+  }, [items]);
+  const toggleIn = (set: (f: (s: Set<string>) => Set<string>) => void, k: string) =>
+    set(s => { const x = new Set(s); if (x.has(k)) x.delete(k); else x.add(k); return x; });
+  const allOpen = groups.length > 0 && groups.every(g => openGroups.has(g.name));
 
   const reimbursableEntries = useMemo(
     () => rows.filter(r => r.reimbursable && r.active && r.type === 'expense'),
@@ -568,7 +600,6 @@ export default function RecurringPage() {
     return map;
   }, [crossOwed]);
 
-  const accountName = (id?: string, pool = accounts) => pool.find(a => a.id === id)?.name;
   const paidByLabel = (r: RecurringEntryDoc) => {
     if (!r.paidByAccountId) return null;
     const name = crossAccounts.find(a => a.id === r.paidByAccountId)?.name ?? r.paidByAccountId;
@@ -584,12 +615,124 @@ export default function RecurringPage() {
   };
   const unconfirmedCount = isPrivate ? 0 : rows.filter(r => recurringVatCode(r) === 'por_confirmar').length;
 
-  const freqLabel = (r: RecurringEntryDoc) => {
-    if (r.frequency === 'monthly')   return `dia ${r.dayOfMonth}`;
+  const freqLabel = (r: Pick<RecurringItem, 'frequency' | 'dayOfMonth' | 'monthOfYear' | 'onceYearMonth'>) => {
+    if (r.frequency === 'monthly')   return `mensal · dia ${r.dayOfMonth}`;
     if (r.frequency === 'quarterly') return `trimestral · dia ${r.dayOfMonth}`;
-    if (r.frequency === 'annual')    return `${MONTHS[(r.monthOfYear ?? 1) - 1]} · dia ${r.dayOfMonth}`;
+    if (r.frequency === 'annual')    return `anual · ${MONTHS[(r.monthOfYear ?? 1) - 1]} · dia ${r.dayOfMonth}`;
     if (r.frequency === 'once')      return r.onceYearMonth ?? 'única vez';
     return FREQ_LABELS[r.frequency];
+  };
+
+  /** Where a derived item is edited. */
+  const sourceLink = (i: RecurringItem): { to: string; label: string } | null => {
+    const src = i.entry?.sourceId ?? '';
+    switch (i.kind) {
+      case 'salary_cost':   return { to: `/${selectedEntity.id}/contracts`, label: 'Contrato' };
+      case 'salary':        return { to: '/noisysource/contracts', label: 'Contrato' };
+      case 'benefit':       return src.startsWith('inc:') ? { to: '/private/income', label: 'Rendimento' } : { to: '/noisysource/contracts', label: 'Contrato' };
+      case 'income_source': return { to: '/private/income', label: 'Rendimento' };
+      case 'ec':            return { to: '/noisysource/ec-contracts', label: 'Cliente' };
+      case 'insurance':     return { to: `/${selectedEntity.id}/insurances`, label: 'Seguro' };
+      case 'credit':        return { to: `/${selectedEntity.id}/credits`, label: 'Crédito' };
+      default:              return null;
+    }
+  };
+  const statusLabel = (i: RecurringItem) =>
+    i.status === 'ended' ? `terminou ${i.endYearMonth ?? i.onceYearMonth ?? ''}`
+    : i.status === 'future' ? `a partir de ${i.startYearMonth ?? i.onceYearMonth ?? ''}`
+    : i.status === 'inactive' ? 'inativo' : null;
+  const categoryLabel = (id?: string) => (id ? categories.find(c => c.id === id)?.label : undefined);
+
+  const renderItem = (i: RecurringItem) => {
+    const r = i.entry;
+    const color = i.type === 'income' ? 'text-emerald-400' : i.type === 'transfer' ? 'text-blue-400' : 'text-red-400';
+    const sign = i.type === 'income' ? '+' : i.type === 'expense' ? '−' : '';
+    const open = openItems.has(i.key);
+    const link = sourceLink(i);
+    const status = statusLabel(i);
+    const from = accountLabel(i.accountId);
+    const to = accountLabel(i.toAccountId);
+    return (
+      <div key={i.key} className="rounded-lg border border-zinc-800 bg-zinc-900 hover:border-zinc-700 transition-colors">
+        <div className="flex items-center gap-3 px-3 py-2.5">
+          <button onClick={() => toggleIn(setOpenItems, i.key)} className="text-zinc-500 hover:text-zinc-200 shrink-0" aria-label="Detalhe">
+            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium truncate">{i.description}</span>
+              {KIND_LABEL[i.kind] && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 shrink-0">{KIND_LABEL[i.kind]}</span>
+              )}
+              {status && <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 shrink-0">{status}</span>}
+              {r?.costModel === 'commission' && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 border border-blue-800/60 shrink-0">
+                  comissão {r.commissionPct ?? 0}% sem IVA
+                </span>
+              )}
+              {r && !isPrivate && recurringVatCode(r) === 'por_confirmar' && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/60 shrink-0">
+                  IVA por confirmar
+                </span>
+              )}
+              {r?.reimbursable && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/60 shrink-0">
+                  reembolso pendente
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-zinc-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+              <span>{freqLabel(i)}</span>
+              {from && <><span className="text-zinc-700">·</span><span>{i.type === 'income' ? 'para' : 'de'} {from}</span></>}
+              {i.type === 'transfer' && to && <span>→ {to}</span>}
+              {r?.reimbursable && r.paidByAccountId && (
+                <><span className="text-zinc-700">·</span><span className="text-amber-500/80">{paidByLabel(r)}</span></>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="text-right">
+              <div className={`text-sm font-semibold tabular-nums ${color}`}>
+                {sign}{formatEUR(i.amountCents)}
+                {r?.costModel === 'commission' && <span className="text-[10px] text-zinc-500 font-normal ml-1">(estimado)</span>}
+              </div>
+              {i.frequency !== 'monthly' && i.monthlyCents > 0 && (
+                <div className="text-[10px] text-zinc-500 tabular-nums">≈ {formatEUR(i.monthlyCents)}/mês</div>
+              )}
+              {r && vatLine(r) && <div className="text-[10px] text-zinc-500 tabular-nums">{vatLine(r)}</div>}
+            </div>
+            <div className="flex gap-2 text-xs w-24 justify-end">
+              {i.kind === 'manual' && r ? (
+                <>
+                  <button className="text-blue-400 hover:underline" onClick={() => openEdit(r)}>Editar</button>
+                  <button className="text-red-400 hover:underline" onClick={() => deleteOne(r.id)}>Apagar</button>
+                </>
+              ) : link ? (
+                <button className="text-zinc-400 hover:text-zinc-100 flex items-center gap-1" onClick={() => navigate(link.to)}>
+                  {link.label} <ExternalLink size={11} />
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        {open && (
+          <div className="pl-10 pr-4 pb-3 space-y-1 text-xs">
+            {i.details.map((d, k) => (
+              <div key={k} className="flex justify-between gap-3 text-zinc-400">
+                <span>{d.label}</span>
+                <span className="tabular-nums text-zinc-300">{d.amountCents !== undefined ? formatEUR(d.amountCents) : d.text}</span>
+              </div>
+            ))}
+            {categoryLabel(r?.categoryId) && (
+              <div className="flex justify-between gap-3 text-zinc-400">
+                <span>Categoria</span><span className="text-zinc-300">{categoryLabel(r?.categoryId)}</span>
+              </div>
+            )}
+            {i.details.length === 0 && !categoryLabel(r?.categoryId) && <div className="text-zinc-600">Sem mais detalhe.</div>}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -618,7 +761,7 @@ export default function RecurringPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-xl font-semibold">Recorrentes</h2>
-          <p className="text-sm text-zinc-400 mt-0.5">{selectedEntity.name} · subscrições, créditos e saídas regulares</p>
+          <p className="text-sm text-zinc-400 mt-0.5">{selectedEntity.name} · tudo o que se repete: contratos, créditos, seguros, subscrições e entradas</p>
         </div>
         <div className="flex items-center gap-2">
           {msg && <span className="text-sm text-emerald-400">{msg}</span>}
@@ -626,14 +769,28 @@ export default function RecurringPage() {
         </div>
       </div>
 
-      {/* Monthly summary */}
-      {(totals.expense > 0 || totals.income > 0) && (
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm px-1">
+      {/* Monthly summary: what's in force this month, as a monthly equivalent */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm px-1">
           <span className="text-zinc-400">Saídas: <span className="text-red-400 font-medium">{formatEUR(totals.expense)}</span>/mês</span>
           {totals.income > 0 && <span className="text-zinc-400">Entradas: <span className="text-emerald-400 font-medium">{formatEUR(totals.income)}</span>/mês</span>}
           <span className="text-zinc-400">Saldo: <span className={`font-medium ${totals.net >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatEUR(totals.net)}</span>/mês</span>
+          <span className="text-xs text-zinc-600">equivalente mensal do que está em vigor em {ym}</span>
         </div>
-      )}
+        <div className="flex items-center gap-1 text-xs">
+          <span className="text-zinc-500 mr-1">Agrupar por</span>
+          {(['category', 'account'] as const).map(g => (
+            <button key={g} onClick={() => setGroupBy(g)}
+              className={`px-2 py-1 rounded border ${groupBy === g ? 'border-emerald-600 bg-emerald-900/30 text-emerald-200' : 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'}`}>
+              {g === 'category' ? 'Categoria' : 'Conta'}
+            </button>
+          ))}
+          <button onClick={() => setOpenGroups(allOpen ? new Set() : new Set(groups.map(g => g.name)))}
+            className="ml-2 px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800">
+            {allOpen ? 'Fechar todos' : 'Abrir todos'}
+          </button>
+        </div>
+      </div>
 
       {unconfirmedCount > 0 && (
         <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/50 px-3 py-2 rounded">
@@ -643,80 +800,42 @@ export default function RecurringPage() {
         </div>
       )}
 
-      {/* Grouped entries */}
-      {GROUPS.map(({ type, label, sign, color }) => {
-        const group = rows.filter(r => r.type === type);
-        if (!group.length) return null;
-        const monthlyTotal = group.filter(r => r.active && r.frequency === 'monthly').reduce((s, r) => s + r.amountCents, 0);
-        return (
-          <div key={type}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">{label}</span>
-              {monthlyTotal > 0 && (
-                <span className={`text-xs font-medium tabular-nums ${color}`}>{sign}{formatEUR(monthlyTotal)}/mês</span>
-              )}
+      {/* Groups (current items only) */}
+      <div className="space-y-2">
+        {groups.map(g => {
+          const open = openGroups.has(g.name);
+          return (
+            <div key={g.name} className="rounded-lg border border-zinc-800 bg-zinc-900/60">
+              <button onClick={() => toggleIn(setOpenGroups, g.name)}
+                className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-zinc-800/40 rounded-lg">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  {g.name}
+                  <span className="text-xs text-zinc-500 font-normal">{g.items.length}</span>
+                </span>
+                <span className="flex gap-3 text-sm tabular-nums">
+                  {g.expenseCents > 0 && <span className="text-red-400">−{formatEUR(g.expenseCents)}/mês</span>}
+                  {g.incomeCents > 0 && <span className="text-emerald-400">+{formatEUR(g.incomeCents)}/mês</span>}
+                </span>
+              </button>
+              {open && <div className="px-2 pb-2 space-y-1.5">{g.items.map(renderItem)}</div>}
             </div>
-            <div className="space-y-1.5">
-              {group.map(r => (
-                <div key={r.id}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2.5 border transition-colors border-zinc-800 bg-zinc-900 hover:border-zinc-700 ${!r.active ? 'opacity-40' : ''}`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium truncate">{r.description}</span>
-                      {r.costModel === 'commission' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 border border-blue-800/60 shrink-0">
-                          comissão {r.commissionPct ?? 0}% sem IVA
-                        </span>
-                      )}
-                      {!isPrivate && recurringVatCode(r) === 'por_confirmar' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/60 shrink-0">
-                          IVA por confirmar
-                        </span>
-                      )}
-                      {r.reimbursable && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/60 shrink-0">
-                          reembolso pendente
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-zinc-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
-                      <span>{freqLabel(r)}</span>
-                      {accountName(r.accountId) && <>
-                        <span className="text-zinc-700">·</span>
-                        <span>{accountName(r.accountId)}</span>
-                      </>}
-                      {r.reimbursable && r.paidByAccountId && (
-                        <>
-                          <span className="text-zinc-700">·</span>
-                          <span className="text-amber-500/80">{paidByLabel(r)}</span>
-                        </>
-                      )}
-                      {r.endYearMonth && <span className="text-zinc-600">até {r.endYearMonth}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <div className="text-right">
-                      <div className={`text-sm font-semibold tabular-nums ${color}`}>
-                        {type !== 'transfer' ? sign : ''}{formatEUR(r.amountCents)}
-                        {r.costModel === 'commission' && <span className="text-[10px] text-zinc-500 font-normal ml-1">(estimado)</span>}
-                      </div>
-                      {vatLine(r) && <div className="text-[10px] text-zinc-500 tabular-nums">{vatLine(r)}</div>}
-                    </div>
-                    <div className="flex gap-2 text-xs">
-                      <button className="text-blue-400 hover:underline" onClick={() => openEdit(r)}>Editar</button>
-                      <button className="text-red-400 hover:underline" onClick={() => deleteOne(r.id)}>Apagar</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
 
-      {rows.length === 0 && (
+      {items.length === 0 && (
         <div className="text-sm text-zinc-500 text-center py-10">Nenhuma entrada configurada.</div>
+      )}
+
+      {/* Not in force this month: out of the totals */}
+      {history.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">
+            Fora deste mês ({history.length}) — terminados, futuros ou inativos, fora dos totais
+          </summary>
+          <div className="mt-2 space-y-1.5 opacity-75">{history.map(renderItem)}</div>
+        </details>
       )}
 
       {/* Company: reimbursement tracker */}

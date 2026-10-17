@@ -426,3 +426,18 @@ steps 3–4.
 1. Contas → each bank account → import its statements oldest first (the import sets the balance
    to the statement's closing balance, so the newest must come last). ✅ Every statement imports
    with "Saldos verificados"; the account's balance = the last statement's closing balance.
+
+### FinHub redesign (`HANDOFF-finhub-redesign.md`, in #94)
+
+#### R1. Recorrentes shows everything that repeats
+1. Casa → Recorrentes. ✅ Groups (collapsed): Créditos (both mortgages, construction interest,
+   personal loan, each "do crédito"), Seguros, Habitação, Saúde, Salários, Vales…, each with its
+   monthly subtotal. ✅ Header: Saídas / Entradas / Saldo per month = only what's in force now.
+2. Open Créditos → a mortgage → ▸. ✅ Capital, juros, capital em dívida, taxa, última prestação;
+   "Crédito ↗" opens Créditos. Rows say where the money comes from ("de BPI (conjunta)").
+3. "Agrupar por: Conta". ✅ The same items grouped by account/card.
+4. "Fora deste mês (n)" at the bottom. ✅ April's salary entries ("terminou 2026-04"), Malt's
+   first rate, and anything inactive; none of them in the totals.
+5. NoisySource → Recorrentes → Pessoal → "Encargos Salariais — Renato" ▸. ✅ Bruto, SS patronal,
+   encargos, each voucher (pago à parte), custo total, líquido.
+6. Typed entries keep Editar/Apagar; derived ones show "Contrato ↗ / Seguro ↗ / Cliente ↗".
