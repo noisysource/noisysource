@@ -129,6 +129,8 @@ export interface BillRow {
   dueDate?: Date;
   invoiceError?: string;
   invoiceNumber?: string;
+  /** Vendus document id, set with invoiceNumber when the invoice is recorded. */
+  vendusId?: number;
   /** Current Easypay payment id, if an attempt was started. */
   easypayId?: string;
   /** Easypay payments that landed on an already-paid bill — need a refund. */
