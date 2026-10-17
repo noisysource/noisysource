@@ -45,5 +45,7 @@ export const setStateFn = httpsCallable<{
   // `bridge` is required by Netatmo's /setstate — omitting it returns 400.
   modules: Array<{
     id: string; bridge?: string; on?: boolean; target_position?: number;
+    /** Dimmers (NLFN) only, 0–100. */
+    brightness?: number;
   }>;
 }>(fns, 'legrandSetState');
