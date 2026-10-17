@@ -206,6 +206,10 @@ async function publish() {
       // by the update mask, so a failed inverter read would otherwise leave the
       // last good figures on display as though they were current.
       inverter: state.inverter ?? null,
+      // Tells the app this bridge understands `{watch: true}` relay messages.
+      // An older bridge treats one as a failed command, so the app only sends
+      // them when it sees this.
+      watchable: true,
       updatedAt: new Date(),
     });
     lastRelayFingerprint = fingerprint;
@@ -224,6 +228,12 @@ async function publish() {
  * decisions someone made long ago.
  */
 const COMMAND_TTL_MS = 2 * 60_000;
+/**
+ * How long a failed command keeps its error for the app before being deleted.
+ * Without a limit they were never deleted at all, and every one is re-read on
+ * every 10s poll — a slow but unbounded climb in Firestore reads.
+ */
+const FAILED_KEEP_MS = 10 * 60_000;
 
 /** Requests older than this are discarded unanswered rather than executed. */
 const ADMIN_TTL_MS = 5 * 60_000;
@@ -241,7 +251,13 @@ async function pollCommands() {
       // listener that document was "added" once and never seen again; under
       // polling it comes back every cycle, so without this guard a broken
       // command would be retried against the hardware forever.
-      if (doc.data.error) continue;
+      if (doc.data.error) {
+        const createdAt = doc.data.createdAt;
+        if (createdAt instanceof Date && Date.now() - createdAt.getTime() > FAILED_KEEP_MS) {
+          await db.deleteDoc(`${COMMANDS}/${doc.id}`).catch(() => {});
+        }
+        continue;
+      }
       await handleRelayCommand(doc.id, doc.data);
     }
   } catch (err) {
@@ -336,6 +352,20 @@ async function handleRelayCommand(docId: string, data: Record<string, unknown>) 
   if (age > COMMAND_TTL_MS) {
     console.warn(`[relay] dropping stale command (${Math.round(age / 1000)}s old)`);
     await db!.deleteDoc(path).catch(() => {});
+    return;
+  }
+  // Not a command: an app away from home saying it's open. Only LAN requests
+  // reach getState, so without this a phone outside the house never counts as
+  // watching and its climate readings lag by the idle interval (5 min). Treated
+  // exactly like a LAN /state request.
+  if (data.watch === true) {
+    await db!.deleteDoc(path).catch(() => {});
+    lastClientAt = Date.now();
+    const stale = Date.now() - state.updatedAt;
+    if (stale > ACTIVE_POLL_MS) {
+      await poll(stale > ACTIVE_WINDOW_MS);
+      await publish();
+    }
     return;
   }
   try {
