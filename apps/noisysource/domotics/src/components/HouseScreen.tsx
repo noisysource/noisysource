@@ -67,6 +67,16 @@ class SceneBoundary extends Component<{ fallback: ReactNode; children: ReactNode
 }
 
 const HOLD_PREF = 'domotics.holdLearned';
+const LAYER_PREF = 'domotics.layer';
+const LAYERS: HouseMode[] = ['luzes', 'clima', 'energia'];
+
+function initialLayer(): HouseMode {
+  try {
+    const saved = localStorage.getItem(LAYER_PREF) as HouseMode | null;
+    if (saved && LAYERS.includes(saved)) return saved;
+  } catch { /* storage unavailable */ }
+  return 'luzes';
+}
 
 const iconBtn = 'flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors';
 const sectionTitle = 'text-[11px] font-semibold uppercase tracking-widest text-zinc-500 px-0.5';
@@ -83,7 +93,12 @@ export default function HouseScreen({
   onSignIn, onSignOut, onOpenAdmin, onShow2D, onStartEdit,
   onLightCommand, onLightsSet, onBlindCommand, onBlindsSet, onThermostatCommand, onHeatPumpCommand,
 }: Props) {
-  const [mode, setMode] = useState<HouseMode>('casa');
+  const [mode, setModeState] = useState<HouseMode>(initialLayer);
+  /** Remembered per device: the wall tablet may live on Energia, a phone on Luzes. */
+  function setMode(next: HouseMode) {
+    setModeState(next);
+    try { localStorage.setItem(LAYER_PREF, next); } catch { /* not persisted */ }
+  }
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [focusDeviceId, setFocusDeviceId] = useState<string | null>(null);
   /** The press-and-hold hint stays until it has been used once on this device. */
@@ -203,7 +218,7 @@ export default function HouseScreen({
           </SceneBoundary>
 
           <div className="absolute z-[60] top-3 left-3 flex rounded-xl bg-zinc-950/80 backdrop-blur-sm border border-zinc-800 p-0.5">
-            {([['casa', 'Casa', Home], ['clima', 'Clima', Thermometer]] as const).map(([key, label, Icon]) => (
+            {([['luzes', 'Luzes', Lightbulb], ['clima', 'Clima', Thermometer], ['energia', 'Energia', Sun]] as const).map(([key, label, Icon]) => (
               <button
                 key={key}
                 onClick={() => setMode(key)}
@@ -228,14 +243,15 @@ export default function HouseScreen({
           {/* One column in the bottom-left corner, so nothing here can collide
               on a phone: the hint (until learned), the climate legend, energy. */}
           <div className="absolute z-[60] bottom-3 left-3 right-3 flex flex-col items-start gap-1.5 pointer-events-none">
-            {!holdLearned && (
+            {mode === 'luzes' && !holdLearned && (
               // Holding is invisible until someone tells you; this is the telling.
               <p className="rounded-lg bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-400">
                 Tocar: ligar/desligar · Manter premido: ajustar
               </p>
             )}
             {mode === 'clima' && <TempLegend />}
-            {energy?.online && <EnergyStrip energy={energy} onOpen={openEnergy} />}
+            {/* On the energy layer the same figures are in the scene itself. */}
+            {mode !== 'energia' && energy?.online && <EnergyStrip energy={energy} onOpen={openEnergy} />}
           </div>
         </section>
 
@@ -259,6 +275,7 @@ export default function HouseScreen({
             />
           ) : (
             <Overview
+              mode={mode}
               plan={plan}
               devices={devices}
               energy={energy}
@@ -322,8 +339,9 @@ function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => 
 
 /** The panel when no room is selected: what's on, every room, climate, energy. */
 function Overview({
-  plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
+  mode, plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
 }: {
+  mode: HouseMode;
   plan: FloorPlan;
   devices: Device[];
   energy: EnergyReading | null;
@@ -337,8 +355,8 @@ function Overview({
   const withDevices = new Set(devices.map(d => d.roomId));
   const rooms = plan.rooms.filter(r => r.controllable || withDevices.has(r.id));
 
-  return (
-    <div className="flex flex-col gap-6">
+  const sections = {
+    lights: (
       <section className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <h2 className={sectionTitle}>
@@ -369,7 +387,8 @@ function Overview({
           </div>
         )}
       </section>
-
+    ),
+    rooms: (
       <section className="flex flex-col gap-1.5">
         <h2 className={sectionTitle}>Divisões</h2>
         <div className="grid grid-cols-2 gap-1.5">
@@ -400,9 +419,11 @@ function Overview({
           })}
         </div>
       </section>
-
-      {energy?.online && <EnergyCard energy={energy} />}
-
+    ),
+    energy: energy?.online ? <EnergyCard energy={energy} /> : (
+      <p id="energia" className="text-sm text-zinc-500">Inversor sem ligação — sem dados de energia.</p>
+    ),
+    climate: (
       <section className="flex flex-col gap-2">
         <h2 className={sectionTitle}>Clima</h2>
         <ClimatePanel
@@ -412,6 +433,17 @@ function Overview({
           onHeatPumpCommand={onHeatPumpCommand}
         />
       </section>
+    ),
+  };
+  // The layer in view leads; the rest follow.
+  const order: Array<keyof typeof sections> =
+    mode === 'clima' ? ['climate', 'rooms', 'lights', 'energy']
+    : mode === 'energia' ? ['energy', 'lights', 'rooms', 'climate']
+    : ['lights', 'rooms', 'energy', 'climate'];
+
+  return (
+    <div className="flex flex-col gap-6">
+      {order.map(key => <div key={key}>{sections[key]}</div>)}
     </div>
   );
 }

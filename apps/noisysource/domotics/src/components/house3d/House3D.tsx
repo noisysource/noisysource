@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { CameraControls, Edges, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -9,11 +9,14 @@ import type {
 } from '@shared/models/Device';
 import type { FloorPlan, InfraItem, PlanRoom, Wall } from '@shared/models/Room';
 import type { EnergyReading } from '../../data/energy';
-import { batteryFlow, formatWatts } from '../../data/energy';
 import { wallsFromRooms } from '../../data/walls';
 import { placeDevices, roomStats } from '../../data/placement';
 import { ThermostatRow } from '../ClimatePanel';
 import { BlindRow } from '../RoomPanel';
+import {
+  FLOOR_T, HIT_MAT, MAT, Overlay, WALL_H, chip, tapped, usePress,
+} from './common';
+import EnergyLayer, { type Equipment } from './EnergyLayer';
 
 /**
  * The house as a cut-away dollhouse, built from the same floor plan the 2D
@@ -30,7 +33,11 @@ import { BlindRow } from '../RoomPanel';
  * and draining for a picture that isn't changing.
  */
 
-export type HouseMode = 'casa' | 'clima';
+/**
+ * What the house is showing: lights and blinds, temperatures, or solar and
+ * power. One concern at a time — all three at once buried each of them.
+ */
+export type HouseMode = 'luzes' | 'clima' | 'energia';
 
 interface Props {
   plan: FloorPlan;
@@ -52,9 +59,6 @@ interface Props {
   onHoldUsed: () => void;
 }
 
-/** Cut-away wall height — enough to read as walls, low enough to see over. */
-const WALL_H = 1.15;
-const FLOOR_T = 0.06;
 /** Same thicknesses as the 2D plan's wall strokes. */
 const WALL_T = { exterior: 0.26, interior: 0.13, glass: 0.08 } as const;
 const BULB_Y = 1.55;
@@ -63,19 +67,6 @@ const BLIND_H = 1.0;
 const BLIND_Y0 = 0.1;
 /** Camera tilt from vertical: steep enough to see floors, shallow enough to read as 3D. */
 const POLAR = 0.7;
-/** A pointer that travelled further than this was orbiting, not tapping. */
-const TAP_SLOP_PX = 6;
-/** Press this long on a light or blind for its slider instead of a toggle. */
-const HOLD_MS = 450;
-/** One solar panel marker: footprint in metres, height above the (absent) roof, tilt south. */
-const PANEL_W = 1.7;
-const PANEL_D = 1.05;
-const PANEL_Y = 2.5;
-const PANEL_TILT = 0.35;
-/** Output at which the panels glow fully. Rough array size, not a rating. */
-const PV_FULL_W = 4000;
-const BATTERY_H = 1.1;
-
 const FLOOR = { room: '#4a505e', structural: '#30333b', outdoor: '#4a3f33' };
 
 /** Room temperature → floor colour in climate mode. */
@@ -99,33 +90,6 @@ function tempColor(t: number) {
   return new THREE.Color(TEMP_STOPS[TEMP_STOPS.length - 1][1]);
 }
 
-// Shared across every mesh of a kind — dozens of walls need one material, not dozens.
-const MAT = {
-  wall: new THREE.MeshStandardMaterial({ color: '#d4d4d8', roughness: 0.85 }),
-  // The cut face is darker, as in an architectural section: it is what tells
-  // the eye these are walls sliced open, not low partitions.
-  wallCut: new THREE.MeshStandardMaterial({ color: '#52525b', roughness: 1 }),
-  glass: new THREE.MeshStandardMaterial({
-    color: '#7dd3fc', transparent: true, opacity: 0.3, roughness: 0.1,
-  }),
-  ground: new THREE.MeshStandardMaterial({ color: '#0c0e13', roughness: 1 }),
-  bulbOff: new THREE.MeshStandardMaterial({ color: '#52525b', roughness: 0.6 }),
-  bulbOn: new THREE.MeshStandardMaterial({
-    color: '#fef3c7', emissive: '#fbbf24', emissiveIntensity: 2.2,
-  }),
-  slats: new THREE.MeshStandardMaterial({ color: '#3b82f6', roughness: 0.7 }),
-  pane: new THREE.MeshStandardMaterial({
-    color: '#bae6fd', transparent: true, opacity: 0.3, roughness: 0.1,
-  }),
-  pump: new THREE.MeshStandardMaterial({ color: '#e4e4e7', roughness: 0.5 }),
-};
-/**
- * Invisible, generous tap area around a small device. Drawn (so the raycaster
- * finds it) but writes neither colour nor depth.
- */
-const HIT_MAT = new THREE.MeshBasicMaterial({
-  transparent: true, opacity: 0, depthWrite: false, colorWrite: false,
-});
 // BoxGeometry face order: +x, -x, +y (top), -y, +z, -z.
 const WALL_FACES = [MAT.wall, MAT.wall, MAT.wallCut, MAT.wall, MAT.wall, MAT.wall];
 
@@ -148,27 +112,6 @@ function getGlowTexture() {
   return glowTexture;
 }
 
-let panelTexture: THREE.Texture | null = null;
-/** Photovoltaic cells: a dark blue grid, drawn once and shared. */
-function getPanelTexture() {
-  if (panelTexture) return panelTexture;
-  const W = 192;
-  const H = 120;
-  const canvas = document.createElement('canvas');
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#132a5e';
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = '#4f6fc7';
-  ctx.lineWidth = 2;
-  for (let x = 0; x <= W; x += W / 6) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = 0; y <= H; y += H / 4) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-  panelTexture = new THREE.CanvasTexture(canvas);
-  panelTexture.colorSpace = THREE.SRGBColorSpace;
-  return panelTexture;
-}
-
 function isOutdoor(room: PlanRoom) {
   return /deck|exterior|jardim|terra[cç]o|varanda/i.test(room.name);
 }
@@ -176,11 +119,6 @@ function isOutdoor(room: PlanRoom) {
 function isNight(date = new Date()) {
   const h = date.getHours();
   return h >= 20 || h < 7;
-}
-
-/** A tap, as opposed to the end of an orbit drag. */
-function tapped(e: ThreeEvent<MouseEvent>) {
-  return e.delta <= TAP_SLOP_PX;
 }
 
 /**
@@ -318,7 +256,7 @@ function RoomFloor({
     const base = new THREE.Color(
       isOutdoor(room) ? FLOOR.outdoor : room.controllable ? FLOOR.room : FLOOR.structural,
     );
-    if (stats.lit > 0) {
+    if (mode === 'luzes' && stats.lit > 0) {
       return { color: base.lerp(new THREE.Color('#78501f'), 0.6), emissive: new THREE.Color('#f59e0b'), intensity: night ? 0.32 : 0.16 };
     }
     if (selected) return { color: base, emissive: new THREE.Color('#38bdf8'), intensity: 0.08 };
@@ -332,51 +270,6 @@ function RoomFloor({
       {selected && <Edges color="#7dd3fc" />}
     </mesh>
   );
-}
-
-/**
- * Tap and press-and-hold on a 3D object.
- *
- * A tap is the everyday action (light on/off, blind open/close) and must not
- * be mistaken for the end of an orbit drag; holding still opens the fine
- * control (dimmer level, blind position). Either way the event stops here, so
- * it never reaches the floor behind and selects the room as well.
- */
-function usePress(onTap: () => void, onHold?: () => void) {
-  const timer = useRef<ReturnType<typeof setTimeout>>();
-  const start = useRef<[number, number] | null>(null);
-  const held = useRef(false);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const cancel = () => clearTimeout(timer.current);
-
-  return {
-    onPointerDown(e: ThreeEvent<PointerEvent>) {
-      e.stopPropagation();
-      held.current = false;
-      start.current = [e.clientX, e.clientY];
-      cancel();
-      if (onHold) {
-        timer.current = setTimeout(() => {
-          held.current = true;
-          onHold();
-        }, HOLD_MS);
-      }
-    },
-    onPointerMove(e: ThreeEvent<PointerEvent>) {
-      const s = start.current;
-      if (s && Math.hypot(e.clientX - s[0], e.clientY - s[1]) > TAP_SLOP_PX) cancel();
-    },
-    onPointerUp: cancel,
-    onPointerOut: cancel,
-    onClick(e: ThreeEvent<MouseEvent>) {
-      e.stopPropagation();
-      if (held.current) {
-        held.current = false;
-        return;
-      }
-      if (tapped(e)) onTap();
-    },
-  };
 }
 
 function Bulb({ x, z, light, poolSize, night, onTap, onHold }: {
@@ -556,96 +449,6 @@ function ClimateDecal({ room, temp, humidity, heating }: {
   );
 }
 
-/** A solar panel at roof height, tilted south, glowing with the array's output. */
-function SolarPanel({ x, z, output, onTap }: { x: number; z: number; output: number; onTap: () => void }) {
-  const press = usePress(onTap);
-  return (
-    <group position={[x, PANEL_Y, z]} rotation={[PANEL_TILT, 0, 0]}>
-      <mesh position={[0, -0.03, 0]} material={MAT.pump}>
-        <boxGeometry args={[PANEL_W + 0.08, 0.04, PANEL_D + 0.08]} />
-      </mesh>
-      <mesh {...press}>
-        <boxGeometry args={[PANEL_W, 0.05, PANEL_D]} />
-        <meshStandardMaterial
-          map={getPanelTexture()}
-          roughness={0.35}
-          metalness={0.3}
-          emissive="#60a5fa"
-          emissiveIntensity={0.45 * output}
-        />
-      </mesh>
-    </group>
-  );
-}
-
-/** Wall-mounted inverter with a status light: green while it answers. */
-function InverterBox({ x, z, online, onTap }: { x: number; z: number; online: boolean; onTap: () => void }) {
-  const press = usePress(onTap);
-  return (
-    <group position={[x, 0, z]}>
-      <mesh position={[0, 1.0, 0]} material={MAT.pump} {...press}>
-        <boxGeometry args={[0.45, 0.6, 0.2]} />
-      </mesh>
-      <mesh position={[0, 1.2, 0.101]}>
-        <circleGeometry args={[0.035, 12]} />
-        <meshStandardMaterial
-          color={online ? '#22c55e' : '#52525b'}
-          emissive={online ? '#22c55e' : '#000000'}
-          emissiveIntensity={online ? 1.6 : 0}
-        />
-      </mesh>
-    </group>
-  );
-}
-
-const BATTERY_COLOUR = { in: '#a3e635', out: '#fb923c', idle: '#22c55e' } as const;
-
-/** Battery cabinet with its state of charge as a gauge on the front. */
-function BatteryBox({ x, z, soc, flow, onTap }: {
-  x: number; z: number; soc?: number; flow: keyof typeof BATTERY_COLOUR; onTap: () => void;
-}) {
-  const press = usePress(onTap);
-  const fill = soc === undefined ? 0 : Math.min(1, Math.max(0, soc / 100));
-  const track = BATTERY_H * 0.8;
-  const colour = BATTERY_COLOUR[flow];
-  return (
-    <group position={[x, 0, z]}>
-      <mesh position={[0, BATTERY_H / 2, 0]} material={MAT.pump} {...press}>
-        <boxGeometry args={[0.6, BATTERY_H, 0.28]} />
-      </mesh>
-      <mesh position={[0, BATTERY_H / 2, 0.141]}>
-        <planeGeometry args={[0.18, track]} />
-        <meshBasicMaterial color="#27272a" />
-      </mesh>
-      {fill > 0 && (
-        <mesh position={[0, BATTERY_H * 0.1 + (track * fill) / 2, 0.142]}>
-          <planeGeometry args={[0.18, track * fill]} />
-          <meshStandardMaterial color={colour} emissive={colour} emissiveIntensity={0.7} />
-        </mesh>
-      )}
-    </group>
-  );
-}
-
-/**
- * DOM overlay pinned to a point in the scene.
- *
- * Its events must stop here. Overlays live inside the element the 3D scene
- * listens on, so a tap on a control would otherwise bubble on into the scene,
- * be raycast against the floor behind it, and also select or deselect a room —
- * and a press would start an orbit drag.
- */
-function Overlay({ children, ...props }: ComponentProps<typeof Html>) {
-  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
-  return (
-    <Html {...props}>
-      <div onPointerDown={stop} onPointerUp={stop} onClick={stop} onWheel={stop}>
-        {children}
-      </div>
-    </Html>
-  );
-}
-
 /** Room name tag; tapping it zooms into the room. Climate is on the floor itself. */
 function RoomLabel({ room, lit, dimmed, onTap }: {
   room: PlanRoom;
@@ -688,29 +491,6 @@ function DeviceName({ position, text }: { position: [number, number, number]; te
         {text}
       </span>
     </Html>
-  );
-}
-
-const chip = 'flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs border shadow-lg shadow-black/50 active:scale-95 transition-transform';
-
-/** A live figure hanging over a piece of energy equipment. */
-function EnergyTag({ position, tone, children, onTap }: {
-  position: [number, number, number];
-  tone: 'solar' | 'in' | 'out' | 'idle' | 'off';
-  children: ReactNode;
-  onTap: () => void;
-}) {
-  const cls = {
-    solar: 'bg-amber-950/85 border-amber-500/60 text-amber-200',
-    in: 'bg-lime-950/85 border-lime-500/60 text-lime-200',
-    out: 'bg-orange-950/85 border-orange-500/60 text-orange-200',
-    idle: 'bg-zinc-950/80 border-zinc-600 text-zinc-200',
-    off: 'bg-zinc-950/80 border-zinc-700 text-zinc-500',
-  }[tone];
-  return (
-    <Overlay position={position} center zIndexRange={[25, 0]}>
-      <button onClick={onTap} className={`${chip} ${cls} tabular-nums`}>{children}</button>
-    </Overlay>
   );
 }
 
@@ -853,15 +633,16 @@ export default function House3D({
   /** Device whose fine control is open, if any. */
   const [popoverId, setPopoverId] = useState<string | null>(null);
 
-  // Moving to another room (or back to the house) closes a control left open.
-  useEffect(() => setPopoverId(null), [selectedRoomId]);
+  // Moving to another room, back to the house, or to another layer closes a
+  // control left open.
+  useEffect(() => setPopoverId(null), [selectedRoomId, mode]);
 
   useEffect(() => {
     if (popoverId) onHoldUsed();
   }, [popoverId, onHoldUsed]);
 
   /** The photovoltaic equipment from the plan; Firestore can hand numbers back as strings. */
-  const equipment = useMemo(() => {
+  const equipment = useMemo((): Equipment => {
     const at = (i: InfraItem) => ({ ...i, x: Number(i.x), y: Number(i.y) });
     const items = (plan.infrastructure ?? []).map(at);
     return {
@@ -889,19 +670,33 @@ export default function House3D({
    * garage and storage wing still render, but framing the whole envelope made
    * the lived-in part tiny on a phone for the sake of rooms with nothing to tap.
    */
+  const lived = useMemo(() => {
+    const r = rooms.filter(room => interactive.has(room.id));
+    return boundsOf(r.length ? r : rooms);
+  }, [rooms, interactive]);
+  /** Where house consumption is drawn going to. */
+  const homeCentre = { x: (lived.x1 + lived.x2) / 2, z: (lived.z1 + lived.z2) / 2 };
+  /** The grid isn't on the plan: the pylon stands just outside, level with the inverter. */
+  const gridAt = {
+    x: house.x2 + 3.5,
+    z: equipment.inverters[0]?.y ?? homeCentre.z,
+  };
+
   const home = useMemo(() => {
-    const lived = rooms.filter(r => interactive.has(r.id));
-    const b = boundsOf(lived.length ? lived : rooms);
-    // The solar equipment belongs in the default view too, even when it sits
-    // outside the walls.
-    for (const i of [...equipment.panels, ...equipment.inverters, ...equipment.batteries]) {
-      b.x1 = Math.min(b.x1, i.x - 0.5);
-      b.x2 = Math.max(b.x2, i.x + 0.5);
-      b.z1 = Math.min(b.z1, i.y - 0.5);
-      b.z2 = Math.max(b.z2, i.y + 0.5);
+    const b = { ...lived };
+    if (mode !== 'energia') return b;
+    // The energy layer frames its equipment too, outside the walls included.
+    const pts = [...equipment.panels, ...equipment.inverters, ...equipment.batteries]
+      .map(i => ({ x: i.x, z: i.y }))
+      .concat([{ x: gridAt.x, z: gridAt.z }]);
+    for (const p of pts) {
+      b.x1 = Math.min(b.x1, p.x - 1);
+      b.x2 = Math.max(b.x2, p.x + 1);
+      b.z1 = Math.min(b.z1, p.z - 1);
+      b.z2 = Math.max(b.z2, p.z + 1);
     }
     return b;
-  }, [rooms, interactive, equipment]);
+  }, [lived, mode, equipment, gridAt.x, gridAt.z]);
 
   const cx = (house.x1 + house.x2) / 2;
   const cz = (house.z1 + house.z2) / 2;
@@ -968,7 +763,7 @@ export default function House3D({
                 onSelectRoom(interactive.has(room.id) ? room.id : null);
               }}
             />
-            {stats.temp !== undefined && (
+            {mode === 'clima' && stats.temp !== undefined && (
               <ClimateDecal room={room} temp={stats.temp} humidity={stats.humidity} heating={stats.heating} />
             )}
           </group>
@@ -981,7 +776,7 @@ export default function House3D({
         const room = roomById.get(device.roomId);
         if (!room) return null;
         const hold = () => setPopoverId(device.id);
-        if (device.type === 'light') {
+        if (device.type === 'light' && mode === 'luzes') {
           return (
             <Bulb
               key={device.id}
@@ -995,7 +790,7 @@ export default function House3D({
             />
           );
         }
-        if (device.type === 'blind') {
+        if (device.type === 'blind' && mode === 'luzes') {
           return (
             <Shutter
               key={device.id}
@@ -1011,20 +806,23 @@ export default function House3D({
             />
           );
         }
-        if (device.type === 'thermostat') {
+        if (device.type === 'thermostat' && mode === 'clima') {
           return <ThermostatPuck key={device.id} x={x} z={y} device={device} onTap={hold} />;
         }
         if (device.type === 'heatpump') {
           const p = device.state;
           return (
             <group key={device.id}>
-              <HeatPumpUnit
-                cx={x}
-                cy={y}
-                running={device.online !== false && p.on && (p.compressorHz ?? 0) > 0}
-                fault={p.faults.length > 0}
-                onTap={() => onDeviceOpen(device.id)}
-              />
+              {mode === 'clima' && (
+                <HeatPumpUnit
+                  cx={x}
+                  cy={y}
+                  running={device.online !== false && p.on && (p.compressorHz ?? 0) > 0}
+                  fault={p.faults.length > 0}
+                  onTap={() => onDeviceOpen(device.id)}
+                />
+              )}
+              {/* A fault shows whatever layer is up. */}
               {p.faults.length > 0 && (
                 <FaultBadge cx={x} cy={y} codes={p.faults} onTap={() => onDeviceOpen(device.id)} />
               )}
@@ -1034,58 +832,23 @@ export default function House3D({
         return null;
       })}
 
-      {(() => {
-        const online = energy?.online === true;
-        const pv = online ? energy?.pvPowerW ?? 0 : 0;
-        const output = Math.min(1, Math.max(0, pv / PV_FULL_W));
-        const flow = online && energy ? batteryFlow(energy) : 'idle';
-        const panels = equipment.panels;
-        const mid = panels.length
-          ? { x: panels.reduce((a, p) => a + p.x, 0) / panels.length, z: Math.min(...panels.map(p => p.y)) }
-          : null;
-        return (
-          <>
-            {panels.map(p => (
-              <SolarPanel key={p.id} x={p.x} z={p.y} output={output} onTap={onEnergyOpen} />
-            ))}
-            {/* Panels share one array total, so it's said once, above them all. */}
-            {mid && (
-              <EnergyTag position={[mid.x, PANEL_Y + 0.75, mid.z]} tone={online ? 'solar' : 'off'} onTap={onEnergyOpen}>
-                ☀ {online ? formatWatts(pv) : '—'}
-              </EnergyTag>
-            )}
-            {equipment.inverters.map(i => (
-              <InverterBox key={i.id} x={i.x} z={i.y} online={online} onTap={onEnergyOpen} />
-            ))}
-            {equipment.batteries.map(b => (
-              <group key={b.id}>
-                <BatteryBox x={b.x} z={b.y} soc={online ? energy?.soc : undefined} flow={flow} onTap={onEnergyOpen} />
-                <EnergyTag
-                  position={[b.x, BATTERY_H + 0.45, b.y]}
-                  tone={!online ? 'off' : flow}
-                  onTap={onEnergyOpen}
-                >
-                  🔋 {online ? `${energy?.soc ?? '—'}%` : '—'}
-                  {online && flow !== 'idle' && (
-                    <span>
-                      {flow === 'in' ? '↑' : '↓'}
-                      {formatWatts(energy?.batteryPowerW === undefined ? undefined : Math.abs(energy.batteryPowerW))}
-                    </span>
-                  )}
-                </EnergyTag>
-              </group>
-            ))}
-          </>
-        );
-      })()}
+      {mode === 'energia' && (
+        <EnergyLayer
+          equipment={equipment}
+          energy={energy}
+          homeCentre={homeCentre}
+          gridAt={gridAt}
+          onOpen={onEnergyOpen}
+        />
+      )}
 
-      {rooms
+      {mode !== 'energia' && rooms
         .filter(r => interactive.has(r.id) && r.id !== selectedRoomId)
         .map(room => (
           <RoomLabel
             key={room.id}
             room={room}
-            lit={roomStats(devices, room.id).lit}
+            lit={mode === 'luzes' ? roomStats(devices, room.id).lit : 0}
             dimmed={selected !== null}
             onTap={() => {
               setPopoverId(null);
@@ -1096,7 +859,11 @@ export default function House3D({
 
       {/* Names only where they can be read: the room zoomed into. */}
       {selected && placed
-        .filter(p => p.device.roomId === selected.id && p.device.type !== 'heatpump' && p.device.id !== popoverId)
+        .filter(p => p.device.roomId === selected.id && p.device.id !== popoverId && (
+          mode === 'luzes' ? p.device.type === 'light' || p.device.type === 'blind'
+          : mode === 'clima' ? p.device.type === 'thermostat'
+          : false
+        ))
         .map(({ device, cx: x, cy: y }) => {
           const [ax, ay, az] = anchorOf(device, x, y, selected);
           const dimmed = device.type === 'light' && device.state.on && device.state.dimmable && device.state.brightness < 100;
