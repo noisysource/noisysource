@@ -57,8 +57,14 @@ function ago(ms: number) {
   return m < 60 ? `${m} min` : `${Math.round(m / 60)} h`;
 }
 
-/** Relayed state can legitimately be minutes old; past this it's worth saying. */
-const STALE_AFTER_MS = 90_000;
+/**
+ * Past this, the reading is older than the bridge would ever leave it. Away
+ * from home nothing tells the bridge it's being watched (only LAN requests
+ * do), so it publishes to the relay at its idle rate — every 5 min — and a
+ * 3-minute-old reading is normal, not a warning. The relay itself gives up at
+ * 15 min (bridge.ts), where the chip turns red instead.
+ */
+const STALE_AFTER_MS = 7 * 60_000;
 
 const PANEL_PREF = 'domotics.climatePanel';
 
