@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { query, where, getDocs, getDoc, limit } from 'firebase/firestore';
 import { callable } from '../../lib/callable';
 import { col, docRef } from '../../lib/db';
@@ -9,6 +10,8 @@ import { familyPaymentMethod } from '../../lib/paymentMethod';
 import { useBankTransferConfig, formatIban, transferDescription, BankTransferConfig } from '../../lib/bankTransfer';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
+import { needsNifPrompt } from '../../lib/nif';
+import { reportClientError } from '../../lib/clientErrors';
 
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
@@ -255,6 +258,7 @@ export default function PaymentsPage() {
       setActionResult(prev => ({ ...prev, [record.id]: msg }));
       setActiveId(null);
     } catch (err: any) {
+      reportClientError(`[PaymentsPage] pay ${method} failed`, err, { billingId: record.id });
       setActionResult(prev => ({ ...prev, [record.id]: `Erro: ${err.message}` }));
     } finally {
       setActing(false);
@@ -278,6 +282,7 @@ export default function PaymentsPage() {
         else msg = await payCard(record);
         setBatchResults(prev => [...prev, { id: record.id, ok: true, msg }]);
       } catch (err: any) {
+        reportClientError(`[PaymentsPage] batch pay ${batchMethod} failed`, err, { billingId: record.id });
         setBatchResults(prev => [...prev, { id: record.id, ok: false, msg: err.message }]);
       }
     }
@@ -334,6 +339,15 @@ export default function PaymentsPage() {
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-5">
       <h1 className="text-2xl font-bold text-gray-800">Pagamentos</h1>
+
+      {/* No NIF and no opt-out (families from before the opt-out): invoices go
+          to Consumidor final. A nudge only — payment is never blocked. */}
+      {needsNifPrompt(family) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+          Adicione o seu NIF antes de pagar para que conste na fatura.{' '}
+          <Link to="/client/account" className="font-medium underline hover:text-amber-900">Adicionar NIF</Link>
+        </div>
+      )}
 
       {/* Summary */}
       {unpaid.length > 0 && (

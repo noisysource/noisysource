@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { getDocs, getDoc, setDoc } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
+import { kidclubVatNote } from '@shared/models/kidclubVat';
 import { WeekPattern } from '@shared/models/weekPattern';
 import { normalizeSubStatus } from '../../lib/utils';
 
@@ -150,10 +151,11 @@ function StudySettingsModal({
           <div>
             {sectionTitle('Preços — Sala de Estudo')}
             <div className="space-y-2">
-              <Field label="€/dia" value={cfg.pricePerDayPerWeek ?? 6} step={0.5} onChange={v => set('pricePerDayPerWeek', v)} width="w-16" />
+              <Field label="€/dia com IVA" value={cfg.pricePerDayPerWeek ?? 6} step={0.5} onChange={v => set('pricePerDayPerWeek', v)} width="w-16" />
               <Field label="semanas/mês" value={cfg.weeksPerMonth ?? 4} step={0.01} onChange={v => set('weeksPerMonth', v)} width="w-16" />
             </div>
             {hint(`= €${((cfg.pricePerDayPerWeek ?? 6) * (cfg.weeksPerMonth ?? 4) * 5).toFixed(0)}/mês plano 5 dias`)}
+            {hint(`Por dia: ${kidclubVatNote(cfg.pricePerDayPerWeek ?? 6, 'study')}`)}
           </div>
 
 
@@ -161,8 +163,10 @@ function StudySettingsModal({
           <div>
             {sectionTitle('Outras taxas')}
             <div className="space-y-2">
-              <Field label="Taxa de inscrição (€)" value={cfg.registrationFee} step={5} onChange={v => set('registrationFee', v)} width="w-20" />
-              <Field label="Seguro (€/mês)" value={cfg.insuranceFee} step={5} onChange={v => set('insuranceFee', v)} width="w-20" />
+              <Field label="Taxa de inscrição (€ com IVA)" value={cfg.registrationFee} step={5} onChange={v => set('registrationFee', v)} width="w-20" />
+              {hint(kidclubVatNote(cfg.registrationFee, 'enrollment'))}
+              <Field label="Seguro (€ com IVA)" value={cfg.insuranceFee} step={5} onChange={v => set('insuranceFee', v)} width="w-20" />
+              {hint(`Uma vez por criança e ano letivo, com a taxa de inscrição · ${kidclubVatNote(cfg.insuranceFee, 'insurance')}`)}
               <Field label="Desconto aluno regresso (%)" value={Math.round(cfg.returningStudentDiscountPercentage * 100)} step={1} onChange={v => set('returningStudentDiscountPercentage', v / 100)} width="w-16" />
             </div>
           </div>

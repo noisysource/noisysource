@@ -1,16 +1,15 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
-import { Child, Family, TransportationSubscription } from '@shared/models';
-import { TransportationConfig } from '@shared/models/Transportation';
+import { reportClientError } from '../../lib/clientErrors';
+import { Child, Family, TransportationSubscription, kidclubVatNote } from '@shared/models';
 import { normalizeSubStatus , coerceSubscriptionDate } from '../../lib/utils';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
-import { familyService } from '../../services/familyService';
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -40,13 +39,10 @@ export default function TransportSubscriptionDetailPage() {
   const navigate = useNavigate();
   const user = useUser();
   const [subscription, setSubscription] = useState<TransportationSubscription | null>(null);
-  const [config, setConfig] = useState<TransportationConfig | null>(null);
-  const [siblingRank, setSiblingRank] = useState(1);
   // Child/guardian details are resolved from children/{childId} and
   // families/{familyId}.primaryContact, not from this subscription's own
   // denormalized copies — see lib/personalData.ts.
   const [person, setPerson] = useState<PersonalData | null>(null);
-  const schoolName = person?.schoolName;
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -64,17 +60,14 @@ export default function TransportSubscriptionDetailPage() {
     if (!id) return;
     setIsLoading(true);
     try {
-      const [subSnap, cfgSnap, calSnap] = await Promise.all([
+      const [subSnap, calSnap] = await Promise.all([
         getDoc(docRef('transportationSubscriptions', id)),
-        getDoc(docRef('config', 'transportation')),
         getDoc(docRef('config', 'schoolCalendar')),
       ]);
       if (!subSnap.exists()) return;
       const data = subSnap.data();
       const sub = { ...data, id: subSnap.id, status: normalizeSubStatus(data.status) } as TransportationSubscription;
       setSubscription(sub);
-
-      if (cfgSnap.exists()) setConfig(cfgSnap.data() as TransportationConfig);
 
       // Personal data (name, school, guardian contact) comes from the child
       // and family documents. Best-effort: an admin-created child that no
@@ -94,23 +87,6 @@ export default function TransportSubscriptionDetailPage() {
         console.warn('[TransportSubscriptionDetailPage] personal data read failed:', err);
       }
       setPerson(resolvePersonalData(child, family, sub));
-
-      // Sibling rank: count active transport subs in the same family, sorted by
-      // childName. Uses the subscriptions' own copies deliberately — this only
-      // needs a stable ordering across siblings, not display-accurate names.
-      // Through familyService (a parent may only query subscriptions by their own
-      // userId) and best-effort: the rank is cosmetic and must not fail the page.
-      if (sub.familyId) try {
-        const { transport } = await familyService.getFamilySubscriptions(sub.familyId, user?.uid);
-        const siblings = transport
-          .filter(t => t.status === 'active')
-          .map(t => ({ id: t.id, childName: (t.childName ?? '') as string }))
-          .sort((a, b) => a.childName.localeCompare(b.childName));
-        const rank = siblings.findIndex(s => s.id === id) + 1;
-        setSiblingRank(rank > 0 ? rank : 1);
-      } catch (err) {
-        console.warn('[TransportSubscriptionDetailPage] sibling rank read failed:', err);
-      }
 
       const schoolYearEnd: Date | null =
         calSnap.exists() && calSnap.data().yearEndDate
@@ -215,6 +191,7 @@ export default function TransportSubscriptionDetailPage() {
       await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } catch (err: any) {
+      reportClientError('[TransportSubscriptionDetailPage] action failed', err);
       setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
@@ -272,65 +249,10 @@ export default function TransportSubscriptionDetailPage() {
     }
   };
 
-  // Derived state — must stay before any early returns (rules of hooks)
+  // Derived state
   const isActive = subscription?.status === 'active';
   const isPending = subscription?.status === 'pending';
   const needsReview = subscription?.clientReviewPending === true;
-
-  const priceBreakdown = useMemo(() => {
-    if (!config || !subscription) return null;
-    const { flatRatePerTrip, weeksPerMonth, vatRate, siblingDiscountPercentage, schoolDiscounts, minTripsForDiscount, multiTripDiscountPercentage } = config;
-    if (!flatRatePerTrip) return null;
-
-    const periodOrder: Record<string, number> = { morning: 0, lunch: 1, afternoon: 2 };
-    const slotPeriodFrom = (time: string) => {
-      const h = parseInt(time.split(':')[0], 10);
-      return h < 12 ? 'morning' : h < 15 ? 'lunch' : 'afternoon';
-    };
-
-    const slotsByDay: Record<string, typeof subscription.schedule> = {};
-    for (const s of subscription.schedule ?? []) (slotsByDay[s.dayOfWeek] ??= []).push(s);
-    Object.values(slotsByDay).forEach(g =>
-      g.sort((a, b) => (periodOrder[slotPeriodFrom(a.pickupTime)] ?? 0) - (periodOrder[slotPeriodFrom(b.pickupTime)] ?? 0))
-    );
-
-    const appliedDiscounts: { label: string; pct: number }[] = [];
-    if (siblingRank >= 2 && siblingDiscountPercentage > 0)
-      appliedDiscounts.push({ label: 'Desconto irmãos', pct: siblingDiscountPercentage });
-
-    let subtotal = 0;
-    let hasMultiTrip = false;
-    for (const [, slots] of Object.entries(slotsByDay)) {
-      slots.forEach((_, idx) => {
-        const tripRank = idx + 1;
-        let discount = siblingRank >= 2 ? siblingDiscountPercentage : 0;
-        if (tripRank >= minTripsForDiscount && multiTripDiscountPercentage > 0) {
-          discount += multiTripDiscountPercentage;
-          hasMultiTrip = true;
-        }
-        discount = Math.min(1, discount);
-        subtotal += flatRatePerTrip * (1 - discount) * weeksPerMonth;
-      });
-    }
-    if (hasMultiTrip)
-      appliedDiscounts.push({ label: `Desconto viagem extra`, pct: multiTripDiscountPercentage });
-
-    let schoolDiscountPct = 0;
-    for (const sd of (schoolDiscounts ?? [])) {
-      if (schoolName && sd.schoolName && sd.schoolName.toLowerCase() === schoolName.toLowerCase() && sd.discountPercentage > 0) {
-        schoolDiscountPct = sd.discountPercentage;
-        appliedDiscounts.push({ label: `Desconto ${sd.schoolName}`, pct: sd.discountPercentage });
-        break;
-      }
-    }
-    const totalFee = subtotal * (1 - schoolDiscountPct);
-
-    const slotsPerWeek = (subscription.schedule ?? []).length;
-    const baseTotal = flatRatePerTrip * slotsPerWeek * weeksPerMonth;
-    const vatAmount = totalFee * vatRate;
-
-    return { flatRatePerTrip, weeksPerMonth, slotsPerWeek, baseTotal, appliedDiscounts, totalFee, vatRate, vatAmount };
-  }, [config, subscription, siblingRank, schoolName]);
 
   const statusBadge = isActive
     ? { label: 'Ativa', cls: 'bg-green-100 text-green-800' }
@@ -391,13 +313,13 @@ export default function TransportSubscriptionDetailPage() {
           {(() => {
             const fee = subscription.monthlyFee ?? 0;
             return (
-              <div className="flex items-baseline gap-1.5 flex-wrap">
-                <span className="text-2xl font-bold text-gray-900">€{fee.toFixed(2)}</span>
-                <span className="text-base font-normal text-gray-500">/mês</span>
-                {priceBreakdown && priceBreakdown.vatRate > 0 && (
-                  <span className="text-xs text-gray-400">+ €{priceBreakdown.vatAmount.toFixed(2)} IVA</span>
-                )}
-              </div>
+              <>
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="text-2xl font-bold text-gray-900">€{fee.toFixed(2)}</span>
+                  <span className="text-base font-normal text-gray-500">/mês</span>
+                </div>
+                <p className="text-xs text-gray-400">IVA incluído · {kidclubVatNote(fee, 'transport')}</p>
+              </>
             );
           })()}
         </div>

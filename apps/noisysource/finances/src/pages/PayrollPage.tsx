@@ -73,6 +73,29 @@ export default function PayrollPage() {
   const { selectedEntity } = useEntity();
   const { companies, peopleById, accountsById } = usePayrollBase(selectedEntity.id);
 
+  // `companies` (finances_companies) is a global reference list, not scoped
+  // by entity — without this filter, the picker below let you view/default
+  // to another entity's company (e.g. NoisySource's contracts while looking
+  // at NoisyPhocus's Payroll page). Match by normalized name against the
+  // hardcoded ENTITIES list (see EntityContext.tsx) rather than assuming
+  // company doc IDs equal entity IDs, since that's not guaranteed by the
+  // data model. Falls back to the full list only for the 'private' entity
+  // (which has no matching company) or if the name match finds nothing —
+  // logged so a silent data mismatch doesn't look like "working as intended".
+  const companiesForEntity = useMemo(() => {
+    if (selectedEntity.type !== 'company') return companies;
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '');
+    const matches = companies.filter(c => norm(c.name) === norm(selectedEntity.name));
+    if (matches.length === 0) {
+      console.warn(
+        `[PayrollPage] no company matches entity "${selectedEntity.name}" by name — ` +
+        `falling back to the full company list. Check finances_companies docs.`
+      );
+      return companies;
+    }
+    return matches;
+  }, [companies, selectedEntity]);
+
   const [companyId, setCompanyId] = useState<string>("");
   const [month, setMonth] = useState<string>(() => {
     const d = new Date();
@@ -96,8 +119,14 @@ export default function PayrollPage() {
   const [sourceAccountId, setSourceAccountId] = useState<string>("");
 
   useEffect(() => {
-    if (!companyId && companies.length) setCompanyId(companies[0].id);
-  }, [companies, companyId]);
+    // Reset whenever the entity-filtered list changes (including on entity
+    // switch) so a stale companyId from another entity can't linger.
+    if (companiesForEntity.length && !companiesForEntity.some(c => c.id === companyId)) {
+      setCompanyId(companiesForEntity[0].id);
+    } else if (!companiesForEntity.length) {
+      setCompanyId('');
+    }
+  }, [companiesForEntity, companyId]);
 
   useEffect(() => {
     // reset source account on company change
@@ -183,7 +212,7 @@ export default function PayrollPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Payroll (preview from shared)</h2>
+      <h2 className="text-xl font-semibold">Salários</h2>
 
       <div className="flex flex-wrap gap-2 items-end">
         <div>
@@ -197,7 +226,7 @@ export default function PayrollPage() {
             onChange={(e) => setCompanyId(e.target.value)}
             className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
           >
-            {companies.map((c) => (
+            {companiesForEntity.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>

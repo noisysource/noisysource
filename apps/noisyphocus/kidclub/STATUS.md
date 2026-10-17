@@ -4,7 +4,7 @@
 
 **Last updated:** 2026-10-17
 
-## 🔴 Prod bug (2026-10-16): parents couldn't enroll. Branch `hotfix/kidclub-enroll-permission-denied`, PR → `main`, NOT merged
+## 🔴 Prod bug (2026-10-16): parents couldn't enroll. PR #96 merged → `main` and deployed to prod 2026-10-17 08:40 UTC
 
 **Symptom.** No new pending subscriptions for weeks. A parent (Bruno, child Laura Silva, family
 `B5O3HQncgNTzM4e3KGPi`) pressed "Enviar pedido de inscrição" repeatedly and nothing happened.
@@ -26,10 +26,10 @@ not the admin. "+ Add Subscription" on the child page opens the enrollment form.
 `pnpm test:rules` runs these query shapes against `firestore.rules` in the emulator (18 checks, all pass;
 not in CI yet). Verified only at the rules level: the app can't point Firestore at the emulator.
 
-**Deploy.** A hotfix PR deploys on merge, not when opened. After the merge, the new `reservationEvents`
-index builds for a few minutes. Until it's ready the upcoming-session lists fail, which is no worse than
-before. The post-merge staging sync will probably fail as usual: `staging` is 80 commits ahead. Merge
-`main` into `staging` by hand. Expect a STATUS.md conflict at the top of this file.
+**Deploy.** Merged and deployed to prod 2026-10-17 08:40 UTC; the prod deploy job succeeded. The automatic
+staging sync failed as usual and was done by hand in `sync/main-to-staging-2026-10-17`. In that merge,
+`TransportSubscriptionDetailPage` kept staging's side: staging had already removed the sibling-rank block.
+**Still to verify on prod:** a parent submits an enrollment and it lands as pending.
 
 **Open, needs Renato:**
 - **Laura Silva's 2 subs carry the admin's identity.** Renato submitted them while impersonating, before the
@@ -50,7 +50,214 @@ before. The post-merge staging sync will probably fail as usual: `staging` is 80
 - **Follow-up:** wire `pnpm test:rules` into `ci-checks.yml` (needs Java on the runner, and the
   emulator).
 - **Failed-action tracing** (Renato, 2026-10-16: "trace when parents try to do something and it didn't
-  land"): separate branch off `staging`, see its own section once it exists.
+  land"): PR #98, merged into `staging`. See its own section below.
+
+## 🚨 Failed-action tracing (2026-10-17). PR #98 merged into `staging` 2026-10-17, NOT in prod
+
+**Why.** From 2026-09-18 to 2026-10-16 every parent enrollment failed silently (see the hotfix
+`hotfix/kidclub-enroll-permission-denied`, PR #96 → `main`). Nobody found out until a parent phoned.
+Renato asked for a way to see when parents try something and it doesn't land: subscriptions, payments and so on.
+
+**What it does.**
+- **`src/lib/clientErrors.ts`**, installed in `main.tsx`. It writes a report to
+  `_apps/arcoiris/clientErrors` whenever a signed-in user hits any of these:
+  - an unhandled promise rejection (the exact shape of the enrollment bug)
+  - an uncaught error from our own scripts
+  - a `console.error(…, err)` call with an error object among its arguments. That covers the existing
+    "catch and log" blocks without touching each page. After #96 merges, its enrollment catch blocks
+    report this way too.
+  - explicit `reportClientError()` calls, added where a catch only showed a message on screen: payments
+    (single and batch pay, proof upload), calendar day changes, profile save, subscription-page actions,
+    party booking and deposit/payment.
+
+  Fields: who, action label, error code and message, route, and whether an admin was impersonating.
+  **Cost guard:** at most 20 reports per page load, and the same error is deduped for 60 s.
+  Signed-out users aren't reported, because the rule needs `auth.uid`.
+- **Rules:** create-only for the signed-in user about themselves, in a fixed shape, with `createdAt` set
+  to server time. Only `rainbowAdmin`/`owner` can read or delete. `pnpm test:rules:client-errors` runs
+  10/10 in the emulator.
+- **Admin → 🛠️ Admin → "🚨 Erros dos clientes"** (`/admin/client-errors`) shows the last 200 reports.
+  "Só clientes" (on by default) hides the admin area and impersonation sessions.
+- **`clientErrorsDigest`**, a scheduled function that runs at 08:00 Lisbon time. It emails `admin@kidclub.pt`
+  the parent-facing failures from the last 24 h through `emailOutbox`, and sends nothing on a quiet day.
+  The logic is in `clientErrorsDigestLogic.ts`, with 6 tests.
+
+**How to test on dev (after this PR's deploy is green):**
+1. Sign in as a parent, or impersonate one. On a dev build, open the browser console and run
+   `console.error('[test] manual', Object.assign(new Error('boom'), { code: 'test' }))`.
+2. Admin → Erros dos clientes: turn "Só clientes" off if you were impersonating. The report shows up.
+3. A real failure: try "Enviar comprovativo" with a non-PDF/JPEG file, or any payment action on dev that errors.
+4. The digest only runs at 08:00. To check it sooner, run it from Cloud Scheduler on kidclub-dev
+   (`gcloud scheduler jobs run firebase-schedule-clientErrorsDigest-europe-west3 --location europe-west3
+   --project kidclub-dev`) and look for a new `emailOutbox` doc.
+
+**Open / follow-ups:**
+- **TTL is not enabled yet.** Each report has an `expireAt` 90 days out, but nothing deletes it until a TTL
+  policy exists. That's one command per project (Renato for prod):
+  `gcloud firestore fields ttls update expireAt --collection-group=clientErrors --enable-ttl --project <id>`.
+  Or add a `google_firestore_field` to Terraform.
+- Server-side function errors aren't covered; they're already in Cloud Logging. A Cloud Monitoring alert on
+  function error rate would be the server-side counterpart.
+- Wire `test:rules:*` into CI (needs Java on the runner).
+
+## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, NOT in prod
+
+**Decision (Renato, 2026-10-13): option B**, chosen over keeping named NIF-less clients (background: the
+2026-10-11 client-loop section below and its "Update 2026-10-12"). A family without a NIF is invoiced to
+"Consumidor final", with no Vendus client. **Legacy NIF-less families are now Consumidor final too**,
+including the ~10 holding an old NIF-less `vendusClientId` (the id stays on the doc, unused; nothing is
+deleted in Vendus). **Verified on live Vendus 2026-10-13, before this branch:** a test-mode `POST /documents/`
+(`type: FR`, `mode: tests`, no `client`) returned 201, document `FR T01P2026/1`, `client: null`, and the
+client count didn't change. Vendus accepts it and doesn't create a client.
+
+**What the PR does**
+- `billing.ts`: no NIF → `createInvoice(null, …)`, no `client` field, nothing created or updated in Vendus,
+  family doc untouched. NIF → as before (ensure the client if there's no `vendusClientId`, invoice it). "No NIF"
+  = `nif` missing, blank or `999999990` (`familyInvoiceNif`); the old placeholder logic is gone. A stored
+  *invalid* NIF still goes the NIF way and fails at Vendus with `invoiceError`, as before (not silently
+  Consumidor final).
+- `syncVendusClient`: families without a NIF are skipped, no Vendus call; a stale `vendusSyncError` on them is
+  deleted. #91's change detection, `vendusSyncError` and write-back-only-if-changed are unchanged.
+- NIF added later (`createOrUpdateClient`): with a NIF and a `vendusClientId`, it first reads that client
+  (`GET /clients/{id}/`). If it has no NIF **or a different one**, it's left alone: NIF lookup → link, else
+  create (50/day cap); the sync write-back re-links the family. A NIF is never PATCHed onto a client that has
+  none, so the unverified "Vendus refuses a NIF change" case is gone. Cost: one Vendus GET per sync of a family
+  with a NIF and a client (syncs only run when a synced field changes). #91's "duplicado → re-link" stays as a
+  fallback.
+- Profile (setup, A minha conta): NIF required unless "Não pretendo NIF na fatura" → `nifOptOut: true` and
+  `nif` deleted; saving a NIF deletes `nifOptOut`. Nobody is sent back through setup (the gate is still
+  `profileComplete`); legacy families choose on their next save of A minha conta. Admin "Dados da família":
+  same checkbox, clearing a NIF needs it, legacy families still save without touching the NIF; the panel shows
+  "Sem NIF / Não pretende (Consumidor final)".
+- Pagamentos: no NIF and no opt-out → amber banner "Adicione o seu NIF antes de pagar para que conste na
+  fatura" → A minha conta. Payment isn't blocked.
+- **Every** recorded invoice gets one "Fatura disponível" email (emailOutbox) with the Pagamentos link (Renato,
+  2026-10-14, after testing #93 on dev). Consumidor final invoices add a line asking for the NIF. Failing to
+  queue it never affects the invoice.
+  - **One per invoice:** only the run that issued and recorded the invoice queues it (the existing
+    `invoiceClaimedAt` claim + "already invoiced" check, and the webhook's paid transaction), and the outbox doc
+    id is `invoiceReady_<vendusId>`, written with `create()`: a second attempt for the same invoice gets
+    ALREADY_EXISTS and queues nothing. A bill re-invoiced on purpose (`retryVendusInvoice` with `force`) is a
+    new Vendus document, so that new invoice is emailed too.
+  - An invoice issued but not recorded ("criada mas não registada") gets no email; the admin sorts it out.
+- Tests: functions 226/226 (new `billing.test.ts`, incl. the webhook's two calls, retries and an outbox failure;
+  `syncVendusClient.test.ts`; `vendus.test.ts` updated for the GET-first flow). App typecheck: the same 11 old
+  errors; build OK. No Vendus calls, no prod access.
+
+**How parents get invoices — finding and decision (2026-10-14):**
+- **Until this PR, no parent got invoice emails from Vendus, with or without a NIF.** A read-only check of 5 prod
+  clients, all families with a NIF (381648011, 379980008, 364285165, 374090954, 291428847), found
+  `send_email: "no"` on every one. Vendus only emails through a client with `send_email: "yes"`, and
+  `syncVendusClient`, which creates most clients, never sends it.
+- The only way to get an invoice was the portal (Pagamentos → "Descarregar fatura", `getInvoicePdf`: bill →
+  `vendusId`, cached, 100/day cap; works with or without a client). The only emails parents got were
+  "Pagamento pendente"; neither the EasyPay webhook nor `markBillingPaid` emails them.
+- **Renato's decision: option 1.** The app sends its own "Fatura disponível" email for every invoice, from this
+  PR. Vendus's own emails stay off: nothing sets `send_email` on Vendus clients (the sync payload never did).
+- `send_email: "yes"` in billing's own client create/link payload (a family with a NIF but no `vendusClientId`
+  at invoice time) is **removed (Renato, 2026-10-14)**, so that path can't cause a second email from Vendus.
+  Existing clients keep whatever `send_email` they have; the 5 sampled had "no".
+
+**How to test on dev.** Dev skips Vendus entirely (invoicing throws on `kidclub-dev`, the sync returns early), so
+the invoice path, the late-NIF re-link and the email can only run on prod.
+1. `parent-test@kidclub.pt` (`TEST-FAMILY-QA`, `nif: "999999990"`, which now counts as no NIF) → Pagamentos
+   shows the banner; the pay buttons are still there.
+2. A minha conta → Guardar → asks to tick the box. Tick "Não pretendo NIF na fatura" → Guardar → doc has
+   `nifOptOut: true` and no `nif`; banner gone. Untick, type `123456789` → saves, `nifOptOut` removed. An
+   invalid NIF → red error, button disabled.
+3. Setup page: set `profileComplete: false` on the QA family in the dev console, reload: same rules.
+4. Admin Inscrições → the family → Editar: the checkbox; clearing the NIF without it → error.
+
+**After promotion to prod, check (read-only):**
+- The first invoice for a family without a NIF shows "Consumidor final"; the bill has `invoiceNumber`/`vendusId`;
+  log `[Vendus] invoice created … client=Consumidor final`; outbox doc `invoiceReady_<vendusId>` is sent and
+  asks for the NIF.
+- The first invoice for a family with a NIF: one `invoiceReady_<vendusId>` email, sent, without the NIF line,
+  and no Vendus email alongside it.
+- **No new Vendus client appears** for that family (client count unchanged by that invoice).
+- A family with a NIF still invoices to its client (log `client=<id>`).
+- The first legacy family that adds a NIF: log `client X has NIF "", not …`, then link or create; its
+  `vendusClientId` changes; the old client is untouched.
+- Cross-app: root `CLAUDE.md` → "Cross-App Data Contracts": FinHub must link invoices by `invoiceNumber`/
+  `vendusId`, never the Vendus client name.
+
+(#91 is merged: in `main`, and in `staging` via #92. The 2026-10-11 section's header below still says OPEN.)
+
+## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, NOT in prod
+
+**What the check found (read-only, dev + prod + invoice FR 01P2026/202).** Families pay exactly the
+price the app shows; VAT is already inside it (billing sends each line to Vendus as `gross_price`).
+Prod: no bill line is the price + VAT, none is above the shown price. Vendus products: study room,
+enrollment fee, insurance **23%**, transport **6%**. The transport page was wrong: it showed
+"+ €X IVA" on top, using `config/transportation.vatRate` = **0.23 on prod**, a field billing never
+reads. **Renato's decision: fix the page, keep what families pay.**
+
+**What the PR does (display only, no billed amount changes):**
+- `packages/shared/models/kidclubVat.ts`: `KIDCLUB_VAT` (rate per service, mirroring the Vendus
+  products) and `kidclubVatNote` / `kidclubVatNoteMixed` (split a com-IVA price; mixed totals split
+  once per rate, like the invoice).
+- Families: transport and study-room detail pages, the child panel and the enrollment price box show
+  "IVA incluído · sem IVA €X · IVA 6%/23% €Y". The transport page no longer reads the transport
+  config or sibling subscriptions (they only fed the removed line).
+- Admin: transport price (planner ⚙ and `/admin/transport-config`), study room €/dia, enrollment fee
+  and insurance say "com IVA" with the split; the subscription card shows it under the price. The
+  editable transport "IVA (%)" is gone (read-only "IVA 6% … produto Vendus"); `vatRate` is
+  deprecated in the model, old docs keep it, no migration. Insurance is labelled once per child and
+  school year (it said €/mês).
+- Parties: `partyVatBreakdown` and `partyDepositAmount` take the VAT from `vat.ts`; the deposit keeps
+  its rounding. `functions/src/kidclub/partyPricingParity.test.ts` pins every subtotal €0–€5000 to the
+  cent (the helper's own rounding would have moved ~3% of deposits by 1 cent, so it isn't used there).
+
+**How to test on dev:** `RELEASE-TEST-PLAN.md` §6 V6–V9 (and K2.4). Not clicked through by the agent:
+builds, typecheck (no new errors; 11 old ones remain) and the 177 function tests pass.
+
+**Open:**
+- Ask the accountant whether insurance should be exempt; today Vendus invoices it at 23%. If so: change
+  the Vendus product, then `KIDCLUB_VAT.insurance`.
+- `getKidclubVatSummary` (`functions/src/kidclub/vatSummary.ts`) has no sign-in/admin check and is
+  callable by `allUsers` (checked on dev): anyone could read KidClub's quarterly sales by VAT rate,
+  and each call makes one Vendus request per invoice. Not fixed here; small separate fix.
+- Lists and totals (Inscrições list, dashboard, child page totals) still show the com-IVA price
+  without the split. Deliberate: the handoff asks for setup and detail pages.
+
+## 🎈 Party prices 2026/27 + IVA + extra quantities (2026-10-07) — branch `agent/party-pricing-vat`, PR → `staging`, code NOT in prod
+
+**Prod data already changed (done 2026-10-07, Renato asked).** `config/party` on prod now matches the
+"apresentação festas 26_27" PDF. Prod had 0 party bookings and 0 party deposits, so nothing was repriced.
+Same config copied to kidclub-dev. Old prod values, for rollback: A 150/14 kids/+7, B 200/+10, C 225/+10;
+extras Prato de Fruta 4, Gelatinas (pack 6) 2.5, Pizza 4, Cachorro (pack 4) 5.
+
+| Party type | Base (sem IVA) | Kids incl. | Extra child |
+|---|---|---|---|
+| A | 150 | 14 | 7 |
+| B (lanche simples) | 210 | 14 | 14 |
+| C (lanche completo) | 240 | 14 | 17 |
+
+B and C read the PDF's "60€ (criança extra 7€)" / "90€ (criança extra 10€)" as **added on top of A**.
+If Renato meant them as standalone, change B/C in Admin → Configuração das Festas.
+Extras (sem IVA): Cachorro 2/unidade, Sobremesa 2/unidade, Prato de Fruta 4.5/prato, Pizza 3.5/unidade,
+Gelatinas ou iogurtes 3/pack de 6, Convites 6, Poster 100x70 20, Pack decoração temática 55.
+The first five carry `perUnit: true` + `unitLabel` — the live prod code ignores those fields until this PR ships.
+
+**What the PR fixes.**
+- **Deposit undercharged IVA.** `createPartyDeposit` billed 50% of `Booking.total` (pre-IVA) and Vendus treats
+  line amounts as gross: a €150 party gave a €75 invoice instead of €92.25. Now 50% of total + 23%.
+- **Client pages hid IVA.** Booking, detail and list pages showed the pre-IVA total as "Total". All party views
+  now use `packages/shared/models/partyPricing.ts` and show subtotal / IVA / total / sinal.
+- **Quantities.** Per-unit extras get a stepper (client) or number input (admin). Stored in the existing
+  `Booking.extrasDetail` map; an extra with no entry counts once, so old bookings price the same.
+  `Booking.total` still means the pre-IVA subtotal.
+
+**How to test on dev (after the PR deploy is green):** book a party as a parent with 17 kids, Festa B,
+10 cachorros + Pack decoração → summary should read subtotal €327, IVA €75.21, total €402.21, sinal €201.11.
+Confirm it as admin, then "Pagar sinal" → the billing doc's `total` should be 201.11.
+
+**Open / not done:**
+- Overtime (€5 per 15 min) and "sob consulta" items (bolo, pinturas faciais, pinhatas) aren't modelled.
+- `Booking.total` is written by the client; the deposit function trusts it. Recomputing server-side from
+  `config/party` would close that — not done here.
+- The admin edit form recomputes `total` from the *current* config as soon as a booking is opened, so editing
+  an old booking after a price change silently reprices it (pre-existing behaviour).
 
 ## 🆕 Bank transfer payments (2026-10-07) — branch `agent/kidclub-bank-transfer`, PR → `staging`, NOT in prod
 

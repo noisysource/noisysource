@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
 import { Family } from '@shared/models';
 import { familyService } from '../../services/familyService';
-import { isValidNif, normalizeNif } from '../../lib/nif';
+import { nifFieldError, normalizeNif, NIF_OPT_OUT_LABEL } from '../../lib/nif';
 import { profilePaymentChoice } from '../../lib/paymentMethod';
 import { deleteField } from 'firebase/firestore';
 
@@ -12,10 +12,12 @@ export default function AccountPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [nifSubmitted, setNifSubmitted] = useState(false);
   const [form, setForm] = useState({
     name: '',
     phone: '',
     nif: '',
+    nifOptOut: false,
     street: '',
     city: '',
     postalCode: '',
@@ -35,6 +37,8 @@ export default function AccountPage() {
         name: fam.primaryContact.name,
         phone: fam.primaryContact.phone,
         nif: fam.nif || '',
+        // A NIF on file wins over a stray opt-out flag.
+        nifOptOut: !fam.nif && !!fam.nifOptOut,
         street: fam.billingAddress?.street || '',
         city: fam.billingAddress?.city || '',
         postalCode: fam.billingAddress?.postalCode || '',
@@ -45,16 +49,25 @@ export default function AccountPage() {
     load();
   }, [user]);
 
-  const set = (field: keyof typeof form, value: string) =>
+  const set = (field: Exclude<keyof typeof form, 'nifOptOut'>, value: string) =>
     setForm(prev => ({ ...prev, [field]: value }));
+  const setNifOptOut = (nifOptOut: boolean) =>
+    setForm(prev => ({ ...prev, nifOptOut, nif: nifOptOut ? '' : prev.nif }));
 
-  // Vendus refuses an invoice for a NIF that fails the checksum, and the bill
-  // then sits paid-but-uninvoiced until an admin fixes it — catch it here.
-  const nifError = form.nif.trim() && !isValidNif(form.nif) ? 'NIF inválido — confirme os 9 dígitos.' : '';
+  // A NIF is required unless the parent opts out (then invoices go to
+  // "Consumidor final"); families from before the opt-out existed choose on
+  // their next save. Vendus refuses an invoice for a NIF that fails the
+  // checksum, and the bill then sits paid-but-uninvoiced — catch it here.
+  const nifError = nifFieldError(form.nif, form.nifOptOut);
+  // Shown live for a typed NIF; "missing" only once they try to save.
+  const nifTypedError = form.nif.trim() ? nifError : '';
+  const nifShownError = nifTypedError || (nifSubmitted ? nifError : '');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!family || nifError) return;
+    if (!family) return;
+    setNifSubmitted(true);
+    if (nifError) return;
     setSaving(true);
     try {
       await familyService.updateFamily(family.id, {
@@ -63,7 +76,10 @@ export default function AccountPage() {
           name: form.name,
           phone: form.phone,
         },
-        nif: normalizeNif(form.nif) || undefined,
+        // Opting out deletes the NIF; a NIF clears the opt-out.
+        ...(form.nifOptOut
+          ? { nif: deleteField() as unknown as undefined, nifOptOut: true }
+          : { nif: normalizeNif(form.nif), nifOptOut: deleteField() as unknown as undefined }),
         billingAddress: form.street
           ? { street: form.street, city: form.city, postalCode: form.postalCode, country: 'PT' }
           : undefined,
@@ -137,16 +153,25 @@ export default function AccountPage() {
         <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
           <h2 className="font-semibold text-gray-900">Dados de faturação</h2>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">NIF</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">NIF{form.nifOptOut ? '' : ' *'}</label>
             <input
               type="text"
-              placeholder="Número de contribuinte (opcional)"
+              inputMode="numeric"
+              placeholder={form.nifOptOut ? 'Sem NIF na fatura' : 'Número de contribuinte (9 dígitos)'}
+              disabled={form.nifOptOut}
               value={form.nif}
               onChange={e => set('nif', e.target.value)}
               maxLength={9}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
             />
-            {nifError && <p className="text-sm text-red-600 mt-1">{nifError}</p>}
+            {nifShownError && <p className="text-sm text-red-600 mt-1">{nifShownError}</p>}
+            <label className="flex items-center gap-2 mt-2 text-sm text-gray-700 cursor-pointer">
+              <input type="checkbox" checked={form.nifOptOut} onChange={e => setNifOptOut(e.target.checked)} />
+              {NIF_OPT_OUT_LABEL}
+            </label>
+            {form.nifOptOut && (
+              <p className="text-xs text-gray-500 mt-1">As faturas são emitidas a "Consumidor final", sem nome nem NIF.</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Morada</label>
@@ -217,7 +242,7 @@ export default function AccountPage() {
 
         <button
           type="submit"
-          disabled={saving || !!nifError}
+          disabled={saving || !!nifTypedError}
           className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-60"
         >
           {saving ? 'A guardar...' : 'Guardar alterações'}

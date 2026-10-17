@@ -29,6 +29,8 @@ jobs:
         run: pnpm install
       - name: Build KidClub app
         run: pnpm --filter kidclub build
+      - name: Build FinHub app
+        run: pnpm --filter finances build
       - name: Build Functions
         run: pnpm --filter functions build
       - name: Set up Terraform

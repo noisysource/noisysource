@@ -8,6 +8,8 @@ import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallLength } from '../data/walls';
 import type { EnergyReading } from '../data/energy';
 import { formatWatts } from '../data/energy';
+import { faultMeaning } from '../data/heatpumpFaults';
+import { heatPumpModeLabel } from '../data/tuyaData';
 
 /** Which layer the edit gestures act on. */
 export type EditTarget = 'rooms' | 'devices' | 'walls';
@@ -59,7 +61,14 @@ const TRACK_H = 1.6;
 const THERMO_H = 3.3;
 const THERMO_W = 3.8;
 const TRACK_W = 2.9;
-const PUMP_H = 1.7;
+/** Heat pump popover: width, row pitch, and the fault block's text metrics.
+ *  Height is computed per render — it grows with the number of active faults. */
+const PUMP_W = 3.8;
+const PUMP_ROW_H = 0.32;
+const FAULT_CODE_H = 0.36;
+const FAULT_LINE_H = 0.26;
+/** Characters per line for fault meanings at fontSize 0.2 across PUMP_W. */
+const FAULT_WRAP = 34;
 /** Range the TR01-WF accepts, and the granularity it steps in. */
 const TEMP_MIN = 5;
 const TEMP_MAX = 35;
@@ -121,6 +130,22 @@ function fitLabel(name: string, w: number, h: number) {
     ? `${name.slice(0, Math.max(1, maxChars - 1))}…`
     : name;
   return { size, text, fits: name.length <= maxChars };
+}
+
+/** Greedy word wrap for SVG text, which has no wrapping of its own. */
+function wrapText(text: string, maxChars: number): string[] {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && line.length + 1 + word.length > maxChars) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 /**
@@ -599,9 +624,11 @@ export default function FloorPlan({
                   x={cx - 0.34} y={cy - 0.34} width={0.68} height={0.68} rx={0.34}
                   fill={device.state.on ? 'rgba(239, 68, 68, 0.25)' : '#27272a'}
                   stroke={
-                    isSelected ? '#fafafa' : device.state.on ? '#ef4444' : '#52525b'
+                    isSelected ? '#fafafa'
+                      : device.state.faults.length > 0 ? '#facc15'
+                      : device.state.on ? '#ef4444' : '#52525b'
                   }
-                  strokeWidth={isSelected ? 0.07 : 0.04}
+                  strokeWidth={isSelected || device.state.faults.length > 0 ? 0.07 : 0.04}
                 />
                 <text
                   x={cx} y={cy + 0.11} textAnchor="middle" fontSize={0.34}
@@ -609,6 +636,27 @@ export default function FloorPlan({
                 >
                   🔥
                 </text>
+                {/* An active fault usually means the compressor has stopped, so
+                    it has to be visible without opening anything. */}
+                {device.state.faults.length > 0 && (() => {
+                  const f = device.state.faults;
+                  const label = f.length === 1 ? f[0] : `${f[0]} +${f.length - 1}`;
+                  const w = 0.16 * label.length + 0.24;
+                  return (
+                    <g className="pointer-events-none">
+                      <rect
+                        x={cx - w / 2} y={cy + 0.4} width={w} height={0.36} rx={0.08}
+                        fill="#dc2626" stroke="#fecaca" strokeWidth={0.03}
+                      />
+                      <text
+                        x={cx} y={cy + 0.66} textAnchor="middle" fontSize={0.24}
+                        fontWeight={700} fill="#fff"
+                      >
+                        {label}
+                      </text>
+                    </g>
+                  );
+                })()}
               </g>
             ) : (
               <g>
@@ -813,29 +861,88 @@ export default function FloorPlan({
               );
             })()}
             {openPopover === device.id && device.type === 'heatpump' && !editMode && (() => {
-              const baseY = popoverBase(cy, PUMP_H);
               const p = device.state;
+              const deg = (v: number | undefined) => (v === undefined ? '—' : `${v.toFixed(1)}°`);
+              const cooling = p.mode?.toLowerCase().includes('cooling') ?? false;
+              const waterTarget = cooling ? p.coolingSetpoint : p.heatingSetpoint;
+              const rows: Array<[string, string]> = [
+                ['Modo', heatPumpModeLabel(p.mode) ?? '—'],
+                ['Compressor', p.compressorHz === undefined ? '—'
+                  : p.compressorHz > 0 ? `${p.compressorHz} Hz` : 'parado'],
+                ['Exterior', deg(p.outdoor)],
+                ['AQS', deg(p.dhwTank) + (p.dhwSetpoint !== undefined ? ` / alvo ${p.dhwSetpoint}°` : '')],
+                ['Água entrada', deg(p.waterIn)],
+                ['Água saída', deg(p.waterOut) + (waterTarget !== undefined ? ` / alvo ${waterTarget}°` : '')],
+              ];
+              // Faults first and in red: they explain everything below them
+              // (a stopped compressor, a cold tank).
+              let faultH = 0;
+              const faultBlocks = p.faults.map(code => {
+                const lines = wrapText(faultMeaning(code), FAULT_WRAP);
+                const top = 0.15 + faultH;
+                faultH += FAULT_CODE_H + lines.length * FAULT_LINE_H;
+                return { code, lines, top };
+              });
+              if (faultBlocks.length > 0) faultH += 0.2;
+              const rowsTop = 0.15 + faultH;
+              const buttonTop = rowsTop + rows.length * PUMP_ROW_H + 0.15;
+              const height = buttonTop + 0.48 + 0.2;
+              const baseY = popoverBase(cy, height);
+              const left = cx - PUMP_W / 2 + 0.2, right = cx + PUMP_W / 2 - 0.2;
               return (
                 <g>
                   <rect
-                    x={cx - 1.4} y={baseY} width={2.8} height={PUMP_H} rx={0.14}
-                    fill="#18181b" stroke="#52525b" strokeWidth={0.04}
+                    x={cx - PUMP_W / 2} y={baseY} width={PUMP_W} height={height} rx={0.14}
+                    fill="#18181b" stroke={p.faults.length > 0 ? '#dc2626' : '#52525b'}
+                    strokeWidth={0.04}
                   />
-                  <text
-                    x={cx} y={baseY + 0.4} textAnchor="middle" fontSize={0.24}
-                    fill="#a1a1aa" className="pointer-events-none"
-                  >
-                    Topo {p.tankTop?.toFixed(1) ?? '—'}° · Fundo {p.tankBottom?.toFixed(1) ?? '—'}°
-                  </text>
-                  <text
-                    x={cx} y={baseY + 0.78} textAnchor="middle" fontSize={0.24}
-                    fill="#a1a1aa" className="pointer-events-none"
-                  >
-                    {p.power !== undefined ? `${p.power} W` : 'consumo —'}
-                  </text>
+                  {faultBlocks.length > 0 && (
+                    <rect
+                      x={cx - PUMP_W / 2 + 0.08} y={baseY + 0.08}
+                      width={PUMP_W - 0.16} height={faultH} rx={0.1}
+                      fill="rgba(220, 38, 38, 0.22)" className="pointer-events-none"
+                    />
+                  )}
+                  {faultBlocks.map(b => {
+                    const top = baseY + b.top;
+                    return (
+                      <g key={b.code} className="pointer-events-none">
+                        <text
+                          x={left} y={top + 0.3} fontSize={0.26} fontWeight={700} fill="#fca5a5"
+                        >
+                          ⚠ {b.code}
+                        </text>
+                        {b.lines.map((line, i) => (
+                          <text
+                            key={i} x={left} y={top + FAULT_CODE_H + 0.18 + i * FAULT_LINE_H}
+                            fontSize={0.2} fill="#fecaca"
+                          >
+                            {line}
+                          </text>
+                        ))}
+                      </g>
+                    );
+                  })}
+
+                  {rows.map(([label, value], i) => (
+                    <g key={label} className="pointer-events-none">
+                      <text
+                        x={left} y={baseY + rowsTop + 0.24 + i * PUMP_ROW_H}
+                        fontSize={0.22} fill="#a1a1aa"
+                      >
+                        {label}
+                      </text>
+                      <text
+                        x={right} y={baseY + rowsTop + 0.24 + i * PUMP_ROW_H}
+                        textAnchor="end" fontSize={0.22} fill="#e4e4e7"
+                      >
+                        {value}
+                      </text>
+                    </g>
+                  ))}
 
                   <rect
-                    x={cx - 0.75} y={baseY + 1.0} width={1.5} height={0.48} rx={0.1}
+                    x={cx - 0.75} y={baseY + buttonTop} width={1.5} height={0.48} rx={0.1}
                     fill={p.on ? '#7f1d1d' : '#3f3f46'} stroke="#71717a" strokeWidth={0.03}
                     className="cursor-pointer"
                     onClick={e => {
@@ -845,7 +952,7 @@ export default function FloorPlan({
                     }}
                   />
                   <text
-                    x={cx} y={baseY + 1.33} textAnchor="middle" fontSize={0.24}
+                    x={cx} y={baseY + buttonTop + 0.33} textAnchor="middle" fontSize={0.24}
                     fill="#e4e4e7" className="pointer-events-none"
                   >
                     {p.on ? 'Desligar' : 'Ligar'}

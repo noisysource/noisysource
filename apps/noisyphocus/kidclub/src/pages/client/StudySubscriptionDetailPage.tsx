@@ -3,12 +3,13 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
 import { callable } from '../../lib/callable';
-import { Child, Family, StudyRoomEntry, normalizeStatus } from '@shared/models';
+import { Child, Family, StudyRoomEntry, normalizeStatus, kidclubVatNote } from '@shared/models';
 import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { coerceSubscriptionDate, normalizeSubStatus } from '../../lib/utils';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
+import { reportClientError } from '../../lib/clientErrors';
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -169,6 +170,7 @@ export default function StudySubscriptionDetailPage() {
       await fn({ eventId: session.reservationEventId, status: session.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } catch (err: any) {
+      reportClientError('[StudySubscriptionDetailPage] action failed', err);
       setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
@@ -307,6 +309,7 @@ export default function StudySubscriptionDetailPage() {
             <span className="text-2xl font-bold text-gray-900">€{(subscription.monthlyPrice ?? 0).toFixed(2)}</span>
             <span className="text-base font-normal text-gray-500">/mês</span>
           </div>
+          <p className="text-xs text-gray-400">IVA incluído · {kidclubVatNote(subscription.monthlyPrice ?? 0, 'study')}</p>
         </div>
 
         {!editingSchedule ? (

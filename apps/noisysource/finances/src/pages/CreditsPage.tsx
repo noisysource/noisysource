@@ -23,7 +23,7 @@ const TYPE_COLORS: Record<CreditType, string> = {
 
 const ENTITY_IDS: FinanceEntityId[] = ['private', 'noisysource', 'noisyphocus'];
 const ENTITY_LABELS: Record<FinanceEntityId, string> = {
-  private: 'Private', noisysource: 'NoisySource', noisyphocus: 'NoisyPhocus',
+  private: 'Casa', noisysource: 'NoisySource', noisyphocus: 'NoisyPhocus',
 };
 const ENTITY_BADGE: Record<FinanceEntityId, string> = {
   private:     'text-blue-400 bg-blue-950/40 border-blue-800/60',

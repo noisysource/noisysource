@@ -98,7 +98,7 @@ export default function PartyConfigAdmin() {
                 <>
                   <input placeholder="Nome do pacote" value={pt.name} onChange={e => handlePartyTypeChange(pt.id, 'name', e.target.value)} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
                   <textarea placeholder="Descrição" value={pt.description} onChange={e => handlePartyTypeChange(pt.id, 'description', e.target.value)} className="w-full border-gray-300 rounded-md shadow-sm text-sm" rows={2} />
-                  <input type="number" placeholder="Preço Base (€)" value={pt.basePrice} onChange={e => handlePartyTypeChange(pt.id, 'basePrice', parseFloat(e.target.value))} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
+                  <input type="number" placeholder="Preço Base sem IVA (€)" value={pt.basePrice} onChange={e => handlePartyTypeChange(pt.id, 'basePrice', parseFloat(e.target.value))} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
                   <input type="number" placeholder="Crianças Incluídas" value={pt.includedKids} onChange={e => handlePartyTypeChange(pt.id, 'includedKids', parseInt(e.target.value))} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
                   <input type="number" placeholder="Preço por Criança Extra (€)" value={pt.pricePerExtraChild} onChange={e => handlePartyTypeChange(pt.id, 'pricePerExtraChild', parseFloat(e.target.value))} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
                   <div className="flex justify-end gap-2">
@@ -110,7 +110,7 @@ export default function PartyConfigAdmin() {
                 <>
                   <h4 className="text-lg font-bold text-purple-600">{pt.name}</h4>
                   <p className="text-gray-600 text-xs">{pt.description}</p>
-                  <p className="text-base font-semibold">€{pt.basePrice} <span className="text-xs font-normal text-gray-500">/ {pt.includedKids} crianças</span></p>
+                  <p className="text-base font-semibold">€{pt.basePrice} <span className="text-xs font-normal text-gray-500">+ IVA / {pt.includedKids} crianças</span></p>
                   <p className="text-base font-semibold">€{pt.pricePerExtraChild} <span className="text-xs font-normal text-gray-500">/ criança extra</span></p>
                   <div className="flex justify-end gap-2 pt-2">
                     <button onClick={() => deletePartyType(pt.id)} className="text-xs text-red-500">Apagar</button>
@@ -138,7 +138,14 @@ export default function PartyConfigAdmin() {
                 <>
                   <input placeholder="Nome do extra" value={ex.name} onChange={e => handleExtraChange(ex.id, 'name', e.target.value)} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
                   <textarea placeholder="Descrição" value={ex.description} onChange={e => handleExtraChange(ex.id, 'description', e.target.value)} className="w-full border-gray-300 rounded-md shadow-sm text-sm" rows={2} />
-                  <input type="number" placeholder="Preço (€)" value={ex.price} onChange={e => handleExtraChange(ex.id, 'price', parseFloat(e.target.value))} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
+                  <input type="number" placeholder="Preço sem IVA (€)" value={ex.price} onChange={e => handleExtraChange(ex.id, 'price', parseFloat(e.target.value))} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input type="checkbox" checked={!!ex.perUnit} onChange={e => handleExtraChange(ex.id, 'perUnit', e.target.checked)} className="rounded border-gray-300" />
+                    Preço por unidade (a família escolhe a quantidade)
+                  </label>
+                  {ex.perUnit && (
+                    <input placeholder="Unidade (ex: unidade, prato, pack de 6)" value={ex.unitLabel ?? ''} onChange={e => handleExtraChange(ex.id, 'unitLabel', e.target.value)} className="w-full border-gray-300 rounded-md shadow-sm text-sm" />
+                  )}
                   <div className="flex justify-end gap-2">
                     <button onClick={() => toggleEditExtra(ex.id)} className="text-xs text-gray-600">Cancelar</button>
                     <button onClick={() => toggleEditExtra(ex.id)} className="text-xs text-blue-600 font-semibold">Guardar</button>
@@ -148,7 +155,7 @@ export default function PartyConfigAdmin() {
                 <>
                   <h4 className="text-lg font-bold text-purple-600">{ex.name}</h4>
                   <p className="text-gray-600 text-xs">{ex.description}</p>
-                  <p className="text-base font-semibold">€{ex.price}</p>
+                  <p className="text-base font-semibold">€{ex.price}{ex.perUnit && <span className="text-xs font-normal text-gray-500"> / {ex.unitLabel || 'unidade'}</span>} <span className="text-xs font-normal text-gray-500">+ IVA</span></p>
                   
                   <div className="flex justify-end gap-2 pt-2">
                     <button onClick={() => deleteExtra(ex.id)} className="text-xs text-red-500">Apagar</button>

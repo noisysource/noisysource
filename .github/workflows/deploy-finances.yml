@@ -1,5 +1,10 @@
 name: Deploy Finances
 
+# Manual fallback only. FinHub now deploys automatically with KidClub
+# (_deploy-kidclub-env.yml): a PR into staging → kidclub-dev, the
+# staging→main promotion → prod. Use this to redeploy FinHub's hosting alone,
+# e.g. when the pipeline is broken for an unrelated reason. Run it on
+# `staging` for dev or on `main` for prod; any other branch does nothing.
 on:
   workflow_dispatch:
 
@@ -25,8 +30,18 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install
+      # build:staging loads .env.staging (VITE_FIREBASE_PROJECT_ID=kidclub-dev).
+      # Plain `build` defaults to Vite's "production" mode (.env.production,
+      # rainbow-prod-2454b) — deploying that bundle here would bake prod's
+      # Firebase config into the dev site, and prod's API key's HTTP-referrer
+      # restriction doesn't allow kidclub-dev-finhub.web.app, so every
+      # Firebase SDK call (installations/analytics/auth) 403s at runtime.
+      # Mirrors the same build:staging-vs-build distinction KidClub's own
+      # deploy already gets right — see root CLAUDE.md.
       - name: Build Finances app
-        run: pnpm --filter finances build
+        run: pnpm --filter finances build:staging
+      - name: Check the build targets kidclub-dev
+        run: grep -rqF 'projectId:"kidclub-dev"' apps/noisysource/finances/dist/assets
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -39,7 +54,9 @@ jobs:
 
   deploy-prod-finances:
     name: 'Deploy: prod-finances'
-    if: false
+    # Was `if: false` from the April migration until the pipeline took over
+    # FinHub (2026-10-12). Prod only from main: what's merged is what's live.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
@@ -60,6 +77,8 @@ jobs:
         run: pnpm install
       - name: Build Finances app
         run: pnpm --filter finances build
+      - name: Check the build targets rainbow-prod-2454b
+        run: grep -rqF 'projectId:"rainbow-prod-2454b"' apps/noisysource/finances/dist/assets
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:

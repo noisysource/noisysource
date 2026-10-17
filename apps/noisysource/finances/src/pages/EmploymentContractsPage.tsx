@@ -20,6 +20,7 @@ function fromEUR(s: string)   { return Math.round((parseFloat(s) || 0) * 100); }
 function pct(s: string)       { return parseFloat(s) || 0; }
 
 const EMPTY_FORM = {
+  contractType: "employee" as "employee" | "green_receipt",
   personId: "",
   grossEUR: "",
   irsPct: "",
@@ -103,6 +104,7 @@ export default function EmploymentContractsPage() {
     if (!c) return;
     setEditingId(id);
     setForm({
+      contractType: c.contractType === "green_receipt" ? "green_receipt" : "employee",
       personId: c.personId,
       grossEUR: toEUR(c.grossMonthlyCents ?? 0),
       irsPct: String(c.irsRatePct ?? ""),
@@ -123,21 +125,27 @@ export default function EmploymentContractsPage() {
     if (!companyId || !form.personId) return;
     setBusy(true); setMsg(null);
     try {
+      const isGreenReceipt = form.contractType === "green_receipt";
       const payload = {
         id: editingId ?? undefined,
         companyId,
         personId: form.personId,
+        contractType: form.contractType,
         grossMonthlyCents: fromEUR(form.grossEUR),
         irsRatePct: pct(form.irsPct),
-        ssEmpPct: pct(form.ssEmpPct),
-        ssErPct: pct(form.ssErPct),
+        // Green receipt: no employer/employee SS contribution, regardless of
+        // whatever stale value sits in these fields from a prior edit — a
+        // freelancer's own SS is their own affair, not a NoisyPhocus cost.
+        ssEmpPct: isGreenReceipt ? 0 : pct(form.ssEmpPct),
+        ssErPct: isGreenReceipt ? 0 : pct(form.ssErPct),
         payDay: Math.max(1, Math.min(31, parseInt(form.payDay || "25", 10))),
         startDate: form.startDate || undefined,
         endDate: form.endDate || undefined,
         active: form.active,
         flowToPrivate: form.flowToPrivate,
         netPayAccountId: form.netPayAccountId || undefined,
-        benefits: form.benefits,
+        // Subsídios (benefits) don't apply to a green-receipt arrangement.
+        benefits: isGreenReceipt ? [] : form.benefits,
       };
       const id = await (api.contracts as any).save(payload);
       setEditingId(id);
@@ -177,7 +185,7 @@ export default function EmploymentContractsPage() {
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
       {/* LEFT: form */}
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold">Employment Contracts</h2>
+        <h2 className="text-xl font-semibold">Contratos</h2>
 
         {/* Company label + employee selector */}
         <Card className="p-4">
@@ -206,9 +214,32 @@ export default function EmploymentContractsPage() {
         {/* Contract fields */}
         <Card className="p-4">
           <form onSubmit={save} className="space-y-4">
+            <div>
+              <div className="text-xs text-zinc-400 mb-1">Tipo de contrato</div>
+              <div className="grid grid-cols-2 gap-1 max-w-xs">
+                {(["employee", "green_receipt"] as const).map(t => (
+                  <button key={t} type="button" onClick={() => set("contractType", t)}
+                    className={`py-1.5 rounded text-xs font-medium border transition-colors ${
+                      form.contractType === t
+                        ? "border-blue-500 bg-blue-900/50 text-blue-200"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
+                    }`}>
+                    {t === "employee" ? "Contrato de Trabalho" : "Recibo Verde"}
+                  </button>
+                ))}
+              </div>
+              {form.contractType === "green_receipt" && (
+                <div className="text-[11px] text-zinc-500 mt-1">
+                  Freelance/prestador de serviços — sem SS a cargo da empresa, sem subsídios.
+                </div>
+              )}
+            </div>
+
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
-                <div className="text-xs text-zinc-400 mb-1">Gross monthly (€)</div>
+                <div className="text-xs text-zinc-400 mb-1">
+                  {form.contractType === "green_receipt" ? "Valor mensal do recibo (€)" : "Gross monthly (€)"}
+                </div>
                 <Input
                   type="number" step="0.01" placeholder="0.00"
                   value={form.grossEUR}
@@ -230,29 +261,35 @@ export default function EmploymentContractsPage() {
 
             <div className="grid sm:grid-cols-3 gap-3">
               <div>
-                <div className="text-xs text-zinc-400 mb-1">IRS %</div>
+                <div className="text-xs text-zinc-400 mb-1">
+                  {form.contractType === "green_receipt" ? "Retenção na fonte %" : "IRS %"}
+                </div>
                 <Input
                   type="number" step="0.1" placeholder="15"
                   value={form.irsPct}
                   onChange={e => set("irsPct", e.target.value)}
                 />
               </div>
-              <div>
-                <div className="text-xs text-zinc-400 mb-1">SS employee %</div>
-                <Input
-                  type="number" step="0.01"
-                  value={form.ssEmpPct}
-                  onChange={e => set("ssEmpPct", e.target.value)}
-                />
-              </div>
-              <div>
-                <div className="text-xs text-zinc-400 mb-1">SS employer %</div>
-                <Input
-                  type="number" step="0.01"
-                  value={form.ssErPct}
-                  onChange={e => set("ssErPct", e.target.value)}
-                />
-              </div>
+              {form.contractType === "employee" && (
+                <>
+                  <div>
+                    <div className="text-xs text-zinc-400 mb-1">SS employee %</div>
+                    <Input
+                      type="number" step="0.01"
+                      value={form.ssEmpPct}
+                      onChange={e => set("ssEmpPct", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-400 mb-1">SS employer %</div>
+                    <Input
+                      type="number" step="0.01"
+                      value={form.ssErPct}
+                      onChange={e => set("ssErPct", e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="grid sm:grid-cols-2 gap-3">
@@ -281,15 +318,17 @@ export default function EmploymentContractsPage() {
               </select>
             </div>
 
-            {/* Benefits */}
-            <div>
-              <div className="text-sm font-medium mb-2">Benefits</div>
-              <BenefitsEditor
-                benefits={form.benefits}
-                accountsForPerson={accountsForPerson}
-                onChange={v => set("benefits", v)}
-              />
-            </div>
+            {/* Benefits — not applicable to a green-receipt/freelance arrangement */}
+            {form.contractType === "employee" && (
+              <div>
+                <div className="text-sm font-medium mb-2">Benefits</div>
+                <BenefitsEditor
+                  benefits={form.benefits}
+                  accountsForPerson={accountsForPerson}
+                  onChange={v => set("benefits", v)}
+                />
+              </div>
+            )}
 
             <div className="flex items-center gap-4 pt-1 flex-wrap">
               <label className="flex items-center gap-2 text-sm">
@@ -330,6 +369,9 @@ export default function EmploymentContractsPage() {
                   <div>
                     <div className="text-sm font-medium">
                       {personName(c.personId)}
+                      {c.contractType === "green_receipt" && (
+                        <span className="ml-1 text-xs text-amber-400" title="Recibo Verde">📄 Recibo Verde</span>
+                      )}
                       {c.flowToPrivate && <span className="ml-1 text-xs text-blue-400" title="Synced to Private">⇢ Private</span>}
                     </div>
                     <div className="text-xs text-zinc-500">

@@ -6,8 +6,10 @@ import { Button } from "../components/ui/button";
 import { AccountForm } from "../components/forms/AccountsForm";
 import { api } from "../lib/api";
 import { useEntity } from "../hooks/EntityContext";
-import { Plus, Pencil, Trash2, Landmark, CreditCard, Ticket, TrendingUp, Wallet, Banknote, Upload, X, FileSpreadsheet, ChevronDown, ChevronRight, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Plus, Pencil, Trash2, Landmark, CreditCard, Ticket, TrendingUp, Wallet, Banknote, Upload, X, FileSpreadsheet, ChevronDown, ChevronRight, ArrowDownLeft, ArrowUpRight, CheckCircle2 } from "lucide-react";
 import { parseBpiXlsx, type ParsedBpiStatement } from '../lib/parsers/bpiXlsx';
+import { parseBpiPdf, BpiPdfError } from '../lib/parsers/bpiPdf';
+import { StatementOverlapError, type StatementFormat } from '../lib/api/domains/bankTransactions';
 import type { BankTransactionDoc } from '@shared/models/BankTransaction';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -43,7 +45,7 @@ function accountSubtitle(a: Account): string {
   return parts.join(' · ');
 }
 
-type ImportStep = 'idle' | 'preview' | 'importing' | 'done';
+type ImportStep = 'idle' | 'reading' | 'preview' | 'importing' | 'done';
 
 function BpiImportModal({ account, entityId, onClose, onRefresh }: {
   account: Account & { id: string };
@@ -53,21 +55,29 @@ function BpiImportModal({ account, entityId, onClose, onRefresh }: {
 }) {
   const [step, setStep] = useState<ImportStep>('idle');
   const [file, setFile] = useState<File | null>(null);
+  const [format, setFormat] = useState<StatementFormat>('xlsx');
   const [statement, setStatement] = useState<ParsedBpiStatement | null>(null);
   const [result, setResult] = useState<{ newCount: number; duplicateCount: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleFile(f: File) {
     setError(null);
+    const fmt: StatementFormat = f.type === 'application/pdf' || /\.pdf$/i.test(f.name) ? 'pdf' : 'xlsx';
+    setStep('reading');
     try {
       const buf = await f.arrayBuffer();
-      const stmt = parseBpiXlsx(buf);
+      // PDF: refused unless every line matches the running balance (the file itself isn't kept).
+      const stmt = fmt === 'pdf' ? await parseBpiPdf(buf) : parseBpiXlsx(buf);
       if (!stmt.transactions.length) throw new Error('no rows');
       setFile(f);
+      setFormat(fmt);
       setStatement(stmt);
       setStep('preview');
-    } catch {
-      setError('Erro ao ler o ficheiro. Verifica que é um extrato BPI válido.');
+    } catch (e) {
+      setStep('idle');
+      setError(e instanceof BpiPdfError
+        ? e.message
+        : 'Erro ao ler o ficheiro. Verifica que é um extrato BPI válido.');
     }
   }
 
@@ -81,13 +91,13 @@ function BpiImportModal({ account, entityId, onClose, onRefresh }: {
     if (!statement || !file) return;
     setStep('importing');
     try {
-      const imp = await api.bankTransactions.importXlsx(account.id, entityId, file.name, statement);
+      const imp = await api.bankTransactions.importStatement(account.id, entityId, file.name, statement, format);
       setResult({ newCount: imp.newCount, duplicateCount: imp.duplicateCount, total: imp.transactionCount });
       setStep('done');
       // Bust tx cache so the list reloads on next expand
       onRefresh(account.id);
-    } catch {
-      setError('Erro ao importar. Tenta novamente.');
+    } catch (e) {
+      setError(e instanceof StatementOverlapError ? e.message : 'Erro ao importar. Tenta novamente.');
       setStep('preview');
     }
   }
@@ -106,12 +116,16 @@ function BpiImportModal({ account, entityId, onClose, onRefresh }: {
             onDragOver={e => e.preventDefault()}
             onDrop={onDrop}
           >
-            <input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }} />
+            <input type="file" accept=".pdf,.xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void handleFile(f); }} />
             <FileSpreadsheet size={32} className="mx-auto mb-3 text-zinc-500" />
-            <div className="text-sm text-zinc-300">Arrasta o extrato XLSX aqui</div>
+            <div className="text-sm text-zinc-300">Arrasta o extrato aqui</div>
             <div className="text-xs text-zinc-500 mt-1">ou clica para selecionar</div>
-            <div className="text-xs text-zinc-600 mt-3">Extrato BPI Empresas (.xlsx)</div>
+            <div className="text-xs text-zinc-600 mt-3">Extrato BPI: PDF mensal ou XLSX (BPI Empresas)</div>
           </label>
+        )}
+
+        {step === 'reading' && (
+          <div className="py-8 text-center text-zinc-400 text-sm">A ler o extrato…</div>
         )}
 
         {step === 'preview' && statement && (
@@ -129,6 +143,14 @@ function BpiImportModal({ account, entityId, onClose, onRefresh }: {
                 <span className="text-zinc-400">Movimentos</span>
                 <span className="text-zinc-200">{statement.transactions.length}</span>
               </div>
+              {statement.openingBalanceCents != null && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Saldo inicial</span>
+                  <span className={statement.openingBalanceCents >= 0 ? 'text-zinc-200' : 'text-red-400'}>
+                    {formatEUR(statement.openingBalanceCents)}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-zinc-400">Saldo final</span>
                 <span className={statement.closingBalanceCents >= 0 ? 'text-emerald-400' : 'text-red-400'}>
@@ -141,9 +163,21 @@ function BpiImportModal({ account, entityId, onClose, onRefresh }: {
                   <span className="text-zinc-200 text-right max-w-52 truncate">{statement.holderName}</span>
                 </div>
               )}
+              {format === 'pdf' && statement.accountNumber && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Conta no extrato</span>
+                  <span className="text-zinc-200 font-mono text-xs">{statement.accountNumber}</span>
+                </div>
+              )}
             </div>
+            {format === 'pdf' && (
+              <div className="flex items-center gap-2 text-xs text-emerald-400">
+                <CheckCircle2 size={14} className="shrink-0" />
+                Saldos verificados: todos os movimentos batem certo com o saldo do extrato.
+              </div>
+            )}
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => { setStep('idle'); setStatement(null); setFile(null); }}>
+              <Button variant="outline" className="flex-1" onClick={() => { setStep('idle'); setStatement(null); setFile(null); setError(null); }}>
                 Cancelar
               </Button>
               <Button className="flex-1" onClick={() => void confirm()}>

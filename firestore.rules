@@ -204,6 +204,21 @@ service cloud.firestore {
         allow write: if isRainbowAdmin();
       }
 
+      // Failed-action reports from the app (src/lib/clientErrors.ts): any signed-in
+      // user may create one about themselves, fixed shape and size, server time.
+      // Nobody but staff reads them; nobody edits them (TTL on expireAt deletes).
+      match /clientErrors/{doc} {
+        allow create: if isAuthenticated()
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.keys().hasOnly(['userId', 'email', 'impersonatingFamilyId', 'action', 'code',
+               'message', 'route', 'userAgent', 'mode', 'context', 'createdAt', 'expireAt'])
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.action is string && request.resource.data.action.size() <= 120
+          && request.resource.data.message is string && request.resource.data.message.size() <= 1000
+          && (!('context' in request.resource.data) || request.resource.data.context.size() <= 10);
+        allow read, delete: if isRainbowAdmin() || isOwner();
+      }
+
       // Financial events
       match /financialEvents/{doc} {
         allow read, write: if isRainbowAdmin() || isOwner();

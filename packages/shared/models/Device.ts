@@ -70,13 +70,27 @@ export interface ThermostatDevice extends DeviceBase {
   state: ThermostatState;
 }
 
-/** Tuya MTATWHP-5C heat pump. Tank probes, not a room temperature. */
+/**
+ * Zantia Vancouver 13 (R32) heat pump, via a Tuya module. Temperatures in °C,
+ * all optional: the unit may not report a given probe, and a missing reading
+ * must render as "—", not as a plausible-looking 0.
+ */
 export interface HeatPumpState {
   on: boolean;
-  tankTop?: number;
-  tankBottom?: number;
-  /** Instantaneous draw as reported by the unit, in watts. */
-  power?: number;
+  /** Raw Tuya mode: Hot (DHW) | Heating | Hot_Heating | Cooling | Hot_Cooling. */
+  mode?: string;
+  /** Compressor frequency in Hz; 0 while the compressor is stopped. */
+  compressorHz?: number;
+  outdoor?: number;
+  waterIn?: number;
+  waterOut?: number;
+  /** Domestic hot water tank. */
+  dhwTank?: number;
+  heatingSetpoint?: number;
+  coolingSetpoint?: number;
+  dhwSetpoint?: number;
+  /** Active fault codes, e.g. ['E13']; empty when healthy. */
+  faults: string[];
 }
 
 export interface HeatPumpDevice extends DeviceBase {

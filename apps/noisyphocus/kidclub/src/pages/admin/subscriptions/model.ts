@@ -90,6 +90,8 @@ export interface FamilyDoc {
   id: string;
   primaryContact?: { name?: string; email?: string; phone?: string; userId?: string };
   nif?: string;
+  /** "Não pretende NIF na fatura" (see Family.nifOptOut): invoiced to Consumidor final. */
+  nifOptOut?: boolean;
   billingAddress?: { street?: string; city?: string; postalCode?: string; country?: string };
   status?: string;
   paymentMethod?: string;

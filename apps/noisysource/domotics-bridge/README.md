@@ -83,10 +83,49 @@ failed, so a supervisor can restart it. On the Pi that means systemd with
   few connection slots and measurably raises the failure rate.
 - Always `disconnect()`. A leaked socket holds one of those scarce slots and
   makes the *next* poll fail.
-- Datapoint numbers in `dpmap.ts` were derived by reading cloud status and local
-  dps back-to-back and matching on value — not from documentation. A few heat
-  pump datapoints are still unmapped because they all read zero at sampling time
-  and couldn't be told apart.
+- Thermostat datapoint numbers in `dpmap.ts` were derived by reading cloud
+  status and local dps back-to-back and matching on value — not from
+  documentation. The heat pump's come from its Tuya cloud thing model (below).
+
+## Heat pump
+
+**Zantia Vancouver 13** (single-phase, R32), Zantia catalogue code 2301-0273
+(the unit's own label reads 2301-8273). Manual, "Vancouver 13DC-32":
+<https://zantia.com/storage/products/vzau85qrqt.pdf> — fault codes are in
+§5.3.2-8. It is *not* an "MTATWHP-5C"; older notes that say so are wrong.
+
+It talks through a Tuya module (category `znrb`, Tuya product "HY
+Multifunctional Heat Pump V1.2"). The datapoints below were read from the
+device's cloud thing model (`/v2.0/cloud/thing/{id}/model` and
+`/shadow/properties`) on 2026-10-02. The Tuya `code` names are generic ones the
+vendor reused and mostly **don't mean what they say** — trust the "meaning"
+column. `dpmap.ts` keeps the codes verbatim so cloud and LAN state look the
+same. ×10 = tenths of a degree.
+
+| dp | Tuya code | real meaning |
+|---|---|---|
+| 1 | `switch` | on/off |
+| 2 | `mode` | Hot (DHW) / Heating / Hot_Heating / Cooling / Hot_Cooling |
+| 15 | `fault` | fault bitmap, bit i → E(i+1) (E01–E16) |
+| 16 | `temp_current` | compressor frequency, Hz |
+| 18 | `power_consumption` | C00 coil temp, °C ×10 |
+| 20 | `compressor_strength` | C01 discharge temp, °C ×10 |
+| 21 | `temp_top` | outdoor/ambient temp, °C ×10 |
+| 22 | `temp_bottom` | C03 suction temp, °C ×10 |
+| 23 | `coiler_temp` | water inlet temp, °C ×10 |
+| 24 | `venting_temp` | water outlet temp (Tout), °C ×10 |
+| 25 | `effluent_temp` | DHW tank temp (TDHW), °C ×10 |
+| 109 | `smart_system` | fault bitmap (E17–E32) |
+| 117 | `p02_heating` | heating setpoint, °C |
+| 118 | `p03_cooling` | cooling setpoint, °C |
+| 119 | `p04_dhw` | DHW setpoint, °C |
+| 120 | `power_system` | fault bitmap (E36, E40, E44, E45, E59) |
+| 121 | `ithium_battery_system` | fault bitmap (E50) |
+| 122 | `electronic_system` | fault bitmap (IPM sub-codes E20_x) |
+| 123 | `bcu_com_state` | fault bitmap (IPM sub-codes E20_x) |
+
+The bit → E-code tables for the bitmaps, and what each code means, live in the
+app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts`.
 
 ## Moving to the Raspberry Pi
 

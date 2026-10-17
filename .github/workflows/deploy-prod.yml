@@ -52,6 +52,7 @@ jobs:
       firebase_project: rainbow-prod-2454b
       service_account: github-action-1020915538@rainbow-prod-2454b.iam.gserviceaccount.com
       build_command: pnpm --filter kidclub build
+      finances_build_command: pnpm --filter finances build
       tf_var_file: env/prod.tfvars
       # Prod's "rainbow-prod-2454b" state prefix was found essentially
       # empty (81 pending creates, plus a hard error in storage.tf) the

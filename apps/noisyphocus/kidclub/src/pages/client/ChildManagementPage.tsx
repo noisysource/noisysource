@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useUser } from '@shared/hooks';
-import { Family, Child, StudyRoomEntry, TransportationSubscription } from '@shared/models';
+import { Family, Child, StudyRoomEntry, TransportationSubscription, kidclubVatNote } from '@shared/models';
 import { Link } from 'react-router-dom';
 import { updateDoc, getDoc, getDocs, addDoc, query, where } from 'firebase/firestore';
 import { col, docRef } from '../../lib/db';
@@ -249,6 +249,9 @@ function SubDetailPanel({ selected, onClose, onUpdated, userId }: {
           <div>
             <p className="text-2xl font-bold text-gray-900">
               €{(fee ?? 0).toFixed(2)}<span className="text-base font-normal text-gray-500">/mês</span>
+            </p>
+            <p className="text-xs text-gray-400">
+              IVA incluído · {kidclubVatNote(fee ?? 0, selected.type === 'transport' ? 'transport' : 'study')}
             </p>
           </div>
         )}

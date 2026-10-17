@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { Child, PartyConfig } from '@shared/models';
+import { Child, PartyConfig, ExtraItem, computePartyPrice, PARTY_VAT_RATE } from '@shared/models';
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
 import { normalizeEmail } from '../../../lib/utils';
+import { reportClientError } from '../../../lib/clientErrors';
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 
@@ -24,7 +25,8 @@ export default function PartyBookingPage() {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [numKids, setNumKids] = useState(10);
-  const [extras, setExtras] = useState<string[]>([]);
+  // Quantity per extra name; 0 or missing means not chosen.
+  const [extraQtys, setExtraQtys] = useState<Record<string, number>>({});
   const [childId, setChildId] = useState('');
   const [manualChild, setManualChild] = useState(false);
   const [manualName, setManualName] = useState('');
@@ -48,24 +50,27 @@ export default function PartyBookingPage() {
 
   const selectedType = config?.partyTypes.find(pt => pt.name === partyType);
 
-  const total = useMemo(() => {
-    if (!selectedType) return 0;
-    let t = selectedType.basePrice;
-    if (numKids > selectedType.includedKids) {
-      t += (numKids - selectedType.includedKids) * selectedType.pricePerExtraChild;
-    }
-    extras.forEach(name => {
-      const ex = config?.extras.find(e => e.name === name);
-      if (ex) t += ex.price;
-    });
-    return t;
-  }, [selectedType, numKids, extras, config]);
+  const extras = useMemo(
+    () => (config?.extras ?? []).filter(ex => (extraQtys[ex.name] ?? 0) > 0).map(ex => ex.name),
+    [config, extraQtys],
+  );
+  const extrasDetail = useMemo(
+    () => Object.fromEntries(extras.map(name => [name, extraQtys[name]])),
+    [extras, extraQtys],
+  );
 
-  const toggleExtra = (name: string) =>
-    setExtras(prev => prev.includes(name) ? prev.filter(e => e !== name) : [...prev, name]);
+  const price = useMemo(
+    () => (config ? computePartyPrice(config, { partyType, numKids, extras, extrasDetail }) : null),
+    [config, partyType, numKids, extras, extrasDetail],
+  );
+
+  const setExtraQty = (name: string, qty: number) =>
+    setExtraQtys(prev => ({ ...prev, [name]: Math.max(0, Math.min(999, Math.floor(qty) || 0)) }));
+
+  const toggleExtra = (ex: ExtraItem) => setExtraQty(ex.name, (extraQtys[ex.name] ?? 0) > 0 ? 0 : 1);
 
   const handleSubmit = async () => {
-    if (!user || !familyId) return;
+    if (!user || !familyId || !price) return;
     if (!manualChild && !childId) return;
     const child = children.find(c => c.id === childId);
     const resolvedName = manualChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
@@ -88,13 +93,14 @@ export default function PartyBookingPage() {
         time,
         numKids,
         extras,
-        extrasDetail: {},
-        total,
+        extrasDetail,
+        total: price.subtotal, // before IVA, like every price in the party config
         status: 'pending',
         createdAt: new Date(),
       } as any);
       navigate('/client/parties');
     } catch (err: any) {
+      reportClientError('[PartyBookingPage] submit booking failed', err);
       alert(err?.message || 'Erro ao submeter reserva.');
       setSubmitting(false);
     }
@@ -103,6 +109,7 @@ export default function PartyBookingPage() {
   if (loading || !config) return <div className="p-6 text-gray-400 text-sm">A carregar...</div>;
 
   const today = new Date().toISOString().split('T')[0];
+  const vatPct = Math.round(PARTY_VAT_RATE * 100);
 
   return (
     <div className="p-6 max-w-xl mx-auto space-y-6">
@@ -139,8 +146,8 @@ export default function PartyBookingPage() {
                   <p className="font-semibold text-gray-800">{pt.name}</p>
                   <p className="text-xs text-gray-500 mt-0.5">{pt.description}</p>
                   <p className="text-sm text-pink-600 font-medium mt-1">
-                    {fmtEur(pt.basePrice)} · inclui {pt.includedKids} crianças
-                    {pt.pricePerExtraChild > 0 && ` (+${fmtEur(pt.pricePerExtraChild)}/criança extra)`}
+                    {fmtEur(Number(pt.basePrice))} + IVA · inclui {pt.includedKids} crianças
+                    {Number(pt.pricePerExtraChild) > 0 && ` (+${fmtEur(Number(pt.pricePerExtraChild))}/criança extra)`}
                   </p>
                 </button>
               ))}
@@ -164,9 +171,9 @@ export default function PartyBookingPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Número de crianças convidadas</label>
             <input type="number" min={1} value={numKids} onChange={e => setNumKids(Number(e.target.value))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
-            {selectedType && numKids > selectedType.includedKids && (
+            {price && price.extraKids > 0 && (
               <p className="text-xs text-pink-600 mt-1">
-                +{numKids - selectedType.includedKids} crianças extra · +{fmtEur((numKids - selectedType.includedKids) * selectedType.pricePerExtraChild)}
+                +{price.extraKids} crianças extra · +{fmtEur(price.extraKidsAmount)} + IVA
               </p>
             )}
           </div>
@@ -184,24 +191,71 @@ export default function PartyBookingPage() {
       {/* Step 2 */}
       {step === 2 && (
         <div className="space-y-4">
-          <p className="text-sm text-gray-600">Selecione os extras que pretende incluir na festa:</p>
+          <p className="text-sm text-gray-600">Selecione os extras que pretende incluir na festa. Os preços não incluem IVA ({vatPct}%).</p>
           {config.extras.length === 0 ? (
             <p className="text-sm text-gray-400">Sem extras disponíveis.</p>
           ) : (
             <div className="space-y-2">
-              {config.extras.map(ex => (
-                <button
-                  key={ex.name}
-                  onClick={() => toggleExtra(ex.name)}
-                  className={`w-full text-left p-4 rounded-xl border-2 transition flex justify-between items-center ${extras.includes(ex.name) ? 'border-pink-500 bg-pink-50' : 'border-gray-200 hover:border-gray-300'}`}
-                >
-                  <div>
-                    <p className="font-medium text-gray-800">{ex.name}</p>
-                    {ex.description && <p className="text-xs text-gray-500 mt-0.5">{ex.description}</p>}
+              {config.extras.map(ex => {
+                const qty = extraQtys[ex.name] ?? 0;
+                const chosen = qty > 0;
+                const unitPrice = Number(ex.price) || 0;
+                if (!ex.perUnit) {
+                  return (
+                    <button
+                      key={ex.name}
+                      onClick={() => toggleExtra(ex)}
+                      className={`w-full text-left p-4 rounded-xl border-2 transition flex justify-between items-center ${chosen ? 'border-pink-500 bg-pink-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    >
+                      <div>
+                        <p className="font-medium text-gray-800">{ex.name}</p>
+                        {ex.description && <p className="text-xs text-gray-500 mt-0.5">{ex.description}</p>}
+                      </div>
+                      <p className="text-pink-600 font-semibold text-sm shrink-0 ml-3">+{fmtEur(unitPrice)}</p>
+                    </button>
+                  );
+                }
+                return (
+                  <div
+                    key={ex.name}
+                    className={`w-full p-4 rounded-xl border-2 transition flex justify-between items-center gap-3 ${chosen ? 'border-pink-500 bg-pink-50' : 'border-gray-200'}`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-800">{ex.name}</p>
+                      {ex.description && <p className="text-xs text-gray-500 mt-0.5">{ex.description}</p>}
+                      <p className="text-xs text-pink-600 font-semibold mt-0.5">
+                        {fmtEur(unitPrice)} / {ex.unitLabel || 'unidade'}
+                        {chosen && <span className="text-gray-500 font-normal"> · {fmtEur(unitPrice * qty)}</span>}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        aria-label={`Menos ${ex.name}`}
+                        onClick={() => setExtraQty(ex.name, qty - 1)}
+                        disabled={qty === 0}
+                        className="w-8 h-8 rounded-lg border border-gray-300 text-gray-700 font-bold hover:bg-gray-50 disabled:opacity-30"
+                      >−</button>
+                      <input
+                        type="number"
+                        min={0}
+                        max={999}
+                        inputMode="numeric"
+                        aria-label={`Quantidade de ${ex.name}`}
+                        value={qty}
+                        onChange={e => setExtraQty(ex.name, Number(e.target.value))}
+                        className="w-14 border border-gray-300 rounded-lg px-1 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-pink-400"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Mais ${ex.name}`}
+                        onClick={() => setExtraQty(ex.name, qty + 1)}
+                        className="w-8 h-8 rounded-lg border border-gray-300 text-gray-700 font-bold hover:bg-gray-50"
+                      >+</button>
+                    </div>
                   </div>
-                  <p className="text-pink-600 font-semibold text-sm shrink-0 ml-3">+{fmtEur(ex.price)}</p>
-                </button>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -295,28 +349,33 @@ export default function PartyBookingPage() {
             <p className="font-semibold text-gray-700 mb-2">Resumo da reserva</p>
             <div className="flex justify-between">
               <span>{selectedType?.name}</span>
-              <span>{fmtEur(selectedType?.basePrice ?? 0)}</span>
+              <span>{fmtEur(price?.basePrice ?? 0)}</span>
             </div>
-            {selectedType && numKids > selectedType.includedKids && (
+            {price && price.extraKids > 0 && (
               <div className="flex justify-between text-gray-500">
-                <span>{numKids - selectedType.includedKids} crianças extra</span>
-                <span>+{fmtEur((numKids - selectedType.includedKids) * selectedType.pricePerExtraChild)}</span>
+                <span>{price.extraKids} crianças extra × {fmtEur(price.pricePerExtraChild)}</span>
+                <span>+{fmtEur(price.extraKidsAmount)}</span>
               </div>
             )}
-            {extras.map(name => {
-              const ex = config.extras.find(e => e.name === name);
-              return ex ? (
-                <div key={name} className="flex justify-between text-gray-500">
-                  <span>{ex.name}</span>
-                  <span>+{fmtEur(ex.price)}</span>
-                </div>
-              ) : null;
-            })}
-            <div className="border-t pt-2 flex justify-between font-bold text-gray-800">
-              <span>Total</span>
-              <span>{fmtEur(total)}</span>
+            {price?.extraLines.map(line => (
+              <div key={line.name} className="flex justify-between text-gray-500">
+                <span>{line.perUnit ? `${line.qty} × ${line.name}` : line.name}</span>
+                <span>+{fmtEur(line.amount)}</span>
+              </div>
+            ))}
+            <div className="border-t pt-2 flex justify-between text-gray-700">
+              <span>Subtotal (sem IVA)</span>
+              <span>{fmtEur(price?.subtotal ?? 0)}</span>
             </div>
-            <p className="text-xs text-gray-400">Sinal de 50% ({fmtEur(total * 0.5)}) devido após confirmação</p>
+            <div className="flex justify-between text-gray-500">
+              <span>IVA ({vatPct}%)</span>
+              <span>+{fmtEur(price?.vat ?? 0)}</span>
+            </div>
+            <div className="flex justify-between font-bold text-gray-800">
+              <span>Total</span>
+              <span>{fmtEur(price?.total ?? 0)}</span>
+            </div>
+            <p className="text-xs text-gray-400">Sinal de 50% ({fmtEur(price?.deposit ?? 0)}) devido após confirmação</p>
           </div>
 
           <p className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg p-3">

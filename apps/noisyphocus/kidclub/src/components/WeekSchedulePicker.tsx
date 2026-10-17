@@ -3,6 +3,7 @@ import { WeekPattern, activeWeeksInPattern } from '@shared/models/weekPattern';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { TransportationConfig } from '@shared/models/Transportation';
 import { DiscountRule } from '@shared/models/Discount';
+import { kidclubVatNoteMixed } from '@shared/models/kidclubVat';
 import { resolveAutoDiscounts } from '../services/discountService';
 import PlacesInput from './PlacesInput';
 
@@ -316,7 +317,13 @@ export default function WeekSchedulePicker({
                   </>
                 )}
               </div>
-              <p className="text-xs text-blue-400 pt-0.5">Valor fixo mensal</p>
+              <p className="text-xs text-blue-400 pt-0.5">
+                Valor fixo mensal, IVA incluído ·{' '}
+                {kidclubVatNoteMixed([
+                  { grossEur: studyFee, service: 'study' },
+                  { grossEur: transportFeeNet, service: 'transport' },
+                ])}
+              </p>
             </div>
           )}
         </div>

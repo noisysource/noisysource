@@ -11,12 +11,18 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../../firebase';
-import type { BankTransactionDoc, BankImportDoc, BankImportSource } from '@shared/models/BankTransaction';
+import type { BankTransactionDoc, BankImportDoc } from '@shared/models/BankTransaction';
 import type { ParsedBpiStatement } from '../../parsers/bpiXlsx';
 import { bpiTxId } from '../../parsers/bpiXlsx';
+import { bpiPdfTxId } from '../../parsers/bpiPdf';
 
 const TX_COL = 'finances_bank_transactions';
 const IMPORT_COL = 'finances_bank_imports';
+
+export type StatementFormat = 'xlsx' | 'pdf';
+
+// Importing would duplicate movements already imported from the other format. Message shown as is.
+export class StatementOverlapError extends Error {}
 
 function toDate(raw: any): Date | undefined {
   if (!raw) return undefined;
@@ -84,21 +90,34 @@ export function makeBankTransactionsDomain() {
     return snap.docs.map(d => importFrom(d.data(), d.id));
   }
 
-  async function importXlsx(
+  async function importStatement(
     accountId: string,
     entityId: string,
     filename: string,
     statement: ParsedBpiStatement,
+    format: StatementFormat,
   ): Promise<BankImportDoc> {
+    // PDF and XLSX describe the same movement differently, so their ids never match: importing
+    // both formats for the same days would duplicate every movement.
+    const other: StatementFormat = format === 'pdf' ? 'xlsx' : 'pdf';
+    const overlap = (await listByAccount(accountId)).filter(t =>
+      t.sourceType === other && t.date >= statement.dateFrom && t.date <= statement.dateTo);
+    if (overlap.length) {
+      throw new StatementOverlapError(
+        `Esta conta já tem ${overlap.length} movimentos importados de ${other.toUpperCase()} entre ` +
+        `${statement.dateFrom} e ${statement.dateTo}. Importar este ${format.toUpperCase()} duplicava-os.`,
+      );
+    }
+
     // Check for existing transactions (dedup)
     let newCount = 0;
     let duplicateCount = 0;
     const importId = doc(collection(db, IMPORT_COL)).id;
-    const sourceType: BankImportSource = 'xlsx';
+    const sourceType = format;
+    const txId = format === 'pdf' ? bpiPdfTxId : bpiTxId;
 
     for (const tx of statement.transactions) {
-      const txId = bpiTxId(accountId, tx);
-      const txRef = doc(db, TX_COL, txId);
+      const txRef = doc(db, TX_COL, txId(accountId, tx));
       const existing = await getDoc(txRef);
       if (existing.exists()) {
         duplicateCount++;
@@ -122,13 +141,15 @@ export function makeBankTransactionsDomain() {
     const importRecord: Omit<BankImportDoc, 'id' | 'importedAt'> = {
       accountId,
       entityId,
-      sourceFormat: 'xlsx',
+      sourceFormat: format,
       filename,
       dateFrom: statement.dateFrom,
       dateTo: statement.dateTo,
       transactionCount: statement.transactions.length,
       newCount,
       duplicateCount,
+      // Firestore rejects undefined fields; XLSX statements have no opening balance.
+      ...(statement.openingBalanceCents !== undefined && { openingBalanceCents: statement.openingBalanceCents }),
       closingBalanceCents: statement.closingBalanceCents,
     };
 
@@ -147,5 +168,5 @@ export function makeBankTransactionsDomain() {
     return { ...importRecord, id: importId, importedAt: new Date() };
   }
 
-  return { listByAccount, listImportsByAccount, importXlsx };
+  return { listByAccount, listImportsByAccount, importStatement };
 }

@@ -129,7 +129,8 @@ export default function FamilyPanel({ group, fam, data, actions, highlightId, on
                 <Field label="Telefone" value={group.contactPhone} />
                 {group.familyId ? (
                   <>
-                    <Field label="NIF" value={family?.nif} warn={fam.nifInvalid ? 'inválido' : undefined} />
+                    <Field label="NIF" value={family?.nif || (family?.nifOptOut ? 'Não pretende (Consumidor final)' : 'Sem NIF (Consumidor final)')}
+                      warn={fam.nifInvalid ? 'inválido' : undefined} />
                     <Field label="Morada de faturação" wide
                       value={address ? [address.street, [address.postalCode, address.city].filter(Boolean).join(' ')].filter(Boolean).join(', ') : undefined} />
                     <Field label="Pagamento" value={(() => { const m = family?.paymentMethod ?? family?.defaultPaymentMethod; return m ? PAYMENT_LABEL[m] ?? m : undefined; })()} />

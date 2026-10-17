@@ -12,6 +12,7 @@ import {
   addMonths, isSameMonth, isToday, isBefore, startOfToday,
 } from 'date-fns';
 import { pt } from 'date-fns/locale';
+import { reportClientError } from '../../lib/clientErrors';
 
 /**
  * One calendar for the whole family.
@@ -176,6 +177,7 @@ export default function FamilyCalendarPage() {
       const fn = callable<{ eventId: string; status: 'EXPECTED' | 'CANCELLED' }, { ok: boolean }>('setReservationEventStatus');
       await fn({ eventId: e.id, status: next });
     } catch (err: any) {
+      reportClientError('[FamilyCalendarPage] change day failed', err);
       setEvents(prev => prev.map(x => x.id === e.id ? { ...x, status: e.status } : x));
       setError(err?.message ?? 'Não foi possível alterar este dia.');
     } finally {
