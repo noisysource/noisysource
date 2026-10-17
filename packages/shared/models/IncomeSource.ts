@@ -20,6 +20,19 @@ export interface IncomeSourceDoc {
 
 export type { BenefitConfig };
 
+/** True when an active source pays in that month: start/end month inclusive (ISO dates sliced, no time zone). */
+export function incomeSourceInForce(
+  source: Pick<IncomeSourceDoc, "active" | "startDate" | "endDate">,
+  year: number,
+  month1to12: number,
+): boolean {
+  if (source.active === false) return false;
+  const ym = `${year}-${String(month1to12).padStart(2, "0")}`;
+  if (source.startDate && ym < source.startDate.slice(0, 7)) return false;
+  if (source.endDate && ym > source.endDate.slice(0, 7)) return false;
+  return true;
+}
+
 /** A benefit's monthly total: per month + per day × days (no days = 0, unlike employment contracts). */
 function benefitTotalCents(b: BenefitConfig): number {
   const perMonth = (b as any).perMonthCents ?? 0;

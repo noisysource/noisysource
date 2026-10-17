@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import type { BenefitConfig, IncomeSourceDoc } from "@shared/models/IncomeSource";
+import { incomeSourceInForce } from "@shared/models/IncomeSource";
+import { contractDateYM, contractInForce } from "@shared/lib/payroll";
 import type { EmploymentContractDoc } from "@shared/models/Employment";
 import type { Account } from "@shared/models/Account";
 import { formatEUR } from "@shared/lib/money";
@@ -249,6 +251,12 @@ function IncomeSourceModal({
   );
 }
 
+/** "2026-05-01 → atual": contract dates are ISO strings (form) or Timestamps (older docs). */
+function period(start: unknown, end: unknown): string {
+  const show = (d: unknown) => (typeof d === "string" ? d : contractDateYM(d) ?? "…");
+  return `${start ? show(start) : "…"} → ${end ? show(end) : "atual"}`;
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function IncomeSourcesPage() {
   const [sources, setSources]   = useState<IncomeSourceDoc[]>([]);
@@ -335,17 +343,30 @@ export default function IncomeSourcesPage() {
     await reload();
   }
 
-  // Group all income by person
+  // What pays this month counts; earlier and later versions (a raise is a new version) are history.
+  const { currentSources, currentFlowing } = useMemo(() => {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth() + 1;
+    return {
+      currentSources: sources.filter(s => incomeSourceInForce(s, y, m)),
+      currentFlowing: flowing.filter(c => contractInForce(c, y, m)),
+    };
+  }, [sources, flowing]);
+
+  // Group all income by person: current versions, and the others (ended, future or inactive)
   const byPerson = useMemo(() => {
-    const map = new Map<string, { sources: IncomeSourceDoc[]; contracts: FlowingContract[] }>();
+    const map = new Map<string, {
+      sources: IncomeSourceDoc[]; contracts: FlowingContract[];
+      otherSources: IncomeSourceDoc[]; otherContracts: FlowingContract[];
+    }>();
     const get = (name: string) => {
-      if (!map.has(name)) map.set(name, { sources: [], contracts: [] });
+      if (!map.has(name)) map.set(name, { sources: [], contracts: [], otherSources: [], otherContracts: [] });
       return map.get(name)!;
     };
-    for (const s of sources) get(s.personName).sources.push(s);
-    for (const c of flowing) get(c.personName).contracts.push(c);
+    for (const s of sources) (currentSources.includes(s) ? get(s.personName).sources : get(s.personName).otherSources).push(s);
+    for (const c of flowing) (currentFlowing.includes(c) ? get(c.personName).contracts : get(c.personName).otherContracts).push(c);
     return map;
-  }, [sources, flowing]);
+  }, [sources, flowing, currentSources, currentFlowing]);
 
   // Monthly income breakdown by type
   const summary = useMemo(() => {
@@ -373,16 +394,15 @@ export default function IncomeSourcesPage() {
       addBenefits(benefits);
     };
 
-    for (const s of sources) {
-      if (s.active === false) continue;
+    for (const s of currentSources) {
       addSource(s.grossMonthlyCents, s.irsRatePct ?? 0, s.ssEmpPct ?? 11, s.benefits ?? []);
     }
-    for (const c of flowing) {
+    for (const c of currentFlowing) {
       addSource(c.grossMonthlyCents ?? 0, c.irsRatePct ?? 0, c.ssEmpPct ?? 11, c.benefits ?? []);
     }
 
     return { gross, irs, ss, cash, meal, childcare, education, allowance };
-  }, [sources, flowing]);
+  }, [currentSources, currentFlowing]);
 
   // Per-source breakdown helper
   function sourceBreakdown(gross: number, irsPct: number, ssPct: number, benefits: BenefitConfig[]) {
@@ -483,7 +503,7 @@ export default function IncomeSourcesPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {Array.from(byPerson.entries()).map(([person, { sources: srcs, contracts: ctrs }]) => (
+          {Array.from(byPerson.entries()).map(([person, { sources: srcs, contracts: ctrs, otherSources, otherContracts }]) => (
             <div key={person}>
               <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">{person}</div>
               <div className="space-y-2">
@@ -499,6 +519,7 @@ export default function IncomeSourcesPage() {
                           <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 flex items-center gap-1">
                             <Lock size={10} /> Contrato
                           </span>
+                          <span className="text-xs text-zinc-500">{period(c.startDate, c.endDate)}</span>
                         </div>
                         <span className="text-xs text-zinc-500">dia {c.payDay}</span>
                       </div>
@@ -540,6 +561,41 @@ export default function IncomeSourcesPage() {
                     </Card>
                   );
                 })}
+
+                {/* Ended, future or inactive versions: not in the totals */}
+                {(otherSources.length + otherContracts.length) > 0 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">
+                      Outras versões ({otherSources.length + otherContracts.length}) — fora dos totais
+                    </summary>
+                    <div className="mt-2 space-y-1">
+                      {otherContracts.map(c => {
+                        const bd = sourceBreakdown(c.grossMonthlyCents ?? 0, c.irsRatePct ?? 0, c.ssEmpPct ?? 11, c.benefits ?? []);
+                        return (
+                          <div key={c.id} className="flex items-center justify-between gap-2 px-3 py-1.5 rounded bg-zinc-900/60 text-zinc-500">
+                            <span>{c.companyName} · contrato · {period(c.startDate, c.endDate)}</span>
+                            <span className="tabular-nums">bruto {formatEUR(bd.gross)} · líquido {formatEUR(bd.net)}</span>
+                          </div>
+                        );
+                      })}
+                      {otherSources.map(s => {
+                        const bd = sourceBreakdown(s.grossMonthlyCents, s.irsRatePct ?? 0, s.ssEmpPct ?? 11, s.benefits ?? []);
+                        return (
+                          <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-1.5 rounded bg-zinc-900/60 text-zinc-500">
+                            <span>
+                              {s.employerName} · {period(s.startDate, s.endDate)}
+                              {s.active === false && " · inativo"}
+                            </span>
+                            <span className="flex items-center gap-2">
+                              <span className="tabular-nums">bruto {formatEUR(bd.gross)} · líquido {formatEUR(bd.net)}</span>
+                              <button onClick={() => openEdit(s)} className="p-1 rounded hover:text-zinc-200 hover:bg-zinc-800"><Pencil size={12} /></button>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                )}
               </div>
             </div>
           ))}
