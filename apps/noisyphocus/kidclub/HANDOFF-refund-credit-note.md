@@ -10,6 +10,11 @@ invoice-receipt **FR 01P2026/195** against the wrong period. Fixing it needs a c
 the two bills corrected in Firestore. The pay-in-order rule (`assertEarlierMonthsPaid`) stops this exact
 case from recurring, but refunds and corrections will still come up.
 
+**Update 2026-10-17:** Mary Pratas's case was fixed by hand in Firestore without a credit note (Renato's call):
+the payment and FR/195 moved to her 2026-09 bill, the €43.20 difference waived. See KidClub STATUS.md,
+backlog item 5. Her bills' `correction` fields show the shape such a move takes. The feature is still wanted
+for the next case, but it no longer has a live case waiting on it.
+
 ## What exists today
 - `functions/src/kidclub/vendus.ts` only creates `FR` (fatura-recibo) via `createInvoice`. There is no
   `NC` (nota de crédito) and no refund code anywhere in `functions/src`.

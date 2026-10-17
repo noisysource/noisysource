@@ -110,14 +110,18 @@ export default function TransportSubscriptionDetailPage() {
       // leg. Keying by direction collided: no schedule entry carries one, so
       // both legs of a day resolved to the same occurrence and cancelling one
       // cancelled both.
-      const eventsSnap = await getDocs(
+      // familyId first: firestore.rules only let a parent read their own family's
+      // events, and a query must prove that up front (subscriptionId alone is
+      // denied). Events copy the subscription's familyId; a sub without one has none.
+      const eventsSnap = sub.familyId ? await getDocs(
         query(
           col('reservationEvents'),
+          where('familyId', '==', sub.familyId),
           where('subscriptionId', '==', id),
           where('date', '>=', format(today, 'yyyy-MM-dd')),
           where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
         ),
-      );
+      ) : { docs: [] };
       const eventByDateLeg: Record<string, { id: string; status: string }> = {};
       eventsSnap.docs.forEach(d => {
         const data = d.data();
