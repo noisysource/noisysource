@@ -17,8 +17,9 @@ cleanly onto a fresh branch off `main`: **`agent/finhub-cost-model`** (worktree
 
 ## Release to prod (2026-10-12)
 `RELEASE-TEST-PLAN.md` (repo root): what's going to prod, scenarios to test on dev for KidClub
-and FinHub, the go-live steps, and open questions. **Prod FinHub still runs a build from
-2026-07-31.** **#88 (merged 2026-10-12) deploys FinHub with KidClub**: a PR into `staging` → dev,
+and FinHub, the go-live steps, and open questions. **Prod FinHub runs `staging`'s build since
+2026-10-17** (deployed with the KidClub releases #99/#104; without #94, so no importer yet and the
+old Dev Tools with "Initial Setup"/backup: don't click those on prod). No real FinHub data on prod. **#88 (merged 2026-10-12) deploys FinHub with KidClub**: a PR into `staging` → dev,
 the `staging` → `main` PR → prod, no manual runs; its dev half ran green on 2026-10-12, the prod
 half first runs on the next `staging` → `main` PR. **No real FinHub data exists yet** (Q1
 answered): the release waits for `HANDOFF-finhub-data.md`.
@@ -143,8 +144,13 @@ Progress:
     "Saldos verificados", account numbers matching, 0 duplicates). Closing balances match the
     September statements for all three BPI accounts. Smoke-checked: Custos do mês grouped by
     category, Salários Jul–Sep all "confirmado", Previsão shows the NoisyPhocus green receipt.
-  - **NEXT: Renato checks dev** with RELEASE-TEST-PLAN §3 and §6 (S2–S5), then merge #94 into
-    `staging`, then the `staging` → `main` release (step 5: Renato imports the seed on prod).
+  - **NEXT: Renato checks dev** with RELEASE-TEST-PLAN §3 and §6 (S2–S5) and lists the data still
+    missing, then merge #94 into `staging`, then the `staging` → `main` release (step 5: Renato
+    imports the seed on prod).
+  - **2026-10-17:** dev data checked intact (27 payroll runs, 1,994 bank movements from 27 imports).
+    #95 (domotics) had put the old FinHub back on dev; FinHub hosting redeployed by hand from this
+    branch (same bundle as 2026-10-16). #94 still merges cleanly into `staging` (34 commits behind,
+    no shared files).
   - **Future feature (Renato, 2026-10-16), not this PR:** the IRS page fills itself as months go by,
     from payroll runs (NoisySource, exact), income-source versions (ET, ASFD) and confirmed bank
     movements, with deductions from the health/education/housing categories. Today `irsConfig` is a
