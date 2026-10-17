@@ -9,6 +9,7 @@ import { PersonalData, resolvePersonalData } from '../../lib/personalData';
 import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
+import { reportClientError } from '../../lib/clientErrors';
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -186,6 +187,7 @@ export default function TransportSubscriptionDetailPage() {
       await fn({ eventId: trip.reservationEventId, status: trip.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } catch (err: any) {
+      reportClientError('[TransportSubscriptionDetailPage] action failed', err);
       setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
