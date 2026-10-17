@@ -135,6 +135,34 @@ the invoice path, the late-NIF re-link and the email can only run on prod.
 
 (#91 is merged: in `main`, and in `staging` via #92. The 2026-10-11 section's header below still says OPEN.)
 
+## 🧾 "Tentar faturar novamente" can't issue a second invoice (2026-10-17): PR #101 (`agent/kidclub-retry-invoice-guard`) → `staging`, NOT in prod
+
+**The hazard.** Before #74's invoice claim, EasyPay's two concurrent webhook calls could both invoice one bill.
+For `oK6GHA7D0f4cRVM3RNZW_2026-09` (Maria Teresa Azevedo), one call got Vendus "A001 … too many documents
+simultaneously" and wrote `invoiceError`. The other issued **FR 01P2026/226** and set `invoiced` without clearing
+it. `retryVendusInvoice` only refused `invoiced && !invoiceError`, so on that bill "Tentar faturar novamente" would
+have reset it to `paid`, deleted the number and issued a **second real Fatura-Recibo**. The admin UI offered the
+button on it.
+
+**Prod data fix, 2026-10-17 (by hand, before this PR).** The stale `invoiceError` was deleted from
+`oK6GHA7D0f4cRVM3RNZW_2026-09`. FR 01P2026/226 is its only invoice; no duplicate was issued. It was the only one of
+the 34 paid/invoiced bills with this combination.
+
+**What #101 changes**
+- `retryVendusInvoice` refuses (`already-exists`, naming the invoice) whenever the bill has an `invoiceNumber` or
+  `vendusId`, whatever the status or `invoiceError`. The logic is in `retryInvoiceLogic.ts`, with tests.
+  `force` still overrides; no client sends it. "Fatura … criada mas não registada" is unaffected: its number
+  isn't on the bill, so it can still be retried after checking Vendus.
+- A successful invoice also deletes `invoiceError`.
+- Admin UI: an invoice error only counts as open when no invoice is recorded. One helper,
+  `hasOpenInvoiceError` in `packages/shared/models/billingInvoiceState.ts`, drives every place that shows it:
+  - the "erro de fatura" tag, count and filter, and the "Fatura por emitir" email audience
+  - the retry card in `FamilyBills`
+  - the Cobranças badge and its "Fatura por emitir" text
+- Tests: functions 246/246; the new guard tests fail on the old code.
+
+**Next step:** test on dev (steps in the PR body), then promote with the next `staging` → `main` PR.
+
 ## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, NOT in prod
 
 **What the check found (read-only, dev + prod + invoice FR 01P2026/202).** Families pay exactly the
