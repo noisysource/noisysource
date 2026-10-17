@@ -824,6 +824,12 @@ Email Center (`/admin/email-center`, now "Emails"). Tabs:
    October 2026 (€120) is her first payable month. Vendus untouched: FR/195 still says "Período: Agosto 2027",
    accepted as is. Also checked: her 15% "Aluno do ano anterior" (added on prod 2026-09-08) is on neither sub
    any more, probably lost in the go-live promotion; Renato's call 2026-10-17 was to leave it off for now.
+   **Same day, 10:27 Lisbon: her first October MB WAY attempt was refused on her side** (EasyPay
+   "Operação recusada ao Utilizador", bill → `failed`). Her later "Pagar agora" clicks never reached the server:
+   the page read bills once and still showed October as processing. Workaround: reopen Pagamentos. Code fix:
+   hotfix PR #102 (`hotfix/kidclub-payments-live` → `main`, not merged yet), payments page listens to bills
+   live. **Open: confirm she paid October**. If MB WAY keeps being refused, it's her bank's side (limits);
+   bank transfer is set up on prod (`config/billing` has the IBAN), then "Marcar como pago" in Cobranças.
 6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
    She'd see nothing if she logged in with that email. In the new admin page: tick "Mostrar famílias sem
    inscrições", open it, "Eliminar família".
