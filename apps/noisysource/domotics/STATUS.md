@@ -46,12 +46,12 @@ Plan, in order:
 2026-10-02 — Heat pump fault codes + corrected heat pump readings (PR #73, merged to `staging`). The unit is a **Zantia Vancouver 13 (single-phase, R32)**, manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. Datapoint table in `domotics-bridge/README.md` → "Heat pump"; fault bitmaps decoded in `src/data/heatpumpFaults.ts`; active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
 ## Next step
-0. **Heat pump: E13 is active again (seen 2026-10-17 13:18 UTC)** — see "Anything risky". Physical/installer issue, not software.
-1. **Try the 3D UI on the iPhone** (command in "Last completed") and say what to change. Then merge PR #95, rebase `agent/domotics-3d` onto `staging`, and open its PR → `staging`.
-2. Phase 2 (PWA + iOS sign-in) — see the plan under "Currently working on".
-3. **Sign in on https://kidclub-dev-domotics.web.app and click through** (Google sign-in; away from home it reads via the Firestore relay, so readings can be up to ~5 min old — the bridge only polls fast when a LAN client is watching). At home, `pnpm dev:domotics` (http://localhost:5175) goes straight to the Pi and needs no sign-in for climate. To redeploy: `pnpm --filter domotics build:staging && npx firebase-tools@13 deploy --only hosting:domotics --project=kidclub-dev`.
-3b. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs above). The bridge now survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
-4. Review/merge PR #95 into `staging`, then promote `staging` → `main` as usual.
+1. **Heat pump: E13 is active again (seen 2026-10-17 13:18 UTC)** — see "Anything risky". Physical/installer issue, not software.
+2. **Try the 3D UI on the iPhone** (command in "Last completed") and say what to change. Then merge PR #95, rebase `agent/domotics-3d` onto `staging`, and open its PR → `staging`.
+3. Phase 2 (PWA + iOS sign-in) — see the plan under "Currently working on".
+4. **Sign in on https://kidclub-dev-domotics.web.app and click through** (Google sign-in; away from home it reads via the Firestore relay, so readings can be up to ~5 min old — the bridge only polls fast when a LAN client is watching). At home, `pnpm dev:domotics` (http://localhost:5175) goes straight to the Pi and needs no sign-in for climate. To redeploy: `pnpm --filter domotics build:staging && npx firebase-tools@13 deploy --only hosting:domotics --project=kidclub-dev`.
+5. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs above). The bridge now survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
+6. Promote `staging` → `main` as usual once #95 (and later this branch) are merged.
 
 ## Open questions for Renato
 - **Your wife's Google account email** — needed for household access (phase 3). Until then only `admin@kidclub.pt` gets climate/relay away from home.
