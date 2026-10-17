@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { PaymentProof } from '@shared/models';
 import { PAYMENT_PROOFS_ENABLED, PROOF_ACCEPT, proofFileError, uploadPaymentProof, openPaymentProof } from '../../lib/paymentProof';
+import { reportClientError } from '../../lib/clientErrors';
 
 function fmtDate(ts: any): string {
   const d = ts?.toDate?.() ?? (ts ? new Date(ts) : null);
@@ -14,7 +15,7 @@ export function PaymentProofList({ proofs, showUploader = false }: { proofs: Pay
   const open = async (p: PaymentProof) => {
     setError('');
     try { await openPaymentProof(p.path); }
-    catch (e: any) { setError(e?.message ?? 'Não foi possível abrir o ficheiro.'); }
+    catch (e: any) { reportClientError('[PaymentProofs] open proof failed', e); setError(e?.message ?? 'Não foi possível abrir o ficheiro.'); }
   };
   return (
     <div className="space-y-1">
@@ -57,6 +58,7 @@ export function PaymentProofUpload({ billingId, onUploaded, label = 'Enviar comp
       setDone(true);
       onUploaded();
     } catch (e: any) {
+      reportClientError('[PaymentProofs] upload proof failed', e);
       setError(e?.message ?? 'Falha ao enviar o comprovativo.');
     } finally {
       setUploading(false);

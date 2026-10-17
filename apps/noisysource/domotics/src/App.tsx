@@ -47,8 +47,22 @@ interface Draft {
   customization: Customization;
 }
 
-/** 'offline' means the Legrand gateway didn't answer — the plan still renders. */
-export type DeviceStatus = 'loading' | 'ok' | 'offline';
+/**
+ * 'offline' means the Legrand gateway didn't answer — the plan still renders.
+ * 'signin' means it was never asked: the Legrand callables need an identity,
+ * which on the LAN nothing else does, so this is the normal state until
+ * someone signs in — not a fault, and it must not read like one.
+ */
+export type DeviceStatus = 'loading' | 'ok' | 'offline' | 'signin';
+
+/**
+ * A bridge miss on the very first load is common — the Pi is a 700MHz board
+ * and can be mid-poll when asked — and the normal 30s interval would leave
+ * "offline" on screen for half a minute over one dropped request. So a failure
+ * is retried quickly a few times, and only reported once it repeats.
+ */
+const BRIDGE_RETRY_MS = 4000;
+const BRIDGE_FAILS_BEFORE_OFFLINE = 2;
 
 const EMPTY: Customization = { deviceNames: {}, deviceRooms: {}, devicePositions: {} };
 const CONFIG_REF = () => doc(db, 'domotics_config', 'customization');
@@ -96,6 +110,12 @@ export default function App() {
    */
   const gated = requiresSignIn() && !user;
 
+  /**
+   * Legrand state. Keyed on the user as well, because on the LAN the page
+   * loads signed out and the callable refuses until someone signs in — without
+   * re-running here, signing in would change nothing until a reload.
+   */
+  const uid = user?.uid;
   useEffect(() => {
     if (gated) return;
     // Nothing here blocks the first paint: the plan comes from local seed data
@@ -113,11 +133,18 @@ export default function App() {
         setDeviceStatus(modules && modules.length > 0 ? 'ok' : 'offline');
       })
       .catch(err => {
-        console.error('Failed to load devices:', err);
         setDevices(buildDevices());
+        if ((err as { code?: string })?.code === 'functions/unauthenticated') {
+          setDeviceStatus('signin');
+          return;
+        }
+        console.error('Failed to load devices:', err);
         setDeviceStatus('offline');
       });
+  }, [gated, uid]);
 
+  useEffect(() => {
+    if (gated) return;
     getDoc(CONFIG_REF())
       .then(snap => {
         if (snap.exists()) {
@@ -152,18 +179,29 @@ export default function App() {
   useEffect(() => {
     if (gated) return;
     let cancelled = false;
+    let failures = 0;
+    let retry: ReturnType<typeof setTimeout> | undefined;
 
     async function tick() {
       if (document.hidden) return;
+      clearTimeout(retry);
       try {
         const state = await fetchBridgeState();
         if (cancelled) return;
+        failures = 0;
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
         setEnergy(state.inverter ?? null);
         setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
       } catch {
-        if (!cancelled) setBridgeStatus('offline');
+        if (cancelled) return;
+        failures++;
+        if (failures >= BRIDGE_FAILS_BEFORE_OFFLINE) setBridgeStatus('offline');
+        // Quick retries only; a bridge that stays down falls back to the
+        // normal interval rather than being hammered every few seconds.
+        if (failures <= BRIDGE_FAILS_BEFORE_OFFLINE + 1) {
+          retry = setTimeout(() => void tick(), BRIDGE_RETRY_MS);
+        }
       }
     }
 
@@ -179,6 +217,7 @@ export default function App() {
     return () => {
       cancelled = true;
       clearInterval(id);
+      clearTimeout(retry);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [gated]);
@@ -423,6 +462,7 @@ export default function App() {
       placements={activeCustom.devicePositions}
       deviceStatus={deviceStatus}
       bridgeStatus={bridgeStatus}
+      bridgeUpdatedAt={bridgeUpdatedAt}
       energy={energy}
       user={user}
       onSignIn={signIn}

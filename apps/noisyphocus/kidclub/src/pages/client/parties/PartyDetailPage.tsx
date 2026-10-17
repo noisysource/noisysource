@@ -4,6 +4,7 @@ import { useUser } from '@shared/hooks';
 import { Booking, extraQty, partyVatBreakdown, PARTY_VAT_RATE } from '@shared/models';
 import { partyService } from '../../../services/partyService';
 import { callable } from '../../../lib/callable';
+import { reportClientError } from '../../../lib/clientErrors';
 
 function fmtDate(dateStr: string) {
   if (!dateStr) return '—';
@@ -56,6 +57,7 @@ export default function PartyDetailPage() {
       const res = await callable<{ bookingId: string }, { billingId: string }>('createPartyDeposit')({ bookingId: id });
       setBillingId(res.data.billingId);
     } catch (err: any) {
+      reportClientError('[PartyDetailPage] create deposit failed', err);
       setPayResult({ ok: false, msg: err?.message || 'Erro ao iniciar pagamento.' });
     } finally {
       setCreatingDeposit(false);
@@ -81,6 +83,7 @@ export default function PartyDetailPage() {
         setPayResult({ ok: true, msg: 'Redireccionado para pagamento por cartão.' });
       }
     } catch (err: any) {
+      reportClientError('[PartyDetailPage] pay failed', err);
       setPayResult({ ok: false, msg: err?.message || 'Erro no pagamento.' });
     } finally {
       setPaying(false);

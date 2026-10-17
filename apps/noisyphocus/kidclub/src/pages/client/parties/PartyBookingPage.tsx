@@ -5,6 +5,7 @@ import { Child, PartyConfig, ExtraItem, computePartyPrice, PARTY_VAT_RATE } from
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
 import { normalizeEmail } from '../../../lib/utils';
+import { reportClientError } from '../../../lib/clientErrors';
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 
@@ -99,6 +100,7 @@ export default function PartyBookingPage() {
       } as any);
       navigate('/client/parties');
     } catch (err: any) {
+      reportClientError('[PartyBookingPage] submit booking failed', err);
       alert(err?.message || 'Erro ao submeter reserva.');
       setSubmitting(false);
     }

@@ -7,6 +7,7 @@ import { appCol } from "./db";
 import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 import { partyDepositAmount } from "./partyDepositLogic";
 import { familyInvoiceNif } from "./vendusClientLogic";
+import { retryInvoiceRefusal } from "./retryInvoiceLogic";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -244,11 +245,15 @@ export async function createVendusInvoiceForBilling(billingId: string): Promise<
   }
 
   try {
+    // Also clears invoiceError: an invoiced bill must never keep one, or the
+    // admin is offered "Tentar faturar novamente" for a bill that already has
+    // its invoice (prod, oK6GHA7D0f4cRVM3RNZW_2026-09, before the claim existed).
     await billingRef.update({
       status: "invoiced",
       invoiceNumber: vendusDoc.number,
       vendusId: vendusDoc.id,
       atcud: vendusDoc.atcud ?? null,
+      invoiceError: admin.firestore.FieldValue.delete(),
       invoiceClaimedAt: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -1181,11 +1186,12 @@ export const retryVendusInvoice = onCall(
     const billingRef = appCol("billing").doc(billingId);
     const billing = (await billingRef.get()).data();
     if (!billing) throw new HttpsError("not-found", "Billing record not found");
-    if (!["paid", "invoiced"].includes(billing.status)) {
-      throw new HttpsError("failed-precondition", `Cannot create invoice for status=${billing.status}`);
-    }
-    if (billing.status === "invoiced" && !billing.invoiceError && !force) {
-      throw new HttpsError("already-exists", `Invoice already created: ${billing.invoiceNumber}`);
+    // Refuses any bill that already records an invoice (number or Vendus id),
+    // even with a stale invoiceError on it, unless `force`: see retryInvoiceLogic.ts.
+    const refusal = retryInvoiceRefusal(billing, !!force);
+    if (refusal) {
+      console.warn(`[retryVendusInvoice] refused billing ${billingId}: ${refusal.message}`);
+      throw new HttpsError(refusal.code, refusal.message);
     }
 
     // Reset status to paid so createVendusInvoiceForBilling can re-run

@@ -349,3 +349,67 @@ describe("one email per invoice — no duplicates", () => {
     expect(outbox().filter((m) => m.billingId === "b2")).toHaveLength(1);
   });
 });
+
+describe("retryVendusInvoice — never a second invoice for a bill that already has one", () => {
+  const retry = (billingId: string, extra: Record<string, unknown> = {}) =>
+    (retryVendusInvoice as any).run({ auth: { uid: "admin1" }, data: { billingId, ...extra } });
+
+  beforeEach(() => {
+    state.docs["users/admin1"] = { roles: { rainbowAdmin: true } };
+    state.docs["families/fam1"] = NIF_FAMILY;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("an invoiced bill with a stale invoiceError (prod oK6GHA7D0f4cRVM3RNZW_2026-09) is refused and left untouched", async () => {
+    state.docs["billing/b1"] = bill({
+      status: "invoiced",
+      invoiceNumber: "FR 01P2026/226",
+      vendusId: 9001,
+      atcud: "ABCD-9001",
+      invoiceError: "Vendus POST /documents/ failed (400): A001 You are trying to generate too many documents simultaneously",
+    });
+    const before = structuredClone(state.docs["billing/b1"]);
+
+    await expect(retry("b1")).rejects.toMatchObject({ code: "already-exists", message: expect.stringContaining("FR 01P2026/226") });
+
+    expect(createInvoice).not.toHaveBeenCalled();
+    expect(state.docs["billing/b1"]).toEqual(before);
+    expect(state.log.filter((l) => l.path === "billing/b1")).toEqual([]);
+    expect(outbox()).toEqual([]);
+  });
+
+  it("a paid bill with an invoiceError and no invoice recorded is still retried, once", async () => {
+    state.docs["billing/b2"] = bill({ invoiceError: "Vendus POST /documents/ failed (500)" });
+
+    await retry("b2");
+
+    expect(createInvoice).toHaveBeenCalledTimes(1);
+    expect(state.docs["billing/b2"]).toMatchObject({ status: "invoiced", invoiceNumber: "FR 01P2026/1" });
+    expect(state.docs["billing/b2"]).not.toHaveProperty("invoiceError");
+    await expect(retry("b2")).rejects.toMatchObject({ code: "already-exists" });
+    expect(createInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("force still re-invoices a bill that has an invoice (explicit override, unchanged)", async () => {
+    state.docs["billing/b3"] = bill({ status: "invoiced", invoiceNumber: "FR 01P2026/226", vendusId: 9001 });
+
+    await retry("b3", { force: true });
+
+    expect(createInvoice).toHaveBeenCalledTimes(1);
+    expect(state.docs["billing/b3"]).toMatchObject({ status: "invoiced", invoiceNumber: "FR 01P2026/1", vendusId: 5550001 });
+  });
+
+  it("recording an invoice clears an invoiceError written while Vendus was issuing it", async () => {
+    state.docs["billing/b4"] = bill();
+    vi.mocked(createInvoice).mockImplementationOnce(async () => {
+      // As the losing webhook call did before the claim existed.
+      state.docs["billing/b4"] = { ...state.docs["billing/b4"], invoiceError: "A001 You are trying to generate too many documents simultaneously" };
+      return { id: 5550001, number: "FR 01P2026/1", date: "2026-10-17", atcud: "ABCD-5550001" };
+    });
+
+    await createVendusInvoiceForBilling("b4");
+
+    expect(state.docs["billing/b4"]).toMatchObject({ status: "invoiced", invoiceNumber: "FR 01P2026/1", vendusId: 5550001 });
+    expect(state.docs["billing/b4"]).not.toHaveProperty("invoiceError");
+  });
+});

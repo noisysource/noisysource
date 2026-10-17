@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { query, where, getDocs, getDoc, limit } from 'firebase/firestore';
+import { query, where, getDocs, getDoc, limit, onSnapshot } from 'firebase/firestore';
 import { callable } from '../../lib/callable';
 import { col, docRef } from '../../lib/db';
 import { useUser } from '@shared/hooks';
@@ -11,6 +11,7 @@ import { useBankTransferConfig, formatIban, transferDescription, BankTransferCon
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
 import { needsNifPrompt } from '../../lib/nif';
+import { reportClientError } from '../../lib/clientErrors';
 
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
@@ -167,33 +168,54 @@ export default function PaymentsPage() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<Record<string, string>>({});
 
+  // Bills are listened to, not read once: a payment's outcome arrives later,
+  // from the Easypay webhook (processing → paid/invoiced, or → failed). Read
+  // once, the page kept showing "A aguardar pagamento" after an MB WAY request
+  // was refused, with no way to retry short of reloading (Mary Pratas,
+  // 2026-10-17: "clico em Pagar agora e não acontece nada").
+  const lastStatus = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    lastStatus.current = new Map();
+    // While impersonating, the admin's own uid would never match the
+    // family's billing records (see familyService.ts) — query by the
+    // impersonated familyId instead, same as every other client page.
+    const q = impersonation
+      ? query(col('billing'), where('familyId', '==', impersonation.familyId))
+      : query(col('billing'), where('userId', '==', user.uid));
+    return onSnapshot(q, snap => {
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() } as BillingRecord))
+        // Chronological by the month billed, earliest first — createdAt is
+        // when the record was (re)built, so a recompute would float later
+        // months above the one due now.
+        .sort((a, b) => (a.periodStart?.toMillis?.() ?? 0) - (b.periodStart?.toMillis?.() ?? 0));
+      // A bill that reached an outcome drops its old action message ("Confirme
+      // na app MB WAY" next to a failed or paid bill only confuses). Not on a
+      // move to `processing`: the callable writes that itself, and its snapshot
+      // can land after the callable returned and set the message.
+      const moved = data.filter(r => lastStatus.current.has(r.id) && lastStatus.current.get(r.id) !== r.status
+        && r.status !== 'processing').map(r => r.id);
+      lastStatus.current = new Map(data.map(r => [r.id, r.status]));
+      if (moved.length) {
+        setActionResult(prev => {
+          const next = { ...prev };
+          for (const id of moved) delete next[id];
+          return next;
+        });
+      }
+      setRecords(data);
+      setLoading(false);
+    }, err => {
+      console.error('[PaymentsPage] query failed:', err);
+      setLoading(false);
+    });
+  }, [user, impersonation]);
+
   useEffect(() => {
     if (!user) return;
     const load = async () => {
-      // Only the first load blanks the page; a reload after a proof upload
-      // refreshes in place.
-      if (reloadKey === 0) setLoading(true);
-      try {
-        // While impersonating, the admin's own uid would never match the
-        // family's billing records (see familyService.ts) — query by the
-        // impersonated familyId instead, same as every other client page.
-        const snap = await getDocs(
-          impersonation
-            ? query(col('billing'), where('familyId', '==', impersonation.familyId))
-            : query(col('billing'), where('userId', '==', user.uid))
-        );
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() } as BillingRecord))
-          // Chronological by the month billed, earliest first — createdAt is
-          // when the record was (re)built, so a recompute would float later
-          // months above the one due now.
-          .sort((a, b) => (a.periodStart?.toMillis?.() ?? 0) - (b.periodStart?.toMillis?.() ?? 0));
-        setRecords(data);
-      } catch (err) {
-        console.error('[PaymentsPage] query failed:', err);
-      } finally {
-        setLoading(false);
-      }
       // The family's chosen payment method (Conta → "Método de pagamento").
       // Unpaid bills follow the current choice even before the next billing
       // recompute copies it onto them.
@@ -257,6 +279,7 @@ export default function PaymentsPage() {
       setActionResult(prev => ({ ...prev, [record.id]: msg }));
       setActiveId(null);
     } catch (err: any) {
+      reportClientError(`[PaymentsPage] pay ${method} failed`, err, { billingId: record.id });
       setActionResult(prev => ({ ...prev, [record.id]: `Erro: ${err.message}` }));
     } finally {
       setActing(false);
@@ -280,6 +303,7 @@ export default function PaymentsPage() {
         else msg = await payCard(record);
         setBatchResults(prev => [...prev, { id: record.id, ok: true, msg }]);
       } catch (err: any) {
+        reportClientError(`[PaymentsPage] batch pay ${batchMethod} failed`, err, { billingId: record.id });
         setBatchResults(prev => [...prev, { id: record.id, ok: false, msg: err.message }]);
       }
     }

@@ -2,9 +2,120 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-17
 
-## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, NOT in prod
+## ▶️ Start here (left 2026-10-17, end of session)
+
+Both changes below are **live on prod** (#96, plus #98 shipped with the `staging` → `main` promotion #99,
+2026-10-17 ~09:05 UTC). Nothing is in flight: all PRs are merged and the worktrees are removed.
+Next, in order:
+1. **Confirm a real parent enrollment landed** after 2026-10-17 09:00 UTC. Look for a new `pending` sub on
+   Famílias e inscrições that a parent created, not an admin. As of 09:20 UTC there were none yet, which was
+   expected that soon. If none appear within a few days, check "🚨 Erros dos clientes" before assuming
+   it's fixed.
+2. **Check "🚨 Erros dos clientes" and the 08:00 digest email.** The first digest goes out 2026-10-18,
+   and only if something failed. This is the new early warning for the same class of bug.
+3. **Laura Silva's 2 requests are ready to approve.** Owner fields fixed 2026-10-17 (see below).
+4. **Call the 3 parents** listed under the prod-bug section. They may have tried to enroll and silently failed.
+5. **#99 also shipped everything else that was on `staging`.** That includes #93 (NIF / "Consumidor final")
+   and #89 (VAT on subscriptions); the party-pricing and bank-transfer sections were already on `main`.
+   Their sections below used to say "NOT in prod". Read each one's before/after-prod steps and confirm they
+   were done.
+6. Follow-ups, none urgent: per-child calendar still broken for parents; `clientErrors` TTL not enabled;
+   rules tests not in CI. Details in the two sections below.
+
+**Branch state:** `main` and `staging` match in content. The automatic staging sync worked after #99.
+Dev's last deploy (the merge of #100) was cancelled by a newer push and never re-ran. Merging this STATUS
+PR redeploys dev and brings it up to date.
+
+## 🔴 Prod bug (2026-10-16): parents couldn't enroll. FIXED on prod 2026-10-17 (#96)
+
+**Symptom.** No new pending subscriptions for weeks. A parent (Bruno, child Laura Silva, family
+`B5O3HQncgNTzM4e3KGPi`) pressed "Enviar pedido de inscrição" repeatedly and nothing happened.
+**The last parent-created subscription before the fix was on 2026-09-18.** About 4 weeks with no parent able to enroll.
+
+**Cause.** Both enroll pages queried `studyroom` / `transportationSubscriptions` by `childId` (duplicate check,
+transport coverage). Rules only let a parent query by their own `userId`, and rules aren't filters, so every
+parent submit got permission-denied. The pages had `try/finally` with no `catch`, so the error vanished.
+The same problem hit the upcoming-session lists on the study and transport subscription pages and the
+"As minhas crianças" panel (`reservationEvents` by `subscriptionId` only).
+**Impersonating can't reproduce this kind of bug:** Firestore still sees the admin token, which passes every
+rule, and before the fix anything submitted while impersonating was stamped with the admin's uid and email.
+
+**Fix (#96, in prod).**
+- Parent reads go through `familyService.getChildSubscriptions` / `getFamilySubscriptions`: by `userId` for
+  a parent, by child or family when impersonating.
+- `reservationEvents` queries add `familyId`. They use the new composite index familyId + subscriptionId
+  + date, which is READY on prod.
+- The pages now show errors to the parent.
+- `familyService.owner()` stamps the family's parent, not the admin, while impersonating.
+- "+ Add Subscription" on the child page now opens the enrollment form.
+- `pnpm test:rules` runs these query shapes against `firestore.rules` in the emulator (18 checks). It's
+  verified at the rules level only; nobody has clicked through it as a real parent yet (see "Start here",
+  step 1).
+
+**Done 2026-10-17:** Laura Silva's two requests (study `HIJnfN9AnFaryKlPMbiI`, transport
+`y6TexqKSrRBvLvTlH7Ud`) were submitted by Renato while impersonating, so they carried his uid and email.
+Renato ran the owner-field fix. Both now have Bruno's `userId` (`UlJUfRqS…`), email `brunofs214@gmail.com`
+and guardian name, and are still `pending`. **OK to approve:** the approval email now goes to Bruno.
+
+**Open:**
+- **Parents worth a call.** These children were created after go-live and have no subscription pointing at
+  them, so each could be a failed attempt:
+  - Patrícia Tavares (Camila, 09-30, new family `L5Nz8ZDmpZc0D8ZF7wPV`; her older subs sit in owner-less
+    family `dJVtUfA3oDiCJsU2B7LF`)
+  - Joana Gomes (Duarte, 09-30)
+  - Anabela Gonçalves (Afonso, 10-06)
+
+  Failed attempts left no trace, so there may be others.
+- **Not fixed: the per-child calendar** (`/client/children/:id/calendar`, `EventCalendarPage`) is still
+  broken for parents. It queries subs by `childId`, and `eventService.getEvents` reads every family's
+  transport subscriptions. The family calendar (`/client/calendar`) works. Either rebuild it on
+  `reservationEvents` by `familyId`, or redirect it to the family calendar.
+- **Follow-up:** wire `pnpm test:rules` and `pnpm test:rules:client-errors` into `ci-checks.yml`. Needs Java
+  on the runner, plus the emulator.
+
+## 🚨 Failed-action tracing (2026-10-17). In prod since #99 (2026-10-17)
+
+**Why.** That bug went unnoticed for 4 weeks until a parent phoned. Renato asked for a way to see when
+parents try something and it doesn't land: subscriptions, payments and so on.
+
+**What it does.**
+- **`src/lib/clientErrors.ts`**, installed in `main.tsx`. It writes a report to
+  `_apps/arcoiris/clientErrors` whenever a signed-in user hits any of these:
+  - an unhandled promise rejection
+  - an uncaught error from our own scripts
+  - a `console.error(…, err)` call with an error object among its arguments, which covers the existing
+    "catch and log" blocks, including #96's enrollment catches
+  - explicit `reportClientError()` calls where a catch only showed a message on screen: payments (single
+    and batch pay, proof upload), calendar day changes, profile save, subscription-page actions, party
+    booking and deposit/payment.
+
+  **Cost guard:** at most 20 reports per page load, and the same error is deduped for 60 s. Signed-out users
+  aren't reported.
+- **Rules:** create-only, about yourself, in a fixed shape, with server `createdAt`. Only
+  `rainbowAdmin`/`owner` can read or delete. `pnpm test:rules:client-errors` runs 10 checks.
+- **Admin → 🛠️ Admin → "🚨 Erros dos clientes"** (`/admin/client-errors`) shows the last 200 reports.
+  "Só clientes" (on by default) hides the admin area and impersonation sessions.
+- **`clientErrorsDigest`**, a scheduled function that runs at 08:00 Lisbon time. It emails `admin@kidclub.pt`
+  the parent-facing failures from the last 24 h, and sends nothing on a quiet day.
+- On prod, as of 2026-10-17 09:20 UTC: 0 reports.
+
+**Not yet tried by hand on dev or prod.** Quick check: sign in as a parent and run
+`console.error('[test] manual', Object.assign(new Error('boom'), { code: 'test' }))` in the browser console.
+The report should show on the admin page. To run the digest now:
+`gcloud scheduler jobs run firebase-schedule-clientErrorsDigest-europe-west3 --location europe-west3 --project kidclub-dev`
+(then look for a new `emailOutbox` doc).
+
+**Open / follow-ups:**
+- **TTL not enabled.** Reports carry `expireAt` (90 days out), but nothing deletes them until a TTL policy
+  exists. It's one command per project; Renato runs the prod one:
+  `gcloud firestore fields ttls update expireAt --collection-group=clientErrors --enable-ttl --project <kidclub-dev|rainbow-prod-2454b>`.
+  Or add a `google_firestore_field` to Terraform.
+- Server-side function errors aren't covered; they're in Cloud Logging. A Cloud Monitoring alert on
+  function error rate would be the server-side counterpart.
+
+## 🧾 No Vendus client without a NIF: "Consumidor final" (2026-10-13) — `agent/kidclub-nif-consumidor-final`, PR #93 → `staging`, IN PROD (on `main` as of 2026-10-17; check its post-deploy steps were done)
 
 **Decision (Renato, 2026-10-13): option B**, chosen over keeping named NIF-less clients (background: the
 2026-10-11 client-loop section below and its "Update 2026-10-12"). A family without a NIF is invoiced to
@@ -87,7 +198,38 @@ the invoice path, the late-NIF re-link and the email can only run on prod.
 
 (#91 is merged: in `main`, and in `staging` via #92. The 2026-10-11 section's header below still says OPEN.)
 
-## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, NOT in prod
+## 🧾 "Tentar faturar novamente" can't issue a second invoice (2026-10-17): PR #101, IN PROD via promotion #104
+
+**The hazard.** Before #74's invoice claim, EasyPay's two concurrent webhook calls could both invoice one bill.
+For `oK6GHA7D0f4cRVM3RNZW_2026-09` (Maria Teresa Azevedo), one call got Vendus "A001 … too many documents
+simultaneously" and wrote `invoiceError`. The other issued **FR 01P2026/226** and set `invoiced` without clearing
+it. `retryVendusInvoice` only refused `invoiced && !invoiceError`, so on that bill "Tentar faturar novamente" would
+have reset it to `paid`, deleted the number and issued a **second real Fatura-Recibo**. The admin UI offered the
+button on it.
+
+**In prod 2026-10-17 ~11:02 UTC**, deployed by the `staging` → `main` PR #104 before merge (retryvendusinvoice
+revision 00033, hosting release 11:02). Smoke check on kidclub.pt (admin, read-only): no "erro de fatura" left
+anywhere, and Maria Teresa's row is clean. **Until #104 is merged, prod is ahead of `main`.** Merge it.
+**No data fix needed (Renato, 2026-10-17).** The stale `invoiceError` stays on `oK6GHA7D0f4cRVM3RNZW_2026-09`
+on purpose. It's harmless now: the bill has an invoice number, so the UI doesn't count it and the retry refuses.
+FR 01P2026/226 is its only invoice; no duplicate was ever issued.
+
+**What #101 changes**
+- `retryVendusInvoice` refuses (`already-exists`, naming the invoice) whenever the bill has an `invoiceNumber` or
+  `vendusId`, whatever the status or `invoiceError`. The logic is in `retryInvoiceLogic.ts`, with tests.
+  `force` still overrides; no client sends it. "Fatura … criada mas não registada" is unaffected: its number
+  isn't on the bill, so it can still be retried after checking Vendus.
+- A successful invoice also deletes `invoiceError`.
+- Admin UI: an invoice error only counts as open when no invoice is recorded. One helper,
+  `hasOpenInvoiceError` in `packages/shared/models/billingInvoiceState.ts`, drives every place that shows it:
+  - the "erro de fatura" tag, count and filter, and the "Fatura por emitir" email audience
+  - the retry card in `FamilyBills`
+  - the Cobranças badge and its "Fatura por emitir" text
+- Tests: functions 246/246; the new guard tests fail on the old code.
+
+**Next step:** none beyond merging #104. The dev test steps in #101's PR body still describe how to see the guard.
+
+## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, IN PROD (on `main` as of 2026-10-17; check its post-deploy steps were done)
 
 **What the check found (read-only, dev + prod + invoice FR 01P2026/202).** Families pay exactly the
 price the app shows; VAT is already inside it (billing sends each line to Vendus as `gross_price`).
@@ -124,7 +266,7 @@ builds, typecheck (no new errors; 11 old ones remain) and the 177 function tests
 - Lists and totals (Inscrições list, dashboard, child page totals) still show the com-IVA price
   without the split. Deliberate: the handoff asks for setup and detail pages.
 
-## 🎈 Party prices 2026/27 + IVA + extra quantities (2026-10-07) — branch `agent/party-pricing-vat`, PR → `staging`, code NOT in prod
+## 🎈 Party prices 2026/27 + IVA + extra quantities (2026-10-07) — branch `agent/party-pricing-vat`, PR → `staging`, code IN PROD (on `main` as of 2026-10-17; check its post-deploy steps were done)
 
 **Prod data already changed (done 2026-10-07, Renato asked).** `config/party` on prod now matches the
 "apresentação festas 26_27" PDF. Prod had 0 party bookings and 0 party deposits, so nothing was repriced.
@@ -163,7 +305,7 @@ Confirm it as admin, then "Pagar sinal" → the billing doc's `total` should be 
 - The admin edit form recomputes `total` from the *current* config as soon as a booking is opened, so editing
   an old booking after a price change silently reprices it (pre-existing behaviour).
 
-## 🆕 Bank transfer payments (2026-10-07) — branch `agent/kidclub-bank-transfer`, PR → `staging`, NOT in prod
+## 🆕 Bank transfer payments (2026-10-07) — branch `agent/kidclub-bank-transfer`, PR → `staging`, IN PROD (on `main` as of 2026-10-17; check its post-deploy steps were done)
 
 **What it does.** Parents can pay by bank transfer, optionally upload a proof (dev only for now — see
 below), and an admin marks the bill
@@ -241,7 +383,7 @@ manual-deploy, so likely unnoticed). `studyRoomService.uploadFile` is dead code 
 notifications (hardcoded `ADMIN_EMAIL`, same as enrolment notifications); should the bank-transfer default
 stay for families that never actively chose.
 
-## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — #84 in prod since 2026-10-11 23:02 UTC; follow-up `hotfix/vendus-drop-external-ref`, PR #91 → `main` OPEN, not merged
+## 🔴 Prod bug (2026-10-11): Vendus client-creation loop — #84 in prod since 2026-10-11 23:02 UTC; follow-up `hotfix/vendus-drop-external-ref`, PR #91 merged → `main` 2026-10-13 (its "only AFTER that hotfix is deployed" follow-ups are now unblocked)
 
 **Update 2026-10-12 — read this first.**
 - **Invoice printing.** Vendus prints a client's `external_reference` next to the name on every invoice
@@ -338,9 +480,10 @@ here. A later `staging` → `main` PR deploys its merge ref, which still include
 - **(b) Dangling `vendusClientId`s.** Family `qgQTaxxSpsUJl5bVpVR5` (thaise.ps07) and Ana Bento's family each
   point at one arbitrary duplicate. Decide which client to keep (or let (a) delete them all and the next sync
   make a fresh one with the ref), then fix the family docs to match.
-- **(c) Live Vendus key in `.claude/settings.local.json`.** It's hardcoded in always-allow permission rules,
-  including write calls. Remove those rules and rotate the key (then update the `VENDUS_API_KEY` secret on
-  prod). Renato's decision.
+- ~~**(c) Live Vendus key in `.claude/settings.local.json`.**~~ **Done 2026-10-17.** Rules removed: every allow
+  rule with the key inline (34 rules, incl. document/client POST/PATCH/DELETE), the prod Easypay `notification`
+  calls, `Bash(gcloud secrets *)` and an old prod `backfill.js` run. Rotating the key isn't needed (Renato,
+  2026-10-17).
 
 ## Where things stand (2026-10-01, end of session)
 
@@ -406,7 +549,7 @@ here. A later `staging` → `main` PR deploys its merge ref, which still include
   - Low priority: transport `schedule[]` entries have no `direction` (0 of 23 active subs), so line items and
     events say "both" for single-trip days. Amounts are unaffected (gross counts schedule entries); only labels.
   - ✅ (same PR) The subscription card's price for **new-pricing** subs now comes from the bill line.
-- **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case).
+- **Next feature:** refunds + credit notes → `HANDOFF-refund-credit-note.md` (Mary Pratas's case, since fixed by hand).
 - **Infra, whenever:** `infra/gcp/terraform/HANDOFF-terraform-cleanup.md` (for the `infra-terraform` agent).
 - **Parked for later (Renato, 2026-10-01):** Vendus sandbox approach, which driver/electricity costs are
   real, pricing model (GO-LIVE §4), re-enabling card/Multibanco (needs an Easypay POS).
@@ -715,8 +858,23 @@ Email Center (`/admin/email-center`, now "Emails"). Tabs:
 4. **Afonso Santos has no `children` record** (in prod or dev), so his €60 enrollment fee is never
    charged, because the fee is keyed by child. Create the child in admin and link both subs.
    In the new admin page: his family → "✏️ Dados da criança" → Guardar creates the record and links both subs.
-5. **Mary Pratas' mis-paid period** (paid 2027-08 instead of 2026-09, Vendus FR 01P2026/195) needs a
-   credit note. Unchanged. The new pay-in-order rule stops it happening again.
+5. ~~Mary Pratas' mis-paid period~~ **Fixed in Firestore 2026-10-17, no credit note (Renato's call).** She paid
+   the 2027-08 bill (€142.80, FR 01P2026/195, 2026-09-18) instead of 2026-09 (€186), so the pay-in-order rule
+   blocked October onward. One atomic commit (preconditioned on both docs' updateTime): `Nk7GmFSkSm7zzLYdMD66_2026-09`
+   → `invoiced`, carrying that payment + invoice, lines/total = what FR/195 invoiced (€40.80 study + €102
+   transport, retitled Setembro 2026), the original €186 breakdown kept in its `correction` field; the
+   **€43.20 difference was waived** (Renato). `_2027-08` → `pending`, payment/invoice fields removed, a
+   `correction` note left; its lines were copied from 2027-07 (€120) until the next recompute. Verified after:
+   October 2026 (€120) is her first payable month. Vendus untouched: FR/195 still says "Período: Agosto 2027",
+   accepted as is. Also checked: her 15% "Aluno do ano anterior" (added on prod 2026-09-08) is on neither sub
+   any more, probably lost in the go-live promotion; Renato's call 2026-10-17 was to leave it off for now.
+   **Same day, 10:27 Lisbon: her first October MB WAY attempt was refused on her side** (EasyPay
+   "Operação recusada ao Utilizador", bill → `failed`). Her later "Pagar agora" clicks never reached the server:
+   the page read bills once and still showed October as processing. Workaround: reopen Pagamentos. Code fix:
+   hotfix PR #102 (`hotfix/kidclub-payments-live`), payments page listens to bills live: **merged and deployed
+   to prod 2026-10-17 10:29 UTC, staging synced automatically.** ✅ **She paid October at 10:31 UTC**
+   (FR 01P2026/248, one invoice: EasyPay's second webhook call logged "already processed", #74's claim working).
+   **Mary Pratas is fully resolved.**
 6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
    She'd see nothing if she logged in with that email. In the new admin page: tick "Mostrar famílias sem
    inscrições", open it, "Eliminar família".

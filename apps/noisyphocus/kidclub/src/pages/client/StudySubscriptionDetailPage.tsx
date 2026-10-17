@@ -9,6 +9,7 @@ import { format, eachDayOfInterval, startOfToday, addWeeks } from 'date-fns';
 import { coerceSubscriptionDate, normalizeSubStatus } from '../../lib/utils';
 import { pt } from 'date-fns/locale';
 import { useUser } from '@shared/hooks';
+import { reportClientError } from '../../lib/clientErrors';
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -105,14 +106,18 @@ export default function StudySubscriptionDetailPage() {
         ? (rangeEnd < schoolYearEnd ? rangeEnd : schoolYearEnd)
         : rangeEnd;
 
-      const eventsSnap = await getDocs(
+      // familyId first: firestore.rules only let a parent read their own family's
+      // events, and a query must prove that up front (subscriptionId alone is
+      // denied). Events copy the subscription's familyId; a sub without one has none.
+      const eventsSnap = sub.familyId ? await getDocs(
         query(
           col('reservationEvents'),
+          where('familyId', '==', sub.familyId),
           where('subscriptionId', '==', id),
           where('date', '>=', format(today, 'yyyy-MM-dd')),
           where('date', '<=', format(effectiveEnd, 'yyyy-MM-dd')),
         ),
-      );
+      ) : { docs: [] };
       const eventByDate: Record<string, { id: string; status: string }> = {};
       eventsSnap.docs.forEach(d => {
         const data = d.data();
@@ -165,6 +170,7 @@ export default function StudySubscriptionDetailPage() {
       await fn({ eventId: session.reservationEventId, status: session.cancelled ? 'EXPECTED' : 'CANCELLED' });
       await loadData();
     } catch (err: any) {
+      reportClientError('[StudySubscriptionDetailPage] action failed', err);
       setActionError(err?.message ?? 'Não foi possível guardar. Tente novamente.');
     } finally {
       setActionInProgress(null);
