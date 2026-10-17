@@ -198,7 +198,7 @@ the invoice path, the late-NIF re-link and the email can only run on prod.
 
 (#91 is merged: in `main`, and in `staging` via #92. The 2026-10-11 section's header below still says OPEN.)
 
-## 🧾 "Tentar faturar novamente" can't issue a second invoice (2026-10-17): PR #101 (`agent/kidclub-retry-invoice-guard`) → `staging`, NOT in prod
+## 🧾 "Tentar faturar novamente" can't issue a second invoice (2026-10-17): PR #101, IN PROD via promotion #104
 
 **The hazard.** Before #74's invoice claim, EasyPay's two concurrent webhook calls could both invoice one bill.
 For `oK6GHA7D0f4cRVM3RNZW_2026-09` (Maria Teresa Azevedo), one call got Vendus "A001 … too many documents
@@ -207,12 +207,12 @@ it. `retryVendusInvoice` only refused `invoiced && !invoiceError`, so on that bi
 have reset it to `paid`, deleted the number and issued a **second real Fatura-Recibo**. The admin UI offered the
 button on it.
 
-**Prod data fix: NOT DONE YET (as of 2026-10-17).** The stale `invoiceError` is still on
-`oK6GHA7D0f4cRVM3RNZW_2026-09`. Renato approved deleting that one field, but the agent's prod write was blocked by
-Claude Code's auto-mode classifier, so Renato runs it himself. Until then, or until #101 is in prod, **don't click
-"Tentar faturar novamente" on that bill**. FR 01P2026/226 is its only invoice; no duplicate was issued. It was the
-only one of the 34 paid/invoiced bills with this combination (checked 2026-10-17). Once #101 is in prod the badge
-already hides itself (an invoice number is recorded), so deleting the field is then just tidying.
+**In prod 2026-10-17 ~11:02 UTC**, deployed by the `staging` → `main` PR #104 before merge (retryvendusinvoice
+revision 00033, hosting release 11:02). Smoke check on kidclub.pt (admin, read-only): no "erro de fatura" left
+anywhere, and Maria Teresa's row is clean. **Until #104 is merged, prod is ahead of `main`.** Merge it.
+**No data fix needed (Renato, 2026-10-17).** The stale `invoiceError` stays on `oK6GHA7D0f4cRVM3RNZW_2026-09`
+on purpose. It's harmless now: the bill has an invoice number, so the UI doesn't count it and the retry refuses.
+FR 01P2026/226 is its only invoice; no duplicate was ever issued.
 
 **What #101 changes**
 - `retryVendusInvoice` refuses (`already-exists`, naming the invoice) whenever the bill has an `invoiceNumber` or
@@ -227,7 +227,7 @@ already hides itself (an invoice number is recorded), so deleting the field is t
   - the Cobranças badge and its "Fatura por emitir" text
 - Tests: functions 246/246; the new guard tests fail on the old code.
 
-**Next step:** test on dev (steps in the PR body), then promote with the next `staging` → `main` PR.
+**Next step:** none beyond merging #104. The dev test steps in #101's PR body still describe how to see the guard.
 
 ## 🧾 VAT on subscriptions — VAT convention PR 2 (2026-10-12) — #89 (`agent/kidclub-vat-pr2`) → `staging`, IN PROD (on `main` as of 2026-10-17; check its post-deploy steps were done)
 
