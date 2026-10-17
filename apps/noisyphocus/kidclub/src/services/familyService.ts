@@ -54,6 +54,24 @@ async function claimFamilyByEmail(userEmail: string): Promise<Family | null> {
 }
 
 export const familyService = {
+  /**
+   * Who a parent-side write (child, subscription) should belong to. Normally the
+   * signed-in parent; while an admin impersonates a family it's that family's
+   * parent, not the admin — Firestore accepts either (admins pass every rule),
+   * so stamping the admin here silently hides the record from the real parent
+   * and sends their emails to the admin.
+   */
+  owner(family: Family, user: { uid: string; email?: string | null; name?: string | null }): { userId: string; email: string; name: string } {
+    if (_impersonation) {
+      return {
+        userId: family.primaryContact?.userId ?? '',
+        email: family.primaryContact?.email ?? '',
+        name: (family.primaryContact?.name ?? '').trim(),
+      };
+    }
+    return { userId: user.uid, email: user.email ?? '', name: user.name ?? '' };
+  },
+
   async getOrCreateFamily(userId: string, userName: string, userEmail: string): Promise<Family> {
     if (_impersonation) {
       const snap = await getDoc(docRef('families', _impersonation.familyId));

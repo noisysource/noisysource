@@ -4,7 +4,55 @@
 
 **Last updated:** 2026-10-17
 
-## 🚨 Failed-action tracing (2026-10-17). Branch `agent/kidclub-failed-action-tracing`, PR → `staging`, NOT in prod
+## 🔴 Prod bug (2026-10-16): parents couldn't enroll. PR #96 merged → `main` and deployed to prod 2026-10-17 08:40 UTC
+
+**Symptom.** No new pending subscriptions for weeks. A parent (Bruno, child Laura Silva, family
+`B5O3HQncgNTzM4e3KGPi`) pressed "Enviar pedido de inscrição" repeatedly and nothing happened.
+**The last parent-created subscription on prod was on 2026-09-18.**
+
+**Cause.** Both enroll pages queried `studyroom` / `transportationSubscriptions` by `childId` (duplicate check,
+transport coverage). Rules only let a parent query by their own `userId` (rules aren't filters), so every
+parent submit got permission-denied. The pages had `try/finally` with no `catch`, so the error vanished.
+**Impersonating can't reproduce this:** Firestore still sees the admin token, which passes every rule.
+The same problem hit the upcoming-session lists on the study and transport subscription pages and the
+"As minhas crianças" panel (`reservationEvents` by `subscriptionId` only), plus the transport page's
+sibling-rank query.
+
+**Fix (this branch).** Reads go through `familyService.getChildSubscriptions` / `getFamilySubscriptions`
+(`userId` for a parent; child/family when impersonating). `reservationEvents` queries add `familyId`, with
+a new composite index (familyId + subscriptionId + date). Errors are now shown to the parent.
+`familyService.owner()` stamps new children and subscriptions with the family's parent while impersonating,
+not the admin. "+ Add Subscription" on the child page opens the enrollment form.
+`pnpm test:rules` runs these query shapes against `firestore.rules` in the emulator (18 checks, all pass;
+not in CI yet). Verified only at the rules level: the app can't point Firestore at the emulator.
+
+**Deploy.** Merged and deployed to prod 2026-10-17 08:40 UTC; the prod deploy job succeeded. The automatic
+staging sync failed as usual and was done by hand in `sync/main-to-staging-2026-10-17`. In that merge,
+`TransportSubscriptionDetailPage` kept staging's side: staging had already removed the sibling-rank block.
+**Still to verify on prod:** a parent submits an enrollment and it lands as pending.
+
+**Open, needs Renato:**
+- **Laura Silva's 2 subs carry the admin's identity.** Renato submitted them while impersonating, before the
+  fix. Study `HIJnfN9AnFaryKlPMbiI` and transport `y6TexqKSrRBvLvTlH7Ud` have `userId` = Renato's uid and
+  email `noisysource@gmail.com`. **Don't approve them until fixed:** the approval email goes to `email` /
+  `contactEmail`. Target: `userId` `UlJUfRqSM7eiaZJFwtcTFLLOryD3`, `email`/`contactEmail`
+  `brunofs214@gmail.com`, study `guardianName` "Bruno Filipe Dias da Silva". Renato OK'd it on 2026-10-16.
+  The agent write was blocked by the auto-mode classifier, so Renato runs it. No trigger sends an email for
+  this change; the status-change emails only fire when `status` changes.
+- **Parents worth a call:** children created after go-live with no subscription pointing at them, so
+  possibly failed attempts. Patrícia Tavares (Camila, 09-30, new family `L5Nz8ZDmpZc0D8ZF7wPV`; her older
+  subs sit in owner-less family `dJVtUfA3oDiCJsU2B7LF`), Joana Gomes (Duarte, 09-30), Anabela Gonçalves
+  (Afonso, 10-06). Failed attempts left no trace, so there may be others.
+- **Not fixed, follow-up:** the per-child calendar (`/client/children/:id/calendar`, `EventCalendarPage`)
+  is still broken for parents. It queries subs by `childId`, and `eventService.getEvents` reads every
+  family's transport subscriptions. The family calendar (`/client/calendar`) works. Either rebuild it on
+  `reservationEvents` by `familyId`, or redirect it to the family calendar.
+- **Follow-up:** wire `pnpm test:rules` into `ci-checks.yml` (needs Java on the runner, and the
+  emulator).
+- **Failed-action tracing** (Renato, 2026-10-16: "trace when parents try to do something and it didn't
+  land"): PR #98, merged into `staging`. See its own section below.
+
+## 🚨 Failed-action tracing (2026-10-17). PR #98 merged into `staging` 2026-10-17, NOT in prod
 
 **Why.** From 2026-09-18 to 2026-10-16 every parent enrollment failed silently (see the hotfix
 `hotfix/kidclub-enroll-permission-denied`, PR #96 → `main`). Nobody found out until a parent phoned.
