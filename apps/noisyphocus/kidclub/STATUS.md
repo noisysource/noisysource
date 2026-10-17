@@ -480,12 +480,10 @@ here. A later `staging` → `main` PR deploys its merge ref, which still include
 - **(b) Dangling `vendusClientId`s.** Family `qgQTaxxSpsUJl5bVpVR5` (thaise.ps07) and Ana Bento's family each
   point at one arbitrary duplicate. Decide which client to keep (or let (a) delete them all and the next sync
   make a fresh one with the ref), then fix the family docs to match.
-- **(c) Live Vendus key in `.claude/settings.local.json`.** Rules removed 2026-10-17: every allow rule with
-  the key inline (34 rules, incl. document/client POST/PATCH/DELETE), the prod Easypay `notification`
-  calls, `Bash(gcloud secrets *)` and an old prod `backfill.js` run. **Still to do: rotate the key** — it sat in
-  that file and in old session transcripts for weeks. New key in Vendus, then
-  `firebase functions:secrets:set VENDUS_API_KEY --project rainbow-prod-2454b` (type it at the prompt, never
-  inline), then redeploy functions so they pick up the new version.
+- ~~**(c) Live Vendus key in `.claude/settings.local.json`.**~~ **Done 2026-10-17.** Rules removed: every allow
+  rule with the key inline (34 rules, incl. document/client POST/PATCH/DELETE), the prod Easypay `notification`
+  calls, `Bash(gcloud secrets *)` and an old prod `backfill.js` run. Rotating the key isn't needed (Renato,
+  2026-10-17).
 
 ## Where things stand (2026-10-01, end of session)
 
