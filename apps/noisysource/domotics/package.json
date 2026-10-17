@@ -11,6 +11,12 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "firebase": "^10.14.1"
+    "@react-three/drei": "9.122.0",
+    "@react-three/fiber": "8.18.0",
+    "firebase": "^10.14.1",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.170.0"
   }
 }

@@ -81,7 +81,7 @@ export default function ClimatePanel({
   );
 }
 
-function HeatPumpCard({
+export function HeatPumpCard({
   device, onCommand,
 }: { device: HeatPumpDevice; onCommand: Props['onHeatPumpCommand'] }) {
   const p = device.state;
@@ -189,7 +189,7 @@ function HeatPumpCard({
   );
 }
 
-function ThermostatRow({
+export function ThermostatRow({
   device, room, onCommand,
 }: { device: ThermostatDevice; room?: string; onCommand: Props['onThermostatCommand'] }) {
   const t = device.state;

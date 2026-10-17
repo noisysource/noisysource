@@ -17,6 +17,7 @@ import { SignInScreen } from './components/SignInScreen';
 import { AdminScreen } from './components/AdminScreen';
 import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
+import HouseScreen from './components/HouseScreen';
 import RoomDetail from './components/RoomDetail';
 
 /**
@@ -64,6 +65,20 @@ export type DeviceStatus = 'loading' | 'ok' | 'offline' | 'signin';
 const BRIDGE_RETRY_MS = 4000;
 const BRIDGE_FAILS_BEFORE_OFFLINE = 2;
 
+/** Lights and blinds are re-read on return to the app, but no more often than this. */
+const LEGRAND_REFRESH_MIN_MS = 60_000;
+
+const VIEW_PREF = 'domotics.view';
+type View = '3d' | '2d';
+
+function initialView(): View {
+  try {
+    return localStorage.getItem(VIEW_PREF) === '2d' ? '2d' : '3d';
+  } catch {
+    return '3d';
+  }
+}
+
 const EMPTY: Customization = { deviceNames: {}, deviceRooms: {}, devicePositions: {} };
 const CONFIG_REF = () => doc(db, 'domotics_config', 'customization');
 const PLAN_REF = () => doc(db, 'domotics_config', 'floorplan');
@@ -83,6 +98,8 @@ export default function App() {
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
+  /** The 3D house for everyday use; the 2D plan for editing and the detailed layers. */
+  const [view, setView] = useState<View>(initialView);
   /**
    * Only needed for the relay — the LAN path works signed out, and being
    * unable to sign in should never stop you controlling the house from inside
@@ -118,29 +135,62 @@ export default function App() {
   const uid = user?.uid;
   useEffect(() => {
     if (gated) return;
+    let cancelled = false;
+    let loadedAt = 0;
+
     // Nothing here blocks the first paint: the plan comes from local seed data
     // and renders immediately, so a slow or unreachable gateway costs device
     // state but never the whole UI.
-    getStatusFn()
-      .then(r => {
-        const data = r.data as {
-          body?: { home?: { modules?: any[]; errors?: Array<{ code: number; id: string }> } };
-        };
-        const modules = data?.body?.home?.modules;
-        setDevices(buildDevices(modules));
-        // Netatmo reports an unreachable gateway as status "ok" with an errors
-        // array and no modules — absence of modules is the real signal.
-        setDeviceStatus(modules && modules.length > 0 ? 'ok' : 'offline');
-      })
-      .catch(err => {
-        setDevices(buildDevices());
-        if ((err as { code?: string })?.code === 'functions/unauthenticated') {
-          setDeviceStatus('signin');
-          return;
-        }
-        console.error('Failed to load devices:', err);
-        setDeviceStatus('offline');
-      });
+    function load() {
+      const first = loadedAt === 0;
+      loadedAt = Date.now();
+      getStatusFn()
+        .then(r => {
+          if (cancelled) return;
+          const data = r.data as {
+            body?: { home?: { modules?: any[]; errors?: Array<{ code: number; id: string }> } };
+          };
+          const modules = data?.body?.home?.modules;
+          // Netatmo reports an unreachable gateway as status "ok" with an errors
+          // array and no modules — absence of modules is the real signal.
+          if (modules && modules.length > 0) {
+            setDevices(buildDevices(modules));
+            setDeviceStatus('ok');
+          } else if (first) {
+            setDevices(buildDevices(modules));
+            setDeviceStatus('offline');
+          }
+        })
+        .catch(err => {
+          if (cancelled) return;
+          // A failed refresh keeps what was already on screen; only the first
+          // load falls back to the seed list, so there is something to draw.
+          if (first) setDevices(buildDevices());
+          if ((err as { code?: string })?.code === 'functions/unauthenticated') {
+            setDeviceStatus('signin');
+            return;
+          }
+          console.error('Failed to load devices:', err);
+          if (first) setDeviceStatus('offline');
+        });
+    }
+
+    /**
+     * Re-read when the app comes back to the foreground. An installed phone app
+     * is resumed, not reloaded, so without this it would show the lights as
+     * they were hours ago. Only on return and at most once a minute — Netatmo
+     * is a metered, rate-limited API, so this is deliberately not a poll.
+     */
+    function onVisible() {
+      if (!document.hidden && Date.now() - loadedAt > LEGRAND_REFRESH_MIN_MS) load();
+    }
+
+    load();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [gated, uid]);
 
   useEffect(() => {
@@ -313,6 +363,18 @@ export default function App() {
     } : d);
   }
 
+  /**
+   * Undo an optimistic update after a Legrand command fails. Without this the
+   * screen showed the light on even when the call was refused (signed out,
+   * gateway down) — tolerable on a desk, misleading on a phone away from home,
+   * where the screen is the only way of knowing what the house is doing.
+   * `devices` here is the state from before the optimistic update.
+   */
+  function restoreDevices(deviceIds: string[]) {
+    const before = new Map(devices.filter(d => deviceIds.includes(d.id)).map(d => [d.id, d]));
+    setDevices(prev => prev.map(d => before.get(d.id) ?? d));
+  }
+
   async function handleLightCommand(deviceId: string, command: LightCommand) {
     const current = devices.find(d => d.id === deviceId && d.type === 'light');
     const currentOn = current?.type === 'light' ? current.state.on : false;
@@ -331,6 +393,7 @@ export default function App() {
       await setStateFn({ modules: [{ id: deviceId, bridge: current?.bridge, on }] });
     } catch (err) {
       console.error('Legrand setstate failed:', err);
+      restoreDevices([deviceId]);
     }
   }
 
@@ -367,7 +430,46 @@ export default function App() {
         });
       } catch (err) {
         console.error('Legrand setstate failed:', err);
+        restoreDevices([deviceId]);
       }
+    }
+  }
+
+  /**
+   * Several lights at once ("Apagar todas"). One setstate call carrying every
+   * module, not one call per light: Netatmo is rate-limited per user, and a
+   * whole-house switch-off should cost the same as switching one light.
+   */
+  async function handleLightsSet(deviceIds: string[], on: boolean) {
+    const ids = new Set(deviceIds);
+    const targets = devices.filter(d => d.type === 'light' && ids.has(d.id));
+    if (targets.length === 0) return;
+    setDevices(prev => prev.map(d =>
+      d.type !== 'light' || !ids.has(d.id) ? d : { ...d, state: { ...d.state, on } }
+    ));
+    try {
+      await setStateFn({ modules: targets.map(d => ({ id: d.id, bridge: d.bridge, on })) });
+    } catch (err) {
+      console.error('Legrand setstate failed:', err);
+      restoreDevices(deviceIds);
+    }
+  }
+
+  /** Several blinds to one position, in a single call — same reasoning as lights. */
+  async function handleBlindsSet(deviceIds: string[], position: number) {
+    const ids = new Set(deviceIds);
+    const targets = devices.filter(d => d.type === 'blind' && ids.has(d.id));
+    if (targets.length === 0) return;
+    setDevices(prev => prev.map(d =>
+      d.type !== 'blind' || !ids.has(d.id) ? d : { ...d, state: { ...d.state, position } }
+    ));
+    try {
+      await setStateFn({
+        modules: targets.map(d => ({ id: d.id, bridge: d.bridge, target_position: position })),
+      });
+    } catch (err) {
+      console.error('Legrand setstate failed:', err);
+      restoreDevices(deviceIds);
     }
   }
 
@@ -455,6 +557,39 @@ export default function App() {
     );
   }
 
+  function showView(next: View) {
+    setView(next);
+    try { localStorage.setItem(VIEW_PREF, next); } catch { /* not persisted */ }
+  }
+
+  // Editing always happens on the 2D plan; when it ends, whichever view was
+  // in use comes back.
+  if (view === '3d' && !editMode) {
+    return (
+      <HouseScreen
+        plan={activePlan}
+        devices={effectiveDevices}
+        placements={activeCustom.devicePositions}
+        deviceStatus={deviceStatus}
+        bridgeStatus={bridgeStatus}
+        bridgeUpdatedAt={bridgeUpdatedAt}
+        energy={energy}
+        user={user}
+        onSignIn={signIn}
+        onSignOut={signOutUser}
+        onOpenAdmin={() => setShowAdmin(true)}
+        onShow2D={() => showView('2d')}
+        onStartEdit={startEdit}
+        onLightCommand={handleLightCommand}
+        onLightsSet={handleLightsSet}
+        onBlindCommand={handleBlindCommand}
+        onBlindsSet={handleBlindsSet}
+        onThermostatCommand={handleThermostatCommand}
+        onHeatPumpCommand={handleHeatPumpCommand}
+      />
+    );
+  }
+
   return (
     <PlanScreen
       plan={activePlan}
@@ -468,6 +603,7 @@ export default function App() {
       onSignIn={signIn}
       onSignOut={signOutUser}
       onOpenAdmin={() => setShowAdmin(true)}
+      onShow3D={() => showView('3d')}
       editMode={editMode}
       editTarget={editTarget}
       selectedId={planSelectedId}
