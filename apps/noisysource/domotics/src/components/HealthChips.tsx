@@ -41,9 +41,10 @@ export function ago(ms: number) {
 
 /**
  * Past this, the reading is older than the bridge would ever leave it. Away
- * from home nothing tells the bridge it's being watched (only LAN requests
- * do), so it publishes to the relay at its idle rate — every 5 min — and a
- * 3-minute-old reading is normal, not a warning. The relay itself gives up at
+ * from home a bridge without `watchable` support can't tell it's being watched
+ * (only LAN requests count), so it publishes at its idle rate — every 5 min —
+ * and a 3-minute-old reading is normal, not a warning. A current bridge hears
+ * the app's watch messages and publishes every ~30s instead. The relay itself gives up at
  * 15 min (bridge.ts), where the chip turns red instead.
  */
 const STALE_AFTER_MS = 7 * 60_000;

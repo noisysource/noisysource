@@ -1,7 +1,10 @@
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
+  signOut, onAuthStateChanged,
+} from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { app } from './firebase';
-import { isLanOrigin } from './origin';
+import { isInstalledApp, isLanOrigin } from './origin';
 
 /**
  * Sign-in for the domotics app.
@@ -37,8 +40,50 @@ export function watchAuth(cb: (user: User | null) => void) {
   return onAuthStateChanged(auth, cb);
 }
 
+/**
+ * Google sign-in. A popup in a browser tab, as before; a full-page redirect in
+ * the installed app, where a popup opens in a separate sheet that can't hand
+ * the result back reliably. The redirect leaves the page — the result arrives
+ * through `watchAuth` when the app reloads, and any error through
+ * `redirectSignInError`.
+ */
 export async function signIn() {
-  await signInWithPopup(auth, new GoogleAuthProvider());
+  const provider = new GoogleAuthProvider();
+  if (isInstalledApp()) await signInWithRedirect(auth, provider);
+  else await signInWithPopup(auth, provider);
+}
+
+/** Why a redirect sign-in failed, once back in the app; null if it didn't. */
+export async function redirectSignInError(): Promise<unknown> {
+  try {
+    await getRedirectResult(auth);
+    return null;
+  } catch (err) {
+    return err;
+  }
+}
+
+/**
+ * Firebase Auth only accepts sign-in from its authorized domains, and no LAN
+ * address is one (localhost included) — so on the LAN, sign-in always fails.
+ */
+export const LAN_NO_SIGN_IN =
+  'Na rede local não é possível iniciar sessão. Use a app (kidclub-dev-domotics.web.app).';
+
+/** Sign-in failures in words, for the person holding the phone. */
+export function describeSignInError(err: unknown): string {
+  const code = (err as { code?: string })?.code ?? '';
+  if (code === 'auth/unauthorized-domain') {
+    // Not something the person did: the page's host isn't one Firebase Auth
+    // accepts. On the LAN that's every address — localhost included.
+    return isLanOrigin()
+      ? LAN_NO_SIGN_IN
+      : `${window.location.hostname} não está nos domínios autorizados do Firebase Auth.`;
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return 'Sessão cancelada.';
+  if (code === 'auth/popup-blocked') return 'O navegador bloqueou a janela de início de sessão.';
+  if (code === 'auth/network-request-failed') return 'Sem ligação à internet.';
+  return (err as Error)?.message ?? 'Não foi possível iniciar sessão.';
 }
 
 export async function signOutUser() {

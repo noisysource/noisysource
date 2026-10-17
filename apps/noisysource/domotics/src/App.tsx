@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
@@ -9,10 +9,15 @@ import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
-import { fetchBridgeState, sendBridgeCommand } from './lib/bridge';
+import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
-import { watchAuth, signIn, signOutUser, requiresSignIn } from './lib/auth';
+import {
+  watchAuth, signIn, signOutUser, requiresSignIn, redirectSignInError, describeSignInError,
+  LAN_NO_SIGN_IN,
+} from './lib/auth';
+import { isLanOrigin } from './lib/origin';
+import NoticeToast, { type Notice } from './components/NoticeToast';
 import { SignInScreen } from './components/SignInScreen';
 import { AdminScreen } from './components/AdminScreen';
 import type { User } from 'firebase/auth';
@@ -115,6 +120,43 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => watchAuth(u => { setUser(u); setAuthReady(true); }), []);
+
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const notify = (text: string) => setNotice({ id: Date.now(), text });
+  const clearNotice = useCallback(() => setNotice(null), []);
+
+  // Back from a redirect sign-in (the installed app): success arrives through
+  // watchAuth; a failure only shows up here, so it has to be asked for.
+  useEffect(() => {
+    void redirectSignInError().then(err => { if (err) notify(describeSignInError(err)); });
+  }, []);
+
+  /** Sign-in from the header and chips. Says why instead of failing silently. */
+  async function requestSignIn() {
+    if (isLanOrigin()) {
+      notify(LAN_NO_SIGN_IN);
+      return;
+    }
+    try {
+      await signIn();
+    } catch (err) {
+      notify(describeSignInError(err));
+    }
+  }
+
+  function legrandFailed(err: unknown) {
+    console.error('Legrand setstate failed:', err);
+    const code = (err as { code?: string })?.code;
+    notify(
+      code === 'functions/unauthenticated'
+        ? isLanOrigin()
+          ? `As luzes e estores precisam de sessão iniciada. ${LAN_NO_SIGN_IN}`
+          : 'Inicie sessão para controlar as luzes e estores.'
+        : code === 'functions/permission-denied'
+        ? 'Esta conta não tem acesso às luzes e estores.'
+        : 'As luzes e estores não responderam. Tente de novo.',
+    );
+  }
 
   /**
    * Gated pages must not do any work.
@@ -243,6 +285,7 @@ export default function App() {
         setEnergy(state.inverter ?? null);
         setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
+        void announceWatching();
       } catch {
         if (cancelled) return;
         failures++;
@@ -304,6 +347,7 @@ export default function App() {
       setCustomization(draft.customization);
     } catch (err) {
       console.error('Failed to save config:', err);
+      notify('Não foi possível guardar a planta.');
     }
     setDraft(null);
     setPlanSelectedId(null);
@@ -392,7 +436,7 @@ export default function App() {
     try {
       await setStateFn({ modules: [{ id: deviceId, bridge: current?.bridge, on }] });
     } catch (err) {
-      console.error('Legrand setstate failed:', err);
+      legrandFailed(err);
       restoreDevices([deviceId]);
     }
   }
@@ -429,7 +473,7 @@ export default function App() {
           modules: [{ id: deviceId, bridge: blindDev?.bridge, target_position }],
         });
       } catch (err) {
-        console.error('Legrand setstate failed:', err);
+        legrandFailed(err);
         restoreDevices([deviceId]);
       }
     }
@@ -450,7 +494,7 @@ export default function App() {
     try {
       await setStateFn({ modules: targets.map(d => ({ id: d.id, bridge: d.bridge, on })) });
     } catch (err) {
-      console.error('Legrand setstate failed:', err);
+      legrandFailed(err);
       restoreDevices(deviceIds);
     }
   }
@@ -468,7 +512,7 @@ export default function App() {
         modules: targets.map(d => ({ id: d.id, bridge: d.bridge, target_position: position })),
       });
     } catch (err) {
-      console.error('Legrand setstate failed:', err);
+      legrandFailed(err);
       restoreDevices(deviceIds);
     }
   }
@@ -495,6 +539,7 @@ export default function App() {
       if (state) setTuyaDevices(buildTuyaDevices(state.devices));
     } catch (err) {
       console.error('Bridge command failed:', err);
+      notify('O comando de clima não chegou à casa. Tente de novo.');
     }
   }
 
@@ -509,6 +554,7 @@ export default function App() {
       if (state) setTuyaDevices(buildTuyaDevices(state.devices));
     } catch (err) {
       console.error('Bridge command failed:', err);
+      notify('O comando de clima não chegou à casa. Tente de novo.');
     }
   }
 
@@ -527,46 +573,79 @@ export default function App() {
     ? (activePlan.rooms.find(r => r.id === openRoomId) ?? null)
     : null;
 
-  // Served from the public internet, the house is not shown to anyone who has
-  // not signed in. On the LAN this is skipped entirely — see requiresSignIn.
-  if (gated) {
-    return authReady
-      ? <SignInScreen onSignIn={signIn} />
-      : <div className="h-screen bg-zinc-950" />;
-  }
+  return (
+    <>
+      {renderScreen()}
+      {notice && <NoticeToast notice={notice} onClose={clearNotice} />}
+    </>
+  );
 
-  if (showAdmin) {
+  function renderScreen() {
+    // Served from the public internet, the house is not shown to anyone who has
+    // not signed in. On the LAN this is skipped entirely — see requiresSignIn.
+    if (gated) {
+      return authReady
+        ? <SignInScreen onSignIn={signIn} />
+        : <div className="h-screen bg-zinc-950" />;
+    }
+
+    if (showAdmin) {
+      return (
+        <AdminScreen
+          onBack={() => setShowAdmin(false)}
+          bridgeUpdatedAt={bridgeUpdatedAt}
+        />
+      );
+    }
+
+    if (openRoom) {
+      return (
+        <RoomDetail
+          room={openRoom}
+          devices={effectiveDevices.filter(d => d.roomId === openRoom.id)}
+          onBack={() => setOpenRoomId(null)}
+          onLightCommand={handleLightCommand}
+          onBlindCommand={handleBlindCommand}
+          {...editProps}
+        />
+      );
+    }
+
+    function showView(next: View) {
+      setView(next);
+      try { localStorage.setItem(VIEW_PREF, next); } catch { /* not persisted */ }
+    }
+
+    // Editing always happens on the 2D plan; when it ends, whichever view was
+    // in use comes back.
+    if (view === '3d' && !editMode) {
+      return (
+        <HouseScreen
+          plan={activePlan}
+          devices={effectiveDevices}
+          placements={activeCustom.devicePositions}
+          deviceStatus={deviceStatus}
+          bridgeStatus={bridgeStatus}
+          bridgeUpdatedAt={bridgeUpdatedAt}
+          energy={energy}
+          user={user}
+          onSignIn={requestSignIn}
+          onSignOut={signOutUser}
+          onOpenAdmin={() => setShowAdmin(true)}
+          onShow2D={() => showView('2d')}
+          onStartEdit={startEdit}
+          onLightCommand={handleLightCommand}
+          onLightsSet={handleLightsSet}
+          onBlindCommand={handleBlindCommand}
+          onBlindsSet={handleBlindsSet}
+          onThermostatCommand={handleThermostatCommand}
+          onHeatPumpCommand={handleHeatPumpCommand}
+        />
+      );
+    }
+
     return (
-      <AdminScreen
-        onBack={() => setShowAdmin(false)}
-        bridgeUpdatedAt={bridgeUpdatedAt}
-      />
-    );
-  }
-
-  if (openRoom) {
-    return (
-      <RoomDetail
-        room={openRoom}
-        devices={effectiveDevices.filter(d => d.roomId === openRoom.id)}
-        onBack={() => setOpenRoomId(null)}
-        onLightCommand={handleLightCommand}
-        onBlindCommand={handleBlindCommand}
-        {...editProps}
-      />
-    );
-  }
-
-  function showView(next: View) {
-    setView(next);
-    try { localStorage.setItem(VIEW_PREF, next); } catch { /* not persisted */ }
-  }
-
-  // Editing always happens on the 2D plan; when it ends, whichever view was
-  // in use comes back.
-  if (view === '3d' && !editMode) {
-    return (
-      <HouseScreen
+      <PlanScreen
         plan={activePlan}
         devices={effectiveDevices}
         placements={activeCustom.devicePositions}
@@ -575,53 +654,29 @@ export default function App() {
         bridgeUpdatedAt={bridgeUpdatedAt}
         energy={energy}
         user={user}
-        onSignIn={signIn}
+        onSignIn={requestSignIn}
         onSignOut={signOutUser}
         onOpenAdmin={() => setShowAdmin(true)}
-        onShow2D={() => showView('2d')}
-        onStartEdit={startEdit}
+        onShow3D={() => showView('3d')}
+        editMode={editMode}
+        editTarget={editTarget}
+        selectedId={planSelectedId}
+        onEditTargetChange={setEditTarget}
+        onSelect={setPlanSelectedId}
+        onOpenRoom={setOpenRoomId}
+        onChangeRooms={changeRooms}
+        onChangeInfra={changeInfra}
+        onChangeWalls={changeWalls}
+        onPlaceDevice={placeDevice}
+        onDeviceNameChange={updateDeviceName}
         onLightCommand={handleLightCommand}
-        onLightsSet={handleLightsSet}
         onBlindCommand={handleBlindCommand}
-        onBlindsSet={handleBlindsSet}
         onThermostatCommand={handleThermostatCommand}
         onHeatPumpCommand={handleHeatPumpCommand}
+        onStartEdit={startEdit}
+        onCancelEdit={cancelEdit}
+        onSaveEdit={saveEdit}
       />
     );
   }
-
-  return (
-    <PlanScreen
-      plan={activePlan}
-      devices={effectiveDevices}
-      placements={activeCustom.devicePositions}
-      deviceStatus={deviceStatus}
-      bridgeStatus={bridgeStatus}
-      bridgeUpdatedAt={bridgeUpdatedAt}
-      energy={energy}
-      user={user}
-      onSignIn={signIn}
-      onSignOut={signOutUser}
-      onOpenAdmin={() => setShowAdmin(true)}
-      onShow3D={() => showView('3d')}
-      editMode={editMode}
-      editTarget={editTarget}
-      selectedId={planSelectedId}
-      onEditTargetChange={setEditTarget}
-      onSelect={setPlanSelectedId}
-      onOpenRoom={setOpenRoomId}
-      onChangeRooms={changeRooms}
-      onChangeInfra={changeInfra}
-      onChangeWalls={changeWalls}
-      onPlaceDevice={placeDevice}
-      onDeviceNameChange={updateDeviceName}
-      onLightCommand={handleLightCommand}
-      onBlindCommand={handleBlindCommand}
-      onThermostatCommand={handleThermostatCommand}
-      onHeatPumpCommand={handleHeatPumpCommand}
-      onStartEdit={startEdit}
-      onCancelEdit={cancelEdit}
-      onSaveEdit={saveEdit}
-    />
-  );
 }
