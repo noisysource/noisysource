@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { callable } from '../../../lib/callable';
+import { hasOpenInvoiceError } from '@shared/models/billingInvoiceState';
 import { BillRow, isUnpaid, isOverdue } from './model';
 
 const STATUS_TAG: Record<string, { label: string; cls: string }> = {
@@ -32,7 +33,9 @@ export default function FamilyBills({ bills, onChanged }: {
   const [resetting, setResetting] = useState<string | null>(null);
   const [resetError, setResetError] = useState<Record<string, string>>({});
 
-  const errors = bills.filter(b => b.invoiceError);
+  // Only bills with no invoice recorded: a stale invoiceError on an invoiced
+  // bill must not offer a retry (it would issue a second real invoice).
+  const errors = bills.filter(hasOpenInvoiceError);
   const duplicates = bills.filter(b => b.duplicatePaymentEasypayIds);
   const newestFirst = bills.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey));
   // Bills exist ahead of time for the whole school year. By default show what
@@ -41,7 +44,7 @@ export default function FamilyBills({ bills, onChanged }: {
     .filter(b => isUnpaid(b) && !isOverdue(b))
     .sort((a, b) => a.periodKey.localeCompare(b.periodKey))[0];
   const visible = showAll ? newestFirst : newestFirst.filter(b =>
-    isOverdue(b) || b.invoiceError || b.status === 'processing' || b.duplicatePaymentEasypayIds || b === nextDue);
+    isOverdue(b) || hasOpenInvoiceError(b) || b.status === 'processing' || b.duplicatePaymentEasypayIds || b === nextDue);
 
   // One call per click, button disabled while it runs: this creates a real
   // invoice in the live Vendus account (prod) and emails it to the parent.

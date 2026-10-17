@@ -16,6 +16,7 @@ export * from './Transportation';
 export * from './Employment';
 export * from './Invoice';
 export * from './Billing';
+export * from './billingInvoiceState';
 export * from './Payment';
 export * from './Family';
 export * from './Child';

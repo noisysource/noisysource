@@ -3,7 +3,7 @@ import { getDocs, query, orderBy, where, Timestamp } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import { callable } from '../../lib/callable';
 import { col } from '../../lib/db';
-import { BillingRecord, BillingStatus, BillingPaymentMethod, BillingLineItem } from '@shared/models';
+import { BillingRecord, BillingStatus, BillingPaymentMethod, BillingLineItem, hasOpenInvoiceError } from '@shared/models';
 import MarkPaidModal from './billing/MarkPaidModal';
 import BankDetailsPanel from './billing/BankDetailsPanel';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
@@ -443,7 +443,7 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                           ⚠️ Pagamento em duplicado
                         </span>
                       )}
-                      {r.invoiceError && (
+                      {hasOpenInvoiceError(r) && (
                         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-800" title={r.invoiceError}>
                           🧾 Erro de fatura
                         </span>
@@ -492,7 +492,7 @@ function MonthSection({ monthKey, records, expanded, onToggle, expandedId, onExp
                       )}
                       {r.paidAt && <p className="text-xs text-green-700 mt-1">Pago em {fmtDate(r.paidAt)}{r.manualPayment ? ' · transferência confirmada manualmente' : ''}{r.manualPayment?.note ? ` — ${r.manualPayment.note}` : ''}</p>}
                       {r.invoiceNumber && <p className="text-xs text-purple-700 mt-1">Fatura: {r.invoiceNumber}</p>}
-                      {r.invoiceError && (
+                      {hasOpenInvoiceError(r) && (
                         <p className="text-xs text-red-700 mt-1 break-words">
                           Fatura por emitir: {r.invoiceError} — <Link to="/admin/subscriptions" className="underline">Tentar faturar novamente em Famílias e inscrições</Link>
                         </p>
