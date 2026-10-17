@@ -7,7 +7,7 @@ import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { familyService } from '../../../services/familyService';
 import { getTransportationConfig } from '../../../services/transportationService';
 import { studyRoomService } from '../../../services/studyRoomService';
-import { addDoc, getDoc, updateDoc, writeBatch, doc, getDocs, query, where } from 'firebase/firestore';
+import { addDoc, getDoc, updateDoc, writeBatch, doc } from 'firebase/firestore';
 import { col, docRef } from '../../../lib/db';
 import { db } from '../../../lib/firebase';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
@@ -15,7 +15,10 @@ import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../compo
 import { DiscountRule } from '@shared/models/Discount';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
-import { calculateAge, normalizeSubStatus, normalizeEmail } from '../../../lib/utils';
+import { calculateAge, normalizeEmail } from '../../../lib/utils';
+
+const SAVE_ERROR = 'Não foi possível enviar o pedido. Tente novamente; se o problema continuar, contacte-nos.';
+const LOAD_ERROR = 'Não foi possível carregar o formulário de inscrição.';
 
 function computeTransportFee(
   days: DayConfig[],
@@ -51,6 +54,8 @@ export default function TransportEnrollPage() {
 
   const [child, setChild] = useState<Child | null>(null);
   const [familyId, setFamilyId] = useState<string | null>(null);
+  const [owner, setOwner] = useState<{ userId: string; email: string; name: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tConfig, setTConfig] = useState<TransportationConfig | null>(null);
   const [sConfig, setSConfig] = useState<StudyCenterConfig | null>(null);
   const [activeSiblingCount, setActiveSiblingCount] = useState(0);
@@ -72,10 +77,11 @@ export default function TransportEnrollPage() {
     const errs = validateEnrollmentDetails(newChildDetails);
     if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
     setCreatingChild(true);
+    setSubmitError(null);
     try {
       const fam = await familyService.getOrCreateFamily(user.uid, user.name || '', user.email || '');
       const dob = new Date(newChildDetails.dateOfBirth + 'T12:00:00');
-      const newChildId = await familyService.addChild(fam.id, user.uid, {
+      const newChildId = await familyService.addChild(fam.id, familyService.owner(fam, user).userId, {
         firstName: newChildDetails.firstName.trim(),
         lastName: newChildDetails.lastName.trim(),
         dateOfBirth: dob,
@@ -85,6 +91,9 @@ export default function TransportEnrollPage() {
         status: 'active',
       });
       navigate(`/client/enroll/transport?childId=${newChildId}`, { replace: true });
+    } catch (err) {
+      console.error('[enroll/transport] create child failed', err);
+      setSubmitError(SAVE_ERROR);
     } finally {
       setCreatingChild(false);
     }
@@ -99,6 +108,7 @@ export default function TransportEnrollPage() {
     if (!user || !childId) return;
     const load = async () => {
       setIsLoading(true);
+      setLoadError(null);
       try {
         const promises: Promise<any>[] = [
           familyService.getOrCreateFamily(user.uid, user.name || '', user.email || ''),
@@ -110,28 +120,25 @@ export default function TransportEnrollPage() {
         if (editId) promises.push(getDoc(docRef('transportationSubscriptions', editId)));
         const [fam, c, cfg, sCfg, rules, existingSnap] = await Promise.all(promises);
         setFamilyId(fam.id);
+        setOwner(familyService.owner(fam, user));
         setChild(c);
         setTConfig(cfg);
         setSConfig(sCfg);
         setDiscountRules(rules ?? []);
 
-        // Count siblings across both services (any non-cancelled status) for sibling discount preview
+        // Count siblings across both services (any non-cancelled status) for sibling discount preview.
+        // Through familyService: a parent may only query subscriptions by their own userId.
         try {
-          const [tSibSnap, sSibSnap] = await Promise.all([
-            getDocs(query(col('transportationSubscriptions'), where('familyId', '==', fam.id))),
-            getDocs(query(col('studyroom'), where('familyId', '==', fam.id))),
-          ]);
-          const CANCELLED = new Set(['cancelled', 'canceled']);
+          const famSubs = await familyService.getFamilySubscriptions(fam.id, user.uid);
           const siblingChildIds = new Set<string>();
-          for (const d of [...tSibSnap.docs, ...sSibSnap.docs]) {
-            const x = d.data();
-            if (!CANCELLED.has(x.status) && x.childId && x.childId !== childId) {
+          for (const x of [...famSubs.transport, ...famSubs.study] as any[]) {
+            if (x.status !== 'cancelled' && x.childId && x.childId !== childId) {
               siblingChildIds.add(x.childId);
             }
           }
           setActiveSiblingCount(siblingChildIds.size);
         } catch {
-          // Firestore rules may not permit this query — sibling discount silently unavailable
+          // best-effort — sibling discount preview unavailable; the server recalculates discounts anyway
         }
 
         if (existingSnap?.exists()) {
@@ -149,6 +156,9 @@ export default function TransportEnrollPage() {
           }
           setSchedule({ weekPattern: sub.weekPattern ?? 'all', days: Object.values(dayMap) });
         }
+      } catch (err) {
+        console.error('[enroll/transport] load failed', err);
+        setLoadError(LOAD_ERROR);
       } finally {
         setIsLoading(false);
       }
@@ -168,22 +178,18 @@ export default function TransportEnrollPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!child || !familyId || !tConfig || !isValid) return;
+    if (!user || !child || !familyId || !owner || !tConfig || !isValid) return;
     setSubmitError(null);
     setSubmitting(true);
     try {
       if (!editId) {
-        const [tDupSnap, sDupSnap] = await Promise.all([
-          getDocs(query(col('transportationSubscriptions'), where('childId', '==', child.id))),
-          studyDays.length > 0 ? getDocs(query(col('studyroom'), where('childId', '==', child.id))) : Promise.resolve(null),
-        ]);
-        const hasTransportDup = tDupSnap.docs.some(d => normalizeSubStatus(d.data().status) !== 'cancelled');
-        const hasStudyDup = sDupSnap?.docs.some(d => {
-          const data = d.data();
-          return !data.canceled &&
-            data.schoolYear === (child.schoolYear || '') &&
-            normalizeSubStatus(data.status) !== 'cancelled';
-        });
+        const existing = await familyService.getChildSubscriptions(child.id, user.uid);
+        const hasTransportDup = existing.transport.some((d: any) => d.status !== 'cancelled');
+        const hasStudyDup = studyDays.length > 0 && existing.study.some((data: any) =>
+          !data.canceled &&
+          data.schoolYear === (child.schoolYear || '') &&
+          data.status !== 'cancelled'
+        );
         if (hasTransportDup) {
           setSubmitError('Já existe uma inscrição de transporte ativa para este aluno.');
           return;
@@ -232,10 +238,10 @@ export default function TransportEnrollPage() {
         const sRef = doc(col('studyroom'));
 
         batch.set(tRef, {
-          familyId, userId: user?.uid || '', childId: child.id,
+          familyId, userId: owner.userId, childId: child.id,
           childName: `${child.firstName} ${child.lastName}`,
           childAge: child.age || 0,
-          contactMobile: '', contactEmail: user?.email || '',
+          contactMobile: '', contactEmail: owner.email,
           startDate: today.toISOString().split('T')[0],
           endDate: nextJuly.toISOString().split('T')[0],
           status: 'pending', monthlyFee: tFee, weekPattern: schedule.weekPattern,
@@ -244,11 +250,11 @@ export default function TransportEnrollPage() {
         });
 
         batch.set(sRef, {
-          familyId, userId: user?.uid || '', childId: child.id,
+          familyId, userId: owner.userId, childId: child.id,
           childName: `${child.firstName} ${child.lastName}`,
           studentName: `${child.firstName} ${child.lastName}`,
           schoolName: child.schoolName || '', schoolYear: child.schoolYear || '',
-          guardianName: user?.name || '', email: normalizeEmail(user?.email), phone: '',
+          guardianName: owner.name, email: normalizeEmail(owner.email), phone: '',
           days: studyDays.map(d => ({ day: d.weekday, hour: d.hour })),
           weekPattern: schedule.weekPattern,
           monthlyPrice: sFee, basePrice: sFee,
@@ -261,10 +267,10 @@ export default function TransportEnrollPage() {
         await batch.commit();
       } else {
         await addDoc(col('transportationSubscriptions'), {
-          familyId, userId: user?.uid || '', childId: child.id,
+          familyId, userId: owner.userId, childId: child.id,
           childName: `${child.firstName} ${child.lastName}`,
           childAge: child.age || 0,
-          contactMobile: '', contactEmail: user?.email || '',
+          contactMobile: '', contactEmail: owner.email,
           startDate: today.toISOString().split('T')[0],
           endDate: nextJuly.toISOString().split('T')[0],
           status: 'pending', monthlyFee: tFee, weekPattern: schedule.weekPattern,
@@ -274,6 +280,9 @@ export default function TransportEnrollPage() {
       }
 
       setSubmitted(true);
+    } catch (err) {
+      console.error('[enroll/transport] submit failed', err);
+      setSubmitError(SAVE_ERROR);
     } finally {
       setSubmitting(false);
     }
@@ -289,6 +298,9 @@ export default function TransportEnrollPage() {
         </div>
         <form onSubmit={handleCreateChild} className="space-y-5">
           <EnrollmentDetailsForm value={newChildDetails} onChange={setNewChildDetails} showContactFields={false} errors={newChildErrors} />
+          {submitError && (
+            <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">{submitError}</p>
+          )}
           <button type="submit" disabled={creatingChild}
             className="w-full bg-green-600 text-white py-3 rounded-xl font-semibold hover:bg-green-700 disabled:opacity-60">
             {creatingChild ? 'A continuar…' : 'Continuar'}
@@ -298,6 +310,20 @@ export default function TransportEnrollPage() {
     );
   }
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
+
+  if (loadError) {
+    return (
+      <div className="max-w-lg">
+        <Link to="/client/children" className="text-blue-600 hover:underline text-sm">← Voltar</Link>
+        <div className="mt-4 bg-red-50 border border-red-200 rounded-xl p-5 text-center space-y-3">
+          <p className="text-red-700">{loadError}</p>
+          <button onClick={() => window.location.reload()} className="text-red-700 border border-red-300 px-4 py-2 rounded-lg hover:bg-red-100">
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (submitted) {
     return (

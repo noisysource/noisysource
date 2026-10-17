@@ -8,12 +8,12 @@ import { studyRoomService } from '../../../services/studyRoomService';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
 import { DiscountRule } from '@shared/models/Discount';
 import { inferDirection } from '@shared/models/Transportation';
-import { addDoc, getDoc, getDocs, updateDoc, query, where } from 'firebase/firestore';
+import { addDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { col, docRef } from '../../../lib/db';
 import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
-import { calculateAge, normalizeSubStatus, normalizeEmail } from '../../../lib/utils';
+import { calculateAge, normalizeEmail } from '../../../lib/utils';
 
 
 function buildTransportCoverage(subs: any[]) {
@@ -25,6 +25,9 @@ function buildTransportCoverage(subs: any[]) {
   }
   return coverage;
 }
+
+const SAVE_ERROR = 'Não foi possível enviar o pedido. Tente novamente; se o problema continuar, contacte-nos.';
+const LOAD_ERROR = 'Não foi possível carregar o formulário de inscrição.';
 
 function computeStudyFee(days: DayConfig[], cfg: StudyCenterConfig, weekPattern: WeekScheduleValue['weekPattern']): number {
   const studyDays = days.filter(d => d.services.study).length;
@@ -45,6 +48,8 @@ export default function StudyRoomEnrollPage() {
 
   const [child, setChild] = useState<Child | null>(null);
   const [familyId, setFamilyId] = useState<string | null>(null);
+  const [owner, setOwner] = useState<{ userId: string; email: string; name: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [config, setConfig] = useState<StudyCenterConfig | null>(null);
   const [transportCoverage, setTransportCoverage] = useState<{ weekday: string; direction: 'pickup' | 'dropoff' | 'both' }[]>([]);
   const [discountRules, setDiscountRules] = useState<DiscountRule[]>([]);
@@ -66,10 +71,11 @@ export default function StudyRoomEnrollPage() {
     const errs = validateEnrollmentDetails(newChildDetails);
     if (Object.keys(errs).length) { setNewChildErrors(errs); return; }
     setCreatingChild(true);
+    setSubmitError(null);
     try {
       const fam = await familyService.getOrCreateFamily(user.uid, user.name || '', user.email || '');
       const dob = new Date(newChildDetails.dateOfBirth + 'T12:00:00');
-      const newChildId = await familyService.addChild(fam.id, user.uid, {
+      const newChildId = await familyService.addChild(fam.id, familyService.owner(fam, user).userId, {
         firstName: newChildDetails.firstName.trim(),
         lastName: newChildDetails.lastName.trim(),
         dateOfBirth: dob,
@@ -79,6 +85,9 @@ export default function StudyRoomEnrollPage() {
         status: 'active',
       });
       navigate(`/client/enroll/study?childId=${newChildId}`, { replace: true });
+    } catch (err) {
+      console.error('[enroll/study] create child failed', err);
+      setSubmitError(SAVE_ERROR);
     } finally {
       setCreatingChild(false);
     }
@@ -91,37 +100,35 @@ export default function StudyRoomEnrollPage() {
     if (!user || !childId) return;
     const load = async () => {
       setIsLoading(true);
+      setLoadError(null);
       try {
+        // Subscription reads go through familyService: a parent may only query by
+        // their own userId (rules aren't filters — a childId/familyId-only query
+        // is denied outright), while an impersonating admin queries by child/family.
         const promises: Promise<any>[] = [
           familyService.getOrCreateFamily(user.uid, user.name || '', user.email || ''),
           familyService.getChild(childId),
           studyRoomService.getStudyCenterConfig(),
-          getDocs(query(col('transportationSubscriptions'), where('childId', '==', childId))),
+          familyService.getChildSubscriptions(childId, user.uid),
           getDiscountRules(),
         ];
         if (editId) promises.push(getDoc(docRef('studyroom', editId)));
-        const [fam, c, cfg, transSnap, rules, existingSnap] = await Promise.all(promises);
+        const [fam, c, cfg, childSubs, rules, existingSnap] = await Promise.all(promises);
         setFamilyId(fam.id);
+        setOwner(familyService.owner(fam, user));
         setChild(c);
         setConfig(cfg);
         setDiscountRules(rules ?? []);
         setTransportCoverage(buildTransportCoverage(
-          transSnap.docs
-            .map((d: any) => ({ id: d.id, ...d.data() }))
-            .filter((s: any) => normalizeSubStatus(s.status) !== 'cancelled')
+          childSubs.transport.filter((s: any) => s.status !== 'cancelled')
         ));
 
         // Sibling count for discount preview: both collections, any non-cancelled status
         try {
-          const CANCELLED = new Set(['cancelled', 'canceled']);
-          const [tSibSnap, sSibSnap] = await Promise.all([
-            getDocs(query(col('transportationSubscriptions'), where('familyId', '==', fam.id))),
-            getDocs(query(col('studyroom'), where('familyId', '==', fam.id))),
-          ]);
+          const famSubs = await familyService.getFamilySubscriptions(fam.id, user.uid);
           const siblingChildIds = new Set<string>();
-          for (const d of [...tSibSnap.docs, ...sSibSnap.docs]) {
-            const x = d.data();
-            if (!CANCELLED.has(x.status) && x.childId && x.childId !== childId) siblingChildIds.add(x.childId);
+          for (const x of [...famSubs.transport, ...famSubs.study] as any[]) {
+            if (x.status !== 'cancelled' && x.childId && x.childId !== childId) siblingChildIds.add(x.childId);
           }
           setActiveSiblingCount(siblingChildIds.size);
         } catch { /* best-effort */ }
@@ -138,6 +145,9 @@ export default function StudyRoomEnrollPage() {
           setSchedule({ weekPattern: sub.weekPattern ?? 'all', days });
           setNote(sub.note ?? '');
         }
+      } catch (err) {
+        console.error('[enroll/study] load failed', err);
+        setLoadError(LOAD_ERROR);
       } finally {
         setIsLoading(false);
       }
@@ -151,18 +161,17 @@ export default function StudyRoomEnrollPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!child || !familyId || !config || studyDays.length === 0) return;
+    if (!user || !child || !familyId || !owner || !config || studyDays.length === 0) return;
     setSubmitError(null);
     setSubmitting(true);
     try {
       if (!editId) {
-        const dupSnap = await getDocs(query(col('studyroom'), where('childId', '==', child.id)));
-        const hasDup = dupSnap.docs.some(d => {
-          const data = d.data();
-          return !data.canceled &&
-            data.schoolYear === (child.schoolYear || '') &&
-            normalizeSubStatus(data.status) !== 'cancelled';
-        });
+        const { study } = await familyService.getChildSubscriptions(child.id, user.uid);
+        const hasDup = study.some((data: any) =>
+          !data.canceled &&
+          data.schoolYear === (child.schoolYear || '') &&
+          data.status !== 'cancelled'
+        );
         if (hasDup) {
           setSubmitError('Já existe uma inscrição na Sala de Estudo para este aluno este ano letivo.');
           return;
@@ -196,14 +205,14 @@ export default function StudyRoomEnrollPage() {
 
       await addDoc(col('studyroom'), {
         familyId,
-        userId: user?.uid || '',
+        userId: owner.userId,
         childId: child.id,
         childName: `${child.firstName} ${child.lastName}`,
         studentName: `${child.firstName} ${child.lastName}`,
         schoolName: child.schoolName || '',
         schoolYear: child.schoolYear || '',
-        guardianName: user?.name || '',
-        email: normalizeEmail(user?.email),
+        guardianName: owner.name,
+        email: normalizeEmail(owner.email),
         phone: '',
         days,
         weekPattern: schedule.weekPattern,
@@ -223,6 +232,9 @@ export default function StudyRoomEnrollPage() {
       });
 
       setSubmitted(true);
+    } catch (err) {
+      console.error('[enroll/study] submit failed', err);
+      setSubmitError(SAVE_ERROR);
     } finally {
       setSubmitting(false);
     }
@@ -238,6 +250,9 @@ export default function StudyRoomEnrollPage() {
         </div>
         <form onSubmit={handleCreateChild} className="space-y-5">
           <EnrollmentDetailsForm value={newChildDetails} onChange={setNewChildDetails} showContactFields={false} errors={newChildErrors} />
+          {submitError && (
+            <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-center">{submitError}</p>
+          )}
           <button type="submit" disabled={creatingChild}
             className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60">
             {creatingChild ? 'A continuar…' : 'Continuar'}
@@ -247,6 +262,20 @@ export default function StudyRoomEnrollPage() {
     );
   }
   if (isLoading) return <div className="flex justify-center items-center h-64 text-gray-500">A carregar...</div>;
+
+  if (loadError) {
+    return (
+      <div className="max-w-lg">
+        <Link to="/client/children" className="text-blue-600 hover:underline text-sm">← Voltar</Link>
+        <div className="mt-4 bg-red-50 border border-red-200 rounded-xl p-5 text-center space-y-3">
+          <p className="text-red-700">{loadError}</p>
+          <button onClick={() => window.location.reload()} className="text-red-700 border border-red-300 px-4 py-2 rounded-lg hover:bg-red-100">
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (submitted) {
     const DAY_PT: Record<string, string> = { monday: 'Segunda', tuesday: 'Terça', wednesday: 'Quarta', thursday: 'Quinta', friday: 'Sexta' };
