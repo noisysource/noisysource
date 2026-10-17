@@ -1,5 +1,8 @@
-import { Component, Suspense, lazy, useState, type ReactNode } from 'react';
-import { Flame, Lightbulb, Map as MapIcon, Pencil, Server, Thermometer, Home, Maximize2 } from 'lucide-react';
+import { Component, Suspense, lazy, useCallback, useState, type ReactNode } from 'react';
+import {
+  Battery, BatteryCharging, Flame, Home, Lightbulb, Map as MapIcon, Maximize2, Pencil, Server,
+  Sun, Thermometer, Zap,
+} from 'lucide-react';
 import type {
   BlindCommand, Device, DevicePlacement, HeatPumpCommand, LightCommand, LightDevice,
   ThermostatCommand,
@@ -63,6 +66,8 @@ class SceneBoundary extends Component<{ fallback: ReactNode; children: ReactNode
   }
 }
 
+const HOLD_PREF = 'domotics.holdLearned';
+
 const iconBtn = 'flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors';
 const sectionTitle = 'text-[11px] font-semibold uppercase tracking-widest text-zinc-500 px-0.5';
 
@@ -81,6 +86,22 @@ export default function HouseScreen({
   const [mode, setMode] = useState<HouseMode>('casa');
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [focusDeviceId, setFocusDeviceId] = useState<string | null>(null);
+  /** The press-and-hold hint stays until it has been used once on this device. */
+  const [holdLearned, setHoldLearned] = useState(() => {
+    try { return localStorage.getItem(HOLD_PREF) === '1'; } catch { return false; }
+  });
+  const onHoldUsed = useCallback(() => {
+    setHoldLearned(true);
+    try { localStorage.setItem(HOLD_PREF, '1'); } catch { /* not persisted */ }
+  }, []);
+
+  /** Solar/battery equipment tapped: back to the house panel, scrolled to the energy figures. */
+  const openEnergy = useCallback(() => {
+    setSelectedRoomId(null);
+    setFocusDeviceId(null);
+    // After the panel has switched back to the overview.
+    requestAnimationFrame(() => document.getElementById('energia')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, []);
 
   const selectedRoom = plan.rooms.find(r => r.id === selectedRoomId) ?? null;
 
@@ -174,6 +195,9 @@ export default function HouseScreen({
                 onBlindCommand={onBlindCommand}
                 onThermostatCommand={onThermostatCommand}
                 onDeviceOpen={openDevice}
+                energy={energy}
+                onEnergyOpen={openEnergy}
+                onHoldUsed={onHoldUsed}
               />
             </Suspense>
           </SceneBoundary>
@@ -201,12 +225,18 @@ export default function HouseScreen({
             </button>
           )}
 
-          {mode === 'clima' && <TempLegend />}
-
-          {/* Holding is invisible until someone tells you; this is the telling. */}
-          <p className="absolute z-[60] bottom-3 right-3 pointer-events-none rounded-lg bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-400">
-            Tocar: ligar/desligar · Manter premido: ajustar
-          </p>
+          {/* One column in the bottom-left corner, so nothing here can collide
+              on a phone: the hint (until learned), the climate legend, energy. */}
+          <div className="absolute z-[60] bottom-3 left-3 right-3 flex flex-col items-start gap-1.5 pointer-events-none">
+            {!holdLearned && (
+              // Holding is invisible until someone tells you; this is the telling.
+              <p className="rounded-lg bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-400">
+                Tocar: ligar/desligar · Manter premido: ajustar
+              </p>
+            )}
+            {mode === 'clima' && <TempLegend />}
+            {energy?.online && <EnergyStrip energy={energy} onOpen={openEnergy} />}
+          </div>
         </section>
 
         <aside
@@ -246,7 +276,7 @@ export default function HouseScreen({
 
 function TempLegend() {
   return (
-    <div className="absolute z-[60] bottom-3 left-3 flex items-center gap-2 rounded-xl bg-zinc-950/80 backdrop-blur-sm border border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-400 tabular-nums">
+    <div className="flex items-center gap-2 rounded-xl bg-zinc-950/80 backdrop-blur-sm border border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-400 tabular-nums">
       16°
       <span
         className="w-28 h-1.5 rounded-full"
@@ -254,6 +284,39 @@ function TempLegend() {
       />
       25°
     </div>
+  );
+}
+
+/**
+ * Solar, house, battery and grid in one line over the 3D view, so the energy
+ * picture is there without scrolling the panel — the part of it that changes
+ * minute to minute. Tapping it opens the full figures.
+ */
+function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => void }) {
+  const battery = batteryFlow(energy);
+  const grid = gridFlow(energy);
+  const abs = (w?: number) => (w === undefined ? undefined : Math.abs(w));
+  const item = 'flex items-center gap-1 whitespace-nowrap';
+  return (
+    <button
+      onClick={onOpen}
+      className="pointer-events-auto max-w-full flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-zinc-950/80 backdrop-blur-sm border border-zinc-800 px-3 py-1.5 text-xs tabular-nums text-left"
+      title="Energia: solar, consumo, bateria e rede"
+    >
+      <span className={`${item} text-amber-300`}><Sun size={13} />{formatWatts(energy.pvPowerW)}</span>
+      <span className={`${item} text-zinc-100`}><Home size={13} className="text-zinc-400" />{formatWatts(energy.consumptionW)}</span>
+      <span className={`${item} ${battery === 'in' ? 'text-lime-300' : battery === 'out' ? 'text-orange-300' : 'text-zinc-300'}`}>
+        {battery === 'in' ? <BatteryCharging size={14} /> : <Battery size={14} />}
+        {energy.soc ?? '—'}%
+        {battery !== 'idle' && (
+          <span className="text-[11px] opacity-80">{battery === 'in' ? '↑' : '↓'}{formatWatts(abs(energy.batteryPowerW))}</span>
+        )}
+      </span>
+      <span className={`${item} ${grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'}`}>
+        <Zap size={13} />
+        {grid === 'out' ? '↑' : grid === 'in' ? '↓' : ''}{formatWatts(abs(energy.gridPowerW))}
+      </span>
+    </button>
   );
 }
 
@@ -359,7 +422,7 @@ function EnergyCard({ energy }: { energy: EnergyReading }) {
   const share = solarShare(energy);
   const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
   return (
-    <section className="flex flex-col gap-2">
+    <section id="energia" className="flex flex-col gap-2 scroll-mt-4">
       <h2 className={sectionTitle}>Energia</h2>
       <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 flex flex-col gap-3">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">

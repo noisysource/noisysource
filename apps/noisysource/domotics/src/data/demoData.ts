@@ -1,4 +1,5 @@
 import type { Device } from '@shared/models/Device';
+import type { EnergyReading } from './energy';
 import { buildDevices, deviceMeta, rooms } from './legrandData';
 
 /**
@@ -56,4 +57,17 @@ export function demoClimate(): Device[] {
     },
   };
   return [...thermostats, pump];
+}
+
+/** A sunny afternoon: panels producing, battery charging, a little exported. */
+export function demoEnergy(): EnergyReading {
+  return {
+    online: true,
+    pvPowerW: 3720,
+    consumptionW: 719,
+    batteryPowerW: 2850,
+    gridPowerW: 150,
+    soc: 86,
+    readAt: Date.now(),
+  };
 }

@@ -7,7 +7,7 @@ import type {
 import type { FloorPlan, InfraItem, PlanRoom, Room, Wall } from '@shared/models/Room';
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
-import { DEMO, demoClimate, demoLegrand } from './data/demoData';
+import { DEMO, demoClimate, demoEnergy, demoLegrand } from './data/demoData';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
 import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
@@ -284,6 +284,7 @@ export default function App() {
     if (gated) return;
     if (DEMO) {
       setTuyaDevices(demoClimate());
+      setEnergy(demoEnergy());
       setBridgeUpdatedAt(Date.now());
       setBridgeStatus('ok');
       return;
