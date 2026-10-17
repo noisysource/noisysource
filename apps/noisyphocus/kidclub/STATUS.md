@@ -827,9 +827,10 @@ Email Center (`/admin/email-center`, now "Emails"). Tabs:
    **Same day, 10:27 Lisbon: her first October MB WAY attempt was refused on her side** (EasyPay
    "Operação recusada ao Utilizador", bill → `failed`). Her later "Pagar agora" clicks never reached the server:
    the page read bills once and still showed October as processing. Workaround: reopen Pagamentos. Code fix:
-   hotfix PR #102 (`hotfix/kidclub-payments-live` → `main`, not merged yet), payments page listens to bills
-   live. **Open: confirm she paid October**. If MB WAY keeps being refused, it's her bank's side (limits);
-   bank transfer is set up on prod (`config/billing` has the IBAN), then "Marcar como pago" in Cobranças.
+   hotfix PR #102 (`hotfix/kidclub-payments-live`), payments page listens to bills live: **merged and deployed
+   to prod 2026-10-17 10:29 UTC, staging synced automatically.** ✅ **She paid October at 10:31 UTC**
+   (FR 01P2026/248, one invoice: EasyPay's second webhook call logged "already processed", #74's claim working).
+   **Mary Pratas is fully resolved.**
 6. **Cláudia Faustino has a second, empty family** (`KGkcDjgI54iKGblEQRmo`, fmsc812@gmail.com).
    She'd see nothing if she logged in with that email. In the new admin page: tick "Mostrar famílias sem
    inscrições", open it, "Eliminar família".
