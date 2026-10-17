@@ -229,9 +229,14 @@ export async function deactivateIncomeSourceRecurring(sourceId: string): Promise
  * Annual premiums fall in the renewal month; the renewal day is the day of the month.
  */
 export async function syncInsuranceRecurring(
-  insurance: Pick<InsuranceDoc, "id" | "name" | "insurer" | "premiumCents" | "frequency" | "renewalDate" | "active">,
+  insurance: Pick<InsuranceDoc, "id" | "name" | "insurer" | "premiumCents" | "frequency" | "renewalDate" | "active" | "recurring">,
 ): Promise<void> {
   const sourceId = `insurance:${insurance.id}`;
+  // Paid only at contract or renewal: no recurring entry (an earlier one is switched off).
+  if (insurance.recurring === false) {
+    await api.recurring.deactivateBySourceId(sourceId);
+    return;
+  }
   if (insurance.active && insurance.premiumCents > 0) {
     const renewalDate = insurance.renewalDate ? new Date(`${insurance.renewalDate}T00:00:00`) : null;
     const dayOfMonth = renewalDate ? renewalDate.getDate() : 1;

@@ -86,6 +86,7 @@ interface FormState {
   insuredPersons: string;
   notes: string;
   active: boolean;
+  recurring: boolean;
 }
 
 function emptyForm(): FormState {
@@ -94,7 +95,7 @@ function emptyForm(): FormState {
     policyNumber: "", premiumCents: "",
     frequency: "annual",
     startDate: "", renewalDate: "",
-    insuredPersons: "", notes: "", active: true,
+    insuredPersons: "", notes: "", active: true, recurring: true,
   };
 }
 
@@ -112,6 +113,7 @@ function fromDoc(d: InsuranceDoc): FormState {
     insuredPersons: d.insuredPersons ?? "",
     notes: d.notes ?? "",
     active: d.active,
+    recurring: d.recurring !== false,
   };
 }
 
@@ -152,6 +154,7 @@ function InsuranceModal({
         notes: form.notes.trim() || undefined,
         attachments: editing?.attachments ?? [],
         active: form.active,
+        recurring: form.recurring,
       } as any);
 
       // Auto-link to recurring expenses
@@ -163,6 +166,7 @@ function InsuranceModal({
         frequency: form.frequency,
         renewalDate: form.renewalDate || undefined,
         active: form.active,
+        recurring: form.recurring,
       });
 
       await onSaved();
@@ -294,6 +298,20 @@ function InsuranceModal({
               onChange={e => set("active", e.target.checked)}
             />
             Ativo
+          </label>
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.recurring}
+              onChange={e => set("recurring", e.target.checked)}
+            />
+            <span>
+              Prémio recorrente
+              <span className="block text-xs text-zinc-500">
+                Entra em Recorrentes e na Previsão. Desliga para um prémio pago só no início ou na renovação.
+              </span>
+            </span>
           </label>
         </div>
 

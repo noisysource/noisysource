@@ -172,7 +172,7 @@ function inputFor(r: SeedRecord, names: { person: Map<string, string>; company: 
       return {
         name: d.name, type: d.type, insurer: d.insurer, policyNumber: d.policyNumber, premiumCents: d.premiumCents,
         frequency: d.frequency, startDate: d.startDate, renewalDate: d.renewalDate, insuredPersons: d.insuredPersons,
-        notes: d.notes, active: d.active ?? true,
+        notes: d.notes, active: d.active ?? true, recurring: d.recurring !== false,
       };
     case "recurring":
       return {

@@ -34,5 +34,11 @@ export interface InsuranceDoc {
   notes?: string;
   attachments: InsuranceAttachment[];
   active: boolean;
+  /**
+   * The premium repeats (monthly/quarterly/annual) and is a recurring expense in Recorrentes and the
+   * forecast. false = paid only at contract or renewal (e.g. a works policy): kept as a record, no
+   * recurring entry. Absent = true.
+   */
+  recurring?: boolean;
   createdAt?: Date;
 }

@@ -19,6 +19,7 @@ const from = (raw: any, id: string): InsuranceDoc => ({
   notes: raw?.notes || undefined,
   attachments: Array.isArray(raw?.attachments) ? raw.attachments : [],
   active: raw?.active !== false,
+  recurring: raw?.recurring !== false,
   createdAt: toDate(raw?.createdAt) ?? undefined,
 });
 

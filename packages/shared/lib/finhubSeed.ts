@@ -291,6 +291,8 @@ const InsuranceSchema = z.strictObject({
   insuredPersons: orTodo(text).optional(),
   notes: orTodo(text).optional(),
   active: z.boolean().optional(),
+  /** false = premium paid only at contract or renewal: no recurring entry. Absent = true. */
+  recurring: z.boolean().optional(),
   comment,
 });
 

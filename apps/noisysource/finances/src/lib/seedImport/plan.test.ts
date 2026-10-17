@@ -82,5 +82,9 @@ describe('seed import plan', () => {
     const ins = write('private-saude');
     expect(ins.sync).toBe('insurance');
     expect('attachments' in ins.input).toBe(false);
+    expect(ins.input.recurring).toBe(true);
+    const seed = example();
+    seed.entities.private.insurances[0].recurring = false;
+    expect(write('private-saude', seed).input.recurring).toBe(false);
   });
 });
