@@ -67,7 +67,8 @@
    confirmed event to a balance that statement imports already set). This is the generic base that
    `HANDOFF-kidclub-reconciliation.md` (Vendus/EasyPay credits) and the emails → expenses work plug
    into later; don't build their specific matching here.
-5. **IVA from Movimentos.** Past months: VAT from classified/matched lines (VAT code from the
+5. **IVA from Movimentos.** **DONE 2026-10-18** (`lib/vatFromMovements.ts` + tests, VatPage: month chips
+   real/previsto, pending-lines warning; NoisyPhocus income VAT stays from Vendus; §6 R5). Past months: VAT from classified/matched lines (VAT code from the
    recurring item or the ad hoc classification, never a silent 0); future months: the current
    estimate from Recorrentes.
 

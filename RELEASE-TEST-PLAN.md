@@ -480,3 +480,15 @@ steps 3–4.
 6. Casa → Movimentos → BPI (conjunta) → "+ Movimento manual" (e.g. a cash expense). ✅ Line "manual",
    classified, no balance; "apagar" removes it. Contas: a confirmed Dashboard payment dated on or
    before the account's "saldo a" no longer adds to the balance.
+
+#### R5. IVA from Movimentos
+1. NoisySource → IVA → T3 2026. ✅ Chips "julho: real · agosto: real · setembro: real" (months that are
+   over and have statement lines); T4 2026: "previsto". With lines still to classify: the amber
+   warning "N movimento(s) … por classificar" with a link to Movimentos.
+2. Classify a NoisySource line in Movimentos as Despesa avulsa, IVA 23%. ✅ IVA dedutível gains a row
+   with that description, "real", base and VAT split out of the amount. A line matched to the
+   accountant's recurring entry counts at that entry's 23%.
+3. A line classified with "Por confirmar". ✅ Listed under "IVA por confirmar — fora dos totais",
+   "despesa · real".
+4. NoisyPhocus → IVA. ✅ KidClub's VAT still from Vendus (one row per rate, "real"); income lines from
+   the statement don't add to it.

@@ -148,8 +148,11 @@ Progress:
     traps: **`HANDOFF-finhub-redesign.md`** (same folder). Steps: 1 Recorrentes as the aggregator,
     2 Despesas do mês for every entity, 3 Equipa (Contratos + Salários), 4 Movimentos (running
     balances, matching), 5 IVA from Movimentos. All in #94, Renato tests each on dev.
-    Done so far: Rendimento counts only versions in force; insurance "Prémio recorrente" switch
-    (Obras e Montagens off: **re-import the seed on dev** to apply).
+    **All five steps DONE 2026-10-18** (each in §6 R1–R5 of RELEASE-TEST-PLAN.md): Recorrentes as
+    the aggregator, Despesas do mês for every entity, Equipa, Movimentos, IVA from Movimentos.
+    Also: Rendimento counts only versions in force; insurance "Prémio recorrente" switch (Obras e
+    Montagens off: **re-import the seed on dev** to apply). **NEXT: Renato tests R1–R5 on dev**,
+    then classifies the movements (Movimentos) and enters the missing data by hand.
   - After the redesign: merge #94 into `staging`, then the `staging` → `main` release (step 5:
     Renato imports the seed on prod).
   - **2026-10-17:** dev data checked intact (27 payroll runs, 1,994 bank movements from 27 imports).

@@ -5,8 +5,16 @@ import { api } from '../lib/api';
 import { formatEUR } from '@shared/lib/money';
 import { Card } from '../components/ui/card';
 import type { RecurringEntryDoc } from '@shared/models/RecurringEntry';
-import { recurringVatInMonths, type RecurringVatRow } from '../lib/recurringSchedule';
+import type { RecurringVatRow } from '../lib/recurringSchedule';
 import { vatCodeLabel } from '@shared/lib/vat';
+import type { BankTransactionDoc } from '@shared/models/BankTransaction';
+import { useNavigate } from 'react-router-dom';
+import { quarterVat, type VatSource } from '../lib/vatFromMovements';
+
+const SOURCE_BADGE: Record<VatSource, string> = {
+  real: 'bg-emerald-900/40 text-emerald-300',
+  previsto: 'bg-zinc-800 text-zinc-400',
+};
 
 // ── Quarter helpers ────────────────────────────────────────────────────────────
 
@@ -62,7 +70,7 @@ function IvaTable({
 }: {
   title: string;
   color: 'red' | 'green';
-  rows: RecurringVatRow[];
+  rows: Array<RecurringVatRow & { source?: VatSource }>;
 }) {
   const totalIva = rows.reduce((s, r) => s + r.ivaCents, 0);
   if (!rows.length) return (
@@ -81,6 +89,7 @@ function IvaTable({
             <span className="text-zinc-400 flex-1 truncate pr-3">
               {r.description}
               {r.vatCode !== undefined && <span className="text-zinc-600 ml-1.5">{vatCodeLabel(r.vatCode)}</span>}
+              {r.source && <span className={`ml-1.5 text-[10px] px-1 rounded ${SOURCE_BADGE[r.source]}`}>{r.source}</span>}
             </span>
             <span className="text-zinc-500 tabular-nums mr-3">{formatEUR(r.baseCents)}</span>
             <span className={`tabular-nums font-medium ${color === 'green' ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -99,20 +108,20 @@ function IvaTable({
   );
 }
 
-function UnconfirmedTable({ rows }: { rows: { description: string; amountCents: number; kind: string }[] }) {
+function UnconfirmedTable({ rows }: { rows: { description: string; amountCents: number; kind: string; source?: VatSource }[] }) {
   if (!rows.length) return null;
   return (
     <div>
       <div className="text-xs font-semibold mb-1 text-amber-400">IVA por confirmar — fora dos totais</div>
       <div className="text-[11px] text-zinc-500 mb-2">
-        Guardadas antes da regra do IVA (ou sem taxa): não se sabe se o valor inclui IVA.
-        Abre cada uma em Recorrentes, escolhe a taxa e guarda.
+        Sem taxa de IVA: não se sabe se o valor inclui IVA. "previsto": abre a entrada em Recorrentes e escolhe
+        a taxa; "real": o movimento foi classificado sem taxa, corrige-o em Movimentos.
       </div>
       <div className="space-y-1">
         {rows.map((r, i) => (
           <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-zinc-800/50">
             <span className="text-zinc-400 flex-1 truncate pr-3">{r.description}</span>
-            <span className="text-zinc-600 mr-3">{r.kind}</span>
+            <span className="text-zinc-600 mr-3">{r.kind}{r.source ? ` · ${r.source}` : ''}</span>
             <span className="text-zinc-500 tabular-nums">{formatEUR(r.amountCents)}</span>
           </div>
         ))}
@@ -127,7 +136,10 @@ export default function VatPage() {
   const { selectedEntity } = useEntity();
   const entityId = selectedEntity.id;
 
+  const navigate = useNavigate();
   const [recurring, setRecurring] = useState<RecurringEntryDoc[]>([]);
+  // Every statement line of the entity's accounts: real months take their VAT from them.
+  const [lines, setLines] = useState<BankTransactionDoc[]>([]);
   const [kidclubVat, setKidclubVat] = useState<KidclubVatResult | null>(null);
   const [kidclubLoading, setKidclubLoading] = useState(false);
   const [kidclubError, setKidclubError] = useState<string | null>(null);
@@ -142,7 +154,12 @@ export default function VatPage() {
   useEffect(() => {
     setLoading(true);
     api.setEntity(entityId);
-    api.recurring.list().then(setRecurring).finally(() => setLoading(false));
+    (async () => {
+      const [recs, accounts] = await Promise.all([api.recurring.list(), api.accounts.list()]);
+      setRecurring(recs);
+      const perAccount = await Promise.all(accounts.map(a => api.bankTransactions.listByAccount((a as any).id)));
+      setLines(perAccount.flat());
+    })().finally(() => setLoading(false));
   }, [entityId]);
 
   // Fetch KidClub VAT from Vendus when quarter changes (noisyphocus only)
@@ -180,18 +197,17 @@ export default function VatPage() {
     return () => { cancelled = true; };
   }, [entityId, recurring, months]);
 
-  const incomeVat = useMemo(
-    () => recurringVatInMonths(recurring, months, 'income', volumeCentsByMonth),
-    [recurring, months, volumeCentsByMonth],
-  );
-  const expenseVat = useMemo(
-    () => recurringVatInMonths(recurring, months, 'expense', volumeCentsByMonth),
-    [recurring, months, volumeCentsByMonth],
-  );
+  // Months that are over and have statement lines: VAT from the confirmed lines; else estimated.
+  const currentYM = useMemo(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }, []);
+  const qv = useMemo(() => quarterVat({
+    months, currentYM, entries: recurring, volumeByMonth: volumeCentsByMonth,
+    lines: lines.filter(l => months.some(m => l.date.startsWith(m))),
+    incomeFromLines: entityId !== 'noisyphocus',
+  }), [months, currentYM, recurring, volumeCentsByMonth, lines, entityId]);
 
   // IVA liquidado rows
   const collectedRows = useMemo(() => {
-    const rows: RecurringVatRow[] = [...incomeVat.rows];
+    const rows: Array<RecurringVatRow & { source?: VatSource }> = [...qv.incomeRows];
 
     // NoisyPhocus: add KidClub rows from Vendus (one row per VAT rate)
     if (entityId === 'noisyphocus' && kidclubVat) {
@@ -203,18 +219,16 @@ export default function VatPage() {
           description: `KidClub — ${RATE_LABELS[rate] ?? `${rate}%`} (${kidclubVat.docCount} faturas)`,
           baseCents: amounts.baseCents,
           ivaCents: amounts.ivaCents,
+          source: 'real',
         });
       }
     }
 
     return rows;
-  }, [incomeVat, entityId, kidclubVat]);
+  }, [qv, entityId, kidclubVat]);
 
-  const deductibleRows = expenseVat.rows;
-  const unconfirmedRows = useMemo(() => [
-    ...incomeVat.unconfirmed.map(r => ({ ...r, kind: 'rendimento' })),
-    ...expenseVat.unconfirmed.map(r => ({ ...r, kind: 'despesa' })),
-  ], [incomeVat, expenseVat]);
+  const deductibleRows = qv.expenseRows;
+  const unconfirmedRows = qv.unconfirmed;
 
   const totalCollected  = collectedRows.reduce((s, r)  => s + r.ivaCents, 0);
   const totalDeductible = deductibleRows.reduce((s, r) => s + r.ivaCents, 0);
@@ -269,6 +283,22 @@ export default function VatPage() {
           {kidclubError && (
             <div className="text-red-400 text-xs bg-red-950/30 px-3 py-2 rounded">
               Erro Vendus: {kidclubError}
+            </div>
+          )}
+
+          {/* Which months are real (statement lines) and which are estimated */}
+          <div className="text-xs text-zinc-500 flex flex-wrap items-center gap-2">
+            {months.map(ym => (
+              <span key={ym} className={`px-1.5 py-0.5 rounded ${SOURCE_BADGE[qv.monthSource[ym]]}`}>
+                {new Date(`${ym}-01T12:00:00`).toLocaleDateString('pt-PT', { month: 'long' })}: {qv.monthSource[ym]}
+              </span>
+            ))}
+            <span>real = movimentos confirmados; previsto = Recorrentes.</span>
+          </div>
+          {qv.pendingLines > 0 && (
+            <div className="text-amber-300 text-xs bg-amber-950/30 border border-amber-800/50 px-3 py-2 rounded flex items-center justify-between gap-2">
+              <span>{qv.pendingLines} movimento(s) dos meses reais por classificar: o IVA real deste trimestre está incompleto.</span>
+              <button className="underline shrink-0" onClick={() => navigate(`/${entityId}/movements`)}>Movimentos</button>
             </div>
           )}
 
