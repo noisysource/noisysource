@@ -54,6 +54,12 @@ jobs:
       build_command: pnpm --filter kidclub build
       finances_build_command: pnpm --filter finances build
       tf_var_file: env/prod.tfvars
+      # Prod always deploys every part, whatever the diff says: it must match
+      # what's being promoted. (Dev deploys only what each PR changes — see
+      # deploy-dev.yml.) false is also the default; spelled out so nobody
+      # flips it thinking it's an oversight. No domotics_build_command: prod
+      # has no domotics site or production config yet.
+      only_changed: false
       # Prod's "rainbow-prod-2454b" state prefix was found essentially
       # empty (81 pending creates, plus a hard error in storage.tf) the
       # first time this pipeline actually ran a plan against it — real
