@@ -43,14 +43,10 @@ jobs:
       service_account: gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com
       build_command: pnpm --filter kidclub build:staging
       finances_build_command: pnpm --filter finances build:staging
-      # Domotics (site kidclub-dev-domotics) is still deployed by hand: its
-      # build needs apps/noisysource/domotics/.env.staging, which is
-      # gitignored and not in the repo, so CI can't build it for dev yet.
-      # The pipeline already handles it (plan, build-mode check, its own
-      # hosting job and concurrency group); once that config is available
-      # to CI, switch it on with:
-      #   domotics_build_command: pnpm --filter domotics build:staging
-      # Until then the plan shows domotics as "off for this environment".
+      # Site kidclub-dev-domotics (deployed by hand until 2026-10-18). Builds
+      # with apps/noisysource/domotics/.env.staging, committed for this.
+      domotics_build_command: pnpm --filter domotics build:staging
+      deploy_domotics: true
       tf_var_file: env/kidclub-dev.tfvars
       only_changed: true
       # storage.rules (payment proofs, FinHub insurances). Prod stays off

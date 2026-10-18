@@ -2,7 +2,11 @@
 
 gcp_project_id = "rainbow-prod-2454b"
 
-firebase_hosting_site_ids = ["rainbow-prod-2454b-arcoiris", "rainbow-prod-2454b-finhub"]
+# rainbow-prod-2454b-domotics added 2026-10-18 for domotics in prod. Prod's
+# state isn't reconciled yet (CI doesn't apply prod), so this declares it for
+# that reconciliation; the site itself is created once by hand (root
+# CLAUDE.md, "Domotics in prod") and imported then.
+firebase_hosting_site_ids = ["rainbow-prod-2454b-arcoiris", "rainbow-prod-2454b-finhub", "rainbow-prod-2454b-domotics"]
 
 gmail_sender_sa_id = "gmail-sender-prod"
 

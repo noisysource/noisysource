@@ -57,9 +57,22 @@ jobs:
       # Prod always deploys every part, whatever the diff says: it must match
       # what's being promoted. (Dev deploys only what each PR changes — see
       # deploy-dev.yml.) false is also the default; spelled out so nobody
-      # flips it thinking it's an oversight. No domotics_build_command: prod
-      # has no domotics site or production config yet.
+      # flips it thinking it's an oversight.
       only_changed: false
+      # Domotics goes to prod like every other app (Renato, 2026-10-18: what
+      # merges into staging ships on the next release) — but it stays OFF
+      # until its prod site exists, because deploying hosting:domotics into a
+      # site that doesn't exist fails the whole prod deploy. Before flipping
+      # deploy_domotics to true, all of these must be done (details in the
+      # "Domotics in prod" checklist in root CLAUDE.md):
+      #   1. site rainbow-prod-2454b-domotics created (already declared in
+      #      infra/gcp/terraform/env/prod.tfvars and mapped in .firebaserc);
+      #   2. apps/noisysource/domotics/.env.production committed (prod
+      #      Firebase web config) — without it the build check below fails;
+      #   3. the site's domains allowed for Google sign-in on prod (Firebase
+      #      Auth authorized domains + the prod browser API key's referrers).
+      domotics_build_command: pnpm --filter domotics build
+      deploy_domotics: false
       # Prod's "rainbow-prod-2454b" state prefix was found essentially
       # empty (81 pending creates, plus a hard error in storage.tf) the
       # first time this pipeline actually ran a plan against it — real

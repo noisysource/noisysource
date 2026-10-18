@@ -3,8 +3,9 @@ name: Deploy KidClub + FinHub Environment (reusable)
 # Shared deploy logic for one environment (dev or prod). Called by
 # deploy-dev.yml (PR/push to staging) and deploy-prod.yml (staging→main PR,
 # push to main). Parts: terraform, Firestore rules + indexes (+ storage rules
-# where enabled), Cloud Functions, and hosting for KidClub, FinHub and (dev
-# only) domotics. FinHub and domotics have no rules/functions of their own:
+# where enabled), Cloud Functions, and hosting for KidClub, FinHub and
+# domotics (where deploy_domotics is on). FinHub and domotics have no
+# rules/functions of their own:
 # they share this project's Firestore rules and the /functions codebase.
 #
 # ONE JOB PER PART, each with its own concurrency group. Until 2026-10-18 this
@@ -73,12 +74,22 @@ on:
         type: string
       domotics_build_command:
         description: >
-          Command that builds the domotics app for this environment. Empty (the
-          default) means this environment doesn't deploy domotics at all — prod
-          has no domotics site or production config yet.
+          Command that builds the domotics app for this environment:
+          build:staging for kidclub-dev, build for prod (same rule and same
+          projectId check as the other apps).
         required: false
         type: string
         default: ''
+      deploy_domotics:
+        description: >
+          Whether this environment deploys domotics hosting. Off by default, and
+          off for prod until its hosting site (rainbow-prod-2454b-domotics) and
+          production config exist: `firebase deploy --only hosting:domotics`
+          into a site that doesn't exist fails the job. The steps to switch it
+          on are in deploy-prod.yml.
+        required: false
+        type: boolean
+        default: false
       tf_var_file:
         description: "Path (relative to infra/gcp/terraform) to this environment's tfvars"
         required: true
@@ -158,9 +169,15 @@ jobs:
           FORCED: ${{ github.event.forced }}
           # Parts this environment never deploys, whatever changed.
           DISABLED_PARTS: >-
-            ${{ !inputs.run_terraform && 'terraform' || '' }},${{ !inputs.deploy_storage_rules && 'storage_rules' || '' }},${{ inputs.domotics_build_command == '' && 'domotics' || '' }}
+            ${{ !inputs.run_terraform && 'terraform' || '' }},${{ !inputs.deploy_storage_rules && 'storage_rules' || '' }},${{ !inputs.deploy_domotics && 'domotics' || '' }}
+          DEPLOY_DOMOTICS: ${{ inputs.deploy_domotics }}
+          DOMOTICS_BUILD_COMMAND: ${{ inputs.domotics_build_command }}
         run: |
           set -euo pipefail
+          if [ "$DEPLOY_DOMOTICS" = "true" ] && [ -z "$DOMOTICS_BUILD_COMMAND" ]; then
+            echo "::error::deploy_domotics is on but domotics_build_command is empty."
+            exit 1
+          fi
           plan() { node .github/scripts/deploy-parts.mjs "$@"; }
           if [ "$ONLY_CHANGED" != "true" ]; then
             plan --all "this environment always deploys every part"
@@ -529,8 +546,8 @@ jobs:
       - name: Deploy FinHub Hosting
         run: firebase deploy --only hosting:finances --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
 
-  # Dev only for now (domotics_build_command is empty for prod, so the plan
-  # never selects it there): kidclub-dev-domotics is the only domotics site.
+  # Runs only where deploy_domotics is on: dev (kidclub-dev-domotics) now,
+  # prod once rainbow-prod-2454b-domotics exists (see deploy-prod.yml).
   hosting-domotics:
     name: "Hosting: domotics (${{ inputs.environment }})"
     needs: [plan, terraform, rules, functions]
