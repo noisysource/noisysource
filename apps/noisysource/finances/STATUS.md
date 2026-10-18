@@ -308,6 +308,13 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   Give Vendus and EasyPay the "Software" category when entering them.
 
 ## Anything risky in flight
+- **Dev deploy pipeline being fixed (2026-10-18):** every PR into `staging` deploys *everything*
+  from its own branch, and dev runs share one queue where GitHub drops older pending runs (#106
+  domotics' deploys were dropped behind #94's on 10-17). Handed to the infra agent: branch
+  `agent/dev-deploy-per-part` (worktree `.claude/worktrees/dev-deploy-per-part`), PR into
+  `staging`: each dev deploy ships only the parts its PR changed. Its own PR deploys everything once
+  (replaces #94's FinHub on dev until #94 redeploys). **After it merges:** merge `staging` into #94
+  and #106 and push, so each puts its own parts on dev; then Renato resumes testing both.
 - **Dev hosting race:** a PR into `staging` deploys its own build of KidClub + FinHub to dev, so
   another open PR (e.g. `agent/domotics-pi-ip-fix`, 2026-10-16 20:20 UTC) can put the old FinHub
   back on dev. Data is unaffected. FinHub hosting was redeployed by hand from this branch
