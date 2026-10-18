@@ -308,18 +308,12 @@ to `staging` *before* merging it (#76 merged into its old base instead and was r
   Give Vendus and EasyPay the "Software" category when entering them.
 
 ## Anything risky in flight
-- **Dev deploy pipeline being fixed (2026-10-18):** every PR into `staging` deploys *everything*
-  from its own branch, and dev runs share one queue where GitHub drops older pending runs (#106
-  domotics' deploys were dropped behind #94's on 10-17). Handed to the infra agent: branch
-  `agent/dev-deploy-per-part` (worktree `.claude/worktrees/dev-deploy-per-part`), PR into
-  `staging`: each dev deploy ships only the parts its PR changed. Its own PR deploys everything once
-  (replaces #94's FinHub on dev until #94 redeploys). **After it merges:** merge `staging` into #94
-  and #106 and push, so each puts its own parts on dev; then Renato resumes testing both.
-- **Dev hosting race:** a PR into `staging` deploys its own build of KidClub + FinHub to dev, so
-  another open PR (e.g. `agent/domotics-pi-ip-fix`, 2026-10-16 20:20 UTC) can put the old FinHub
-  back on dev. Data is unaffected. FinHub hosting was redeployed by hand from this branch
-  (2026-10-16, `hosting:finances` only, build:staging, kidclub-dev). If Dev Tools shows "Initial
-  Setup" again, redeploy FinHub hosting from `agent/finhub-real-data` the same way.
+- **Dev deploy pipeline fixed (#107, merged 2026-10-18):** a PR into `staging` now deploys only the
+  parts it changes (one job + queue per part); docs-only pushes deploy nothing. #94 deploys FinHub
+  only; #106 (domotics) functions + domotics. Both re-pushed with `staging` merged in 2026-10-18 and
+  green; dev FinHub = #94 again. #108 (pin pnpm 10, frozen lockfile) open with the infra agent.
+- **Dev hosting race: solved by #107** for different parts. Two open PRs that both change FinHub
+  would still take turns on dev (last push wins). Data is never affected.
 - **Real-data PR (`agent/finhub-real-data` → `staging`) deploys FinHub + KidClub to dev** when
   opened/updated. It changes no data by itself; the wipe and the seed import are manual (step 4).
   The importer writes to whatever project the build points at: on prod it is Renato's step 5.
