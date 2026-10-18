@@ -35,6 +35,7 @@ Configured in `/firebase.json` and `/.firebaserc` at monorepo root.
 |---|---|---|---|
 | `kidclub` | KidClub | `kidclub-dev-arcoiris` | `rainbow-prod-2454b-arcoiris` |
 | `finances` | Finances | `kidclub-dev-finhub` | `rainbow-prod-2454b-finhub` |
+| `domotics` | Domotics | `kidclub-dev-domotics` (deployed by hand; not in CI yet) | none |
 
 > Site IDs also retain legacy names. Rename via `firebase hosting:sites:create` when infra is cleaned up.
 
@@ -47,9 +48,9 @@ this table is just the file map.
 
 | Workflow | Trigger | Deploys | SA used |
 |---|---|---|---|
-| `deploy-dev.yml` | PR opened/updated against `staging`, or push to `staging` | KidClub app, Firestore rules/indexes, functions, terraform apply — all to kidclub-dev | `gmail-sender-kidclub-dev` |
+| `deploy-dev.yml` | PR opened/updated against `staging`, push to `staging`, or manual run on `staging` | to kidclub-dev, **only the parts the PR/push changed** (terraform, rules/indexes/storage rules, functions, KidClub/FinHub hosting; rules in `.github/scripts/deploy-parts.mjs`); a manual run deploys everything from `staging` | `gmail-sender-kidclub-dev` |
 | `deploy-prod.yml` | PR opened/updated against `main` **whose head is `staging`**, or push to `main` | same, to rainbow-prod-2454b (deploys pre-merge only on the staging→main promotion PR; a PR into `main` from any other branch skips the deploy job entirely — see the header comment in that file for the incident that prompted the guard. `sync-staging` fast-forwards/PRs `staging` to match, only on the post-merge push) | `github-action-1020915538` |
-| `_deploy-kidclub-env.yml` | `workflow_call` only | the reusable deploy logic both of the above call | (whichever caller passes in) |
+| `_deploy-kidclub-env.yml` | `workflow_call` only | the reusable deploy logic both of the above call: a plan + build job, then one job per part (terraform → rules → functions → hosting), each with its own concurrency group | (whichever caller passes in) |
 | `ci-checks.yml` | PR opened/updated against `main` | nothing — build/typecheck/terraform-validate only | n/a |
 | `deploy-finances.yml` | manual | Finances hosting | `gmail-sender-kidclub-dev` (dev), `github-action-1020915538` (prod) |
 | `deploy-functions.yml` | manual | functions only, fallback (normally deployed via the two above) | same SAs |
