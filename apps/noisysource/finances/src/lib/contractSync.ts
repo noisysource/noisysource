@@ -219,6 +219,7 @@ export async function deactivateIncomeSourceRecurring(sourceId: string): Promise
   const prevEntity = api.entityId;
   api.setEntity("private");
   await api.recurring.deactivateBySourceId(`inc:${sourceId}`);
+  await api.recurring.deactivateBySourceIdPrefix(`inc:${sourceId}:`);
   api.setEntity(prevEntity);
 }
 

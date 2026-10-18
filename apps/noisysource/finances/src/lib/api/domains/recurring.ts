@@ -56,5 +56,11 @@ export function makeRecurringDomain(getOrgId: () => string) {
       const existing = await base.list([where("sourceId", "==", sourceId)]);
       await Promise.all(existing.map(r => base.update(r.id, { active: false } as any)));
     },
+
+    /** Every entry whose sourceId starts with `prefix`, e.g. "inc:abc:" for a source's benefit entries. */
+    async deactivateBySourceIdPrefix(prefix: string): Promise<void> {
+      const existing = await base.list([where("sourceId", ">=", prefix), where("sourceId", "<", `${prefix}`)]);
+      await Promise.all(existing.map(r => base.update(r.id, { active: false } as any)));
+    },
   };
 }

@@ -12,7 +12,7 @@ import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { BenefitsEditor } from "../components/BenefitsEditor";
-import { syncIncomeSourceRecurring } from "../lib/contractSync";
+import { deactivateIncomeSourceRecurring, syncIncomeSourceRecurring } from "../lib/contractSync";
 import { Plus, Pencil, Trash2, Lock } from "lucide-react";
 import type { BenefitConfig } from "@shared/models/Employment";
 
@@ -267,7 +267,10 @@ export default function IncomeSourcesPage() {
   const [editingId, setEditingId]   = useState<string | null>(null);
   const [formInit, setFormInit]     = useState(EMPTY_FORM);
 
+  // Income sources are Casa's (nav: private only). Set it before every call: the API's entity is
+  // whatever page ran last, and this page doesn't call useEntity.
   async function reload() {
+    api.setEntity("private");
     const [srcs, accs, people, companies, contractsSnap] = await Promise.all([
       api.incomeSources.list(),
       api.accounts.list(),
@@ -332,6 +335,7 @@ export default function IncomeSourcesPage() {
       active: form.active,
       benefits: form.benefits,
     };
+    api.setEntity("private");
     const savedId = await api.incomeSources.save(payload as any);
     await syncIncomeSourceRecurring({ ...payload, id: savedId } as IncomeSourceDoc);
     await reload();
@@ -339,7 +343,9 @@ export default function IncomeSourcesPage() {
 
   async function deleteSource(id: string) {
     if (!confirm('Eliminar esta fonte de rendimento?')) return;
+    api.setEntity("private");
     await api.incomeSources.delete(id);
+    await deactivateIncomeSourceRecurring(id);
     await reload();
   }
 
