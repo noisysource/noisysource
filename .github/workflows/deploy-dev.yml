@@ -1,19 +1,37 @@
 name: Deploy to Dev
 
-# Any PR targeting staging (open/update) deploys a live preview of KidClub
-# and FinHub to kidclub-dev, so Renato can review real behavior before
-# promoting.
+# Any PR targeting staging (open/update) deploys a live preview to
+# kidclub-dev, so Renato can review real behavior before promoting.
 # Also re-runs on push to staging (i.e. right after a PR merges), since a
 # merge commit is a separate event from the PR's own commits.
+#
+# Only the parts a PR (or push) actually changes are deployed
+# (`only_changed: true`; how parts are detected: .github/scripts/
+# deploy-parts.mjs). Several PRs into staging are usually open at once, and
+# each one used to redeploy every part from its own branch, reverting the
+# others' previews on dev. Now a FinHub PR redeploys FinHub, a domotics PR
+# redeploys domotics, and so on; a PR that changes the pipeline itself or the
+# workspace config (this directory, root package.json, firebase.json, ...)
+# still deploys everything. The step summary of the "Plan + build" job says
+# what was deployed and why.
+#
+# Side effect: a part keeps whatever was deployed to it last. A PR that's
+# closed without merging leaves its preview on dev until something else
+# deploys that part; run this workflow by hand on `staging` (Actions → Deploy
+# to Dev → Run workflow) to put all of staging back on dev.
 on:
   pull_request:
     branches: [staging]
     types: [opened, synchronize, reopened]
   push:
     branches: [staging]
+  workflow_dispatch:
 
 jobs:
   deploy:
+    # A manual run deploys every part, so only from staging: dev should never
+    # get a whole unreviewed branch by hand.
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/staging'
     uses: ./.github/workflows/_deploy-kidclub-env.yml
     permissions:
       contents: 'read'
@@ -25,7 +43,12 @@ jobs:
       service_account: gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com
       build_command: pnpm --filter kidclub build:staging
       finances_build_command: pnpm --filter finances build:staging
+      # Site kidclub-dev-domotics (deployed by hand until 2026-10-18). Builds
+      # with apps/noisysource/domotics/.env.staging, committed for this.
+      domotics_build_command: pnpm --filter domotics build:staging
+      deploy_domotics: true
       tf_var_file: env/kidclub-dev.tfvars
+      only_changed: true
       # storage.rules (payment proofs, FinHub insurances). Prod stays off
       # until Storage is active there — see _deploy-kidclub-env.yml.
       deploy_storage_rules: true

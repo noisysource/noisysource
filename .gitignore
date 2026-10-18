@@ -47,6 +47,12 @@ apps/noisyphocus/kidclub/src/lib/featureFlags.ts
 # App env files — project-specific, not committed
 apps/noisysource/finances/.env.*
 apps/noisysource/domotics/.env.*
+# ...except domotics' dev build config, which CI needs to build the dev site
+# (Renato, 2026-10-18). It's Firebase *web* config, public by design (it ships
+# inside every bundle), with the same values as finances/.env.staging, which
+# is tracked already. Never put a real secret in a .env.<mode> file: Vite
+# bakes every VITE_* value into the public bundle.
+!apps/noisysource/domotics/.env.staging
 
 # Claude Code — personal/local-only config, never shared or committed
 .claude/settings.local.json
