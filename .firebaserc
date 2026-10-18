@@ -25,7 +25,8 @@
     "rainbow-prod-2454b": {
       "hosting": {
         "finances": ["rainbow-prod-2454b-finhub"],
-        "kidclub":  ["rainbow-prod-2454b-arcoiris"]
+        "kidclub":  ["rainbow-prod-2454b-arcoiris"],
+        "domotics": ["rainbow-prod-2454b-domotics"]
       }
     }
   },

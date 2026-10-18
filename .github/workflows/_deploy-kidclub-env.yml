@@ -1,28 +1,56 @@
 name: Deploy KidClub + FinHub Environment (reusable)
 
 # Shared deploy logic for one environment (dev or prod). Called by
-# deploy-dev.yml (PR/push to staging) and deploy-prod.yml (push to main).
-# Deploys KidClub (app, rules, indexes, functions, hosting) and FinHub's
-# hosting. FinHub has no rules/functions of its own: it shares this
-# project's Firestore rules and the /functions codebase deployed below.
+# deploy-dev.yml (PR/push to staging) and deploy-prod.yml (staging→main PR,
+# push to main). Parts: terraform, Firestore rules + indexes (+ storage rules
+# where enabled), Cloud Functions, and hosting for KidClub, FinHub and
+# domotics (where deploy_domotics is on). FinHub and domotics have no
+# rules/functions of their own:
+# they share this project's Firestore rules and the /functions codebase.
 #
-# Both apps are built before anything deploys, so a broken FinHub build
-# stops the run before KidClub goes out half-updated, and vice versa.
+# ONE JOB PER PART, each with its own concurrency group. Until 2026-10-18 this
+# was a single job that deployed everything from whichever branch triggered
+# it, with one concurrency group per environment. Two things went wrong with
+# that on dev, where several PRs into staging are open at once:
+#   - every PR redeployed every part from its own branch, so a domotics PR
+#     put staging's FinHub back on dev over the FinHub PR being reviewed
+#     there, and the FinHub PR redeployed functions without the domotics
+#     PR's change;
+#   - GitHub keeps only the newest *pending* run per concurrency group, so
+#     with two PRs pushing close together the older pending run was
+#     cancelled and its change never reached dev (2026-10-17: three #106
+#     runs cancelled behind #94; #106's functions change never deployed).
+# Now, with `only_changed: true` (dev), the plan job works out which parts
+# the PR/push actually changes (.github/scripts/deploy-parts.mjs) and only
+# those deploy; every other part keeps what was last deployed. Different
+# parts never share a concurrency group, so they never cancel each other.
+# Two runs that touch the SAME part still queue on it, and a run whose
+# pending job gets superseded shows that job as cancelled: re-run it, or push
+# again, if that run's version of the part is the one you want on dev.
 #
-# Order: terraform first, then rules/indexes, then functions/hosting.
-# Terraform owns IAM (e.g. which secrets the deploy SA can read) — running
-# it first means a newly-added grant is live before the step that needs it
-# runs, instead of that step failing on the very same run that would have
-# fixed it. Rules/indexes still go before functions/hosting, so nothing is
-# ever live against a schema it doesn't expect. No continue-on-error
-# anywhere — a failed step here must stop the job, not let a half-deployed
-# state look green.
+# With `only_changed: false` (prod; the default, so a caller has to opt in
+# to partial deploys) every part deploys, exactly as before: prod must match
+# what's being promoted, whatever the diff says.
+#
+# Everything that's going to deploy is built (and its build mode checked)
+# in the plan job before any deploy job starts, so a broken build stops the
+# run before anything goes out half-updated. Then: terraform first, then
+# rules/indexes, then functions, then hosting. Terraform owns IAM (e.g. which
+# secrets the deploy SA can read): running it first means a newly-added grant
+# is live before the step that needs it runs, instead of that step failing on
+# the very same run that would have fixed it. Rules/indexes go before
+# functions/hosting, so nothing is ever live against a schema it doesn't
+# expect. Each job checks every earlier job's result itself (a job skipped
+# because nothing changed is fine; one skipped because an earlier one failed
+# must not be): a failed job stops everything after it. No continue-on-error
+# anywhere — a failed step must stop the run, not let a half-deployed state
+# look green.
 
 on:
   workflow_call:
     inputs:
       environment:
-        description: "Label for logs/backend prefix, e.g. 'kidclub-dev' or 'rainbow-prod-2454b'"
+        description: "Label for logs/backend prefix/concurrency groups, e.g. 'kidclub-dev' or 'rainbow-prod-2454b'"
         required: true
         type: string
       firebase_project:
@@ -44,10 +72,37 @@ on:
           Firebase config, which breaks login; the check step below catches it.
         required: true
         type: string
+      domotics_build_command:
+        description: >
+          Command that builds the domotics app for this environment:
+          build:staging for kidclub-dev, build for prod (same rule and same
+          projectId check as the other apps).
+        required: false
+        type: string
+        default: ''
+      deploy_domotics:
+        description: >
+          Whether this environment deploys domotics hosting. Off by default, and
+          off for prod until its hosting site (rainbow-prod-2454b-domotics) and
+          production config exist: `firebase deploy --only hosting:domotics`
+          into a site that doesn't exist fails the job. The steps to switch it
+          on are in deploy-prod.yml.
+        required: false
+        type: boolean
+        default: false
       tf_var_file:
         description: "Path (relative to infra/gcp/terraform) to this environment's tfvars"
         required: true
         type: string
+      only_changed:
+        description: >
+          Deploy only the parts the triggering PR/push changed (dev). Default
+          false: deploy every part (prod). A push whose previous tip can't be
+          diffed (first push, force push) and any other event deploy
+          everything either way.
+        required: false
+        type: boolean
+        default: false
       run_terraform:
         description: >
           Whether to run terraform init/apply for this environment. Default true.
@@ -55,7 +110,7 @@ on:
           reconciled with reality yet — e.g. prod's state prefix was found to be
           essentially empty (81 pending creates against already-live infra) when
           this was first wired up. Turning this off is a stopgap, not a fix: the
-          app/rules/indexes/functions/hosting steps below don't depend on it and
+          app/rules/indexes/functions/hosting jobs below don't depend on it and
           stay fully automated either way.
         required: false
         type: boolean
@@ -72,22 +127,194 @@ on:
         default: false
 
 jobs:
-  deploy:
-    name: "Deploy KidClub + FinHub (${{ inputs.environment }})"
-    # One deploy at a time per environment. Both dev PRs and staging pushes
-    # run `terraform apply` against the same GCS state prefix, so two
-    # overlapping runs collide on the state lock and the later one dies with
-    # "Error acquiring the state lock ... 412 conditionNotMet". That has now
-    # happened twice — once across two branches, once from two pushes to the
-    # same branch 2.5 minutes apart (the second was a docs-only commit that
-    # needed no deploy at all).
+  plan:
+    name: "Plan + build (${{ inputs.environment }})"
+    # No concurrency group: this job only reads the repo and builds, it never
+    # touches the environment, so runs can plan and build in parallel.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+    outputs:
+      terraform: ${{ steps.parts.outputs.terraform }}
+      firestore_rules: ${{ steps.parts.outputs.firestore_rules }}
+      firestore_indexes: ${{ steps.parts.outputs.firestore_indexes }}
+      storage_rules: ${{ steps.parts.outputs.storage_rules }}
+      functions: ${{ steps.parts.outputs.functions }}
+      kidclub: ${{ steps.parts.outputs.kidclub }}
+      finances: ${{ steps.parts.outputs.finances }}
+      domotics: ${{ steps.parts.outputs.domotics }}
+    steps:
+      # A pull_request run checks out GitHub's merge commit (the PR head merged
+      # into the current staging), which is also exactly what gets deployed.
+      # Its first parent is that staging commit, so depth 2 is enough to diff
+      # "what this PR changes on top of staging". A push run fetches its
+      # previous tip separately below.
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.only_changed && github.event_name == 'pull_request' && 2 || 1 }}
+
+      # The detection decides what reaches dev; if it's wrong, a change
+      # silently never deploys. Cheap enough to test on every run.
+      - name: Test the change detection
+        if: inputs.only_changed
+        run: node --test .github/scripts/deploy-parts.test.mjs
+
+      - name: Work out which parts to deploy
+        id: parts
+        env:
+          ONLY_CHANGED: ${{ inputs.only_changed }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          FORCED: ${{ github.event.forced }}
+          # Parts this environment never deploys, whatever changed.
+          DISABLED_PARTS: >-
+            ${{ !inputs.run_terraform && 'terraform' || '' }},${{ !inputs.deploy_storage_rules && 'storage_rules' || '' }},${{ !inputs.deploy_domotics && 'domotics' || '' }}
+          DEPLOY_DOMOTICS: ${{ inputs.deploy_domotics }}
+          DOMOTICS_BUILD_COMMAND: ${{ inputs.domotics_build_command }}
+        run: |
+          set -euo pipefail
+          if [ "$DEPLOY_DOMOTICS" = "true" ] && [ -z "$DOMOTICS_BUILD_COMMAND" ]; then
+            echo "::error::deploy_domotics is on but domotics_build_command is empty."
+            exit 1
+          fi
+          plan() { node .github/scripts/deploy-parts.mjs "$@"; }
+          if [ "$ONLY_CHANGED" != "true" ]; then
+            plan --all "this environment always deploys every part"
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            if git rev-parse -q --verify 'HEAD^2' >/dev/null; then
+              plan --base 'HEAD^1' --head HEAD
+            else
+              plan --all "the PR checkout isn't a merge commit, so what it changes can't be told"
+            fi
+          elif [ "$EVENT_NAME" = "push" ]; then
+            # A merge into staging: deploy what that push changed, so merging
+            # one PR doesn't put staging's version of every other part back
+            # over the PRs still being reviewed on dev.
+            if [ "$FORCED" = "true" ]; then
+              plan --all "force push: the previous tip isn't an ancestor, so the diff means nothing"
+            elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              plan --all "first push of the branch: nothing to diff against"
+            elif ! git fetch --no-tags --depth=1 origin "$BEFORE"; then
+              plan --all "couldn't fetch the previous tip $BEFORE"
+            else
+              plan --base "$BEFORE" --head HEAD
+            fi
+          else
+            plan --all "$EVENT_NAME run: deploy every part"
+          fi
+
+      - name: Set up pnpm
+        if: steps.parts.outputs.install == 'true'
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Set up Node.js
+        if: steps.parts.outputs.install == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        if: steps.parts.outputs.install == 'true'
+        run: pnpm install
+
+      - name: Build KidClub app
+        if: steps.parts.outputs.kidclub == 'true'
+        run: ${{ inputs.build_command }}
+
+      - name: Build FinHub app
+        if: steps.parts.outputs.finances == 'true'
+        run: ${{ inputs.finances_build_command }}
+
+      - name: Build domotics app
+        if: steps.parts.outputs.domotics == 'true'
+        run: ${{ inputs.domotics_build_command }}
+
+      # The functions deploy compiles packages/shared and functions in its
+      # predeploy (firebase.json). Doing it here first means a compile error
+      # stops the run before terraform/rules deploy, and a packages/shared
+      # change that breaks that compile is caught on dev even when no
+      # consumer of the changed file needs redeploying.
+      - name: Compile packages/shared and functions
+        if: steps.parts.outputs.functions == 'true' || steps.parts.outputs.shared_check == 'true'
+        env:
+          FUNCTIONS: ${{ steps.parts.outputs.functions }}
+        run: |
+          pnpm --filter @shared build
+          if [ "$FUNCTIONS" = "true" ]; then pnpm --filter functions build; fi
+
+      # A bundle built in the wrong mode (dev config in prod or the reverse)
+      # deploys fine and then breaks login. Each Vite bundle contains its
+      # Firebase config once as projectId:"<id>"; refuse to deploy unless it's
+      # this environment's project.
+      - name: Check every build targets ${{ inputs.firebase_project }}
+        if: steps.parts.outputs.kidclub == 'true' || steps.parts.outputs.finances == 'true' || steps.parts.outputs.domotics == 'true'
+        env:
+          KIDCLUB: ${{ steps.parts.outputs.kidclub }}
+          FINANCES: ${{ steps.parts.outputs.finances }}
+          DOMOTICS: ${{ steps.parts.outputs.domotics }}
+          PROJECT: ${{ inputs.firebase_project }}
+        run: |
+          apps=()
+          if [ "$KIDCLUB" = "true" ]; then apps+=(apps/noisyphocus/kidclub); fi
+          if [ "$FINANCES" = "true" ]; then apps+=(apps/noisysource/finances); fi
+          if [ "$DOMOTICS" = "true" ]; then apps+=(apps/noisysource/domotics); fi
+          for app in "${apps[@]}"; do
+            if ! grep -rqF "projectId:\"$PROJECT\"" "$app/dist/assets"; then
+              echo "::error::$app was built for another Firebase project (expected $PROJECT). Check its build command (build:staging = kidclub-dev, build = prod) and its .env.<mode> file."
+              exit 1
+            fi
+          done
+
+      # Hosting jobs deploy exactly the bundle built and checked above.
+      - name: Upload KidClub build
+        if: steps.parts.outputs.kidclub == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-kidclub
+          path: apps/noisyphocus/kidclub/dist
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true # a re-run of this job replaces its own upload
+
+      - name: Upload FinHub build
+        if: steps.parts.outputs.finances == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-finances
+          path: apps/noisysource/finances/dist
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true # a re-run of this job replaces its own upload
+
+      - name: Upload domotics build
+        if: steps.parts.outputs.domotics == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-domotics
+          path: apps/noisysource/domotics/dist
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true # a re-run of this job replaces its own upload
+
+  terraform:
+    name: "Terraform (${{ inputs.environment }})"
+    needs: plan
+    if: needs.plan.outputs.terraform == 'true'
+    # Both dev PRs and staging pushes run `terraform apply` against the same
+    # GCS state prefix, so two overlapping applies collide on the state lock
+    # and the later one dies with "Error acquiring the state lock ... 412
+    # conditionNotMet" (happened twice before runs were serialised).
     #
-    # cancel-in-progress is deliberately FALSE: cancelling a run mid
-    # `terraform apply` is what leaves a genuinely stale lock behind, which
-    # then needs a manual force-unlock. Queue instead. GitHub keeps only the
-    # newest pending run per group, so rapid pushes collapse rather than pile up.
+    # cancel-in-progress is deliberately FALSE on every deploy job: cancelling
+    # mid `terraform apply` is what leaves a genuinely stale lock behind, which
+    # then needs a manual force-unlock — and cancelling any deploy midway
+    # leaves that part half-updated. Queue instead.
     concurrency:
-      group: deploy-kidclub-${{ inputs.environment }}
+      group: deploy-${{ inputs.environment }}-terraform
       cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
@@ -97,6 +324,104 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: ${{ inputs.service_account }}
+
+      - name: Export access token
+        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: infra/gcp/terraform
+        run: terraform init -backend-config="prefix=${{ inputs.environment }}" -reconfigure
+
+      # Applies unconditionally whenever this job runs (see root CLAUDE.md's
+      # "Branch → environment pipeline" for why). If the service account is
+      # missing an IAM role for some resource, this fails closed — no partial
+      # apply silently skipped, no separate manual apply step waiting after it.
+      #
+      # billing_account_id has no default (budget.tf) so every apply needs
+      # it regardless of environment, even though the budget resource
+      # itself only exists where manage_combined_budget is true. Comes from
+      # a repo secret, not committed — it's not highly sensitive, but
+      # there's no reason to put it in a file either.
+      - name: Terraform apply
+        working-directory: infra/gcp/terraform
+        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -auto-approve
+
+  rules:
+    name: "Rules + indexes (${{ inputs.environment }})"
+    needs: [plan, terraform]
+    if: >-
+      needs.plan.result == 'success' && !cancelled()
+      && (needs.terraform.result == 'success' || needs.terraform.result == 'skipped')
+      && (needs.plan.outputs.firestore_rules == 'true' || needs.plan.outputs.firestore_indexes == 'true' || needs.plan.outputs.storage_rules == 'true')
+    concurrency:
+      group: deploy-${{ inputs.environment }}-rules
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: ${{ inputs.service_account }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Export access token
+        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
+
+      - name: Deploy Firestore Rules
+        if: needs.plan.outputs.firestore_rules == 'true'
+        run: firebase deploy --only firestore:rules --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy Firestore Indexes
+        if: needs.plan.outputs.firestore_indexes == 'true'
+        run: firebase deploy --only firestore:indexes --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+      - name: Deploy Storage Rules
+        if: needs.plan.outputs.storage_rules == 'true'
+        run: firebase deploy --only storage --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN" --non-interactive
+
+  functions:
+    name: "Functions (${{ inputs.environment }})"
+    needs: [plan, terraform, rules]
+    if: >-
+      needs.plan.result == 'success' && !cancelled()
+      && (needs.terraform.result == 'success' || needs.terraform.result == 'skipped')
+      && (needs.rules.result == 'success' || needs.rules.result == 'skipped')
+      && needs.plan.outputs.functions == 'true'
+    concurrency:
+      group: deploy-${{ inputs.environment }}-functions
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # The functions predeploy (firebase.json) builds packages/shared and
+      # functions with pnpm, so this job needs the workspace installed.
       - name: Set up pnpm
         uses: pnpm/action-setup@v4 # version: packageManager in root package.json
 
@@ -116,24 +441,54 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build KidClub app
-        run: ${{ inputs.build_command }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: ${{ inputs.service_account }}
 
-      - name: Build FinHub app
-        run: ${{ inputs.finances_build_command }}
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
 
-      # A bundle built in the wrong mode (dev config in prod or the reverse)
-      # deploys fine and then breaks login. Each Vite bundle contains its
-      # Firebase config once as projectId:"<id>"; refuse to deploy unless it's
-      # this environment's project.
-      - name: Check both builds target ${{ inputs.firebase_project }}
-        run: |
-          for app in apps/noisyphocus/kidclub apps/noisysource/finances; do
-            if ! grep -rqF 'projectId:"${{ inputs.firebase_project }}"' "$app/dist/assets"; then
-              echo "::error::$app was built for another Firebase project (expected ${{ inputs.firebase_project }}). Check its build command (build:staging = kidclub-dev, build = prod)."
-              exit 1
-            fi
-          done
+      - name: Export access token
+        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
+
+      - name: Deploy Cloud Functions
+        run: firebase deploy --only functions --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+  # The three hosting jobs below are the same apart from the app. They're
+  # separate jobs (not steps of one) on purpose: one concurrency group per
+  # site, so a FinHub deploy never cancels or waits on a domotics one.
+  hosting-kidclub:
+    name: "Hosting: KidClub (${{ inputs.environment }})"
+    needs: [plan, terraform, rules, functions]
+    if: >-
+      needs.plan.result == 'success' && !cancelled()
+      && (needs.terraform.result == 'success' || needs.terraform.result == 'skipped')
+      && (needs.rules.result == 'success' || needs.rules.result == 'skipped')
+      && (needs.functions.result == 'success' || needs.functions.result == 'skipped')
+      && needs.plan.outputs.kidclub == 'true'
+    concurrency:
+      group: deploy-${{ inputs.environment }}-hosting-kidclub
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download KidClub build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-kidclub
+          path: apps/noisyphocus/kidclub/dist
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -144,51 +499,102 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
-      # Exported once so every later step (firebase --token, terraform) can
-      # just reference $GOOGLE_OAUTH_ACCESS_TOKEN without re-invoking gcloud.
       - name: Export access token
         run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
-
-      - name: Set up Terraform
-        if: inputs.run_terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Terraform init
-        if: inputs.run_terraform
-        working-directory: infra/gcp/terraform
-        run: terraform init -backend-config="prefix=${{ inputs.environment }}" -reconfigure
-
-      # Applies unconditionally when run_terraform is true (see root
-      # CLAUDE.md's "Branch → environment pipeline" for why). If the
-      # service account is missing an IAM role for some resource, this
-      # fails closed — no partial apply silently skipped, no separate
-      # manual apply step waiting after it.
-      #
-      # billing_account_id has no default (budget.tf) so every apply needs
-      # it regardless of environment, even though the budget resource
-      # itself only exists where manage_combined_budget is true. Comes from
-      # a repo secret, not committed — it's not highly sensitive, but
-      # there's no reason to put it in a file either.
-      - name: Terraform apply
-        if: inputs.run_terraform
-        working-directory: infra/gcp/terraform
-        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -auto-approve
-
-      - name: Deploy Firestore Rules
-        run: firebase deploy --only firestore:rules --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
-
-      - name: Deploy Firestore Indexes
-        run: firebase deploy --only firestore:indexes --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
-
-      - name: Deploy Storage Rules
-        if: inputs.deploy_storage_rules
-        run: firebase deploy --only storage --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN" --non-interactive
-
-      - name: Deploy Cloud Functions
-        run: firebase deploy --only functions --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
 
       - name: Deploy KidClub Hosting
         run: firebase deploy --only hosting:kidclub --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
 
+  hosting-finances:
+    name: "Hosting: FinHub (${{ inputs.environment }})"
+    needs: [plan, terraform, rules, functions]
+    if: >-
+      needs.plan.result == 'success' && !cancelled()
+      && (needs.terraform.result == 'success' || needs.terraform.result == 'skipped')
+      && (needs.rules.result == 'success' || needs.rules.result == 'skipped')
+      && (needs.functions.result == 'success' || needs.functions.result == 'skipped')
+      && needs.plan.outputs.finances == 'true'
+    concurrency:
+      group: deploy-${{ inputs.environment }}-hosting-finances
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download FinHub build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-finances
+          path: apps/noisysource/finances/dist
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: ${{ inputs.service_account }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Export access token
+        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
+
       - name: Deploy FinHub Hosting
         run: firebase deploy --only hosting:finances --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+
+  # Runs only where deploy_domotics is on: dev (kidclub-dev-domotics) now,
+  # prod once rainbow-prod-2454b-domotics exists (see deploy-prod.yml).
+  hosting-domotics:
+    name: "Hosting: domotics (${{ inputs.environment }})"
+    needs: [plan, terraform, rules, functions]
+    if: >-
+      needs.plan.result == 'success' && !cancelled()
+      && (needs.terraform.result == 'success' || needs.terraform.result == 'skipped')
+      && (needs.rules.result == 'success' || needs.rules.result == 'skipped')
+      && (needs.functions.result == 'success' || needs.functions.result == 'skipped')
+      && needs.plan.outputs.domotics == 'true'
+    concurrency:
+      group: deploy-${{ inputs.environment }}-hosting-domotics
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download domotics build
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-domotics
+          path: apps/noisysource/domotics/dist
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/245453200769/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: ${{ inputs.service_account }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Export access token
+        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
+
+      - name: Deploy domotics Hosting
+        run: firebase deploy --only hosting:domotics --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
