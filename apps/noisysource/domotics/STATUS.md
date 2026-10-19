@@ -65,6 +65,7 @@ Plan, in order:
 2026-10-02 — Heat pump fault codes + corrected heat pump readings (PR #73, merged to `staging`). The unit is a **Zantia Vancouver 13 (single-phase, R32)**, manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. Datapoint table in `domotics-bridge/README.md` → "Heat pump"; fault bitmaps decoded in `src/data/heatpumpFaults.ts`; active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
 ## Next step
+0. **Heating automation — designed 2026-10-19, not started**: see `HANDOFF-heating-automation.md` (bi-horário, Pi controls flow temperature / schedule / pump with limits, dry-run first). Heat pump fixed and running clean since 2026-10-19 (fault 0, 70→85 Hz). Renato to set the RENAC battery not to discharge during vazio.
 1. **Heat pump: E13 is active again (seen 2026-10-17 13:18 UTC)** — see "Anything risky". Physical/installer issue, not software.
 2. **OAuth redirect URI (Renato, Google Cloud console, project kidclub-dev)**: APIs & Services → Credentials → OAuth 2.0 Client IDs → "Web client (auto created by Google Service)" → Authorized redirect URIs → add `https://kidclub-dev-domotics.web.app/__/auth/handler` → Save. (gcloud can't edit this client.) Until then sign-in fails only inside the installed app; browser tabs still work.
 3. **Deploy the app to the dev site** (CI doesn't deploy domotics hosting; firebase CLI needs `firebase login --reauth` first): `pnpm --filter domotics build:staging && npx firebase-tools@13 deploy --only hosting:domotics --project=kidclub-dev`.
