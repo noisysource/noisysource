@@ -18,6 +18,8 @@ import ClimatePanel from './ClimatePanel';
 import Clock from './Clock';
 import HealthChips, { FaultBanner } from './HealthChips';
 import RoomPanel from './RoomPanel';
+import AutomationCard from './AutomationCard';
+import type { AutomationStatus } from '../data/automation';
 
 /**
  * Loaded on its own: three.js is most of the app's weight, and the header,
@@ -46,6 +48,8 @@ interface Props {
   onBlindsSet: (deviceIds: string[], position: number) => void;
   onThermostatCommand: (deviceId: string, command: ThermostatCommand) => void;
   onHeatPumpCommand: (deviceId: string, command: HeatPumpCommand) => void;
+  automation?: AutomationStatus;
+  canEditAutomation: boolean;
 }
 
 /**
@@ -92,7 +96,15 @@ export default function HouseScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
   onSignIn, onSignOut, onOpenAdmin, onShow2D, onStartEdit,
   onLightCommand, onLightsSet, onBlindCommand, onBlindsSet, onThermostatCommand, onHeatPumpCommand,
+  automation, canEditAutomation,
 }: Props) {
+  /**
+   * Outdoor temperature from the heat pump's own sensor. Here it reads colder
+   * than any weather service, and it is what the pump actually works against.
+   */
+  const outdoor = devices.find(
+    (d): d is Extract<Device, { type: 'heatpump' }> => d.type === 'heatpump' && d.online !== false,
+  )?.state.outdoor;
   const [mode, setModeState] = useState<HouseMode>(initialLayer);
   /** Remembered per device: the wall tablet may live on Energia, a phone on Luzes. */
   function setMode(next: HouseMode) {
@@ -146,6 +158,14 @@ export default function HouseScreen({
 
         {/* Second row on a phone, inline from sm up. */}
         <div className="order-last w-full sm:order-none sm:w-auto flex items-center gap-2">
+          {outdoor !== undefined && (
+            <span
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg whitespace-nowrap bg-zinc-800 text-zinc-200 tabular-nums"
+              title="Temperatura exterior — sensor da bomba de calor"
+            >
+              <Thermometer size={12} className="text-sky-300" /> {outdoor.toFixed(1)}° exterior
+            </span>
+          )}
           <HealthChips
             devices={devices}
             deviceStatus={deviceStatus}
@@ -249,7 +269,7 @@ export default function HouseScreen({
                 Tocar: ligar/desligar · Manter premido: ajustar
               </p>
             )}
-            {mode === 'clima' && <TempLegend />}
+            {mode === 'clima' && <TempLegend outdoor={outdoor} />}
             {/* On the energy layer the same figures are in the scene itself. */}
             {mode !== 'energia' && energy?.online && <EnergyStrip energy={energy} onOpen={openEnergy} />}
           </div>
@@ -275,6 +295,8 @@ export default function HouseScreen({
             />
           ) : (
             <Overview
+              automation={automation}
+              canEditAutomation={canEditAutomation}
               mode={mode}
               plan={plan}
               devices={devices}
@@ -291,7 +313,7 @@ export default function HouseScreen({
   );
 }
 
-function TempLegend() {
+function TempLegend({ outdoor }: { outdoor?: number }) {
   return (
     <div className="flex items-center gap-2 rounded-xl bg-zinc-950/80 backdrop-blur-sm border border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-400 tabular-nums">
       16°
@@ -300,6 +322,7 @@ function TempLegend() {
         style={{ background: 'linear-gradient(to right, #1d4ed8, #0891b2, #059669, #d97706, #dc2626)' }}
       />
       25°
+      {outdoor !== undefined && <span className="text-zinc-300">· exterior {outdoor.toFixed(1)}°</span>}
     </div>
   );
 }
@@ -339,8 +362,10 @@ function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => 
 
 /** The panel when no room is selected: what's on, every room, climate, energy. */
 function Overview({
-  mode, plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
+  automation, canEditAutomation, mode, plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
 }: {
+  automation?: AutomationStatus;
+  canEditAutomation: boolean;
   mode: HouseMode;
   plan: FloorPlan;
   devices: Device[];
@@ -423,6 +448,7 @@ function Overview({
     energy: energy?.online ? <EnergyCard energy={energy} /> : (
       <p id="energia" className="text-sm text-zinc-500">Inversor sem ligação — sem dados de energia.</p>
     ),
+    automation: <AutomationCard status={automation} canEdit={canEditAutomation} />,
     climate: (
       <section className="flex flex-col gap-2">
         <h2 className={sectionTitle}>Clima</h2>
@@ -437,9 +463,9 @@ function Overview({
   };
   // The layer in view leads; the rest follow.
   const order: Array<keyof typeof sections> =
-    mode === 'clima' ? ['climate', 'rooms', 'lights', 'energy']
-    : mode === 'energia' ? ['energy', 'lights', 'rooms', 'climate']
-    : ['lights', 'rooms', 'energy', 'climate'];
+    mode === 'clima' ? ['automation', 'climate', 'rooms', 'lights', 'energy']
+    : mode === 'energia' ? ['energy', 'automation', 'lights', 'rooms', 'climate']
+    : ['lights', 'rooms', 'energy', 'climate', 'automation'];
 
   return (
     <div className="flex flex-col gap-6">

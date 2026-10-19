@@ -1,5 +1,6 @@
 import type { Device } from '@shared/models/Device';
 import type { EnergyReading } from './energy';
+import type { AutomationStatus } from './automation';
 import { buildDevices, deviceMeta, rooms } from './legrandData';
 
 /**
@@ -71,3 +72,35 @@ export function demoEnergy(): EnergyReading {
     readAt: Date.now(),
   };
 }
+
+/** The automation in simulation, mid-afternoon with a solar surplus. */
+export function demoAutomation(): AutomationStatus {
+  const now = Date.now();
+  return {
+    enabled: true,
+    dryRun: true,
+    state: 'dry-run',
+    period: 'day',
+    periodLabel: 'dia',
+    boost: true,
+    roomTarget: 24.5,
+    outdoor: 14.5,
+    flowTarget: 30,
+    flowCorrection: 0,
+    zones: [
+      { id: 'a', name: 'Sala therm', note: 'definiria 24.5°C' },
+      { id: 'b', name: 'Master bedroom', note: 'no alvo' },
+    ],
+    reasons: [
+      'Período: dia — alvo das divisões 24.5°C (inclui bónus solar).',
+      'Há excedente solar: a guardar calor no pavimento.',
+      'Água a 30°C: exterior 14.5°C (sensor da bomba).',
+    ],
+    actions: [
+      { at: now - 4 * 60_000, device: 'Sala therm', what: 'alvo 24°C → 24.5°C', sent: false },
+      { at: now - 9 * 60_000, device: 'Bomba de calor', what: 'água 42°C → 30°C', sent: false },
+    ],
+    evaluatedAt: now,
+  };
+}
+

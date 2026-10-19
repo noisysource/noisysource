@@ -7,7 +7,8 @@ import type {
 import type { FloorPlan, InfraItem, PlanRoom, Room, Wall } from '@shared/models/Room';
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
-import { DEMO, demoClimate, demoEnergy, demoLegrand } from './data/demoData';
+import { DEMO, demoAutomation, demoClimate, demoEnergy, demoLegrand } from './data/demoData';
+import type { AutomationStatus } from './data/automation';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
 import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
@@ -101,6 +102,8 @@ export default function App() {
   const [bridgeUpdatedAt, setBridgeUpdatedAt] = useState<number | undefined>();
   const [showAdmin, setShowAdmin] = useState(false);
   const [energy, setEnergy] = useState<EnergyReading | null>(null);
+  /** The heating automation's latest decision, reported by the bridge with its state. */
+  const [automation, setAutomation] = useState<AutomationStatus | undefined>();
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
@@ -285,6 +288,7 @@ export default function App() {
     if (DEMO) {
       setTuyaDevices(demoClimate());
       setEnergy(demoEnergy());
+      setAutomation(demoAutomation());
       setBridgeUpdatedAt(Date.now());
       setBridgeStatus('ok');
       return;
@@ -302,6 +306,7 @@ export default function App() {
         failures = 0;
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
         setEnergy(state.inverter ?? null);
+        setAutomation(state.automation);
         setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
         void announceWatching();
@@ -670,6 +675,9 @@ export default function App() {
           onBlindsSet={handleBlindsSet}
           onThermostatCommand={handleThermostatCommand}
           onHeatPumpCommand={handleHeatPumpCommand}
+          automation={automation}
+          // The settings document is the owner's alone; on the LAN nobody can sign in.
+          canEditAutomation={!!user && !isLanOrigin()}
         />
       );
     }

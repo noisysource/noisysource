@@ -400,13 +400,18 @@ function HeatPumpUnit({ cx, cy, running, fault, onTap }: {
  * glance without opening anything. Drawn into a texture rather than as DOM:
  * it lies flat on the floor, turns with the house, and grows as you zoom in.
  */
+/** Height of the floor decal's canvas (width 512): three lines of text. */
+const DECAL_H = 320;
+
 function ClimateDecal({ room, temp, humidity, heating }: {
-  room: PlanRoom; temp: number; humidity?: number; heating: boolean;
+  room: PlanRoom; temp: number; humidity?: number;
+  /** The zone's floor-circuit valve is open (it is calling for heat). */
+  heating: boolean;
 }) {
   const gl = useThree(s => s.gl);
   const texture = useMemo(() => {
     const W = 512;
-    const H = 256;
+    const H = DECAL_H;
     const canvas = document.createElement('canvas');
     canvas.width = W;
     canvas.height = H;
@@ -418,13 +423,18 @@ function ClimateDecal({ room, temp, humidity, heating }: {
     ctx.shadowBlur = 14;
     const font = 'system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.fillStyle = heating ? '#fdba74' : '#fafafa';
-    ctx.font = `600 124px ${font}`;
-    ctx.fillText(`${temp.toFixed(1)}°`, W / 2, humidity === undefined ? H / 2 : 96);
+    ctx.font = `600 112px ${font}`;
+    ctx.fillText(`${temp.toFixed(1)}°`, W / 2, 84);
     if (humidity !== undefined) {
       ctx.fillStyle = '#a5f3fc';
-      ctx.font = `500 60px ${font}`;
-      ctx.fillText(`${Math.round(humidity)}% humidade`, W / 2, 202);
+      ctx.font = `500 54px ${font}`;
+      ctx.fillText(`${Math.round(humidity)}% humidade`, W / 2, 178);
     }
+    // Whether this zone's floor circuit is open, in words: the thing to check
+    // when a room stays cold.
+    ctx.fillStyle = heating ? '#fb923c' : '#a1a1aa';
+    ctx.font = `600 46px ${font}`;
+    ctx.fillText(heating ? 'válvula aberta' : 'válvula fechada', W / 2, humidity === undefined ? 178 : 262);
     const t = new THREE.CanvasTexture(canvas);
     t.colorSpace = THREE.SRGBColorSpace;
     // Seen at a slant from the default camera; without this the text smears.
@@ -440,7 +450,7 @@ function ClimateDecal({ room, temp, humidity, heating }: {
       rotation={[-Math.PI / 2, 0, 0]}
       renderOrder={2}
     >
-      <planeGeometry args={[w, w / 2]} />
+      <planeGeometry args={[w, (w * DECAL_H) / 512]} />
       <meshBasicMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
     </mesh>
   );
