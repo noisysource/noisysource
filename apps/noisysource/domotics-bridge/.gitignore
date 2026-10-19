@@ -1,6 +1,7 @@
 lib/
 node_modules/
 device-cache.json
+automation-config.json
 
 # Holds the bridge account's password.
 bridge.env

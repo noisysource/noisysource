@@ -6,6 +6,10 @@ import { readAll, sendCommands, type DeviceConfig, type DeviceState, type DpValu
 import { dpForCode } from './dpmap';
 import { startHttp } from './http';
 import { readInverter, type InverterReading } from './inverter';
+import {
+  createAutomation, parseConfig,
+  type AutomationConfig, type AutomationStatus, type PumpReading, type ZoneReading,
+} from './automation';
 
 /**
  * Domotics bridge.
@@ -71,6 +75,10 @@ const COMMAND_POLL_MS = Number(process.env.COMMAND_POLL_MS ?? 10_000);
 
 const CONFIG_DOC = 'domotics_config/tuya_devices';
 const STATE_DOC = 'domotics_state/tuya';
+/** Heating automation settings, edited in the app (see automation.ts). */
+const AUTOMATION_DOC = 'domotics_config/automation';
+/** Settings change rarely; re-reading every couple of minutes is plenty and costs ~700 reads a day. */
+const AUTOMATION_SETTINGS_EVERY_MS = 2 * 60_000;
 const COMMANDS = 'domotics_commands';
 /**
  * Administration requests. Kept apart from device commands because they are a
@@ -122,6 +130,8 @@ const TOTAL_FAILURE_LIMIT = Number(process.env.TOTAL_FAILURE_LIMIT ?? 5);
 let state: {
   devices: DeviceState[];
   inverter?: InverterReading;
+  /** What the heating automation decided last, and why — shown in the app. */
+  automation?: AutomationStatus;
   updatedAt: number;
 } = { devices: [], updatedAt: 0 };
 /** Per-device cool-off after failures. Absent means "due now". */
@@ -177,6 +187,100 @@ async function loadConfig(): Promise<DeviceConfig[]> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Heating automation
+// ---------------------------------------------------------------------------
+
+const AUTOMATION_CACHE = join(__dirname, '..', 'automation-config.json');
+
+/**
+ * The settings, like the device list, are Firestore-first and cached on disk:
+ * a cloud outage must not change how the house is heated, and a bridge
+ * restarted without network carries on with the last settings it knew.
+ */
+let automationConfig: AutomationConfig = (() => {
+  try {
+    return parseConfig(JSON.parse(readFileSync(AUTOMATION_CACHE, 'utf8')));
+  } catch {
+    return parseConfig({});
+  }
+})();
+let automationSettingsAt = 0;
+
+async function refreshAutomationSettings() {
+  if (!db || Date.now() - automationSettingsAt < AUTOMATION_SETTINGS_EVERY_MS) return;
+  automationSettingsAt = Date.now();
+  try {
+    // A missing document means defaults — which is automation off.
+    const next = parseConfig((await db.getDoc(AUTOMATION_DOC)) ?? {});
+    if (JSON.stringify(next) !== JSON.stringify(automationConfig)) {
+      console.log(`[automation] settings changed: ${next.enabled ? (next.dryRun ? 'dry-run' : 'ON') : 'off'}`);
+      automationConfig = next;
+      writeFileSync(AUTOMATION_CACHE, JSON.stringify(next, null, 2));
+    }
+  } catch (err) {
+    console.warn('[automation] could not read settings, keeping the last ones:', (err as Error).message);
+  }
+}
+
+/** Any of the pump's fault bitmaps set. */
+const PUMP_FAULT_CODES = ['fault', 'smart_system', 'power_system', 'ithium_battery_system', 'electronic_system', 'bcu_com_state'];
+const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
+
+const automate = createAutomation(async (deviceId, commands) => {
+  await runCommand(deviceId, commands);
+});
+let automating = false;
+
+/** One automation step on the freshest state. Runs after every poll. */
+async function runAutomation() {
+  if (automating) return;
+  automating = true;
+  try {
+    await refreshAutomationSettings();
+    const zones: ZoneReading[] = [];
+    let pump: PumpReading | undefined;
+    for (const d of state.devices) {
+      const s = new Map(d.status.map(x => [x.code, x.value]));
+      if (s.has('p02_heating')) {
+        pump = {
+          id: d.id,
+          online: d.online,
+          on: s.get('switch') === true,
+          fault: PUMP_FAULT_CODES.some(c => Number(s.get(c) ?? 0) !== 0),
+          // The pump's own outdoor sensor (`temp_top` — see README, "Heat pump").
+          outdoor: tenths(s.get('temp_top')),
+          flowSetpoint: typeof s.get('p02_heating') === 'number' ? (s.get('p02_heating') as number) : undefined,
+        };
+      } else if (s.has('temp_set')) {
+        zones.push({
+          id: d.id,
+          name: d.name,
+          online: d.online,
+          current: tenths(s.get('temp_current')),
+          target: tenths(s.get('temp_set')),
+          mode: typeof s.get('mode') === 'string' ? (s.get('mode') as string) : undefined,
+          valveOpen: s.get('valve_state') === 'open',
+        });
+      }
+    }
+    const inv = state.inverter;
+    const status = await automate(automationConfig, {
+      now: new Date(),
+      zones,
+      pump,
+      energy: inv?.online
+        ? { pvW: inv.pvPowerW, loadW: inv.consumptionW, gridW: inv.gridPowerW, soc: inv.soc }
+        : undefined,
+    });
+    state = { ...state, automation: status };
+  } catch (err) {
+    console.error('[automation] step failed:', (err as Error).message);
+  } finally {
+    automating = false;
+  }
+}
+
 /**
  * Mirror state to Firestore so the app can read it from outside the house.
  *
@@ -196,7 +300,9 @@ async function publish() {
   // someone is watching, 300s otherwise — so this is a few hundred writes on a
   // normal day and a few thousand on a heavily watched one, against a free tier
   // of twenty thousand.
-  const fingerprint = JSON.stringify({ devices: state.devices, inverter: state.inverter });
+  // The automation's evaluation time changes every step; what it decided does not.
+  const { evaluatedAt: _evaluatedAt, ...automation } = state.automation ?? ({} as Partial<AutomationStatus>);
+  const fingerprint = JSON.stringify({ devices: state.devices, inverter: state.inverter, automation });
   if (fingerprint === lastRelayFingerprint) return;
   if (Date.now() - lastRelayAt < RELAY_MIN_INTERVAL_MS) return;
   try {
@@ -206,6 +312,7 @@ async function publish() {
       // by the update mask, so a failed inverter read would otherwise leave the
       // last good figures on display as though they were current.
       inverter: state.inverter ?? null,
+      automation: state.automation ?? null,
       // Tells the app this bridge understands `{watch: true}` relay messages.
       // An older bridge treats one as a failed command, so the app only sends
       // them when it sees this.
@@ -433,11 +540,13 @@ async function poll(force = false) {
     const inverter = await readInverter();
 
     const changed = JSON.stringify(next) !== JSON.stringify(state.devices);
-    state = { devices: next, inverter, updatedAt: Date.now() };
+    state = { devices: next, inverter, automation: state.automation, updatedAt: Date.now() };
     if (changed) {
       const online = next.filter(d => d.online).length;
       console.log(`[state] ${online}/${next.length} online (changed)`);
     }
+    // Decide on what was just read, then publish both together.
+    await runAutomation();
     if (RELAY) void publish();
   } catch (err) {
     console.error('[poll] failed:', (err as Error).message);
