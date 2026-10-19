@@ -6,6 +6,7 @@
 Home automation for Renato's house: lights, blinds, and climate control, plus a live dashboard. Two separate device ecosystems, both behind cloud APIs with a local bridge in front for speed:
 - **Legrand** (lights, blinds) — via the **Netatmo API** (`functions/src/domotics/legrand.ts`)
 - **Tuya/SmartLife** (thermostats, heat pump) — via the **Tuya Cloud API**, EU data centre (`functions/src/domotics/tuya.ts`)
+  - The heat pump (Zantia Vancouver 13) is **dedicated to underfloor heating**. Domestic hot water (AQS) comes from a separate heat pump that is not integrated, so this pump's DHW tank reading and DHW setpoint mean nothing — mode "Heating" is correct, and a cold DHW tank is not a fault (Renato, 2026-10-19).
 
 There is no Shelly integration and no amps/watts/kWh energy monitoring — despite earlier planning docs, those were never built.
 
