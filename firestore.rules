@@ -313,6 +313,13 @@ service cloud.firestore {
       // exactly as it is: rules are permissive-OR, so this grants the bridge one
       // more document and widens nothing for anyone else.
       allow read: if isBridge() && docId == 'tuya_devices';
+      // Heating automation settings (domotics-bridge/src/automation.ts). Unlike
+      // the display documents above, this one decides how the house is heated,
+      // so only the owner may read or change it; the bridge reads it to act on.
+      // The bridge clamps every value to hard limits anyway — the rule decides
+      // who, the bridge decides how much.
+      allow read, write: if isDomoticsOwner() && docId == 'automation';
+      allow read: if isBridge() && docId == 'automation';
     }
 
     // Relay between the house and the app when away from the LAN. At home the
