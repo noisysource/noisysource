@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { Child, PartyConfig, ExtraItem, computePartyPrice, PARTY_VAT_RATE } from '@shared/models';
+import { Child, Family, PartyConfig, ExtraItem, computePartyPrice, PARTY_VAT_RATE } from '@shared/models';
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
 import { normalizeEmail } from '../../../lib/utils';
@@ -15,8 +15,9 @@ export default function PartyBookingPage() {
 
   const [config, setConfig] = useState<PartyConfig | null>(null);
   const [children, setChildren] = useState<Child[]>([]);
-  const [familyId, setFamilyId] = useState('');
+  const [family, setFamily] = useState<Family | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState(1);
 
@@ -35,16 +36,22 @@ export default function PartyBookingPage() {
   useEffect(() => {
     if (!user) return;
     (async () => {
-      const [cfg, family] = await Promise.all([
-        partyService.getPartyConfig(),
-        familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? ''),
-      ]);
-      setConfig(cfg);
-      setFamilyId(family.id);
-      const kids = await familyService.getFamilyChildren(family.id, false, user.uid);
-      setChildren(kids);
-      if (kids.length === 1) setChildId(kids[0].id);
-      setLoading(false);
+      try {
+        const [cfg, fam] = await Promise.all([
+          partyService.getPartyConfig(),
+          familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? ''),
+        ]);
+        setConfig(cfg);
+        setFamily(fam);
+        const kids = await familyService.getFamilyChildren(fam.id, false, user.uid);
+        setChildren(kids);
+        if (kids.length === 1) setChildId(kids[0].id);
+      } catch (err) {
+        reportClientError('[PartyBookingPage] load failed', err);
+        setLoadError('Não foi possível carregar o formulário de reserva. Tente novamente mais tarde.');
+      } finally {
+        setLoading(false);
+      }
     })();
   }, [user]);
 
@@ -70,22 +77,26 @@ export default function PartyBookingPage() {
   const toggleExtra = (ex: ExtraItem) => setExtraQty(ex.name, (extraQtys[ex.name] ?? 0) > 0 ? 0 : 1);
 
   const handleSubmit = async () => {
-    if (!user || !familyId || !price) return;
+    if (!user || !family || !price) return;
     if (!manualChild && !childId) return;
     const child = children.find(c => c.id === childId);
     const resolvedName = manualChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
     const resolvedAge = manualChild ? Number(manualAge) : child ? (child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear()) : 0;
     if (!resolvedName) return;
 
+    // The family's parent, not the admin, while impersonating: the booking's
+    // userId is what lets the parent read it, and its email gets the party emails.
+    const owner = familyService.owner(family, user);
+
     setSubmitting(true);
     try {
       await partyService.createBooking({
-        familyId,
+        familyId: family.id,
         childId: manualChild ? '' : childId,
-        userId: user.uid,
-        parentName: user.name || user.email?.split('@')[0] || '',
-        email: normalizeEmail(user.email),
-        phone: '',
+        userId: owner.userId,
+        parentName: owner.name || owner.email.split('@')[0] || '',
+        email: normalizeEmail(owner.email),
+        phone: family.primaryContact?.phone ?? '',
         childName: resolvedName,
         childAge: resolvedAge,
         partyType,
@@ -106,6 +117,7 @@ export default function PartyBookingPage() {
     }
   };
 
+  if (loadError) return <div className="p-6 max-w-xl mx-auto"><p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{loadError}</p></div>;
   if (loading || !config) return <div className="p-6 text-gray-400 text-sm">A carregar...</div>;
 
   const today = new Date().toISOString().split('T')[0];
