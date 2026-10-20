@@ -53,8 +53,13 @@ export const partyService = {
     await setDoc(docRef('config', 'party'), config);
   },
 
-  async updateBookingStatus(id: string, status: Status): Promise<void> {
-    await updateDoc(docRef('bookings', id), { status });
+  /**
+   * Confirming creates the deposit bill and emails the parent; rejecting emails
+   * the parent `reason` (functions: onPartyBookingStatusNotify). The reason goes
+   * in the same write so the trigger sees it.
+   */
+  async updateBookingStatus(id: string, status: Status, reason?: string): Promise<void> {
+    await updateDoc(docRef('bookings', id), reason ? { status, statusReason: reason } : { status });
   },
 
   async updateBooking(booking: Booking): Promise<void> {

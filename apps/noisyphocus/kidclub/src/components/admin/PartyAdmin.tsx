@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Booking, PartyConfig } from '@shared/models';
+import { Booking, PartyConfig, partyVatBreakdown } from '@shared/models';
 import { partyService } from '../../services/partyService';
 import PartyBookingCard from './PartyBookingCard';
 import EditPartyBookingModal from './EditPartyBookingModal';
@@ -96,15 +96,38 @@ export default function PartyAdminPanel() {
     fetchPartyConfig();
   }, []);
 
+  // Confirming now has effects outside the app (onPartyBookingStatusNotify):
+  // the deposit bill and an email to the parent. Rejecting emails the reason.
   const handleStatusChange = async (id: string, newStatus: Booking['status']) => {
     const booking = bookings.find(b => b.id === id);
     if (!booking) return;
 
-    await partyService.updateBookingStatus(id, newStatus);
+    const header = `${booking.partyType || 'Festa'} · ${booking.childName} · ${booking.date}${booking.time ? ` ${booking.time}` : ''}\n`;
+    let reason: string | undefined;
+    if (newStatus === 'confirmed') {
+      const deposit = partyVatBreakdown(booking.total).deposit;
+      const ok = window.confirm(`${header}Confirmar esta reserva?\n\n`
+        + `• O sinal de 50% (${currencyFormatter.format(deposit)}, IVA incluído) é lançado nos pagamentos da família\n`
+        + `• ${booking.email || 'O encarregado'} recebe um email com a confirmação e o link para pagar`);
+      if (!ok) return;
+    } else if (newStatus === 'rejected') {
+      const answer = window.prompt(`${header}Rejeitar esta reserva?\n\n`
+        + `${booking.email || 'O encarregado'} recebe um email com o motivo.\n\nMotivo (opcional):`, booking.statusReason ?? '');
+      if (answer === null) return;
+      reason = answer.trim() || undefined;
+    }
+
+    try {
+      await partyService.updateBookingStatus(id, newStatus, reason);
+    } catch (err) {
+      console.error('[PartyAdmin] status change failed:', err);
+      alert('Não foi possível alterar o estado da reserva.');
+      return;
+    }
 
     setBookings((prev) =>
       sortBookings(
-        prev.map((b) => (b.id === id ? { ...b, status: newStatus as Booking['status'] } : b))
+        prev.map((b) => (b.id === id ? { ...b, status: newStatus as Booking['status'], ...(reason ? { statusReason: reason } : {}) } : b))
       )
     );
   };
