@@ -28,7 +28,7 @@ Next, in order:
 Dev's last deploy (the merge of #100) was cancelled by a newer push and never re-ran. Merging this STATUS
 PR redeploys dev and brings it up to date.
 
-## 🎈 Party deposit bill + emails at confirmation (2026-10-20): PR #PRNUM → `staging`, NOT in prod
+## 🎈 Party deposit bill + emails at confirmation (2026-10-20): PR #109 → `staging`, NOT in prod
 
 **Why.** Confirming a party did nothing else. The 50% deposit bill only existed after the parent opened the party
 page and tapped "Pagar sinal", so nothing showed under Pagamentos. There were no party emails at all. While
