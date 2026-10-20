@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-20
 
 ## ▶️ Start here (left 2026-10-17, end of session)
 
@@ -27,6 +27,64 @@ Next, in order:
 **Branch state:** `main` and `staging` match in content. The automatic staging sync worked after #99.
 Dev's last deploy (the merge of #100) was cancelled by a newer push and never re-ran. Merging this STATUS
 PR redeploys dev and brings it up to date.
+
+## 🎈 Party deposit bill + emails at confirmation (2026-10-20): PR #PRNUM → `staging`, NOT in prod
+
+**Why.** Confirming a party did nothing else. The 50% deposit bill only existed after the parent opened the party
+page and tapped "Pagar sinal", so nothing showed under Pagamentos. There were no party emails at all. While
+impersonating, "As minhas festas" was empty and a booking made there carried the admin's identity.
+
+**What changed** (branch `agent/kidclub-party-billing`):
+- **Confirmation creates the bill** (`onPartyBookingStatusNotify`, `functions/src/kidclub/partyBookings.ts`). When a
+  booking's status becomes `confirmed`, the deposit bill is created. It's the same shape as before: `type: party_deposit`,
+  50% of the total **com IVA**. It goes to the family's parent (`primaryContact.userId`, falling back to `booking.userId`),
+  with the family's payment method (else `mbway`). The parent is emailed the date, the deposit (IVA incluído) and the
+  party page link, and told it's also in Pagamentos.
+- **Rejection** (`pending → rejected`) emails the parent the reason, with no bill. Festas → Rejeitar now asks for an
+  optional reason (it never did, so `statusReason` was always empty). Confirmar now asks first, and says what will happen.
+- **New request** → email to `admin@kidclub.pt` (`onPartyBookingCreated`).
+- Editing a booking without changing its status does nothing, nor does any other status change.
+- **One bill per booking, whatever happens.** `ensurePartyDeposit` (`partyDeposit.ts`) is shared by the trigger and the
+  `createPartyDeposit` callable. It returns an existing deposit, including old ones with random ids. Otherwise it creates
+  `billing/partyDeposit_<bookingId>` with `create()` in a transaction. Emails have fixed outbox ids
+  (`party_request_/party_confirmed_/party_rejected_<bookingId>`), so a redelivered event sends nothing twice.
+- `createPartyDeposit` stays as the fallback. The bill is owned by the family's parent, not the caller; admins may call
+  it; errors now reach the page instead of "internal".
+- **Party page** follows the bill live: paid, awaiting confirmation, or payable with MB WAY. Card/Multibanco are gone
+  (already off server-side). "Pagar sinal" only shows when there is no bill.
+- **Impersonation:** the list queries by `familyId` while impersonating; new bookings are stamped via
+  `familyService.owner()`.
+- Tests: functions **282/282**, of which 36 are new (`partyDeposit.test.ts`, `partyDepositLogic.test.ts`), covering
+  idempotency, owner, amount and status transitions. `pnpm test:rules` **31/31** (13 new party query shapes). Functions
+  build OK; app typecheck has the same 11 old errors; kidclub + finances builds OK. No new external call: Firestore and
+  the existing outbox only.
+
+**Click through on dev** (emails don't send on dev, because the Gmail guard is prod-only. Read them in the Firebase console
+under `_apps/arcoiris/emailOutbox/party_*`: `status: error` with the guard message is expected, `subject`/`html` is the
+content):
+1. As `parent-test@kidclub.pt`, book a party → outbox `party_request_<id>` to admin.
+2. Admin → Festas → Confirmar → dialog → OK. Check that `billing/partyDeposit_<id>` exists, with `total` = sinal shown
+   on the page, `userId` = the parent, and `createdVia: onPartyBookingStatusNotify`. Outbox `party_confirmed_<id>` exists.
+3. As the parent, Pagamentos shows "Sinal — Festa de …". The party page shows "Pagar €X com MB WAY". Pay in the
+   EasyPay sandbox, and the page should turn to "Sinal pago" without a reload.
+4. Reject another booking with a reason → outbox `party_rejected_<id>` with it. The party page shows it; no bill.
+5. Editar on a confirmed booking → no new bill or email.
+6. Impersonate the QA family → As minhas festas lists its parties. A booking made while impersonating has the parent's
+   `userId`/email.
+7. Fallback: delete `billing/partyDeposit_<id>` in the console → party page shows "Pagar sinal" → tapping it recreates
+   the same id.
+
+**Bookings confirmed before this deploys get no automatic bill or email** (e.g. Ana Ferreira's, confirmed on prod
+2026-10-20). For those, the parent still uses "Pagar sinal" on the party page, which now creates the same deterministic
+bill. To give one the email anyway: set it back to `pending` in the console, then confirm it again in Festas.
+
+**Open:**
+- Prod bookings made by an admin while impersonating (before this fix) carry the admin's `userId`/email. The parent
+  can't see them, and their emails would go to the admin. Worth a read-only check on prod before promoting: `bookings`
+  where `userId` is an admin uid.
+- Not done: a deposit bill isn't cancelled if a confirmed booking is later rejected (the UI only offers
+  Confirmar/Rejeitar on pending bookings). Editing a confirmed booking's price doesn't change its deposit bill.
+- Party deposits are still invoiced under the study-room Vendus product (23%, same rate), as before.
 
 ## 🔴 Prod bug (2026-10-16): parents couldn't enroll. FIXED on prod 2026-10-17 (#96)
 
