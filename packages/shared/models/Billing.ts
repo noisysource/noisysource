@@ -26,7 +26,7 @@ export interface BillingLineItem {
   title: string;
   amount: number;                    // net, after discounts and absence credit
   subscriptionId?: string;
-  type?: 'study' | 'transport' | 'enrollment'; // 'enrollment' = one-time registration+insurance fee
+  type?: 'study' | 'transport' | 'enrollment' | 'event'; // 'enrollment' = one-time registration+insurance fee; 'event' = a one-off event (AdhocEvent.ts)
   grossAmount?: number;               // sum of this period's EXPECTED+CANCELLED ReservationEvents, before any discount
   /** @deprecated study/transport line items no longer populate this — see the breakdown fields below. Still used by one-time enrollment fee line items (always empty array there). */
   appliedDiscounts?: AppliedDiscount[];
@@ -46,8 +46,13 @@ export interface BillingLineItem {
 
 export interface BillingRecord {
   id: string;
-  familyId: string;
+  familyId: string;   // '' / unset on a one-off event bill for a guest (no KidClub account)
   userId: string;
+
+  /** Unset on monthly bills. 'event' = a one-off event paid on its own (AdhocEvent.ts). */
+  type?: 'party_deposit' | 'camp_deposit' | 'camp_balance' | 'event';
+  eventRegistrationId?: string; // type 'event'
+  guestNif?: string;            // type 'event', guest only: the NIF they gave (no family doc to read it from)
 
   periodLabel: string;
   periodStart: Timestamp;

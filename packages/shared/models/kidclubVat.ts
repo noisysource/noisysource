@@ -7,9 +7,10 @@
 // (FR 01P2026/202, 2026-10-12): change a Vendus product's rate and this file together.
 //
 // Party prices are the exception: Booking.total and config/party are before VAT (partyPricing.ts).
+// One-off event prices (AdhocEvent.ts) are VAT-inclusive, like subscriptions.
 import { VatCode, VatSplit, splitGross, vatCodeLabel } from '../lib/vat';
 
-export type KidclubVatService = 'study' | 'transport' | 'enrollment' | 'insurance' | 'party';
+export type KidclubVatService = 'study' | 'transport' | 'enrollment' | 'insurance' | 'party' | 'event';
 
 export const KIDCLUB_VAT: Record<KidclubVatService, VatCode> = {
   study: 23,       // PRODUCT_STUDY, also used for camps
@@ -17,6 +18,7 @@ export const KIDCLUB_VAT: Record<KidclubVatService, VatCode> = {
   enrollment: 23,  // PRODUCT_ENROLLMENT_FEE
   insurance: 23,   // PRODUCT_INSURANCE
   party: 23,       // party deposits are billed as PRODUCT_STUDY
+  event: 23,       // one-off events (AdhocEvent.ts), billed as PRODUCT_STUDY like camps
 };
 
 export interface EuroVatSplit {
