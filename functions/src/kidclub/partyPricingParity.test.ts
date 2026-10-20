@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { partyDepositAmount, PARTY_VAT_CODE } from "./partyDepositLogic";
+import { partyDepositAmount, partyPriceBreakdown, PARTY_VAT_CODE } from "./partyDepositLogic";
 // Test-only imports from packages/shared (tests are excluded from the functions build, so this
 // never reaches runtime). The KidClub app has no test runner; these pin the shared side too.
 import { partyVatBreakdown } from "../../../packages/shared/models/partyPricing";
@@ -27,6 +27,10 @@ describe("party prices after moving to lib/vat.ts", () => {
       }
       if (partyDepositAmount(subtotal) !== now.deposit) {
         moved.push(`${subtotal}: functions deposit ${partyDepositAmount(subtotal)} != shared ${now.deposit}`);
+      }
+      const fn = partyPriceBreakdown(subtotal);
+      if (fn.subtotal !== now.subtotal || fn.vat !== now.vat || fn.total !== now.total || fn.deposit !== now.deposit) {
+        moved.push(`${subtotal}: functions breakdown ${JSON.stringify(fn)} != shared ${JSON.stringify(now)}`);
       }
       if (moved.length > 5) break;
     }
