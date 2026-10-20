@@ -77,6 +77,17 @@ On dev, Vendus is blocked by design (`invoiceError` on paid bills) and so is Gma
 - Camps (`/admin/camps`) overlap with this: two legacy models, account-only, and capacity that can
   overbook. Fold them into events later?
 
+**Dev deploy of PR #110 (2026-10-20 ~22:00 UTC): partly done, blocked.** Terraform, Firestore rules and
+indexes from this branch deployed to `kidclub-dev`. **Functions failed, so hosting was skipped:** the dev
+project still runs `onPartyBookingCreated` / `onPartyBookingStatusNotify`, which PR #109
+(`agent/kidclub-party-billing`, another active session) deployed. A full functions deploy from a branch
+without them refuses to delete them non-interactively, the same shared-dev problem as in the backlog.
+#109 doesn't touch rules or indexes, so nothing of theirs was overwritten. Ways forward (Renato decides):
+(a) merge #109 into `staging` first, then merge `staging` into this branch and redeploy. The two PRs
+conflict in `billing.ts`, `packages/shared/models/Billing.ts` and this file, so the second to merge
+resolves them. (b) `firebase functions:delete onPartyBookingCreated onPartyBookingStatusNotify --region
+europe-west3 --project kidclub-dev` and re-run; #109's dev triggers are gone until its next push.
+
 **Risky / in flight:** new **unauthenticated** callables (`registerForAdhocEvent`, `getAdhocRegistration`,
 `payAdhocRegistration`, `getInvoicePdf` by token) are capped as above. `onAdhocBillingPaid` runs on every
 billing doc update; it exits at once unless `type === "event"`. `expireAdhocHolds` is one more Cloud
