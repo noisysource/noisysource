@@ -92,10 +92,11 @@ vi.mock("./vendus", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./vendus")>()),
   createInvoice: vi.fn(),
   createOrUpdateClient: vi.fn(),
+  findOrCreateClientByNif: vi.fn(),
 }));
 
 import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId } from "./billing";
-import { createInvoice, createOrUpdateClient } from "./vendus";
+import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, PRODUCT_STUDY } from "./vendus";
 
 const { state } = fake;
 
@@ -133,6 +134,7 @@ beforeEach(() => {
   vi.mocked(createInvoice).mockReset();
   invoiceReplies();
   vi.mocked(createOrUpdateClient).mockReset();
+  vi.mocked(findOrCreateClientByNif).mockReset();
   vi.stubEnv("GCLOUD_PROJECT", "test-project");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
@@ -204,6 +206,59 @@ describe("issueVendusInvoice — who the invoice goes to", () => {
     vi.stubEnv("GCLOUD_PROJECT", "kidclub-dev");
     await expect(issueVendusInvoice(bill())).rejects.toThrow(/disabled on kidclub-dev/);
     expect(createInvoice).not.toHaveBeenCalled();
+  });
+});
+
+describe("issueVendusInvoice — one-off event bills (adhocEvents.ts)", () => {
+  const guestBill = (overrides: Record<string, any> = {}) => bill({
+    type: "event", familyId: "", userId: "", eventRegistrationId: "reg1",
+    lineItems: [{ title: "Halloween — Rita (31/10)", amount: 25, type: "event" }], total: 25, periodLabel: "Halloween — 31/10",
+    ...overrides,
+  });
+
+  it("guest without a NIF: Consumidor final, no family read, no client found or created", async () => {
+    const res = await issueVendusInvoice(guestBill());
+
+    expect(res.consumidorFinal).toBe(true);
+    expect(vi.mocked(createInvoice).mock.calls[0][0]).toBeNull();
+    expect(createOrUpdateClient).not.toHaveBeenCalled();
+    expect(findOrCreateClientByNif).not.toHaveBeenCalled();
+    expect(state.log).toEqual([]);
+  });
+
+  it("guest with a NIF: the client for that NIF (found or created, never updated), nothing written", async () => {
+    vi.mocked(findOrCreateClientByNif).mockResolvedValue(888);
+
+    const res = await issueVendusInvoice(guestBill({ guestNif: "123 456 789" }));
+
+    expect(res.consumidorFinal).toBe(false);
+    expect(findOrCreateClientByNif).toHaveBeenCalledWith({ name: "Ana Silva", email: "ana@example.com", fiscal_id: "123456789" }, "event-guest:reg1");
+    expect(createOrUpdateClient).not.toHaveBeenCalled();
+    expect(vi.mocked(createInvoice).mock.calls[0][0]).toEqual({ id: 888 });
+    expect(state.log).toEqual([]);
+  });
+
+  it("event lines are PRODUCT_STUDY (23%) whatever the event is called, also on a monthly bill", async () => {
+    state.docs["families/fam1"] = NIF_FAMILY;
+    await issueVendusInvoice(bill({
+      lineItems: [{ title: "Transporte Escolar — Rita (2ª) — Outubro 2026", amount: 40, type: "transport" }, { title: "Transporte ao museu — Rita (31/10)", amount: 25, type: "event" }],
+      total: 65,
+    }));
+    const items = vi.mocked(createInvoice).mock.calls[0][1];
+    expect(items[0].id).not.toBe(PRODUCT_STUDY);
+    expect(items[1].id).toBe(PRODUCT_STUDY);
+  });
+
+  it("guest's 'Fatura disponível' email links to the registration page, not the client area", async () => {
+    state.docs["billing/b1"] = guestBill();
+    state.docs["adhocEventRegistrations/reg1"] = { accessToken: "tok_123" };
+
+    await createVendusInvoiceForBilling("b1");
+
+    const html = outbox()[0].html;
+    expect(html).toContain("https://kidclub.pt/eventos/inscricao/reg1?t=tok_123");
+    expect(html).not.toContain("/client/payments");
+    expect(html).not.toContain("/client/account");
   });
 });
 
