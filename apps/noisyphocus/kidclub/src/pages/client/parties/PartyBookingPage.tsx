@@ -76,12 +76,18 @@ export default function PartyBookingPage() {
 
   const toggleExtra = (ex: ExtraItem) => setExtraQty(ex.name, (extraQtys[ex.name] ?? 0) > 0 ? 0 : 1);
 
+  // With no registered children the name fields are the only option, without
+  // "+ Outra criança" ever being clicked: manualChild alone left the button
+  // disabled for good.
+  const typedChild = manualChild || children.length === 0;
+  const childMissing = typedChild ? !manualName.trim() : !childId;
+
   const handleSubmit = async () => {
     if (!user || !family || !price) return;
-    if (!manualChild && !childId) return;
+    if (childMissing) return;
     const child = children.find(c => c.id === childId);
-    const resolvedName = manualChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
-    const resolvedAge = manualChild ? Number(manualAge) : child ? (child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear()) : 0;
+    const resolvedName = typedChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
+    const resolvedAge = typedChild ? Number(manualAge) : child ? (child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear()) : 0;
     if (!resolvedName) return;
 
     // The family's parent, not the admin, while impersonating: the booking's
@@ -92,7 +98,7 @@ export default function PartyBookingPage() {
     try {
       await partyService.createBooking({
         familyId: family.id,
-        childId: manualChild ? '' : childId,
+        childId: typedChild ? '' : childId,
         userId: owner.userId,
         parentName: owner.name || owner.email.split('@')[0] || '',
         email: normalizeEmail(owner.email),
@@ -394,13 +400,19 @@ export default function PartyBookingPage() {
             A reserva fica pendente até confirmação da nossa equipa. Receberá uma notificação quando estiver confirmada.
           </p>
 
+          {childMissing && (
+            <p className="text-xs text-pink-700">
+              {typedChild ? 'Indique o nome da criança para enviar o pedido.' : 'Escolha a criança a celebrar para enviar o pedido.'}
+            </p>
+          )}
+
           <div className="flex gap-3">
             <button onClick={() => setStep(2)} className="flex-1 border border-gray-300 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition">
               ← Anterior
             </button>
             <button
               onClick={handleSubmit}
-              disabled={submitting || (!manualChild && !childId) || (manualChild && !manualName.trim())}
+              disabled={submitting || childMissing}
               className="flex-1 bg-pink-600 text-white font-semibold py-3 rounded-xl hover:bg-pink-700 transition disabled:opacity-40"
             >
               {submitting ? 'A enviar...' : 'Enviar pedido'}
