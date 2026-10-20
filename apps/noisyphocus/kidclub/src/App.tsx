@@ -28,6 +28,7 @@ import StudyRoomPlannerPage from './pages/admin/StudyRoomPlannerPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
 import DiscountsAdminPage from './pages/admin/DiscountsAdminPage';
 import ClientErrorsPage from './pages/admin/ClientErrorsPage';
+import AdhocEventsAdminPage from './pages/admin/events/AdhocEventsAdminPage';
 import PaymentsPage from './pages/client/PaymentsPage';
 
 // Client pages
@@ -48,6 +49,10 @@ import PartyBookingPage from './pages/client/parties/PartyBookingPage';
 import PartyDetailPage from './pages/client/parties/PartyDetailPage';
 import ClientCampsPage from './pages/client/camps/ClientCampsPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
+// Public one-off event pages (no login)
+import EventsListPage from './pages/events/EventsListPage';
+import EventSignupPage from './pages/events/EventSignupPage';
+import RegistrationPage from './pages/events/RegistrationPage';
 import TermsPage from './pages/TermsPage';
 
 export default function App() {
@@ -58,6 +63,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage auth={auth} db={db} />} />
+        <Route path="/eventos" element={<EventsListPage />} />
+        <Route path="/eventos/inscricao/:registrationId" element={<RegistrationPage />} />
+        <Route path="/eventos/:eventId" element={<EventSignupPage />} />
 
         {/* Admin */}
         <Route
@@ -80,6 +88,7 @@ export default function App() {
           <Route path="transport-planner" element={<TransportPlannerPage />} />
           <Route path="camp" element={<CampAdminPage />} />
           <Route path="camps" element={<CampsAdminPage />} />
+          <Route path="eventos" element={<AdhocEventsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
           <Route path="families" element={<Navigate to="/admin/subscriptions" replace />} />
           <Route path="config/descontos" element={<DiscountsAdminPage />} />
