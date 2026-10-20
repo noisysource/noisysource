@@ -69,9 +69,15 @@ export default function RegistrationPage() {
   }, [waiting, load]);
 
   const countdown = useCountdown(view?.status === 'held' ? view.holdExpiresAt : null);
+  // The hold just ran out on screen: ask the server once (it gives the seats
+  // back). Once per expiry time: if the server keeps the hold (an MB WAY still
+  // out), the reply is still `held` with the same time, and must not re-trigger.
+  const reloadedForExpiry = useRef<number | null>(null);
   useEffect(() => {
-    // The hold just ran out on screen: ask the server (it gives the seats back).
-    if (view?.status === 'held' && view.holdExpiresAt && countdown === '0:00') load();
+    if (view?.status !== 'held' || !view.holdExpiresAt || countdown !== '0:00') return;
+    if (reloadedForExpiry.current === view.holdExpiresAt) return;
+    reloadedForExpiry.current = view.holdExpiresAt;
+    load();
   }, [countdown, view, load]);
 
   const pay = async () => {
