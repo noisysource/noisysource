@@ -17,6 +17,7 @@
 // on guest signups and token MB WAY starts, MB WAY attempts per registration,
 // and no email to a guest before they've paid (or for a free event).
 import * as admin from "firebase-admin";
+import { Timestamp, FieldValue } from "firebase-admin/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
@@ -32,7 +33,6 @@ import {
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
-const { Timestamp, FieldValue } = admin.firestore;
 
 const REGION = "europe-west3";
 const COMPANY_NAME = "Arco-Íris da Pequenada";
@@ -188,13 +188,18 @@ export const registerForAdhocEvent = onCall({ region: REGION, invoker: "public" 
     ? { name: String(contact.name ?? "").trim(), email: String(contact.email ?? "").trim().toLowerCase(), phone: input.guardian.phone || normalizePhone(contact.phone) }
     : input.guardian;
   if (member && !guardian.email) throw new HttpsError("failed-precondition", "A família não tem email de contacto. Complete o perfil em A minha conta.");
+  const ownerUid: string = member ? String(contact.userId ?? "") : "";
 
   let children: RegistrationChild[];
   if (member) {
     const snaps = await Promise.all(input.memberChildren.map(c => appCol("children").doc(c.childId).get()));
     children = snaps.map((s, i) => {
       const c = s.data();
-      if (!c || c.familyId !== familyDoc!.id) throw new HttpsError("permission-denied", "Criança inválida.");
+      // By family, or by the family's parent: the client lists children by
+      // userId (familyService.getFamilyChildren), and some older child docs
+      // carry a stale familyId.
+      const ours = !!c && (c.familyId === familyDoc!.id || (!!ownerUid && c.userId === ownerUid));
+      if (!ours) throw new HttpsError("permission-denied", "Criança inválida.");
       const name = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || String(c.name ?? "").trim() || "Criança";
       const healthNotes = input.memberChildren[i].healthNotes ?? (typeof c.medicalNotes === "string" && c.medicalNotes.trim() ? c.medicalNotes.trim() : undefined);
       const birthDate = asIso(c.dateOfBirth);
@@ -210,7 +215,6 @@ export const registerForAdhocEvent = onCall({ region: REGION, invoker: "public" 
   const regRef = regsCol().doc();
   const token = newAccessToken();
   const n = children.length;
-  const ownerUid: string = member ? String(contact.userId ?? "") : "";
   const monthlyRefs = input.payment === "monthly"
     ? periodCandidates(input.days[0]).map(p => ({ p, ref: appCol("billing").doc(`${familyDoc!.id}_${p}`) }))
     : [];

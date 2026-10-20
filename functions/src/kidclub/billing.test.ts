@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const fake = vi.hoisted(() => {
   const state = {
     docs: {} as Record<string, Record<string, any>>, // "collection/id" -> data
-    log: [] as { op: "update" | "create" | "add"; path: string; data: Record<string, any> }[],
+    log: [] as { op: "update" | "create" | "add" | "set"; path: string; data: Record<string, any> }[],
     failCreate: null as Error | null,                // makes the next outbox create() throw
   };
   const DELETE = "<DELETE>";
@@ -30,6 +30,11 @@ const fake = vi.hoisted(() => {
       update: async (data: Record<string, any>) => {
         if (!state.docs[path]) throw new Error(`NOT_FOUND ${path}`);
         state.log.push({ op: "update", path, data });
+        write(path, data);
+      },
+      set: async (data: Record<string, any>) => {
+        state.log.push({ op: "set", path, data });
+        state.docs[path] = {};
         write(path, data);
       },
       create: async (data: Record<string, any>) => {
@@ -95,7 +100,7 @@ vi.mock("./vendus", async (importOriginal) => ({
   findOrCreateClientByNif: vi.fn(),
 }));
 
-import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId } from "./billing";
+import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId, onAdhocRegistrationBillingSync } from "./billing";
 import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, PRODUCT_STUDY } from "./vendus";
 
 const { state } = fake;
@@ -466,5 +471,69 @@ describe("retryVendusInvoice — never a second invoice for a bill that already 
 
     expect(state.docs["billing/b4"]).toMatchObject({ status: "invoiced", invoiceNumber: "FR 01P2026/1", vendusId: 5550001 });
     expect(state.docs["billing/b4"]).not.toHaveProperty("invoiceError");
+  });
+});
+
+describe("one-off events on the monthly bill (onAdhocRegistrationBillingSync → fetchEventLines)", () => {
+  // A family with no subscriptions at all, so the recompute skips every
+  // ReservationEvent/children query the fake can't run.
+  const now = new Date();
+  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const billId = `billing/famE_${period}`;
+  const reg = (o: Record<string, any> = {}) => ({
+    familyId: "famE", payment: "monthly", status: "confirmed", billingPeriod: period, createdAt: { toMillis: () => 1 },
+    lines: [{ title: "Halloween — Rita (31/10)", amount: 20 }, { title: "Halloween — Tomás (31/10)", amount: 20 }],
+    ...o,
+  });
+  const run = (before: any, after: any) => (onAdhocRegistrationBillingSync as any).run({
+    data: { before: { data: () => before }, after: { data: () => after } },
+  });
+
+  beforeEach(() => {
+    state.docs["families/famE"] = { primaryContact: { userId: "uE", name: "Eva", email: "eva@example.com" }, paymentMethod: "mbway" };
+  });
+
+  it("a confirmed monthly registration creates that month's bill with one line per child", async () => {
+    state.docs["adhocEventRegistrations/r1"] = reg();
+    await run(undefined, reg());
+    const bill = state.docs[billId];
+    expect(bill).toMatchObject({ familyId: "famE", userId: "uE", status: "pending", total: 40, billingEmail: "eva@example.com" });
+    expect(bill.lineItems).toEqual([
+      { title: "Halloween — Rita (31/10)", amount: 20, grossAmount: 20, subscriptionId: "event:r1:0", type: "event", appliedDiscounts: [] },
+      { title: "Halloween — Tomás (31/10)", amount: 20, grossAmount: 20, subscriptionId: "event:r1:1", type: "event", appliedDiscounts: [] },
+    ]);
+    // No payment notice is emailed for a bill created by the sync.
+    expect(Object.keys(state.docs).some(p => p.startsWith("emailOutbox/"))).toBe(false);
+  });
+
+  it("adds to an existing pending bill; cancelling takes it off again (auto-cancelled when nothing is left)", async () => {
+    state.docs["adhocEventRegistrations/r1"] = reg();
+    await run(undefined, reg());
+    state.docs["adhocEventRegistrations/r2"] = reg({ lines: [{ title: "Greve — Rita (14/11)", amount: 15.5 }], createdAt: { toMillis: () => 2 } });
+    await run(undefined, state.docs["adhocEventRegistrations/r2"]);
+    expect(state.docs[billId].total).toBe(55.5);
+    expect(state.docs[billId].lineItems.map((l: any) => l.subscriptionId)).toEqual(["event:r1:0", "event:r1:1", "event:r2:0"]);
+
+    state.docs["adhocEventRegistrations/r1"] = reg({ status: "cancelled" });
+    await run(reg(), reg({ status: "cancelled" }));
+    expect(state.docs[billId].total).toBe(15.5);
+
+    state.docs["adhocEventRegistrations/r2"] = { ...state.docs["adhocEventRegistrations/r2"], status: "cancelled" };
+    await run(reg(), reg({ status: "cancelled" }));
+    expect(state.docs[billId]).toMatchObject({ status: "cancelled", autoCancelled: true });
+  });
+
+  it("never touches a bill that's already paid", async () => {
+    state.docs[billId] = { familyId: "famE", status: "paid", total: 99, lineItems: [{ title: "x", amount: 99 }] };
+    state.docs["adhocEventRegistrations/r1"] = reg();
+    await run(undefined, reg());
+    expect(state.docs[billId]).toEqual({ familyId: "famE", status: "paid", total: 99, lineItems: [{ title: "x", amount: 99 }] });
+  });
+
+  it("ignores pay-now registrations and edits that change neither status nor month", async () => {
+    state.docs["adhocEventRegistrations/r1"] = reg({ payment: "now" });
+    await run(undefined, reg({ payment: "now" }));
+    await run(reg(), reg({ pickupNotes: "Avó" }));
+    expect(state.docs[billId]).toBeUndefined();
   });
 });

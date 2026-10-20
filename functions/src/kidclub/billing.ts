@@ -1501,7 +1501,10 @@ export const backfillBillingSchedules = onCall(
       const familyId = data.familyId;
       const periodStart: Date | undefined = data.periodStart?.toDate?.();
       const isFuturePeriod = !!periodStart && periodStart > startOfCurrentMonth;
-      if (!familiesWithActiveSubs.has(familyId) && isFuturePeriod) {
+      // A one-off event put on that month's bill (fetchEventLines) is billable
+      // without any subscription: leave it to onAdhocRegistrationBillingSync.
+      const hasEventLines = (data.lineItems ?? []).some((li: any) => li?.type === "event");
+      if (!familiesWithActiveSubs.has(familyId) && isFuturePeriod && !hasEventLines) {
         await doc.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         cancelled++;
       }
