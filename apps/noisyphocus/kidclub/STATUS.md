@@ -4,11 +4,19 @@
 
 **Last updated:** 2026-10-21
 
-## ▶️ Start here (left 2026-10-17, end of session)
+## ▶️ Start here (left 2026-10-21)
 
-Both changes below are **live on prod** (#96, plus #98 shipped with the `staging` → `main` promotion #99,
-2026-10-17 ~09:05 UTC). Nothing is in flight: all PRs are merged and the worktrees are removed.
-Next, in order:
+**Parties are live in prod** (#109 promoted with #111, merged 2026-10-21 15:32 UTC). That covers the deposit bill
+and emails at confirmation, and booking without an account at `kidclub.pt/festas`. Section 🎈 below has the details.
+Next for parties:
+- **Ana Ferreira's deposit (€162.98) is waiting for her to pay.** Re-confirmed 2026-10-21: the bill
+  `partyDeposit_aZPID1Hp3TnTUMjR0L0I` exists and her confirmation email was sent, with the payment link (checked
+  in prod: the link opens her booking). If it's still `pending` in a few days, give her a call.
+- **The first real public request** will be the first time `requestPartyBooking` runs in prod. When it arrives,
+  check the booking (`source: public`), its family, and that both emails went out (`party_request_` / `party_received_`).
+- Follow-ups, none urgent: see "Open" and "Open (public parties)" in the 🎈 section.
+
+**Carried over from 2026-10-17. Not re-checked on 2026-10-21, so confirm before relying on it:**
 1. **Confirm a real parent enrollment landed** after 2026-10-17 09:00 UTC. Look for a new `pending` sub on
    Famílias e inscrições that a parent created, not an admin. As of 09:20 UTC there were none yet, which was
    expected that soon. If none appear within a few days, check "🚨 Erros dos clientes" before assuming
@@ -24,14 +32,13 @@ Next, in order:
 6. Follow-ups, none urgent: per-child calendar still broken for parents; `clientErrors` TTL not enabled;
    rules tests not in CI. Details in the two sections below.
 
-**Branch state:** `main` and `staging` match in content. The automatic staging sync worked after #99.
-Dev's last deploy (the merge of #100) was cancelled by a newer push and never re-ran. Merging this STATUS
-PR redeploys dev and brings it up to date.
+**Branch state (2026-10-21, after #111):** `main` and `staging` match in content.
 
-## 🎈 Parties: deposit bill + emails at confirmation, and booking without an account (2026-10-20/21): PR #109 → `staging`, NOT in prod
+## 🎈 Parties: deposit bill + emails at confirmation, and booking without an account (2026-10-20/21): IN PROD
 
-Renato wants this promoted to prod as soon as it's checked on dev. The second half ("Parties without an
-account", below) was added on 2026-10-21 to the same PR.
+PR #109 → `staging`, then promoted with #111 (prod deploy green, merged 2026-10-21 15:32 UTC). Renato tested it on dev
+first. The second half ("Parties without an account", below) was added on 2026-10-21 to the same PR. Checked in prod
+after the deploy, without logging in: `config/party` is readable, `config/billing` and `partyLinks` are refused.
 
 **Why.** Confirming a party did nothing else. The 50% deposit bill only existed after the parent opened the party
 page and tapped "Pagar sinal", so nothing showed under Pagamentos. There were no party emails at all. While
@@ -77,14 +84,15 @@ content):
 7. Fallback: delete `billing/partyDeposit_<id>` in the console → party page shows "Pagar sinal" → tapping it recreates
    the same id.
 
-**Bookings confirmed before this deploys get no automatic bill or email** (e.g. Ana Ferreira's, confirmed on prod
-2026-10-20). For those, the parent still uses "Pagar sinal" on the party page, which now creates the same deterministic
-bill. To give one the email anyway: set it back to `pending` in the console, then confirm it again in Festas.
+**Bookings confirmed before the deploy** get no automatic bill or email. There was exactly one in prod, Ana Ferreira's
+(`aZPID1Hp3TnTUMjR0L0I`). Renato set it back to `pending` and confirmed it again on 2026-10-21, which created the bill
+and sent the email (see Start here). Same recipe if one ever turns up again.
+
+**Prod check (2026-10-21, read-only):** `bookings` held exactly one document, Ana's, owned by her own account
+(`userId` = her family's `primaryContact.userId`, her email, family has a NIF). No booking carried an admin's identity,
+so nothing needed fixing.
 
 **Open:**
-- Prod bookings made by an admin while impersonating (before this fix) carry the admin's `userId`/email. The parent
-  can't see them, and their emails would go to the admin. Worth a read-only check on prod before promoting: `bookings`
-  where `userId` is an admin uid.
 - Not done: a deposit bill isn't cancelled if a confirmed booking is later rejected (the UI only offers
   Confirmar/Rejeitar on pending bookings). Editing a confirmed booking's price doesn't change its deposit bill.
 - Party deposits are still invoiced under the study-room Vendus product (23%, same rate), as before.
