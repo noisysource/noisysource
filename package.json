@@ -2,6 +2,7 @@
   "name": "noisysource-monorepo",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev:kidclub": "pnpm --filter kidclub dev",
     "dev:kidclub:prod": "pnpm --filter kidclub dev:prod",
