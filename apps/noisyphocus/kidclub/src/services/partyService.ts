@@ -32,6 +32,9 @@ export const partyService = {
         status: s,
         statusReason: x.statusReason ? String(x.statusReason) : undefined,
         statusHistory: x.statusHistory || [],
+        // Only when present: the admin edit saves the whole object back.
+        ...(x.source ? { source: String(x.source) } : {}),
+        ...(x.notes ? { notes: String(x.notes) } : {}),
       };
     });
     list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());

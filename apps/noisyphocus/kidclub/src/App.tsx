@@ -3,6 +3,7 @@ import { ImpersonationProvider } from './contexts/ImpersonationContext';
 import { ProtectRoute } from '@shared/ProtectedRoute';
 import NotAuthorizedPage from './pages/NotAuthorizedPage';
 import LandingPage from './pages/LandingPage';
+import { PublicPartyRequestPage, PublicPartyBookingPage } from './pages/public/PublicPartyPages';
 import { Role } from '@shared/models/Roles';
 import LoginPage from '@shared/Login';
 import { auth, db } from './lib/firebase';
@@ -57,6 +58,9 @@ export default function App() {
       <Analytics />
       <Routes>
         <Route path="/" element={<LandingPage />} />
+        {/* Parties without an account: the request form, and the page every party email links to */}
+        <Route path="/festas" element={<PublicPartyRequestPage />} />
+        <Route path="/festas/reserva/:id" element={<PublicPartyBookingPage />} />
         <Route path="/login" element={<LoginPage auth={auth} db={db} />} />
 
         {/* Admin */}

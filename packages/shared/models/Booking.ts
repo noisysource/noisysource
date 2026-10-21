@@ -33,6 +33,10 @@ export interface Booking {
   
   // Metadata
   createdAt: Date;
+  /** 'public': asked for on the public form (/festas), maybe without an account. */
+  source?: string;
+  /** What the parent wrote on the public form (theme, allergies, questions). */
+  notes?: string;
   statusReason?: string;
   statusHistory?: Array<{
     status: 'pending' | 'confirmed' | 'rejected';

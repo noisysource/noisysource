@@ -68,6 +68,9 @@ async function expect(outcome, label, fn) {
   await seed('_apps/arcoiris/studyroom/existing', { userId: s(PARENT), familyId: s('fam1'), childId: s('child2'), status: s('active') });
   await seed('_apps/arcoiris/reservationEvents/ev1', { familyId: s('fam1'), subscriptionId: s('existing'), date: s('2026-10-20') });
   await seed('_apps/arcoiris/bookings/bk1', { userId: s(PARENT), familyId: s('fam1'), childId: s('child1'), status: s('confirmed') });
+  await seed('_apps/arcoiris/config/party', { partyTypes: { arrayValue: { values: [] } } });
+  await seed('_apps/arcoiris/config/billing', { iban: s('PT50 0000') });
+  await seed('_apps/arcoiris/partyLinks/bk1', { token: s('secret'), bookingId: s('bk1') });
   await seed('_apps/arcoiris/billing/partyDeposit_bk1', { userId: s(PARENT), familyId: s('fam1'), bookingId: s('bk1'), type: s('party_deposit'), status: s('pending') });
 
   const parent = client('parent', { sub: PARENT, user_id: PARENT, email: EMAIL });
@@ -124,7 +127,18 @@ async function expect(outcome, label, fn) {
   await expect('allowed', 'onSnapshot billing where familyId == + bookingId == (deposit bill listener)', () => firstSnapshot(query(admin.col('billing'), where('familyId', '==', 'fam1'), where('bookingId', '==', 'bk1'))));
   await expect('allowed', 'update bookings/bk1 status + statusReason (PartyAdmin)', () => updateDoc(admin.ref('bookings', 'bk1'), { status: 'confirmed', statusReason: 'ok' }));
 
-  await Promise.all([terminate(parent.db), terminate(admin.db)]);
+  console.log('— visitor without an account: public party form (/festas) and booking link');
+  const visitor = client('visitor', undefined);
+  await expect('allowed', 'get config/party (public form shows party types and prices)', () => getDoc(visitor.ref('config', 'party')));
+  await expect('denied', 'get config/billing (every other config doc stays signed-in only)', () => getDoc(visitor.ref('config', 'billing')));
+  await expect('denied', 'get bookings/bk1 (the booking page goes through getPartyBookingByLink)', () => getDoc(visitor.ref('bookings', 'bk1')));
+  await expect('denied', 'addDoc bookings (requests go through requestPartyBooking)', () => addDoc(visitor.col('bookings'), booking('')));
+  await expect('denied', 'get partyLinks/bk1 as a visitor', () => getDoc(visitor.ref('partyLinks', 'bk1')));
+  await expect('denied', 'get partyLinks/bk1 as the booking\'s parent', () => getDoc(parent.ref('partyLinks', 'bk1')));
+  await expect('denied', 'get partyLinks/bk1 as an admin (functions only)', () => getDoc(admin.ref('partyLinks', 'bk1')));
+  await expect('denied', 'list partyLinks as an admin', () => getDocs(admin.col('partyLinks')));
+
+  await Promise.all([terminate(parent.db), terminate(admin.db), terminate(visitor.db)]);
   console.log(failures ? `\n${failures} FAILED` : '\nall passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
