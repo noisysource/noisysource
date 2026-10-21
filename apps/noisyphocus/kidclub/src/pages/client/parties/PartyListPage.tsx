@@ -4,6 +4,8 @@ import { useUser } from '@shared/hooks';
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
 import { Booking, partyVatBreakdown } from '@shared/models';
+import { useImpersonation } from '../../../contexts/ImpersonationContext';
+import { reportClientError } from '../../../lib/clientErrors';
 
 const STATUS = {
   pending:   { label: 'Aguarda confirmação', cls: 'bg-yellow-100 text-yellow-800' },
@@ -19,20 +21,34 @@ function fmtDate(dateStr: string) {
 
 export default function PartyListPage() {
   const user = useUser();
+  const { impersonation } = useImpersonation();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     if (!user) return;
     (async () => {
-      const family = await familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? '');
-      const list = await partyService.getBookingsByFamily(family.id, user.uid);
-      setBookings(list);
-      setLoading(false);
+      setLoading(true);
+      setLoadError('');
+      try {
+        const family = await familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? '');
+        // A parent may only query bookings by their own userId (rules aren't
+        // filters). While an admin impersonates a family, user.uid is the
+        // admin's and matches nothing: query by the family instead.
+        const list = await partyService.getBookingsByFamily(family.id, impersonation ? undefined : user.uid);
+        setBookings(list);
+      } catch (err) {
+        reportClientError('[PartyListPage] load bookings failed', err);
+        setLoadError('Não foi possível carregar as suas festas. Tente novamente mais tarde.');
+      } finally {
+        setLoading(false);
+      }
     })();
-  }, [user]);
+  }, [user, impersonation]);
 
   if (loading) return <div className="p-6 text-gray-400 text-sm">A carregar...</div>;
+  if (loadError) return <div className="p-6 max-w-2xl mx-auto"><p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{loadError}</p></div>;
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-5">

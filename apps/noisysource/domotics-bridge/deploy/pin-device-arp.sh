@@ -9,12 +9,12 @@
 # thermostats, while a laptop on the WiFi side reached all seven at that same
 # moment and saw the identical MAC for every one.
 #
-# Only devices that genuinely fail to resolve are pinned. An earlier version
-# pinned all of them unconditionally, which was wrong the moment a device moved
-# onto the main router's WiFi: its real MAC is then its own, and pointing it at
-# the repeater sends its traffic into a hole. Stale pins are cleared on every
-# run for the same reason — a device that has moved must be allowed to resolve
-# itself again.
+# Devices reached through the repeater are pinned to it; devices that answer
+# with their own MAC (on the main router's WiFi) are left alone. An earlier
+# version pinned every device unconditionally, which was wrong the moment one
+# moved onto the main router: its real MAC is then its own, and pointing it at
+# the repeater sends its traffic into a hole. So which side a device is on is
+# re-derived from scratch on every run, and stale pins are cleared first.
 #
 # Runs as root from the unit's ExecStartPre. Never fails the service: losing
 # two thermostats is much better than losing the bridge.
@@ -23,17 +23,8 @@ set -u
 IFACE=${ARP_IFACE:-eth0}
 CACHE=${DEVICE_CACHE:-/home/pi/domotics-bridge/device-cache.json}
 ROUNDS=${ARP_ROUNDS:-3}
-
-command -v node >/dev/null || exit 0
-[ -r "$CACHE" ] || exit 0
-
-mapfile -t IPS < <(node -e '
-  try {
-    const list = require(process.argv[1]);
-    for (const d of list) if (d.ip) console.log(d.ip);
-  } catch { }
-' "$CACHE")
-[ ${#IPS[@]} -gt 0 ] || exit 0
+# Tuya's local protocol port — a pin only counts if this answers through it.
+TUYA_PORT=${TUYA_PORT:-6668}
 
 # Start clean — every permanent entry on the interface, not just ones for IPs
 # in the current cache. A device's IP changes on its own DHCP lease renewal,
@@ -43,10 +34,29 @@ mapfile -t IPS < <(node -e '
 # else — that thing would inherit a permanent route to a stranger's MAC.
 # Nothing but this script ever sets NUD_PERMANENT here, so clearing all of
 # them is exactly as safe as clearing our own.
+#
+# This runs before the cache check on purpose: with no cache (it is deleted
+# after a device re-sync) the old order exited first and left every stale pin
+# in place, which is how two devices stayed pinned to the wrong MAC through a
+# restart on 2026-10-16.
 cleared=0
 while read -r stale_ip; do
   [ -n "$stale_ip" ] && ip neigh del "$stale_ip" dev "$IFACE" 2>/dev/null && cleared=$((cleared+1))
 done < <(ip neigh show dev "$IFACE" 2>/dev/null | awk '/PERMANENT/{print $1}')
+
+command -v node >/dev/null || exit 0
+if [ ! -r "$CACHE" ]; then
+  echo "pin-device-arp: no device cache yet; cleared $cleared stale pin(s), nothing to pin"
+  exit 0
+fi
+
+mapfile -t IPS < <(node -e '
+  try {
+    const list = require(process.argv[1]);
+    for (const d of list) if (d.ip) console.log(d.ip);
+  } catch { }
+' "$CACHE")
+[ ${#IPS[@]} -gt 0 ] || exit 0
 
 # Give ordinary resolution a fair chance before overriding anything. Entries
 # mid-resolution read as INCOMPLETE rather than FAILED, so a single pass would
@@ -66,41 +76,70 @@ for ip in "${IPS[@]}"; do
   fi
 done
 
-if [ ${#failed[@]} -eq 0 ]; then
-  echo "pin-device-arp: all ${#IPS[@]} devices resolved on their own; cleared $cleared stale pin(s)"
-  exit 0
-fi
+mac_of() {
+  ip neigh show "$1" dev "$IFACE" 2>/dev/null \
+    | awk '{ for (i = 1; i < NF; i++) if ($i == "lladdr") { print $(i+1); break } }'
+}
 
-# Only the devices that did resolve get a vote on where the unreachable ones
-# live. Counting the whole ARP table once elected this machine's own gateway,
-# which would have pinned every thermostat at something that is not the
-# repeater and broken all of them rather than the two already broken.
-MAC=$(
-  for ip in "${resolved[@]}"; do
-    ip neigh show "$ip" dev "$IFACE" 2>/dev/null \
-      | awk '{ for (i = 1; i < NF; i++) if ($i == "lladdr") { print $(i+1); break } }'
-  done | sort | uniq -c | sort -rn | head -1 | awk '{print $2}'
+# Candidate MACs are the ones answering for MORE THAN ONE resolved device.
+# A repeater proxy-ARPs for everything behind it, so it answers for several;
+# a device that joined the main router directly answers only for itself.
+# The previous version took the single most common MAC, and with few devices
+# resolved that could be one device's own address — on 2026-10-16 it elected
+# Master bedroom's MAC (f8:17:2d:9f:86:4d) and pinned every repeater device to
+# it, while the repeater was d6:35:38:f6:ea:21. Counting the whole ARP table
+# instead once elected the gateway; only resolved devices get a vote.
+mapfile -t CANDIDATES < <(
+  for ip in "${resolved[@]}"; do mac_of "$ip"; done \
+    | sort | uniq -c | sort -rn | awk '$1 >= 2 { print $2 }'
 )
 
-if [ -z "${MAC:-}" ]; then
-  echo "pin-device-arp: nothing resolved on $IFACE, so no MAC to borrow; leaving ARP alone"
+if [ ${#CANDIDATES[@]} -eq 0 ]; then
+  echo "pin-device-arp: ${#resolved[@]} resolved, ${#failed[@]} unresolved, no MAC answers for more than one device so no repeater to pin to; cleared $cleared stale"
   exit 0
 fi
 
-pinned=0
-for ip in "${failed[@]}"; do
-  ip neigh replace "$ip" lladdr "$MAC" dev "$IFACE" nud permanent 2>/dev/null && pinned=$((pinned+1))
+is_candidate() {
+  local m
+  for m in "${CANDIDATES[@]}"; do [ "$m" = "$1" ] && return 0; done
+  return 1
+}
+
+reaches() { timeout 3 bash -c "</dev/tcp/$1/$TUYA_PORT" 2>/dev/null; }
+
+# Devices that resolved *through the repeater* are pinned to it as well, not
+# just the ones that failed. Its proxy-ARP is intermittent, not merely picky:
+# on 2026-10-16 .164 resolved fine during this script and was FAILED a few
+# minutes later, once the kernel's entry went stale and had to be re-asked.
+# Devices answering with their own MAC are left to normal ARP — they resolve
+# reliably, and pinning them would break the day one moves. Every pin here is
+# re-derived from scratch on each start, so a move is corrected by a restart.
+held=()
+for ip in "${resolved[@]}"; do
+  mac=$(mac_of "$ip")
+  if is_candidate "$mac" && ip neigh replace "$ip" lladdr "$mac" dev "$IFACE" nud permanent 2>/dev/null; then
+    held+=("$ip")
+  fi
 done
 
-# "pinned" means the entry was written, not that it works — this script never
-# tests whether the guessed MAC actually answers. A single-repeater network has
-# one right answer and this finds it reliably; a network with more than one
-# bridging device (confirmed present here as of 2026-09-13 — three different
-# MACs answered for seven devices in one session) has no single right answer,
-# and the vote can land on a MAC that leaves the device exactly as unreachable
-# as before, just now silently rather than obviously. If devices pinned here
-# keep failing in the bridge's own logs, that is the tell: move them onto
-# whichever access point the working devices are already on, the way Sala and
-# Master bedroom were moved — that fixed them permanently, this only guesses.
-echo "pin-device-arp: ${#resolved[@]} resolved, guessed $pinned of ${#failed[@]} unresolved -> $MAC (cleared $cleared stale, unverified)"
+# Unresolved devices try each candidate, and a pin is only kept if the device
+# answers through it. More than one bridging device has been seen here (three
+# MACs for seven devices), and a wrong permanent pin is worse than none: it
+# silences the kernel's own retries and makes the device fail quietly.
+pinned=(); unreachable=()
+for ip in "${failed[@]}"; do
+  ok=""
+  for mac in "${CANDIDATES[@]}"; do
+    ip neigh replace "$ip" lladdr "$mac" dev "$IFACE" nud permanent 2>/dev/null || continue
+    if reaches "$ip"; then ok=$mac; break; fi
+  done
+  if [ -n "$ok" ]; then
+    pinned+=("$ip")
+  else
+    ip neigh del "$ip" dev "$IFACE" 2>/dev/null
+    unreachable+=("$ip")
+  fi
+done
+
+echo "pin-device-arp: via ${CANDIDATES[*]} — held ${#held[@]} that resolved (${held[*]:-none}), pinned ${#pinned[@]} that didn't (${pinned[*]:-none}), unreachable ${#unreachable[@]} (${unreachable[*]:-none}); cleared $cleared stale"
 exit 0
