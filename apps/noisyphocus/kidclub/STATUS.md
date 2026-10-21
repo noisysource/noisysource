@@ -4,7 +4,7 @@
 
 **Last updated:** 2026-10-21
 
-## 🎃 One-off events (Halloween, strike days) — 2026-10-20, branch `agent/kidclub-events`, PR → `staging`, NOT in prod
+## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 
 **What it is.** Anyone can sign children up for a one-off event, with or without a KidClub account.
 Events have their own prices and per-day capacity. Public pages: `/eventos` (list),
@@ -45,25 +45,50 @@ shows a "Próximos eventos" strip while something is published.
   day (`rateLimits/adhoc*`), 3 MB WAY attempts per registration, 4 children per registration. No email goes
   to a guest before they've paid.
 
-**Tested.** 282 functions unit tests pass (new: `adhocEventLogic.test.ts`, `adhocEventParity.test.ts`, and
-guest invoicing plus the monthly-bill trigger in `billing.test.ts`). `pnpm test:rules:adhoc-events` passes
-18/18. `pnpm test:emulator:adhoc-events` passes 29/29 end to end on the Firestore, Auth and Functions
-emulators: seats, double submit, capacity, token, expiry, late payment, member price, cancel and refund flag,
-admin edits, walk-in. That run found and fixed one real bug (FieldValue import). The monthly-bill
-recompute can't run in the emulator: firebase-tools 14's admin proxy drops `admin.firestore.FieldValue`,
-and `sendEmailFromOutbox` crashes there the same way. It's unit-tested instead. Not tested yet: real MB WAY
-(sandbox on dev) and anything in a browser.
+**Tested.** After merging `staging` (#109 parties, #108 pnpm 10) on 2026-10-21: 356 functions unit tests
+pass. The new ones are `adhocEventLogic.test.ts` and `adhocEventParity.test.ts`, plus guest invoicing and the
+monthly-bill trigger in `billing.test.ts`. `pnpm test:rules` and `pnpm test:rules:adhoc-events` (18/18) pass.
+`pnpm test:emulator:adhoc-events` passes 29/29 end to end on the Firestore, Auth and Functions emulators. The
+monthly-bill recompute can't run in the emulator: firebase-tools 14's admin proxy drops
+`admin.firestore.FieldValue`, and `sendEmailFromOutbox` crashes there the same way. It's unit-tested instead.
 
-**Next step:** Renato clicks through it on dev once the `staging` PR deploys it:
-1. Create an event in `/admin/eventos` with 2 days, a member price and a small capacity, and publish it.
-2. Signed out: sign up 2 kids → pay by MB WAY (EasyPay **sandbox** on dev) → confirmed. Then try the
-   same day again (double-submit message) and fill the capacity ("Esgotado").
-3. As a family (yourself or "👁 Ver como cliente"): member price, "Juntar à mensalidade" → line on that
-   month's bill in Faturação.
-4. Cancel both from the admin page and check that the seats come back. The paid one shows the ⚠️ refund
-   flag.
-5. Walk-in → "Marcar como pago (transferência)". "📋 Lista" → print the attendance sheet.
-On dev, Vendus is blocked by design (`invoiceError` on paid bills) and so is Gmail (no emails go out). That's expected.
+**On dev (2026-10-21, deploy run 39629573346, all green).** Checked by hand: the 9 functions are ACTIVE,
+including `expireAdhocHolds` with its scheduler job ENABLED (every 10 min). The 4 indexes are READY.
+`getAdhocRegistration` answers, and a signed-out visitor can list published events but not all of them
+(403). `/eventos` and `/admin/eventos` are served. No errors in the new functions' logs.
+
+**Next step: Renato's click-through on dev** (https://kidclub-dev-arcoiris.web.app). Gmail and Vendus are
+blocked on dev by design: no emails go out, and a paid bill shows `invoiceError` instead of an invoice.
+That's expected.
+- *Setup:* `/admin/eventos` → + Novo: 2 days. Day 1: 3 seats, €25, member €20. Day 2: 2 seats, €30, no
+  member price. Tick Publicado and Inscrições abertas.
+- *Guest (incognito):* landing strip → event → 2 kids on day 1 → registration page shows €50 and a 30:00
+  countdown → MB WAY → approve in the EasyPay sandbox → turns "Inscrição confirmada" by itself. Same
+  email+child+day again → "já está inscrito(a)". 2 more kids on day 1 → "Sem vagas"; 1 kid → OK, day now
+  Esgotado. Leave one unpaid ~40 min → "A reserva expirou", seat back. Decline an MB WAY → retry offered
+  (3 max).
+- *Family (sign in, or 👁 Ver como cliente, then 🎃 Eventos):* "preço de cliente", €25 struck → €20, own
+  children as checkboxes. "Juntar à mensalidade" → confirmed, and a line appears on that month's bill in
+  Faturação (the next month's if that one is paid). "Pagar agora" → MB WAY → confirmed; the bill is also in
+  Pagamentos. "As minhas inscrições" on `/eventos`.
+- *Admin:* cancel the monthly one (line leaves the bill, seat back). Cancel a paid one → ⚠️ refund flag.
+  Inscrição presencial → doesn't expire → Marcar como pago (transferência). Copiar link → pay from incognito.
+  📋 Lista → print. Edit capacity and price (existing signups keep their price); removing a day with signups
+  is refused. Untick Inscrições abertas / Publicado. Apagar only works with no signups.
+
+**Only verifiable in prod:** the Vendus invoice for event bills (guest Consumidor final, guest with NIF,
+family pay-now, family monthly line) and the emails ("Inscrição confirmada", a guest's "Fatura disponível"
+with the registration link). All are unit-tested and the outbox content is emulator-tested; none has reached
+Vendus or Gmail.
+
+**Prod path:** Renato OKs dev → merge #110 into `staging` → open the `staging` → `main` promotion (it deploys prod
+pre-merge) → check it's green → merge. Then in prod: indexes READY, `expireAdhocHolds` job ENABLED, `/eventos`
+loads. Watch the first real event's first paid signup (invoice + emails). If anything else merges into
+`staging` first (e.g. #106 domotics, open), it ships in the same promotion.
+
+**Different from parties (#109), on purpose:** a public party request matches or creates a `families` doc by
+email. An event guest gets no family; their NIF rides on the bill. Matching a typed email can't safely grant
+the member price, and one-off guests would crowd Famílias e inscrições. Align later if wanted.
 
 **Open questions for Renato:**
 - Vendus product: event lines are invoiced as "Serviço de apoio ao ensino" (PRODUCT_STUDY, 23%), like
