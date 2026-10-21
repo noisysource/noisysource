@@ -10,11 +10,19 @@
 // This checks the query shapes familyService.getChildSubscriptions /
 // getFamilySubscriptions use, as a parent and as an impersonating admin, against
 // the repo's real firestore.rules. Run: pnpm test:rules (needs Java for the emulator).
+// Also the party pages (2026-10-20): PartyListPage (bookings), PartyBookingPage
+// (create) and PartyDetailPage (the booking + its deposit bill, listened to).
 const { initializeApp } = require('firebase/app');
 const {
   getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc,
-  writeBatch, query, where, terminate,
+  updateDoc, writeBatch, query, where, terminate, onSnapshot,
 } = require('firebase/firestore');
+
+// Resolves on a listener's first snapshot, rejects with its error (the pages
+// listen to the deposit bill with onSnapshot, not getDocs).
+const firstSnapshot = (q) => new Promise((resolve, reject) => {
+  const unsub = onSnapshot(q, (snap) => { unsub(); resolve(snap); }, reject);
+});
 
 const PROJECT = 'demo-kidclub-rules';
 const HOST = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
@@ -59,6 +67,11 @@ async function expect(outcome, label, fn) {
   await seed('_apps/arcoiris/children/child2', { userId: s(PARENT), familyId: s('fam1'), firstName: s('Sibling') });
   await seed('_apps/arcoiris/studyroom/existing', { userId: s(PARENT), familyId: s('fam1'), childId: s('child2'), status: s('active') });
   await seed('_apps/arcoiris/reservationEvents/ev1', { familyId: s('fam1'), subscriptionId: s('existing'), date: s('2026-10-20') });
+  await seed('_apps/arcoiris/bookings/bk1', { userId: s(PARENT), familyId: s('fam1'), childId: s('child1'), status: s('confirmed') });
+  await seed('_apps/arcoiris/config/party', { partyTypes: { arrayValue: { values: [] } } });
+  await seed('_apps/arcoiris/config/billing', { iban: s('PT50 0000') });
+  await seed('_apps/arcoiris/partyLinks/bk1', { token: s('secret'), bookingId: s('bk1') });
+  await seed('_apps/arcoiris/billing/partyDeposit_bk1', { userId: s(PARENT), familyId: s('fam1'), bookingId: s('bk1'), type: s('party_deposit'), status: s('pending') });
 
   const parent = client('parent', { sub: PARENT, user_id: PARENT, email: EMAIL });
   const admin = client('admin', { sub: ADMIN, user_id: ADMIN, email: 'admin@example.com' });
@@ -96,7 +109,36 @@ async function expect(outcome, label, fn) {
   await expect('allowed', 'bookings where childId ==', () => getDocs(query(admin.col('bookings'), where('childId', '==', 'child1'))));
   await expect('allowed', 'addDoc studyroom with userId = parent', () => addDoc(admin.col('studyroom'), sub(PARENT)));
 
-  await Promise.all([terminate(parent.db), terminate(admin.db)]);
+  console.log('— parent: party pages');
+  const booking = (userId) => ({ userId, familyId: 'fam1', childId: 'child1', status: 'pending', total: 150, createdAt: new Date() });
+  await expect('allowed', 'get bookings/bk1 (PartyDetailPage)', () => getDoc(parent.ref('bookings', 'bk1')));
+  await expect('denied', 'bookings where familyId == (PartyListPage must use userId for a parent)', () => getDocs(query(parent.col('bookings'), where('familyId', '==', 'fam1'))));
+  await expect('allowed', 'addDoc bookings as me (PartyBookingPage)', () => addDoc(parent.col('bookings'), booking(PARENT)));
+  await expect('denied', 'addDoc bookings owned by someone else', () => addDoc(parent.col('bookings'), booking('someone-else')));
+  await expect('denied', 'update bookings/bk1 status (only an admin confirms/rejects)', () => updateDoc(parent.ref('bookings', 'bk1'), { status: 'rejected' }));
+  await expect('allowed', 'billing where userId == me + bookingId == (deposit bill listener)', () => getDocs(query(parent.col('billing'), where('userId', '==', PARENT), where('bookingId', '==', 'bk1'))));
+  await expect('allowed', 'onSnapshot billing where userId == me + bookingId == (deposit bill listener)', () => firstSnapshot(query(parent.col('billing'), where('userId', '==', PARENT), where('bookingId', '==', 'bk1'))));
+  await expect('denied', 'billing where bookingId == only (rules aren\'t filters)', () => getDocs(query(parent.col('billing'), where('bookingId', '==', 'bk1'))));
+  await expect('denied', 'billing where familyId == + bookingId == (the impersonation shape, as a parent)', () => getDocs(query(parent.col('billing'), where('familyId', '==', 'fam1'), where('bookingId', '==', 'bk1'))));
+
+  console.log('— impersonating admin: party pages');
+  await expect('allowed', 'bookings where familyId == (PartyListPage)', () => getDocs(query(admin.col('bookings'), where('familyId', '==', 'fam1'))));
+  await expect('allowed', 'addDoc bookings with userId = parent (familyService.owner)', () => addDoc(admin.col('bookings'), booking(PARENT)));
+  await expect('allowed', 'onSnapshot billing where familyId == + bookingId == (deposit bill listener)', () => firstSnapshot(query(admin.col('billing'), where('familyId', '==', 'fam1'), where('bookingId', '==', 'bk1'))));
+  await expect('allowed', 'update bookings/bk1 status + statusReason (PartyAdmin)', () => updateDoc(admin.ref('bookings', 'bk1'), { status: 'confirmed', statusReason: 'ok' }));
+
+  console.log('— visitor without an account: public party form (/festas) and booking link');
+  const visitor = client('visitor', undefined);
+  await expect('allowed', 'get config/party (public form shows party types and prices)', () => getDoc(visitor.ref('config', 'party')));
+  await expect('denied', 'get config/billing (every other config doc stays signed-in only)', () => getDoc(visitor.ref('config', 'billing')));
+  await expect('denied', 'get bookings/bk1 (the booking page goes through getPartyBookingByLink)', () => getDoc(visitor.ref('bookings', 'bk1')));
+  await expect('denied', 'addDoc bookings (requests go through requestPartyBooking)', () => addDoc(visitor.col('bookings'), booking('')));
+  await expect('denied', 'get partyLinks/bk1 as a visitor', () => getDoc(visitor.ref('partyLinks', 'bk1')));
+  await expect('denied', 'get partyLinks/bk1 as the booking\'s parent', () => getDoc(parent.ref('partyLinks', 'bk1')));
+  await expect('denied', 'get partyLinks/bk1 as an admin (functions only)', () => getDoc(admin.ref('partyLinks', 'bk1')));
+  await expect('denied', 'list partyLinks as an admin', () => getDocs(admin.col('partyLinks')));
+
+  await Promise.all([terminate(parent.db), terminate(admin.db), terminate(visitor.db)]);
   console.log(failures ? `\n${failures} FAILED` : '\nall passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

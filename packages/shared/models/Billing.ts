@@ -49,6 +49,10 @@ export interface BillingRecord {
   familyId: string;
   userId: string;
 
+  /** Absent on monthly bills. 'party_deposit' bills carry the booking's id. */
+  type?: 'party_deposit' | 'camp_deposit' | 'camp_balance';
+  bookingId?: string;
+
   periodLabel: string;
   periodStart: Timestamp;
   periodEnd: Timestamp;

@@ -1,22 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
-import { Child, PartyConfig, ExtraItem, computePartyPrice, PARTY_VAT_RATE } from '@shared/models';
+import { Child, Family, PartyConfig, ExtraItem, computePartyPrice, PARTY_VAT_RATE } from '@shared/models';
 import { familyService } from '../../../services/familyService';
 import { partyService } from '../../../services/partyService';
 import { normalizeEmail } from '../../../lib/utils';
 import { reportClientError } from '../../../lib/clientErrors';
+import { callable } from '../../../lib/callable';
 
 function fmtEur(n: number) { return `€${n.toFixed(2)}`; }
 
-export default function PartyBookingPage() {
+const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * Party booking form. `guest`: the public form at /festas, for anyone, with no
+ * account. It asks for the parent's contact details instead of picking a child
+ * from the family, and sends the request to requestPartyBooking, which prices
+ * and saves it on the server (functions/src/kidclub/partyPublic.ts).
+ */
+export default function PartyBookingPage({ guest = false }: { guest?: boolean }) {
   const user = useUser();
   const navigate = useNavigate();
 
   const [config, setConfig] = useState<PartyConfig | null>(null);
   const [children, setChildren] = useState<Child[]>([]);
-  const [familyId, setFamilyId] = useState('');
+  const [family, setFamily] = useState<Family | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState(1);
 
@@ -31,22 +42,47 @@ export default function PartyBookingPage() {
   const [manualChild, setManualChild] = useState(false);
   const [manualName, setManualName] = useState('');
   const [manualAge, setManualAge] = useState<number | ''>('');
+  // Guest form only
+  const [parentName, setParentName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [nif, setNif] = useState('');
+  const [notes, setNotes] = useState('');
+  const [website, setWebsite] = useState(''); // honeypot, hidden from people
+  const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
-    if (!user) return;
+    if (!guest) return;
+    partyService.getPartyConfig()
+      .then(setConfig)
+      .catch(err => {
+        reportClientError('[PartyBookingPage] guest load failed', err);
+        setLoadError('Não foi possível carregar o formulário de reserva. Tente novamente mais tarde.');
+      })
+      .finally(() => setLoading(false));
+  }, [guest]);
+
+  useEffect(() => {
+    if (guest || !user) return;
     (async () => {
-      const [cfg, family] = await Promise.all([
-        partyService.getPartyConfig(),
-        familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? ''),
-      ]);
-      setConfig(cfg);
-      setFamilyId(family.id);
-      const kids = await familyService.getFamilyChildren(family.id, false, user.uid);
-      setChildren(kids);
-      if (kids.length === 1) setChildId(kids[0].id);
-      setLoading(false);
+      try {
+        const [cfg, fam] = await Promise.all([
+          partyService.getPartyConfig(),
+          familyService.getOrCreateFamily(user.uid, user.name ?? '', user.email ?? ''),
+        ]);
+        setConfig(cfg);
+        setFamily(fam);
+        const kids = await familyService.getFamilyChildren(fam.id, false, user.uid);
+        setChildren(kids);
+        if (kids.length === 1) setChildId(kids[0].id);
+      } catch (err) {
+        reportClientError('[PartyBookingPage] load failed', err);
+        setLoadError('Não foi possível carregar o formulário de reserva. Tente novamente mais tarde.');
+      } finally {
+        setLoading(false);
+      }
     })();
-  }, [user]);
+  }, [user, guest]);
 
   const selectedType = config?.partyTypes.find(pt => pt.name === partyType);
 
@@ -69,23 +105,67 @@ export default function PartyBookingPage() {
 
   const toggleExtra = (ex: ExtraItem) => setExtraQty(ex.name, (extraQtys[ex.name] ?? 0) > 0 ? 0 : 1);
 
+  // With no registered children the name fields are the only option, without
+  // "+ Outra criança" ever being clicked: manualChild alone left the button
+  // disabled for good.
+  const typedChild = guest || manualChild || children.length === 0;
+  const childMissing = typedChild ? !manualName.trim() : !childId;
+  const contactMissing = guest && (!parentName.trim() || !EMAIL_RE.test(email.trim()) || phone.replace(/\D/g, '').length < 9);
+  const nifInvalid = guest && !!nif.trim() && !/^\d{9}$/.test(nif.replace(/\s/g, ''));
+
+  const handleGuestSubmit = async () => {
+    if (!price || childMissing || contactMissing || nifInvalid) return;
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      const res = await callable<object, { ok: boolean; bookingId?: string; token?: string }>('requestPartyBooking')({
+        parentName: parentName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        nif: nif.trim(),
+        notes: notes.trim(),
+        website,
+        childName: manualName.trim(),
+        childAge: manualAge === '' ? '' : Number(manualAge),
+        partyType,
+        date,
+        time,
+        numKids,
+        extras,
+        extrasDetail,
+      });
+      const { bookingId, token } = res.data;
+      if (bookingId && token) navigate(`/festas/reserva/${encodeURIComponent(bookingId)}?t=${encodeURIComponent(token)}&novo=1`);
+      else navigate('/festas/reserva/enviado');
+    } catch (err: any) {
+      reportClientError('[PartyBookingPage] guest request failed', err);
+      setSubmitError(err?.message || 'Não foi possível enviar o pedido. Tente novamente.');
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!user || !familyId || !price) return;
-    if (!manualChild && !childId) return;
+    if (guest) return handleGuestSubmit();
+    if (!user || !family || !price) return;
+    if (childMissing) return;
     const child = children.find(c => c.id === childId);
-    const resolvedName = manualChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
-    const resolvedAge = manualChild ? Number(manualAge) : child ? (child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear()) : 0;
+    const resolvedName = typedChild ? manualName.trim() : child ? `${child.firstName} ${child.lastName}` : '';
+    const resolvedAge = typedChild ? Number(manualAge) : child ? (child.age ?? new Date().getFullYear() - new Date(child.dateOfBirth).getFullYear()) : 0;
     if (!resolvedName) return;
+
+    // The family's parent, not the admin, while impersonating: the booking's
+    // userId is what lets the parent read it, and its email gets the party emails.
+    const owner = familyService.owner(family, user);
 
     setSubmitting(true);
     try {
       await partyService.createBooking({
-        familyId,
-        childId: manualChild ? '' : childId,
-        userId: user.uid,
-        parentName: user.name || user.email?.split('@')[0] || '',
-        email: normalizeEmail(user.email),
-        phone: '',
+        familyId: family.id,
+        childId: typedChild ? '' : childId,
+        userId: owner.userId,
+        parentName: owner.name || owner.email.split('@')[0] || '',
+        email: normalizeEmail(owner.email),
+        phone: family.primaryContact?.phone ?? '',
         childName: resolvedName,
         childAge: resolvedAge,
         partyType,
@@ -106,6 +186,7 @@ export default function PartyBookingPage() {
     }
   };
 
+  if (loadError) return <div className="p-6 max-w-xl mx-auto"><p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{loadError}</p></div>;
   if (loading || !config) return <div className="p-6 text-gray-400 text-sm">A carregar...</div>;
 
   const today = new Date().toISOString().split('T')[0];
@@ -114,9 +195,15 @@ export default function PartyBookingPage() {
   return (
     <div className="p-6 max-w-xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/client/parties')} className="text-gray-400 hover:text-gray-600">←</button>
-        <h1 className="text-2xl font-bold text-gray-800">🎈 Reservar uma festa</h1>
+        <button onClick={() => navigate(guest ? '/' : '/client/parties')} className="text-gray-400 hover:text-gray-600">←</button>
+        <h1 className="text-2xl font-bold text-gray-800">🎈 {guest ? 'Pedir uma festa' : 'Reservar uma festa'}</h1>
       </div>
+      {guest && (
+        <p className="text-sm text-gray-500 -mt-3">
+          Não precisa de conta. Escolha a festa, deixe o seu contacto e respondemos por email.
+          {' '}<Link to="/login" className="text-pink-600 underline">Já é cliente? Entre aqui</Link>
+        </p>
+      )}
 
       {/* Step indicators */}
       <div className="flex gap-2 text-xs font-medium">
@@ -273,11 +360,40 @@ export default function PartyBookingPage() {
       {/* Step 3 */}
       {step === 3 && (
         <div className="space-y-4">
+          {guest && (
+            <div className="space-y-3">
+              <p className="block text-sm font-medium text-gray-700">Os seus contactos</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Nome</label>
+                <input type="text" autoComplete="name" value={parentName} onChange={e => setParentName(e.target.value)} className={inputCls} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
+                  <input type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Telemóvel</label>
+                  <input type="tel" autoComplete="tel" placeholder="9XXXXXXXX" value={phone} onChange={e => setPhone(e.target.value)} className={inputCls} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">NIF para a fatura <span className="text-gray-400 font-normal">(opcional)</span></label>
+                <input type="text" inputMode="numeric" value={nif} onChange={e => setNif(e.target.value)} className={inputCls} />
+                {nifInvalid && <p className="text-xs text-pink-700 mt-1">O NIF tem 9 dígitos.</p>}
+              </div>
+              {/* Honeypot: hidden from people, bots fill it. */}
+              <div aria-hidden="true" style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, overflow: 'hidden' }}>
+                <label>Website<input type="text" tabIndex={-1} autoComplete="off" value={website} onChange={e => setWebsite(e.target.value)} /></label>
+              </div>
+            </div>
+          )}
+
               <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Criança a celebrar</label>
 
               {/* Registered children */}
-              {children.length > 0 && !manualChild && (
+              {!typedChild && (
                 <div className="space-y-2">
                   {children.map(c => (
                     <button
@@ -303,9 +419,9 @@ export default function PartyBookingPage() {
               )}
 
               {/* Manual entry — shown when no children or user chose "other" */}
-              {(children.length === 0 || manualChild) && (
+              {typedChild && (
                 <div className="space-y-3">
-                  {children.length === 0 && (
+                  {!guest && children.length === 0 && (
                     <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
                       Não tem crianças registadas na sua conta. Pode introduzir os dados directamente.
                     </p>
@@ -332,7 +448,7 @@ export default function PartyBookingPage() {
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
                     />
                   </div>
-                  {manualChild && children.length > 0 && (
+                  {!guest && manualChild && children.length > 0 && (
                     <button
                       onClick={() => { setManualChild(false); setManualName(''); setManualAge(''); }}
                       className="text-xs text-pink-600 underline"
@@ -378,9 +494,27 @@ export default function PartyBookingPage() {
             <p className="text-xs text-gray-400">Sinal de 50% ({fmtEur(price?.deposit ?? 0)}) devido após confirmação</p>
           </div>
 
+          {guest && (
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Notas <span className="text-gray-400 font-normal">(opcional: tema, alergias, dúvidas)</span></label>
+              <textarea rows={3} maxLength={1000} value={notes} onChange={e => setNotes(e.target.value)} className={inputCls} />
+            </div>
+          )}
+
           <p className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg p-3">
-            A reserva fica pendente até confirmação da nossa equipa. Receberá uma notificação quando estiver confirmada.
+            {guest
+              ? 'O pedido fica pendente até confirmarmos a disponibilidade. Enviamos a resposta por email; depois de confirmada, a reserva fica garantida com o sinal de 50%, pago por MB WAY a partir do link no email.'
+              : 'A reserva fica pendente até confirmação da nossa equipa. Receberá uma notificação quando estiver confirmada.'}
           </p>
+
+          {contactMissing ? (
+            <p className="text-xs text-pink-700">Indique o seu nome, um email válido e o telemóvel para enviar o pedido.</p>
+          ) : childMissing && (
+            <p className="text-xs text-pink-700">
+              {typedChild ? 'Indique o nome da criança para enviar o pedido.' : 'Escolha a criança a celebrar para enviar o pedido.'}
+            </p>
+          )}
+          {submitError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{submitError}</p>}
 
           <div className="flex gap-3">
             <button onClick={() => setStep(2)} className="flex-1 border border-gray-300 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition">
@@ -388,7 +522,7 @@ export default function PartyBookingPage() {
             </button>
             <button
               onClick={handleSubmit}
-              disabled={submitting || (!manualChild && !childId) || (manualChild && !manualName.trim())}
+              disabled={submitting || childMissing || contactMissing || nifInvalid}
               className="flex-1 bg-pink-600 text-white font-semibold py-3 rounded-xl hover:bg-pink-700 transition disabled:opacity-40"
             >
               {submitting ? 'A enviar...' : 'Enviar pedido'}

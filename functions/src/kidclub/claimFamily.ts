@@ -24,7 +24,9 @@ import { appCol } from "./db";
 // someone else is left alone, and so is a family owned by a different account
 // of the same parent (that needs a human decision, not an automatic merge).
 
-const LINKED_COLLECTIONS = ["children", "studyroom", "transportationSubscriptions", "billing"] as const;
+// bookings: a party requested from the public site, before the parent had an
+// account (partyPublic.ts), joins their account when they sign up.
+const LINKED_COLLECTIONS = ["children", "studyroom", "transportationSubscriptions", "billing", "bookings"] as const;
 
 // Firestore batches cap at 500 writes; stay well under.
 const BATCH_SIZE = 400;
