@@ -36,7 +36,8 @@ const db = admin.firestore();
 
 const REGION = "europe-west3";
 const COMPANY_NAME = "Arco-Íris da Pequenada";
-const APP_URL = "https://kidclub.pt";
+// The dev site on kidclub-dev (functions/.env.kidclub-dev), like notifications.ts.
+const APP_URL = process.env.APP_URL || "https://kidclub.pt";
 const EASYPAY_SECRETS = ["EASYPAY_ACCOUNT_ID", "EASYPAY_API_KEY", "EASYPAY_WEBHOOK_URL"];
 
 const eventsCol = () => appCol("adhocEvents");

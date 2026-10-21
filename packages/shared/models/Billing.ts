@@ -49,8 +49,10 @@ export interface BillingRecord {
   familyId: string;   // '' / unset on a one-off event bill for a guest (no KidClub account)
   userId: string;
 
-  /** Unset on monthly bills. 'event' = a one-off event paid on its own (AdhocEvent.ts). */
+  /** Absent on monthly bills. 'party_deposit' bills carry the booking's id;
+   *  'event' = a one-off event paid on its own (AdhocEvent.ts). */
   type?: 'party_deposit' | 'camp_deposit' | 'camp_balance' | 'event';
+  bookingId?: string;
   eventRegistrationId?: string; // type 'event'
   guestNif?: string;            // type 'event', guest only: the NIF they gave (no family doc to read it from)
 

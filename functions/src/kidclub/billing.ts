@@ -5,7 +5,8 @@ import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, VendusDoc
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
-import { partyDepositAmount } from "./partyDepositLogic";
+import { FAMILY_PAYMENT_METHODS, familyPaymentMethod, familyBillingInfo } from "./familyBilling";
+import { ensurePartyDeposit } from "./partyDeposit";
 import { familyInvoiceNif, realNif } from "./vendusClientLogic";
 import { retryInvoiceRefusal } from "./retryInvoiceLogic";
 import { eventLineId } from "./adhocEventLogic";
@@ -68,28 +69,10 @@ async function getActiveSubs() {
   return Object.values(byFamily);
 }
 
-// Methods a family can choose / a bill can carry. `bank_transfer` is paid
-// outside Easypay and confirmed by an admin (markBillingPaid).
-export const FAMILY_PAYMENT_METHODS = ["mbway", "multibanco", "card", "subscription", "bank_transfer"] as const;
-
-// The family's chosen payment method, or undefined if it never chose one.
-// `paymentMethod` is the one field going forward; `defaultPaymentMethod` is
-// what the profile pages wrote until 2026-10 (billing never read it, so every
-// bill said "mbway" whatever the parent chose) — read as a fallback only.
-export function familyPaymentMethod(fam: FirebaseFirestore.DocumentData | undefined): string | undefined {
-  const m = fam?.paymentMethod ?? fam?.defaultPaymentMethod;
-  return typeof m === "string" && (FAMILY_PAYMENT_METHODS as readonly string[]).includes(m) ? m : undefined;
-}
-
-// Who owns a family's billing records (ownerUid).
-// families/{id}.primaryContact.userId is the single source of truth: billing.userId used to be copied from whichever
-// subscription triggered the write, and admin-created subscriptions often have
-// no userId, so records were written with "" and the parent could neither see
-// (rules match on billing.userId) nor pay (callables check billing.userId) them.
-async function familyBillingInfo(familyId: string): Promise<{ ownerUid: string; paymentMethod?: string }> {
-  const fam = (await appCol("families").doc(familyId).get()).data();
-  return { ownerUid: fam?.primaryContact?.userId ?? "", paymentMethod: familyPaymentMethod(fam) };
-}
+// FAMILY_PAYMENT_METHODS, familyPaymentMethod and familyBillingInfo (who owns a
+// family's billing records: families/{id}.primaryContact.userId) live in
+// familyBilling.ts, shared with partyDeposit.ts. Re-exported for existing importers.
+export { FAMILY_PAYMENT_METHODS, familyPaymentMethod };
 
 // Same self-heal as ownerUpdate, for the payment method: a still-pending bill
 // follows the family's current choice. Empty when the family never chose one.
@@ -882,9 +865,18 @@ export const initiateMbwayPayment = onCall(
   }
 );
 
-// Everything after "who may pay this bill": shared by initiateMbwayPayment (the
-// bill's owner) and payAdhocRegistration (a one-off event's guest, by token).
-export async function startMbwayPayment(billingId: string, billing: FirebaseFirestore.DocumentData, phone: string): Promise<{ easypayId: string }> {
+/**
+ * Starts an MB WAY payment for a bill whose caller is already checked: the bill
+ * must still be unpaid, earlier months paid, and at least €0.50. Used by
+ * initiateMbwayPayment (signed-in parent), payPartyDepositByLink
+ * (partyPublic.ts, a party deposit paid from its email link) and
+ * payAdhocRegistration (adhocEvents.ts, a one-off event paid from its link).
+ */
+export async function startMbwayPayment(
+  billingId: string,
+  billing: FirebaseFirestore.DocumentData,
+  phone: string,
+): Promise<{ easypayId: string }> {
     const billingRef = appCol("billing").doc(billingId);
     if (!UNPAID_STATUSES.has(billing.status)) throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
     await assertEarlierMonthsPaid(billingId, billing);
@@ -1159,76 +1151,46 @@ export const easypayWebhook = onRequest(
 );
 
 // ── Create party deposit billing record ──────────────────────────────────────
+// Since 2026-10-20 the deposit bill is created when the admin confirms the
+// booking (onPartyBookingStatusNotify, partyBookings.ts). This callable stays
+// for bookings confirmed before that, and as the party page's fallback: it
+// returns the existing bill, or creates it through the same helper (one bill
+// per booking either way, see ensurePartyDeposit).
 
 export const createPartyDeposit = onCall(
   { region: "europe-west3", invoker: "public" },
   async (request) => {
     const uid = request.auth?.uid;
-    if (!uid) throw new Error("Unauthenticated");
+    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
 
     const { bookingId } = request.data ?? {};
-    if (!bookingId) throw new Error("bookingId required");
+    if (!bookingId) throw new HttpsError("invalid-argument", "bookingId required");
 
     const bookingSnap = await appCol("bookings").doc(bookingId).get();
-    if (!bookingSnap.exists) throw new Error("Booking not found");
+    if (!bookingSnap.exists) throw new HttpsError("not-found", "Reserva não encontrada.");
     const booking = bookingSnap.data()!;
 
-    // Verify ownership — booking must have userId or familyId linked to caller
+    // The booking's parent, the family's owner, or an admin (impersonating a
+    // family, the admin's own uid matches neither).
     if (booking.userId !== uid) {
       const famSnap = await appCol("families")
         .where("primaryContact.userId", "==", uid)
         .limit(1)
         .get();
       if (famSnap.empty || famSnap.docs[0].id !== booking.familyId) {
-        throw new Error("Unauthorized");
+        const roles = (await db.collection("users").doc(uid).get()).data()?.roles ?? {};
+        if (!roles.owner && !roles.rainbowAdmin) throw new HttpsError("permission-denied", "Unauthorized");
       }
     }
 
     if (booking.status !== "confirmed") {
-      throw new Error("A reserva ainda não foi confirmada.");
+      throw new HttpsError("failed-precondition", "A reserva ainda não foi confirmada.");
     }
 
-    // Return existing deposit billing if already created
-    const existing = await appCol("billing")
-      .where("bookingId", "==", bookingId)
-      .where("type", "==", "party_deposit")
-      .limit(1)
-      .get();
-    if (!existing.empty) {
-      return { billingId: existing.docs[0].id };
-    }
-
-    // booking.total is before IVA; the deposit line is billed IVA-inclusive.
-    const depositAmount = partyDepositAmount(booking.total);
-    const partyDate = new Date(booking.date);
-    const dateStr = partyDate.toLocaleDateString("pt-PT");
-    const now = admin.firestore.Timestamp.now();
-    const dueDate = admin.firestore.Timestamp.fromDate(
-      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    );
-
-    const billingRef = await appCol("billing").add({
-      familyId: booking.familyId,
-      userId: uid,
-      bookingId,
-      type: "party_deposit",
-      periodLabel: `Sinal — Festa de ${booking.childName} — ${dateStr}`,
-      periodStart: now,
-      periodEnd: admin.firestore.Timestamp.fromDate(partyDate),
-      dueDate,
-      total: depositAmount,
-      lineItems: [
-        { title: `Sinal 50% — ${booking.partyType || "Festa"}`, amount: depositAmount },
-      ],
-      billingName: booking.parentName,
-      billingEmail: booking.email,
-      paymentMethod: "mbway",
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    return { billingId: billingRef.id };
+    // Owner = the family's primaryContact.userId (not the caller), amount =
+    // 50% of the IVA-inclusive total: see ensurePartyDeposit.
+    const { billingId } = await ensurePartyDeposit(bookingId, booking, "createPartyDeposit");
+    return { billingId };
   }
 );
 
@@ -1706,7 +1668,8 @@ function escapeHtml(s: string): string {
 /** The page a one-off event registration is followed on, token included (adhocEvents.ts). */
 export async function adhocRegistrationLink(registrationId: string): Promise<string | null> {
   const token = (await appCol("adhocEventRegistrations").doc(registrationId).get()).data()?.accessToken;
-  return typeof token === "string" && token ? `https://kidclub.pt/eventos/inscricao/${registrationId}?t=${encodeURIComponent(token)}` : null;
+  const appUrl = process.env.APP_URL || "https://kidclub.pt"; // the dev site on kidclub-dev (functions/.env.kidclub-dev)
+  return typeof token === "string" && token ? `${appUrl}/eventos/inscricao/${registrationId}?t=${encodeURIComponent(token)}` : null;
 }
 
 // Same layout as buildPaymentNoticeEmail. A Consumidor final invoice (no NIF)

@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-20
+**Last updated:** 2026-10-21
 
 ## 🎃 One-off events (Halloween, strike days) — 2026-10-20, branch `agent/kidclub-events`, PR → `staging`, NOT in prod
 
@@ -77,17 +77,6 @@ On dev, Vendus is blocked by design (`invoiceError` on paid bills) and so is Gma
 - Camps (`/admin/camps`) overlap with this: two legacy models, account-only, and capacity that can
   overbook. Fold them into events later?
 
-**Dev deploy of PR #110 (2026-10-20 ~22:00 UTC): partly done, blocked.** Terraform, Firestore rules and
-indexes from this branch deployed to `kidclub-dev`. **Functions failed, so hosting was skipped:** the dev
-project still runs `onPartyBookingCreated` / `onPartyBookingStatusNotify`, which PR #109
-(`agent/kidclub-party-billing`, another active session) deployed. A full functions deploy from a branch
-without them refuses to delete them non-interactively, the same shared-dev problem as in the backlog.
-#109 doesn't touch rules or indexes, so nothing of theirs was overwritten. Ways forward (Renato decides):
-(a) merge #109 into `staging` first, then merge `staging` into this branch and redeploy. The two PRs
-conflict in `billing.ts`, `packages/shared/models/Billing.ts` and this file, so the second to merge
-resolves them. (b) `firebase functions:delete onPartyBookingCreated onPartyBookingStatusNotify --region
-europe-west3 --project kidclub-dev` and re-run; #109's dev triggers are gone until its next push.
-
 **Risky / in flight:** new **unauthenticated** callables (`registerForAdhocEvent`, `getAdhocRegistration`,
 `payAdhocRegistration`, `getInvoicePdf` by token) are capped as above. `onAdhocBillingPaid` runs on every
 billing doc update; it exits at once unless `type === "event"`. `expireAdhocHolds` is one more Cloud
@@ -95,11 +84,19 @@ Scheduler job (8 scheduled functions now; ~$0.10/month past the 3 free). The new
 **not** in Terraform's `callable_functions` yet (see the note in `functions.tf`): add them in a follow-up,
 after the first real deploy.
 
-## ▶️ Start here (left 2026-10-17, end of session)
+## ▶️ Start here (left 2026-10-21)
 
-Both changes below are **live on prod** (#96, plus #98 shipped with the `staging` → `main` promotion #99,
-2026-10-17 ~09:05 UTC). Nothing is in flight: all PRs are merged and the worktrees are removed.
-Next, in order:
+**Parties are live in prod** (#109 promoted with #111, merged 2026-10-21 15:32 UTC). That covers the deposit bill
+and emails at confirmation, and booking without an account at `kidclub.pt/festas`. Section 🎈 below has the details.
+Next for parties:
+- **Ana Ferreira's deposit (€162.98) is waiting for her to pay.** Re-confirmed 2026-10-21: the bill
+  `partyDeposit_aZPID1Hp3TnTUMjR0L0I` exists and her confirmation email was sent, with the payment link (checked
+  in prod: the link opens her booking). If it's still `pending` in a few days, give her a call.
+- **The first real public request** will be the first time `requestPartyBooking` runs in prod. When it arrives,
+  check the booking (`source: public`), its family, and that both emails went out (`party_request_` / `party_received_`).
+- Follow-ups, none urgent: see "Open" and "Open (public parties)" in the 🎈 section.
+
+**Carried over from 2026-10-17. Not re-checked on 2026-10-21, so confirm before relying on it:**
 1. **Confirm a real parent enrollment landed** after 2026-10-17 09:00 UTC. Look for a new `pending` sub on
    Famílias e inscrições that a parent created, not an admin. As of 09:20 UTC there were none yet, which was
    expected that soon. If none appear within a few days, check "🚨 Erros dos clientes" before assuming
@@ -115,9 +112,124 @@ Next, in order:
 6. Follow-ups, none urgent: per-child calendar still broken for parents; `clientErrors` TTL not enabled;
    rules tests not in CI. Details in the two sections below.
 
-**Branch state:** `main` and `staging` match in content. The automatic staging sync worked after #99.
-Dev's last deploy (the merge of #100) was cancelled by a newer push and never re-ran. Merging this STATUS
-PR redeploys dev and brings it up to date.
+**Branch state (2026-10-21, after #111):** `main` and `staging` match in content.
+
+## 🎈 Parties: deposit bill + emails at confirmation, and booking without an account (2026-10-20/21): IN PROD
+
+PR #109 → `staging`, then promoted with #111 (prod deploy green, merged 2026-10-21 15:32 UTC). Renato tested it on dev
+first. The second half ("Parties without an account", below) was added on 2026-10-21 to the same PR. Checked in prod
+after the deploy, without logging in: `config/party` is readable, `config/billing` and `partyLinks` are refused.
+
+**Why.** Confirming a party did nothing else. The 50% deposit bill only existed after the parent opened the party
+page and tapped "Pagar sinal", so nothing showed under Pagamentos. There were no party emails at all. While
+impersonating, "As minhas festas" was empty and a booking made there carried the admin's identity.
+
+**What changed** (branch `agent/kidclub-party-billing`):
+- **Confirmation creates the bill** (`onPartyBookingStatusNotify`, `functions/src/kidclub/partyBookings.ts`). When a
+  booking's status becomes `confirmed`, the deposit bill is created. It's the same shape as before: `type: party_deposit`,
+  50% of the total **com IVA**. It goes to the family's parent (`primaryContact.userId`, falling back to `booking.userId`),
+  with the family's payment method (else `mbway`). The parent is emailed the date, the deposit (IVA incluído) and the
+  party page link, and told it's also in Pagamentos.
+- **Rejection** (`pending → rejected`) emails the parent the reason, with no bill. Festas → Rejeitar now asks for an
+  optional reason (it never did, so `statusReason` was always empty). Confirmar now asks first, and says what will happen.
+- **New request** → email to `admin@kidclub.pt` (`onPartyBookingCreated`).
+- Editing a booking without changing its status does nothing, nor does any other status change.
+- **One bill per booking, whatever happens.** `ensurePartyDeposit` (`partyDeposit.ts`) is shared by the trigger and the
+  `createPartyDeposit` callable. It returns an existing deposit, including old ones with random ids. Otherwise it creates
+  `billing/partyDeposit_<bookingId>` with `create()` in a transaction. Emails have fixed outbox ids
+  (`party_request_/party_confirmed_/party_rejected_<bookingId>`), so a redelivered event sends nothing twice.
+- `createPartyDeposit` stays as the fallback. The bill is owned by the family's parent, not the caller; admins may call
+  it; errors now reach the page instead of "internal".
+- **Party page** follows the bill live: paid, awaiting confirmation, or payable with MB WAY. Card/Multibanco are gone
+  (already off server-side). "Pagar sinal" only shows when there is no bill.
+- **Impersonation:** the list queries by `familyId` while impersonating; new bookings are stamped via
+  `familyService.owner()`.
+- Tests: functions **282/282**, of which 36 are new (`partyDeposit.test.ts`, `partyDepositLogic.test.ts`), covering
+  idempotency, owner, amount and status transitions. `pnpm test:rules` **31/31** (13 new party query shapes). Functions
+  build OK; app typecheck has the same 11 old errors; kidclub + finances builds OK. No new external call: Firestore and
+  the existing outbox only.
+
+**Click through on dev** (emails don't send on dev, because the Gmail guard is prod-only. Read them in the Firebase console
+under `_apps/arcoiris/emailOutbox/party_*`: `status: error` with the guard message is expected, `subject`/`html` is the
+content):
+1. As `parent-test@kidclub.pt`, book a party → outbox `party_request_<id>` to admin.
+2. Admin → Festas → Confirmar → dialog → OK. Check that `billing/partyDeposit_<id>` exists, with `total` = sinal shown
+   on the page, `userId` = the parent, and `createdVia: onPartyBookingStatusNotify`. Outbox `party_confirmed_<id>` exists.
+3. As the parent, Pagamentos shows "Sinal — Festa de …". The party page shows "Pagar €X com MB WAY". Pay in the
+   EasyPay sandbox, and the page should turn to "Sinal pago" without a reload.
+4. Reject another booking with a reason → outbox `party_rejected_<id>` with it. The party page shows it; no bill.
+5. Editar on a confirmed booking → no new bill or email.
+6. Impersonate the QA family → As minhas festas lists its parties. A booking made while impersonating has the parent's
+   `userId`/email.
+7. Fallback: delete `billing/partyDeposit_<id>` in the console → party page shows "Pagar sinal" → tapping it recreates
+   the same id.
+
+**Bookings confirmed before the deploy** get no automatic bill or email. There was exactly one in prod, Ana Ferreira's
+(`aZPID1Hp3TnTUMjR0L0I`). Renato set it back to `pending` and confirmed it again on 2026-10-21, which created the bill
+and sent the email (see Start here). Same recipe if one ever turns up again.
+
+**Prod check (2026-10-21, read-only):** `bookings` held exactly one document, Ana's, owned by her own account
+(`userId` = her family's `primaryContact.userId`, her email, family has a NIF). No booking carried an admin's identity,
+so nothing needed fixing.
+
+**Open:**
+- Not done: a deposit bill isn't cancelled if a confirmed booking is later rejected (the UI only offers
+  Confirmar/Rejeitar on pending bookings). Editing a confirmed booking's price doesn't change its deposit bill.
+- Party deposits are still invoiced under the study-room Vendus product (23%, same rate), as before.
+
+### Parties without an account (2026-10-21, same PR)
+
+**Why.** Anyone can have a party at the club, member or not, but booking needed an account. Renato's decisions
+(2026-10-21): request from the landing page with no account; the deposit is paid from the email link, no account;
+the form doesn't show free/busy dates (any date can be requested, the admin decides).
+
+**What changed:**
+- **Landing page → Festas card → `/festas`**: the booking form in guest mode (`PartyBookingPage guest`): party,
+  extras, then the parent's name/email/phone, optional NIF and notes, child's name/age. A hidden honeypot field.
+- **`requestPartyBooking`** (callable, public; `functions/src/kidclub/partyPublic.ts`). It validates and **prices on
+  the server** (`partySubtotal` in `partyRequestLogic.ts` mirrors the shared `computePartyPrice`; a parity test checks
+  both to the cent). It joins the family with that `primaryContact.email` (booking `userId` = its owner, so it also
+  shows in their area), or creates a **lead family** (`source: party_request`, no `userId`, NIF if given). Then it
+  saves the booking (`source: public`) and its secret link.
+  **Limits:** 3 requests per email per 24 h, 20 public requests per 24 h overall (every request queues two emails
+  on the Gmail account whose 300/day cap also carries billing emails).
+- **Booking link `/festas/reserva/<id>?t=<token>`.** The token lives in `partyLinks/{bookingId}` (closed to every
+  client in the rules; `partyLinks.ts`). **Every** party email to a parent now links there, app bookings included:
+  "pedido recebido" (new, `party_received_<id>`), "confirmada" with "Pagar sinal", and "rejeitada" ("Fazer novo pedido"
+  → `/festas`). The page shows status and price. When confirmed, MB WAY for the deposit (`payPartyDepositByLink`,
+  which creates the bill if missing, so bookings confirmed before this deploy can pay too). It follows the bill
+  until paid or refused. **Limit:** 5 MB WAY requests per link per hour.
+- `startMbwayPayment` was pulled out of `initiateMbwayPayment` (billing.ts), with no behaviour change; both paths use it.
+- `claimFamilyByEmail` now also links `bookings`, so a guest who later signs up with that email sees their parties.
+- Rules: `config/party` readable by anyone (party types/extras/prices only; checked nothing else is stored there).
+  `partyLinks` closed.
+- `APP_URL` (email links) now comes from `functions/.env.<project>`; dev links go to `kidclub-dev-arcoiris.web.app`.
+- Admin booking card shows the parent's notes and "Pedido feito no site".
+- Also fixed (in prod since July): the booking button stayed disabled when the family had no registered children.
+- Tests: functions **320/320** (38 new: `partyRequestLogic.test.ts`, public flow in `partyDeposit.test.ts`).
+  `pnpm test:rules` **39/39** (8 new). The app typecheck has the same 11 old errors; the kidclub build passes.
+  External calls: only EasyPay, via the existing MB WAY code, sandboxed on dev (`EASYPAY_SANDBOX`).
+
+**Click through on dev** (still signed in, because of the dev gate; the public form doesn't need it, it just
+works signed in too):
+1. Landing page → Festas card → fill the form with a **new email** → "Enviar pedido". You land on the booking page
+   with "Pedido enviado!". Firestore: a new `families` doc with `source: party_request` and no `userId`, a
+   `bookings` doc with `source: public` and the server's `total`, plus `partyLinks/<id>`. Outbox:
+   `party_request_<id>` (admin) and `party_received_<id>` (parent), whose link should open the same page.
+2. Admin → Festas → the card shows notes and "Pedido feito no site" → Confirmar. The outbox `party_confirmed_<id>`
+   links to the booking page; `billing/partyDeposit_<id>` has `userId: ""`.
+3. Open that link → "Pagar sinal" with MB WAY → approve in the EasyPay sandbox → the page turns to "Sinal pago".
+4. Same form with an email of an existing dev family → the booking gets that family and its owner's `userId`,
+   and shows in that parent's As minhas festas.
+5. A 4th request from the same email the same day is refused with a message.
+
+**Open (public parties):**
+- A lead family's deposit bill has no owner, so it's paid only through the link. If the parent signs up later,
+  `claimFamilyByEmail` gives them the family, bills and bookings.
+- Lead families show up wherever all families are listed. They have `source: party_request` if that ever needs
+  a filter.
+- Typing an existing parent's email attaches the request to that family (the emails still go to that address).
+  Accepted: the admin reviews every request.
 
 ## 🔴 Prod bug (2026-10-16): parents couldn't enroll. FIXED on prod 2026-10-17 (#96)
 

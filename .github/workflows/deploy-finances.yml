@@ -20,16 +20,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Set up pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
+        uses: pnpm/action-setup@v4 # version: packageManager in root package.json
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'pnpm'
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       # build:staging loads .env.staging (VITE_FIREBASE_PROJECT_ID=kidclub-dev).
       # Plain `build` defaults to Vite's "production" mode (.env.production,
       # rainbow-prod-2454b) — deploying that bundle here would bake prod's
@@ -65,16 +63,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Set up pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
+        uses: pnpm/action-setup@v4 # version: packageManager in root package.json
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'pnpm'
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: Build Finances app
         run: pnpm --filter finances build
       - name: Check the build targets rainbow-prod-2454b

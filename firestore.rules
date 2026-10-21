@@ -104,6 +104,12 @@ service cloud.firestore {
         allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       }
 
+      // Secret link tokens of party bookings (functions/src/kidclub/partyLinks.ts).
+      // Cloud Functions only: a token is the key to a booking's page and payment.
+      match /partyLinks/{bookingId} {
+        allow read, write: if false;
+      }
+
       // Billing records — created by Cloud Functions, read by clients and FinHub
       match /billing/{id} {
         allow read: if isRainbowAdmin() || isOwner() || isFinhubAdmin();
@@ -127,6 +133,12 @@ service cloud.firestore {
       match /config/{configId} {
         allow read: if isAuthenticated();
         allow write: if isRainbowAdmin() || isOwner();
+      }
+
+      // Party types, extras and prices: the public party form (/festas) shows
+      // them to visitors without an account. Prices only, nothing personal.
+      match /config/party {
+        allow read: if true;
       }
 
       // App-level settings (read by functions via Admin SDK, write for admin)

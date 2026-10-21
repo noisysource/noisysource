@@ -206,9 +206,7 @@ jobs:
 
       - name: Set up pnpm
         if: steps.parts.outputs.install == 'true'
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
+        uses: pnpm/action-setup@v4 # version: packageManager in root package.json
 
       - name: Set up Node.js
         if: steps.parts.outputs.install == 'true'
@@ -217,9 +215,16 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
+      # Until 2026-10-18 CI ran pnpm 8, which can't read the v9 lockfile the
+      # pnpm 10 used locally writes: it logged "Ignoring not compatible
+      # lockfile" and resolved every dependency fresh from package.json
+      # ranges, so each deploy (prod included) could ship different versions
+      # than were ever run locally. pnpm now comes from `packageManager` in
+      # root package.json, and --frozen-lockfile fails the run if
+      # pnpm-lock.yaml is out of date instead of silently re-resolving.
       - name: Install dependencies
         if: steps.parts.outputs.install == 'true'
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build KidClub app
         if: steps.parts.outputs.kidclub == 'true'
@@ -423,9 +428,7 @@ jobs:
       # The functions predeploy (firebase.json) builds packages/shared and
       # functions with pnpm, so this job needs the workspace installed.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
+        uses: pnpm/action-setup@v4 # version: packageManager in root package.json
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -433,8 +436,9 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
+      # --frozen-lockfile: same as the plan job (see the comment there).
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2

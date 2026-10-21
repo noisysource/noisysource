@@ -17,6 +17,8 @@ export { claimFamilyByEmail } from "./kidclub/claimFamily";
 export { sendBillingNotice, backfillBillingSchedules, initiateMbwayPayment, initiateMultibancoPayment, initiateCardPayment, easypayWebhook, setPaymentMethod, createPartyDeposit, retryVendusInvoice, resetStuckPayment, onStudyroomBillingSync, onTransportBillingSync, onReservationEventBillingSync, onAdhocRegistrationBillingSync } from "./kidclub/billing";
 export { saveAdhocEvent, deleteAdhocEvent, registerForAdhocEvent, getAdhocRegistration, payAdhocRegistration, cancelAdhocRegistration, expireAdhocHolds, onAdhocBillingPaid } from "./kidclub/adhocEvents";
 export { onStudyroomCreated, onTransportCreated, onStudyroomStatusNotify, onTransportStatusNotify, onCampSubscriptionCreated } from "./kidclub/notifications";
+export { onPartyBookingCreated, onPartyBookingStatusNotify } from "./kidclub/partyBookings";
+export { requestPartyBooking, getPartyBookingByLink, payPartyDepositByLink } from "./kidclub/partyPublic";
 export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/discountRecalc";
 export { onStudyroomReservationEventsSync, onTransportReservationEventsSync, setReservationEventStatus, backfillReservationEvents } from "./kidclub/reservationEvents";
 export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
