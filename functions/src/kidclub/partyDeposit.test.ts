@@ -20,7 +20,7 @@ const fake = vi.hoisted(() => {
   };
   const snapOf = (path: string) => {
     const data = state.docs[path];
-    return { id: path.split("/")[1], exists: !!data, data: () => data, get: (f: string) => data?.[f], ref: ref(path) };
+    return { id: path.split("/")[1], exists: !!data, data: () => data, get: (f: string) => f.split(".").reduce((o: any, k) => o?.[k], data), ref: ref(path) };
   };
   function ref(path: string): any {
     return {
@@ -35,16 +35,18 @@ const fake = vi.hoisted(() => {
       },
     };
   }
-  const query = (c: string, filters: [string, unknown][]): any => ({
+  // Dates compare as ms whether stored as a Date, a number or a Timestamp-like.
+  const ms = (x: any) => (x instanceof Date ? x.getTime() : typeof x === "number" ? x : x?.toMillis?.() ?? NaN);
+  const query = (c: string, filters: [string, string, unknown][]): any => ({
     isQuery: true,
-    where: (f: string, _op: string, v: unknown) => query(c, [...filters, [f, v]]),
+    where: (f: string, op: string, v: unknown) => query(c, [...filters, [f, op, v]]),
     limit: () => query(c, filters),
     get: async () => {
       const docs = Object.keys(state.docs)
         .filter((p) => p.startsWith(`${c}/`))
-        .filter((p) => filters.every(([f, v]) => {
+        .filter((p) => filters.every(([f, op, v]) => {
           const val = f.split(".").reduce((o: any, k) => o?.[k], state.docs[p]);
-          return val === v;
+          return op === ">=" ? ms(val) >= ms(v) : val === v;
         }))
         .map(snapOf);
       return { empty: docs.length === 0, docs };
@@ -62,6 +64,7 @@ const fake = vi.hoisted(() => {
       const result = await fn({
         get: (r: any) => r.get(),
         create: (r: any, data: Record<string, any>) => { writes.push(() => createNow(r.path, data)); },
+        set: (r: any, data: Record<string, any>) => { writes.push(() => { state.docs[r.path] = { ...state.docs[r.path], ...data }; }); },
         update: (r: any, data: Record<string, any>) => { writes.push(() => { state.docs[r.path] = { ...state.docs[r.path], ...data }; }); },
       });
       const hook = state.beforeCommit; state.beforeCommit = null; hook?.();
@@ -71,24 +74,39 @@ const fake = vi.hoisted(() => {
     lock = run.catch(() => {});
     return run;
   };
-  return { state, collection, runTransaction };
+  const batch = () => {
+    const ops: (() => void)[] = [];
+    return {
+      set: (r: any, data: Record<string, any>) => { ops.push(() => { state.docs[r.path] = { ...data }; }); },
+      update: (r: any, data: Record<string, any>) => { ops.push(() => { state.docs[r.path] = { ...state.docs[r.path], ...data }; }); },
+      commit: async () => { for (const op of ops) op(); },
+    };
+  };
+  return { state, collection, runTransaction, batch };
 });
 
 vi.mock("firebase-admin", () => ({
   apps: [{}],
   initializeApp: vi.fn(),
-  firestore: Object.assign(() => ({ runTransaction: fake.runTransaction, collection: fake.collection }), {
+  firestore: Object.assign(() => ({ runTransaction: fake.runTransaction, collection: fake.collection, batch: fake.batch }), {
     FieldValue: { delete: () => "<DELETE>", serverTimestamp: () => "<NOW>", arrayUnion: (...v: unknown[]) => ({ arrayUnion: v }) },
     FieldPath: { documentId: () => "__name__" },
     Timestamp: { fromDate: (d: Date) => d, fromMillis: (m: number) => m, now: () => new Date() },
   }),
 }));
 vi.mock("./db", () => ({ appCol: (c: string) => fake.collection(c) }));
+// The only external call on these paths: an MB WAY request to EasyPay.
+const easypay = vi.hoisted(() => ({ createMbwayPayment: vi.fn() }));
+vi.mock("./easypay", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./easypay")>()),
+  createMbwayPayment: easypay.createMbwayPayment,
+}));
 
 import { ensurePartyDeposit } from "./partyDeposit";
 import { onPartyBookingCreated, onPartyBookingStatusNotify, partyEmailId } from "./partyBookings";
 import { createPartyDeposit } from "./billing";
 import { partyDepositBillingId } from "./partyDepositLogic";
+import { requestPartyBooking, getPartyBookingByLink, payPartyDepositByLink } from "./partyPublic";
 
 const { state } = fake;
 
@@ -229,7 +247,9 @@ describe("onPartyBookingStatusNotify", () => {
     });
     expect(mails[0].html).toContain("€201.11");
     expect(mails[0].html).toContain("IVA incluído");
-    expect(mails[0].html).toContain("https://kidclub.pt/client/parties/bk1");
+    const token = state.docs["partyLinks/bk1"].token;
+    expect(token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(mails[0].html).toContain(`https://kidclub.pt/festas/reserva/bk1?t=${token}`);
     expect(mails[0].html).toContain("Pagamentos");
     expect(mails[0].html).toContain("às 15:00");
   });
@@ -293,17 +313,29 @@ describe("onPartyBookingStatusNotify", () => {
 });
 
 describe("onPartyBookingCreated", () => {
-  it("emails the admin once per booking, com IVA total and the admin link", async () => {
+  it("emails the admin and the parent once per booking; the parent's links to the booking page", async () => {
     await created("bk1", booking());
     await created("bk1", booking()); // redelivered
     const mails = outbox();
-    expect(mails).toHaveLength(1);
-    expect(mails[0]).toMatchObject({ id: partyEmailId("request", "bk1"), to: "admin@kidclub.pt", subject: "Novo pedido — Festa: Rita Silva" });
-    expect(mails[0].html).toContain("€402.21");
-    expect(mails[0].html).toContain("sem IVA €327.00");
-    expect(mails[0].html).toContain("10 × Cachorro");
-    expect(mails[0].html).toContain("https://kidclub.pt/admin/parties");
+    expect(mails).toHaveLength(2);
+    const admin = mails.find(m => m.id === partyEmailId("request", "bk1"))!;
+    expect(admin).toMatchObject({ to: "admin@kidclub.pt", subject: "Novo pedido — Festa: Rita Silva" });
+    expect(admin.html).toContain("€402.21");
+    expect(admin.html).toContain("sem IVA €327.00");
+    expect(admin.html).toContain("10 × Cachorro");
+    expect(admin.html).toContain("https://kidclub.pt/admin/parties");
+    const parent = mails.find(m => m.id === partyEmailId("received", "bk1"))!;
+    expect(parent).toMatchObject({ to: "ana@example.com", subject: "Pedido de festa recebido — Rita Silva" });
+    expect(parent.html).toContain("€402.21");
+    expect(parent.html).toContain("€201.11");
+    expect(parent.html).toContain(`https://kidclub.pt/festas/reserva/bk1?t=${state.docs["partyLinks/bk1"].token}`);
     expect(bills()).toHaveLength(0);
+  });
+
+  it("keeps the token a public request already stored, so the emailed link matches the one the browser got", async () => {
+    state.docs["partyLinks/bk1"] = { token: "tok-from-request", bookingId: "bk1" };
+    await created("bk1", booking());
+    expect(outbox().find(m => m.id === partyEmailId("received", "bk1"))!.html).toContain("?t=tok-from-request");
   });
 });
 
@@ -336,5 +368,164 @@ describe("createPartyDeposit (callable)", () => {
     state.docs["bookings/bk1"] = booking({ status: "pending" });
     await expect(callDeposit("parent-uid", "bk1")).rejects.toMatchObject({ code: "failed-precondition" });
     expect(bills()).toHaveLength(0);
+  });
+});
+
+// ── Parties without an account (partyPublic.ts) ──────────────────────────────
+
+const partyConfig = {
+  partyTypes: [{ name: "Festa B", basePrice: 250, includedKids: 15, pricePerExtraChild: 10 }],
+  extras: [{ name: "Cachorro", price: 2.5, perUnit: true }, { name: "Pinhata", price: 30 }],
+};
+const inDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const request = (overrides: Record<string, any> = {}) => ({
+  parentName: "Marta Costa",
+  email: "  Marta.Costa@Example.com ",
+  phone: "912 345 678",
+  childName: "Tomás",
+  childAge: 7,
+  partyType: "Festa B",
+  date: inDays(30),
+  time: "15:00",
+  numKids: 17,
+  extras: ["Cachorro", "Não existe"],
+  extrasDetail: { Cachorro: 10 },
+  total: 1, // whatever the page sends, the server prices it
+  ...overrides,
+});
+const callRequest = (data: Record<string, any>) => (requestPartyBooking as any).run({ data });
+const callView = (bookingId: string, token: string) => (getPartyBookingByLink as any).run({ data: { bookingId, token } });
+const callPay = (bookingId: string, token: string, phone = "912345678") =>
+  (payPartyDepositByLink as any).run({ data: { bookingId, token, phone } });
+
+describe("requestPartyBooking (public form)", () => {
+  beforeEach(() => { state.docs["config/party"] = partyConfig; });
+
+  it("saves a pending booking priced by the server, a lead family with no owner, and the booking link", async () => {
+    const res = await callRequest(request());
+    expect(res).toMatchObject({ ok: true });
+    const b = state.docs[`bookings/${res.bookingId}`];
+    // 250 + 2 extra kids × 10 + 10 × 2.5 = 295; the unknown extra is dropped.
+    expect(b).toMatchObject({
+      status: "pending", source: "public", total: 295, userId: "", email: "marta.costa@example.com",
+      extras: ["Cachorro"], extrasDetail: { Cachorro: 10 }, childName: "Tomás", childAge: 7, phone: "912345678",
+    });
+    const fam = state.docs[`families/${b.familyId}`];
+    expect(fam).toMatchObject({ source: "party_request", primaryContact: { email: "marta.costa@example.com", userId: "", name: "Marta Costa" } });
+    expect(state.docs[`partyLinks/${res.bookingId}`].token).toBe(res.token);
+  });
+
+  it("joins the existing family with that email, owned by its parent, and makes no new family", async () => {
+    state.docs["families/famX"] = { primaryContact: { email: "marta.costa@example.com", userId: "marta-uid" } };
+    const familiesBefore = docsIn("families").length;
+    const res = await callRequest(request());
+    expect(state.docs[`bookings/${res.bookingId}`]).toMatchObject({ familyId: "famX", userId: "marta-uid" });
+    expect(docsIn("families")).toHaveLength(familiesBefore);
+  });
+
+  it("stores a NIF on a new family only, never over an existing family's", async () => {
+    const res = await callRequest(request({ nif: "123 456 789" }));
+    expect(state.docs[`families/${state.docs[`bookings/${res.bookingId}`].familyId}`].nif).toBe("123456789");
+    await expect(callRequest(request({ email: "x@example.com", nif: "12345" }))).rejects.toMatchObject({ code: "invalid-argument" });
+  });
+
+  it("a filled honeypot gets a normal answer and saves nothing", async () => {
+    const familiesBefore = docsIn("families").length;
+    expect(await callRequest(request({ website: "http://spam" }))).toEqual({ ok: true });
+    expect(docsIn("bookings")).toHaveLength(0);
+    expect(docsIn("families")).toHaveLength(familiesBefore);
+  });
+
+  it("refuses bad input with a message the page can show", async () => {
+    await expect(callRequest(request({ email: "nope" }))).rejects.toMatchObject({ code: "invalid-argument", message: "Indique um email válido." });
+    await expect(callRequest(request({ date: inDays(-1) }))).rejects.toMatchObject({ message: "A data da festa já passou." });
+    await expect(callRequest(request({ partyType: "Festa Z" }))).rejects.toMatchObject({ message: "Escolha o tipo de festa." });
+    await expect(callRequest(request({ childName: " " }))).rejects.toMatchObject({ message: "Indique o nome da criança." });
+    expect(docsIn("bookings")).toHaveLength(0);
+  });
+
+  it("caps requests per email per day", async () => {
+    for (let i = 0; i < 3; i++) state.docs[`bookings/old${i}`] = { email: "marta.costa@example.com", createdAt: new Date() };
+    await expect(callRequest(request())).rejects.toMatchObject({ code: "resource-exhausted" });
+    // Two days ago doesn't count.
+    for (let i = 0; i < 3; i++) state.docs[`bookings/old${i}`].createdAt = new Date(Date.now() - 2 * 86400000);
+    await expect(callRequest(request())).resolves.toMatchObject({ ok: true });
+  });
+
+  it("caps public requests from everyone per day; bookings made in the app don't count", async () => {
+    for (let i = 0; i < 20; i++) state.docs[`bookings/p${i}`] = { email: `p${i}@example.com`, source: "public", createdAt: new Date() };
+    state.docs["bookings/app1"] = { email: "app@example.com", createdAt: new Date() };
+    await expect(callRequest(request())).rejects.toMatchObject({ code: "resource-exhausted" });
+    delete state.docs["bookings/p0"];
+    await expect(callRequest(request())).resolves.toMatchObject({ ok: true });
+  });
+
+  it("refuses when parties aren't configured", async () => {
+    delete state.docs["config/party"];
+    await expect(callRequest(request())).rejects.toMatchObject({ code: "failed-precondition" });
+  });
+});
+
+describe("booking link (getPartyBookingByLink / payPartyDepositByLink)", () => {
+  beforeEach(() => {
+    easypay.createMbwayPayment.mockReset();
+    easypay.createMbwayPayment.mockResolvedValue({ id: "ep-1", method: { status: "pending" } });
+    state.docs["partyLinks/bk1"] = { token: "good-token", bookingId: "bk1" };
+  });
+
+  it("a wrong token or booking id gets the same not-found", async () => {
+    state.docs["bookings/bk1"] = booking();
+    await expect(callView("bk1", "bad-token")).rejects.toMatchObject({ code: "not-found" });
+    await expect(callView("bk2", "good-token")).rejects.toMatchObject({ code: "not-found" });
+    await expect(callView("../bk1", "good-token")).rejects.toMatchObject({ code: "not-found" });
+  });
+
+  it("shows the booking and what the deposit will be, without the email", async () => {
+    state.docs["bookings/bk1"] = booking();
+    const v = await callView("bk1", "good-token");
+    expect(v).toMatchObject({ status: "pending", childName: "Rita Silva", total: 402.21, depositAmount: 201.11, depositStatus: "none" });
+    expect(JSON.stringify(v)).not.toContain("ana@example.com");
+  });
+
+  it("won't take a payment before the booking is confirmed", async () => {
+    state.docs["bookings/bk1"] = booking();
+    await expect(callPay("bk1", "good-token")).rejects.toMatchObject({ code: "failed-precondition" });
+    expect(easypay.createMbwayPayment).not.toHaveBeenCalled();
+    expect(bills()).toHaveLength(0);
+  });
+
+  it("confirmed with no bill yet (confirmed before this shipped): creates it, then asks EasyPay once", async () => {
+    state.docs["bookings/bk1"] = booking({ status: "confirmed" });
+    state.docs["families/fam1"] = family();
+    await expect(callPay("bk1", "good-token")).resolves.toEqual({ ok: true });
+    expect(easypay.createMbwayPayment).toHaveBeenCalledTimes(1);
+    expect(easypay.createMbwayPayment.mock.calls[0][1]).toBe(201.11);
+    expect(bills()).toHaveLength(1);
+    expect(bills()[0]).toMatchObject({ id: partyDepositBillingId("bk1"), status: "processing", easypayId: "ep-1", userId: "parent-uid", createdVia: "payPartyDepositByLink" });
+    expect((await callView("bk1", "good-token")).depositStatus).toBe("processing");
+  });
+
+  it("a paid deposit isn't charged again", async () => {
+    state.docs["bookings/bk1"] = booking({ status: "confirmed" });
+    state.docs[`billing/${partyDepositBillingId("bk1")}`] = { bookingId: "bk1", type: "party_deposit", status: "invoiced", total: 201.11 };
+    await expect(callPay("bk1", "good-token")).rejects.toMatchObject({ code: "failed-precondition" });
+    expect(easypay.createMbwayPayment).not.toHaveBeenCalled();
+    expect((await callView("bk1", "good-token")).depositStatus).toBe("paid");
+  });
+
+  it("at most 5 MB WAY requests per link per hour", async () => {
+    state.docs["bookings/bk1"] = booking({ status: "confirmed" });
+    state.docs[`billing/${partyDepositBillingId("bk1")}`] = { bookingId: "bk1", type: "party_deposit", status: "pending", total: 201.11 };
+    for (let i = 0; i < 5; i++) {
+      await callPay("bk1", "good-token");
+      state.docs[`billing/${partyDepositBillingId("bk1")}`].status = "failed"; // refused on the phone, tries again
+    }
+    await expect(callPay("bk1", "good-token")).rejects.toMatchObject({ code: "resource-exhausted" });
+    expect(easypay.createMbwayPayment).toHaveBeenCalledTimes(5);
+  });
+
+  it("asks for a phone number", async () => {
+    state.docs["bookings/bk1"] = booking({ status: "confirmed" });
+    await expect(callPay("bk1", "good-token", "12")).rejects.toMatchObject({ code: "invalid-argument" });
   });
 });

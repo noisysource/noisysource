@@ -801,10 +801,25 @@ export const initiateMbwayPayment = onCall(
 
     console.log(`[MBWay] initiate uid=${uid} billingId=${billingId} phone=${String(phone).slice(0, 3)}***`);
 
-    const billingRef = appCol("billing").doc(billingId);
-    const billing = (await billingRef.get()).data();
+    const billing = (await appCol("billing").doc(billingId).get()).data();
     if (!billing) throw new HttpsError("not-found", "Billing record not found");
     if (billing.userId !== uid) throw new HttpsError("permission-denied", "Unauthorized");
+    return startMbwayPayment(billingId, billing, phone);
+  }
+);
+
+/**
+ * Starts an MB WAY payment for a bill whose caller is already checked: the bill
+ * must still be unpaid, earlier months paid, and at least €0.50. Used by
+ * initiateMbwayPayment (signed-in parent) and payPartyDepositByLink
+ * (partyPublic.ts, a party deposit paid from its email link).
+ */
+export async function startMbwayPayment(
+  billingId: string,
+  billing: FirebaseFirestore.DocumentData,
+  phone: string,
+): Promise<{ easypayId: string }> {
+    const billingRef = appCol("billing").doc(billingId);
     if (!UNPAID_STATUSES.has(billing.status)) throw new HttpsError("failed-precondition", `Already processed (status=${billing.status})`);
     await assertEarlierMonthsPaid(billingId, billing);
     if (!billing.total || billing.total < 0.5) throw new HttpsError("failed-precondition", `Billing total is €${(billing.total ?? 0).toFixed(2)} — minimum is €0.50`);
@@ -853,8 +868,7 @@ export const initiateMbwayPayment = onCall(
 
     console.log(`[MBWay] billing ${billingId} → processing easypayId=${res.id}`);
     return { easypayId: res.id };
-  }
-);
+}
 
 // ── Client initiates Multibanco payment ──────────────────────────────────────
 

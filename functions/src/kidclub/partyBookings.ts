@@ -4,12 +4,15 @@ import { appCol } from "./db";
 import { ADMIN_EMAIL, APP_URL, emailWrapper } from "./notifications";
 import { familyBillingInfo } from "./familyBilling";
 import { ensurePartyDeposit, PartyDepositResult } from "./partyDeposit";
+import { ensurePartyLinkToken } from "./partyLinks";
+import { partyLinkUrl } from "./partyRequestLogic";
 import { partyDate, partyPriceBreakdown, partyStatusEvent, PARTY_VAT_CODE } from "./partyDepositLogic";
 
 // Party bookings (_apps/arcoiris/bookings): the admin is told about a new
-// request; when the admin confirms one, the 50% deposit bill is created and the
-// parent is emailed how to pay it; a rejected request emails the parent the
-// reason. Same outbox and layout as the study room / transport notices in
+// request and the parent gets a "pedido recebido"; when the admin confirms one,
+// the 50% deposit bill is created and the parent is emailed how to pay it; a
+// rejected request emails the parent the reason. Every parent email links to
+// the booking's secret page (partyLinks.ts), which works without an account. Same outbox and layout as the study room / transport notices in
 // notifications.ts. No external call here: Firestore and the email outbox only.
 
 if (!admin.apps.length) admin.initializeApp();
@@ -18,7 +21,7 @@ const PAID_STATUSES = new Set(["paid", "invoiced"]);
 
 /** emailOutbox doc id of a booking's notice: at most one of each kind per
  *  booking, so a redelivered trigger event never emails twice. */
-export const partyEmailId = (kind: "request" | "confirmed" | "rejected", bookingId: string) =>
+export const partyEmailId = (kind: "request" | "received" | "confirmed" | "rejected", bookingId: string) =>
   `party_${kind}_${bookingId}`;
 
 function escapeHtml(v: unknown): string {
@@ -79,22 +82,21 @@ export function buildPartyRequestAdminEmail(b: FirebaseFirestore.DocumentData): 
 }
 
 export function buildPartyConfirmedEmail(
-  bookingId: string,
   b: FirebaseFirestore.DocumentData,
   deposit: Pick<PartyDepositResult, "total" | "status"> | null,
+  partyUrl: string,
 ): string {
   // The bill's own amount when there is one (a deposit created before a price
   // change keeps its amount); otherwise what the party page will bill.
   const amount = deposit ? deposit.total : partyPriceBreakdown(b.total).deposit;
   const paid = !!deposit && PAID_STATUSES.has(deposit.status);
-  const partyUrl = `${APP_URL}/client/parties/${encodeURIComponent(bookingId)}`;
   const name = escapeHtml(String(b.parentName ?? "").trim());
   const payBlock = paid
     ? `<p style="font-size:14px;color:#374151;">O sinal de <strong>${eur(amount)}</strong> já está pago. O valor restante é pago no dia da festa.</p>
     ${button(partyUrl, "Ver reserva")}`
     : `<p style="font-size:14px;color:#374151;">Para garantir a data, só falta pagar o sinal de 50%: <strong>${eur(amount)}</strong> (IVA incluído). O valor restante é pago no dia da festa.</p>
     ${button(partyUrl, "Pagar sinal")}
-    ${deposit ? `<p style="font-size:13px;color:#6b7280;margin-top:20px;">Também encontra este pagamento na sua área de cliente, em Pagamentos.</p>` : ""}`;
+    <p style="font-size:13px;color:#6b7280;margin-top:20px;">Paga por MB WAY, nesta página, sem precisar de conta.${deposit && b.userId ? " Também encontra este pagamento na sua área de cliente, em Pagamentos." : ""}</p>`;
   const body = `
     <p style="font-size:16px;color:#374151;">Olá${name ? `, <strong>${name}</strong>` : ""},</p>
     <p style="font-size:16px;color:#374151;">A festa de <strong>${escapeHtml(b.childName) || "aniversário"}</strong> está confirmada!</p>
@@ -119,9 +121,28 @@ export function buildPartyRejectedEmail(b: FirebaseFirestore.DocumentData): stri
     <p style="font-size:16px;color:#374151;">Olá${name ? `, <strong>${name}</strong>` : ""},</p>
     <p style="font-size:16px;color:#374151;">Lamentamos, mas não foi possível confirmar a festa de <strong>${escapeHtml(b.childName) || "aniversário"}</strong> para ${escapeHtml(whenText(b))}.</p>
     ${reasonBlock}
-    <p style="font-size:14px;color:#6b7280;">Pode fazer um novo pedido para outra data na sua área de cliente. Se tiver dúvidas, entre em contacto connosco por email ou telefone.</p>
-    ${button(`${APP_URL}/client/parties/new`, "Fazer novo pedido")}`;
+    <p style="font-size:14px;color:#6b7280;">Pode fazer um novo pedido para outra data. Se tiver dúvidas, entre em contacto connosco por email ou telefone.</p>
+    ${button(`${APP_URL}/festas`, "Fazer novo pedido")}`;
   return emailWrapper("Reserva de festa", body);
+}
+
+export function buildPartyReceivedEmail(b: FirebaseFirestore.DocumentData, partyUrl: string): string {
+  const price = partyPriceBreakdown(b.total);
+  const name = escapeHtml(String(b.parentName ?? "").trim());
+  const body = `
+    <p style="font-size:16px;color:#374151;">Olá${name ? `, <strong>${name}</strong>` : ""},</p>
+    <p style="font-size:16px;color:#374151;">Recebemos o seu pedido para a festa de <strong>${escapeHtml(b.childName) || "aniversário"}</strong>.</p>
+    <div style="background:#fdf2f8;border:1px solid #fbcfe8;border-radius:8px;padding:16px;margin:24px 0;">
+      <p style="margin:0;font-size:14px;color:#9d174d;line-height:1.6;">
+        🎈 ${escapeHtml(b.partyType) || "Festa"}<br/>
+        📅 ${escapeHtml(whenText(b))}<br/>
+        👧 ${escapeHtml(b.numKids ?? "—")} crianças<br/>
+        💶 ${eur(price.total)} (IVA incluído)
+      </p>
+    </div>
+    <p style="font-size:14px;color:#374151;">Vamos confirmar a disponibilidade e enviamos-lhe um email com a resposta. Depois de confirmada, a reserva fica garantida com o pagamento de um sinal de 50% (${eur(price.deposit)}), por MB WAY.</p>
+    ${button(partyUrl, "Ver pedido")}`;
+  return emailWrapper("Pedido de festa recebido", body);
 }
 
 // ── Outbox ────────────────────────────────────────────────────────────────────
@@ -173,6 +194,18 @@ export const onPartyBookingCreated = onDocumentCreated(
       subject: `Novo pedido — Festa: ${data.childName ?? ""}`,
       html: buildPartyRequestAdminEmail(data),
     }, { bookingId, familyId: data.familyId });
+
+    const to = await parentEmail(data);
+    if (!to) {
+      console.warn(`[party] booking ${bookingId} created, but neither the booking nor the family has an email: parent not told it was received`);
+      return;
+    }
+    const link = partyLinkUrl(APP_URL, bookingId, await ensurePartyLinkToken(bookingId));
+    await queueEmailOnce(partyEmailId("received", bookingId), {
+      to,
+      subject: `Pedido de festa recebido — ${data.childName ?? ""}`,
+      html: buildPartyReceivedEmail(data, link),
+    }, { bookingId, familyId: data.familyId });
   },
 );
 
@@ -201,10 +234,11 @@ export const onPartyBookingStatusNotify = onDocumentUpdated(
 
       const to = await parentEmail(after);
       if (to) {
+        const link = partyLinkUrl(APP_URL, bookingId, await ensurePartyLinkToken(bookingId));
         await queueEmailOnce(partyEmailId("confirmed", bookingId), {
           to,
           subject: `Festa confirmada — ${after.childName ?? ""}`,
-          html: buildPartyConfirmedEmail(bookingId, after, deposit),
+          html: buildPartyConfirmedEmail(after, deposit, link),
         }, { bookingId, familyId: after.familyId, billingId: deposit?.billingId });
       } else {
         console.warn(`[party] booking ${bookingId} confirmed, but neither the booking nor the family has an email: parent not notified`);
