@@ -263,6 +263,22 @@ service cloud.firestore {
         allow write: if isRainbowAdmin() || isOwner();
       }
 
+      // One-off events (Halloween, strike days...): functions/src/kidclub/adhocEvents.ts.
+      // Anyone, signed in or not, reads a published event (the public /eventos page).
+      // No client writes: seat counts (days[].taken) change only inside the
+      // functions' transactions, and admins edit through saveAdhocEvent.
+      match /adhocEvents/{eventId} {
+        allow read: if resource.data.published == true || isRainbowAdmin() || isOwner();
+      }
+
+      // Their registrations. Guests have no account and never read these
+      // directly (they go through callables with the link token); a family
+      // reads its own. Written by Cloud Functions only.
+      match /adhocEventRegistrations/{registrationId} {
+        allow read: if isRainbowAdmin() || isOwner();
+        allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      }
+
       // Transport planner versions (route snapshots saved by admin)
       match /transportRoutes/{doc} {
         allow read, write: if isRainbowAdmin() || isOwner();

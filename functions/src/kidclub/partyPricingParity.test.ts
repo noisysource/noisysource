@@ -49,7 +49,8 @@ describe("party prices after moving to lib/vat.ts", () => {
 
 describe("KidClub VAT per service", () => {
   it("matches the Vendus products (invoice FR 01P2026/202, 2026-10-12)", () => {
-    expect(KIDCLUB_VAT).toEqual({ study: 23, transport: 6, enrollment: 23, insurance: 23, party: 23 });
+    // event: one-off events (AdhocEvent.ts) are invoiced as PRODUCT_STUDY, like camps and party deposits.
+    expect(KIDCLUB_VAT).toEqual({ study: 23, transport: 6, enrollment: 23, insurance: 23, party: 23, event: 23 });
   });
 
   it("takes the VAT out of a price, it doesn't add it", () => {

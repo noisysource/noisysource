@@ -1,14 +1,15 @@
 import * as admin from "firebase-admin";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
-import { createInvoice, createOrUpdateClient, VendusDocument, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
+import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, VendusDocument, VendusLineItem, VendusClient, PRODUCT_STUDY, PRODUCT_TRANSPORT, PRODUCT_ENROLLMENT_FEE, PRODUCT_INSURANCE, PAYMENT_METHOD_MULTIBANCO, PAYMENT_METHOD_TRANSFERENCIA } from "./vendus";
 import { createMbwayPayment, createMultibancoPayment, createCardPayment, EasypayWebhookPayload } from "./easypay";
 import { appCol } from "./db";
 import { reconcileService, studyPerDayRate, resolveSchoolName, contractCoversPeriod, buildReconciliationConfig, manualDiscountPctFor, ReservationEventLite, SubscriptionForReconciliation, ReconciliationConfig } from "./reconciliation";
 import { FAMILY_PAYMENT_METHODS, familyPaymentMethod, familyBillingInfo } from "./familyBilling";
 import { ensurePartyDeposit } from "./partyDeposit";
-import { familyInvoiceNif } from "./vendusClientLogic";
+import { familyInvoiceNif, realNif } from "./vendusClientLogic";
 import { retryInvoiceRefusal } from "./retryInvoiceLogic";
+import { eventLineId } from "./adhocEventLogic";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -270,8 +271,23 @@ export async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData
     );
   }
 
-  const { familyId, userId, lineItems, total, billingName, billingEmail, periodLabel } = billing;
-  console.log(`[Vendus] billing ok — family=${familyId} total=${total} period=${periodLabel}`);
+  const { familyId, total, billingName, billingEmail, periodLabel } = billing;
+  console.log(`[Vendus] billing ok — family=${familyId || "none"} total=${total} period=${periodLabel}`);
+
+  // A one-off event's guest has no family (adhocEvents.ts): the NIF they gave,
+  // if any, is on the bill itself, and their client is found or created by
+  // that NIF without touching an existing one (findOrCreateClientByNif).
+  // Event bills only: any other bill without a family still fails loudly below.
+  if (billing.type === "event" && !familyId) {
+    const guestNif = realNif(billing.guestNif);
+    let guestClient: VendusClient | null = null;
+    if (guestNif) {
+      const id = await findOrCreateClientByNif({ name: billingName, email: billingEmail, fiscal_id: guestNif }, `event-guest:${billing.eventRegistrationId ?? "?"}`);
+      guestClient = { id };
+    }
+    console.log(`[Vendus] guest bill (no family) — ${guestClient ? `client ${guestClient.id}` : "Consumidor final"}`);
+    return createAndCheckInvoice(billing, guestClient);
+  }
 
   const famSnap = await appCol("families").doc(familyId).get();
   const fam = famSnap.data() ?? {};
@@ -301,16 +317,23 @@ export async function issueVendusInvoice(billing: FirebaseFirestore.DocumentData
   } else {
     console.log(`[Vendus] family ${familyId} has no NIF — invoicing Consumidor final, no client (ignoring vendusClientId=${fam.vendusClientId ?? "none"})`);
   }
-  const isCampBilling = billing.type === "camp_deposit" || billing.type === "camp_balance";
-  const vendusProductId = (title: string): number => {
-    if (isCampBilling) return PRODUCT_STUDY;
-    if (title.startsWith("Transporte")) return PRODUCT_TRANSPORT;
-    if (title.startsWith("Taxa de Inscrição")) return PRODUCT_ENROLLMENT_FEE;
-    if (title.startsWith("Seguro")) return PRODUCT_INSURANCE;
+  return createAndCheckInvoice(billing, vendusClient);
+}
+
+async function createAndCheckInvoice(billing: FirebaseFirestore.DocumentData, vendusClient: VendusClient | null): Promise<{ vendusDoc: VendusDocument; consumidorFinal: boolean }> {
+  const { lineItems, total, periodLabel } = billing;
+  const isCampBilling = billing.type === "camp_deposit" || billing.type === "camp_balance" || billing.type === "event";
+  // One-off event lines (type "event") are PRODUCT_STUDY (23%) like camps,
+  // whatever the event is called — even a name starting with "Transporte".
+  const vendusProductId = (li: { title: string; type?: string }): number => {
+    if (isCampBilling || li.type === "event") return PRODUCT_STUDY;
+    if (li.title.startsWith("Transporte")) return PRODUCT_TRANSPORT;
+    if (li.title.startsWith("Taxa de Inscrição")) return PRODUCT_ENROLLMENT_FEE;
+    if (li.title.startsWith("Seguro")) return PRODUCT_INSURANCE;
     return PRODUCT_STUDY;
   };
   const items: VendusLineItem[] = lineItems.map((li: any) => ({
-    id: vendusProductId(li.title),
+    id: vendusProductId(li),
     title: li.title,
     qty: 1,
     gross_price: li.amount,
@@ -346,6 +369,11 @@ export const invoiceReadyEmailId = (vendusId: number) => `invoiceReady_${vendusI
 async function queueInvoiceReadyEmail(billingId: string, billing: FirebaseFirestore.DocumentData, vendusDoc: VendusDocument, consumidorFinal: boolean): Promise<void> {
   if (!billing.billingEmail) return;
   try {
+    // A one-off event's guest has no client area: their link is the
+    // registration's own page, where the invoice can be downloaded.
+    const guestLink = !billing.familyId && billing.eventRegistrationId
+      ? await adhocRegistrationLink(billing.eventRegistrationId)
+      : null;
     await appCol("emailOutbox").doc(invoiceReadyEmailId(vendusDoc.id)).create({
       to: billing.billingEmail,
       subject: `Fatura disponível — ${COMPANY_NAME} — ${billing.periodLabel}`,
@@ -355,6 +383,7 @@ async function queueInvoiceReadyEmail(billingId: string, billing: FirebaseFirest
         total: Number(billing.total ?? 0),
         invoiceNumber: vendusDoc.number,
         consumidorFinal,
+        guestLink,
       }),
       status: "queued",
       billingId,
@@ -377,8 +406,8 @@ export interface BillingLineItem {
   title: string;
   amount: number;               // net, after discounts AND absence credit
   grossAmount: number;          // before discounts — the flat monthly price (scheduleLength x rate x activeWeeksInPattern), not a count of this period's occurrences
-  subscriptionId: string;
-  type: "study" | "transport" | "enrollment";
+  subscriptionId: string;           // event lines: eventLineId(registrationId, childIndex)
+  type: "study" | "transport" | "enrollment" | "event";
   appliedDiscounts: AppliedDiscount[]; // kept for type compatibility; study/transport line items no longer populate this — see multiTripDiscountAmount etc. below
   scheduleDays?: string[];      // weekday names this line item is actually billed for — lets the admin UI show real service days
   legacyPricing?: boolean;       // billed on the grandfathered flat model (institutionalDiscountPct = sum of the sub's discounts)
@@ -408,8 +437,31 @@ interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules
 // See legacyFlatPctFor in computeLineItems. Midnight Lisbon time.
 const LEGACY_PRICING_CUTOFF = new Date("2026-10-01T00:00:00+01:00");
 
+// One-off events a family chose to put on its monthly bill (adhocEvents.ts).
+// Their lines were priced and frozen at signup, so they're copied as they are;
+// a registration cancelled later simply stops matching, and the next recompute
+// drops its lines from a bill that can still change.
+async function fetchEventLines(familyId: string | undefined, period: ReturnType<typeof periodForDate>): Promise<BillingLineItem[]> {
+  if (!familyId) return [];
+  const snap = await appCol("adhocEventRegistrations")
+    .where("familyId", "==", familyId)
+    .where("billingPeriod", "==", period.isoDate.slice(0, 7))
+    .get();
+  const regs = snap.docs
+    .filter(d => d.data().payment === "monthly" && d.data().status === "confirmed")
+    .sort((a, b) => (a.data().createdAt?.toMillis?.() ?? 0) - (b.data().createdAt?.toMillis?.() ?? 0) || a.id.localeCompare(b.id));
+  const out: BillingLineItem[] = [];
+  for (const d of regs) {
+    (d.data().lines ?? []).forEach((l: { title: string; amount: number }, i: number) => {
+      const amount = Math.round(Number(l.amount ?? 0) * 100) / 100;
+      out.push({ title: l.title, amount, grossAmount: amount, subscriptionId: eventLineId(d.id, i), type: "event", appliedDiscounts: [] });
+    });
+  }
+  return out;
+}
+
 async function computeLineItems(
-  group: { study: any[]; transport: any[] },
+  group: { familyId?: string; study: any[]; transport: any[] },
   period: ReturnType<typeof periodForDate>,
   configs: BillingConfigs,
   existingLineItems: BillingLineItem[] = [],
@@ -615,6 +667,11 @@ async function computeLineItems(
     }
   }
 
+  for (const li of await fetchEventLines(group.familyId, period)) {
+    lineItems.push(li);
+    total += li.amount;
+  }
+
   return { lineItems, total: Math.round(total * 100) / 100, newlyBilledEnrollmentFeeSubs };
 }
 
@@ -650,7 +707,7 @@ async function buildBillingRecord(
   configs: BillingConfigs,
   opts: { docId?: string; sendEmail?: boolean } = {},
 ): Promise<{ id: string; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } | undefined> {
-  const { familyId, study, transport } = group;
+  const { familyId } = group;
   const { docId, sendEmail = !dryRun } = opts;
 
   const famSnap = await appCol("families").doc(familyId).get();
@@ -664,7 +721,7 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = familyPaymentMethod(fam) ?? "mbway";
 
-  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems({ study, transport }, period, configs, []);
+  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, []);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -811,8 +868,9 @@ export const initiateMbwayPayment = onCall(
 /**
  * Starts an MB WAY payment for a bill whose caller is already checked: the bill
  * must still be unpaid, earlier months paid, and at least €0.50. Used by
- * initiateMbwayPayment (signed-in parent) and payPartyDepositByLink
- * (partyPublic.ts, a party deposit paid from its email link).
+ * initiateMbwayPayment (signed-in parent), payPartyDepositByLink
+ * (partyPublic.ts, a party deposit paid from its email link) and
+ * payAdhocRegistration (adhocEvents.ts, a one-off event paid from its link).
  */
 export async function startMbwayPayment(
   billingId: string,
@@ -1405,7 +1463,10 @@ export const backfillBillingSchedules = onCall(
       const familyId = data.familyId;
       const periodStart: Date | undefined = data.periodStart?.toDate?.();
       const isFuturePeriod = !!periodStart && periodStart > startOfCurrentMonth;
-      if (!familiesWithActiveSubs.has(familyId) && isFuturePeriod) {
+      // A one-off event put on that month's bill (fetchEventLines) is billable
+      // without any subscription: leave it to onAdhocRegistrationBillingSync.
+      const hasEventLines = (data.lineItems ?? []).some((li: any) => li?.type === "event");
+      if (!familiesWithActiveSubs.has(familyId) && isFuturePeriod && !hasEventLines) {
         await doc.ref.update({ status: "cancelled", autoCancelled: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         cancelled++;
       }
@@ -1536,6 +1597,23 @@ export const onReservationEventBillingSync = onDocumentWritten(
   }
 );
 
+// A one-off event put on the monthly bill (adhocEvents.ts) is a billing fact
+// too: confirming or cancelling it, or moving it to another month, recomputes
+// that family's bills, which pick its lines up in fetchEventLines. Pay-now
+// registrations have their own bill and never touch the monthly ones.
+export const onAdhocRegistrationBillingSync = onDocumentWritten(
+  { document: "_apps/arcoiris/adhocEventRegistrations/{registrationId}", region: "europe-west3" },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    const monthly = (d: FirebaseFirestore.DocumentData | undefined) => d?.payment === "monthly" && !!d?.familyId;
+    if (!monthly(before) && !monthly(after)) return;
+    if (before && after && before.status === after.status && before.billingPeriod === after.billingPeriod) return;
+    const familyId: string = after?.familyId ?? before?.familyId;
+    await autoCreateBillingSchedule(familyId);
+  }
+);
+
 // ── Email templates ───────────────────────────────────────────────────────────
 
 function buildPaymentNoticeEmail(opts: {
@@ -1587,6 +1665,13 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]!));
 }
 
+/** The page a one-off event registration is followed on, token included (adhocEvents.ts). */
+export async function adhocRegistrationLink(registrationId: string): Promise<string | null> {
+  const token = (await appCol("adhocEventRegistrations").doc(registrationId).get()).data()?.accessToken;
+  const appUrl = process.env.APP_URL || "https://kidclub.pt"; // the dev site on kidclub-dev (functions/.env.kidclub-dev)
+  return typeof token === "string" && token ? `${appUrl}/eventos/inscricao/${registrationId}?t=${encodeURIComponent(token)}` : null;
+}
+
 // Same layout as buildPaymentNoticeEmail. A Consumidor final invoice (no NIF)
 // also asks for the NIF for next time.
 function buildInvoiceReadyEmail(opts: {
@@ -1595,6 +1680,7 @@ function buildInvoiceReadyEmail(opts: {
   total: number;
   invoiceNumber: string;
   consumidorFinal: boolean;
+  guestLink?: string | null; // one-off event guest: no client area, link to the registration
 }): string {
   const clientName = escapeHtml(opts.clientName);
   const periodLabel = escapeHtml(opts.periodLabel);
@@ -1609,11 +1695,11 @@ function buildInvoiceReadyEmail(opts: {
 </td></tr>
 <tr><td style="padding:32px 40px;">
   <p style="font-size:16px;color:#374151;">Olá${clientName ? `, <strong>${clientName}</strong>` : ""},</p>
-  <p style="font-size:14px;color:#6b7280;">Recebemos o pagamento de <strong>${periodLabel}</strong> (€${opts.total.toFixed(2)}). A fatura <strong>${invoiceNumber}</strong> está disponível na sua área de cliente, em Pagamentos.</p>
+  <p style="font-size:14px;color:#6b7280;">Recebemos o pagamento de <strong>${periodLabel}</strong> (€${opts.total.toFixed(2)}). A fatura <strong>${invoiceNumber}</strong> está disponível ${opts.guestLink ? "na página da sua inscrição" : "na sua área de cliente, em Pagamentos"}.</p>
   <p style="text-align:center;margin:28px 0;">
-    <a href="https://kidclub.pt/client/payments" style="background:#4f46e5;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">Ver fatura</a>
+    <a href="${opts.guestLink ? escapeHtml(opts.guestLink) : "https://kidclub.pt/client/payments"}" style="background:#4f46e5;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">Ver fatura</a>
   </p>
-  ${opts.consumidorFinal ? `<p style="font-size:12px;color:#9ca3af;">Esta fatura foi emitida sem NIF (Consumidor final). Se quiser o seu NIF nas próximas faturas, adicione-o em <a href="https://kidclub.pt/client/account" style="color:#4f46e5;">A minha conta</a>.</p>` : ""}
+  ${opts.consumidorFinal && !opts.guestLink ? `<p style="font-size:12px;color:#9ca3af;">Esta fatura foi emitida sem NIF (Consumidor final). Se quiser o seu NIF nas próximas faturas, adicione-o em <a href="https://kidclub.pt/client/account" style="color:#4f46e5;">A minha conta</a>.</p>` : ""}
 </td></tr>
 <tr><td style="background:#f9fafb;padding:20px 40px;text-align:center;border-top:1px solid #e5e7eb;">
   <p style="margin:0;font-size:12px;color:#9ca3af;">${COMPANY_NAME} · NIF 518942120 · Avenida da Guarda Inglesa, Lote E, Coimbra</p>

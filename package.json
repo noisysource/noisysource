@@ -13,6 +13,8 @@
     "build": "pnpm run -r build",
     "lint": "pnpm -r lint",
     "test:rules:client-errors": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-client-errors.rules-test.cjs\"",
+    "test:emulator:adhoc-events": "pnpm --filter functions build && firebase emulators:exec --only firestore,auth,functions --project demo-kidclub-rules \"node scripts/emulator-tests/kidclub-adhoc-events.emulator-test.cjs\"",
+    "test:rules:adhoc-events": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-adhoc-events.rules-test.cjs\"",
     "clean": "rm -rf dist apps/*/dist packages/*/dist && find . -name '*.tsbuildinfo' -delete && find . -name '*.js' -delete && find . -name '*.js.map' -delete && find . -name '*.d.ts' -delete && find . -name '*.d.ts.map' -delete",
     "deploy": "firebase deploy --project=dev",
     "deploy:prod": "firebase deploy --project=prod",
