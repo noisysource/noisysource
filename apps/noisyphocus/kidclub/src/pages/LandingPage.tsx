@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import SocialShare from '../components/SocialShare';
+import UpcomingEventsBanner from './events/UpcomingEventsBanner';
 
 export default function LandingPage() {
   const [lang, setLang] = useState<'pt' | 'en'>('pt');
@@ -16,6 +17,8 @@ export default function LandingPage() {
         : 'Unique birthday parties with entertainment, games and fun for all ages.',
       color: 'bg-pink-50 border-pink-200',
       badge: 'text-pink-600',
+      // No account needed: the public request form.
+      link: { to: '/festas', label: pt ? 'Pedir uma festa →' : 'Request a party →' },
     },
     {
       emoji: '🎄',
@@ -81,6 +84,8 @@ export default function LandingPage() {
         </Link>
       </section>
 
+      <UpcomingEventsBanner pt={pt} />
+
       {/* Services */}
       <section className="py-12 px-4">
         <div className="max-w-5xl mx-auto">
@@ -88,13 +93,25 @@ export default function LandingPage() {
             {pt ? 'Os nossos serviços' : 'Our services'}
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            {services.map((s) => (
-              <div key={s.title} className={`p-6 border rounded-2xl shadow-sm ${s.color}`}>
-                <p className="text-3xl mb-3">{s.emoji}</p>
-                <h3 className={`text-xl font-bold mb-2 ${s.badge}`}>{s.title}</h3>
-                <p className="text-sm text-gray-600 leading-relaxed">{s.desc}</p>
-              </div>
-            ))}
+            {services.map((s) => {
+              const card = (
+                <>
+                  <p className="text-3xl mb-3">{s.emoji}</p>
+                  <h3 className={`text-xl font-bold mb-2 ${s.badge}`}>{s.title}</h3>
+                  <p className="text-sm text-gray-600 leading-relaxed">{s.desc}</p>
+                  {'link' in s && s.link && (
+                    <span className={`inline-block mt-4 text-sm font-semibold ${s.badge}`}>{s.link.label}</span>
+                  )}
+                </>
+              );
+              return 'link' in s && s.link ? (
+                <Link key={s.title} to={s.link.to} className={`block p-6 border rounded-2xl shadow-sm hover:shadow-md transition ${s.color}`}>
+                  {card}
+                </Link>
+              ) : (
+                <div key={s.title} className={`p-6 border rounded-2xl shadow-sm ${s.color}`}>{card}</div>
+              );
+            })}
           </div>
         </div>
       </section>

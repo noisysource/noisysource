@@ -36,8 +36,9 @@ export default function Sidebar() {
           <SidebarNavLink to="/admin/party-config">🛠️ Configuração</SidebarNavLink>
         </SidebarSection>
 
-        <SidebarSection title="🏕️ Campos">
+        <SidebarSection title="🏕️ Campos e eventos">
           <SidebarNavLink to="/admin/camps">🏕️ Campos</SidebarNavLink>
+          <SidebarNavLink to="/admin/eventos">🎃 Eventos pontuais</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="⚙️ Configuração">

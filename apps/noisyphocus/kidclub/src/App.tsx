@@ -3,6 +3,7 @@ import { ImpersonationProvider } from './contexts/ImpersonationContext';
 import { ProtectRoute } from '@shared/ProtectedRoute';
 import NotAuthorizedPage from './pages/NotAuthorizedPage';
 import LandingPage from './pages/LandingPage';
+import { PublicPartyRequestPage, PublicPartyBookingPage } from './pages/public/PublicPartyPages';
 import { Role } from '@shared/models/Roles';
 import LoginPage from '@shared/Login';
 import { auth, db } from './lib/firebase';
@@ -28,6 +29,7 @@ import StudyRoomPlannerPage from './pages/admin/StudyRoomPlannerPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
 import DiscountsAdminPage from './pages/admin/DiscountsAdminPage';
 import ClientErrorsPage from './pages/admin/ClientErrorsPage';
+import AdhocEventsAdminPage from './pages/admin/events/AdhocEventsAdminPage';
 import PaymentsPage from './pages/client/PaymentsPage';
 
 // Client pages
@@ -48,6 +50,10 @@ import PartyBookingPage from './pages/client/parties/PartyBookingPage';
 import PartyDetailPage from './pages/client/parties/PartyDetailPage';
 import ClientCampsPage from './pages/client/camps/ClientCampsPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
+// Public one-off event pages (no login)
+import EventsListPage from './pages/events/EventsListPage';
+import EventSignupPage from './pages/events/EventSignupPage';
+import RegistrationPage from './pages/events/RegistrationPage';
 import TermsPage from './pages/TermsPage';
 
 export default function App() {
@@ -57,7 +63,13 @@ export default function App() {
       <Analytics />
       <Routes>
         <Route path="/" element={<LandingPage />} />
+        {/* Parties without an account: the request form, and the page every party email links to */}
+        <Route path="/festas" element={<PublicPartyRequestPage />} />
+        <Route path="/festas/reserva/:id" element={<PublicPartyBookingPage />} />
         <Route path="/login" element={<LoginPage auth={auth} db={db} />} />
+        <Route path="/eventos" element={<EventsListPage />} />
+        <Route path="/eventos/inscricao/:registrationId" element={<RegistrationPage />} />
+        <Route path="/eventos/:eventId" element={<EventSignupPage />} />
 
         {/* Admin */}
         <Route
@@ -80,6 +92,7 @@ export default function App() {
           <Route path="transport-planner" element={<TransportPlannerPage />} />
           <Route path="camp" element={<CampAdminPage />} />
           <Route path="camps" element={<CampsAdminPage />} />
+          <Route path="eventos" element={<AdhocEventsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
           <Route path="families" element={<Navigate to="/admin/subscriptions" replace />} />
           <Route path="config/descontos" element={<DiscountsAdminPage />} />

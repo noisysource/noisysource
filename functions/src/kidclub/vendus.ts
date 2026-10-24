@@ -229,6 +229,27 @@ export async function createOrUpdateClient(
   }
 }
 
+/**
+ * The Vendus client for a NIF, for a one-off event's guest, who has no family
+ * doc to keep a vendusClientId on (adhocEvents.ts). Unlike createOrUpdateClient
+ * it never PATCHes a client it finds: a guest typing a NIF that is already on a
+ * client (a KidClub family's, say) must not rename or re-email that client.
+ * Creating one goes through the daily cap (createClient).
+ */
+export async function findOrCreateClientByNif(payload: VendusClientPayload & { fiscal_id: string }, label: string): Promise<number> {
+  const found = await findClientByNif(payload.fiscal_id);
+  if (found) return found.id;
+  try {
+    return (await createClient(payload, label)).id;
+  } catch (err: any) {
+    if (isDuplicateNif(err)) {
+      const again = await findClientByNif(payload.fiscal_id);
+      if (again) return again.id;
+    }
+    throw err;
+  }
+}
+
 export interface VendusTaxLine {
   id: number;
   title: string;

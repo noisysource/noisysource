@@ -6,7 +6,9 @@ if (!admin.apps.length) admin.initializeApp();
 
 const COMPANY_NAME = "Arco-Íris da Pequenada";
 export const ADMIN_EMAIL = "admin@kidclub.pt";
-const APP_URL = "https://kidclub.pt";
+// Links in emails. functions/.env.kidclub-dev points it at the dev site, so a
+// dev email never sends a tester to prod.
+export const APP_URL = process.env.APP_URL || "https://kidclub.pt";
 
 const DAY_PT: Record<string, string> = {
   monday: "2ª feira", tuesday: "3ª feira", wednesday: "4ª feira",
@@ -24,7 +26,8 @@ async function queueEmail(to: string, subject: string, html: string): Promise<vo
 
 // ── Email layout ──────────────────────────────────────────────────────────────
 
-function emailWrapper(headerSub: string, body: string): string {
+// Also used by the party emails (partyBookings.ts).
+export function emailWrapper(headerSub: string, body: string): string {
   return `<!DOCTYPE html><html lang="pt"><body style="margin:0;padding:0;background:#f9fafb;font-family:Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:32px 0;">
 <tr><td align="center">

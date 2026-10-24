@@ -42,6 +42,9 @@ export default function ClientSidebar({ open, onClose }: ClientSidebarProps) {
       <Link to="/client/camps" onClick={onClick} className={linkClass('/client/camps')}>
         <span>🏕️</span> Campos
       </Link>
+      <Link to="/eventos" onClick={onClick} className={linkClass('/eventos')}>
+        <span>🎃</span> Eventos
+      </Link>
 
       <div className="pt-3 pb-1">
         <p className="text-xs text-gray-500 uppercase tracking-wider px-3">Financeiro</p>

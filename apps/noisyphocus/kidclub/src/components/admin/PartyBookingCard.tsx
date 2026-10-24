@@ -104,6 +104,10 @@ export default function PartyBookingCard({
               <p><strong>Responsável:</strong> {booking.parentName}</p>
               <p><strong>Email:</strong> {booking.email}</p>
               <p><strong>Telemóvel:</strong> {booking.phone}</p>
+              {booking.notes && <p className="mt-2 whitespace-pre-line"><strong>Notas:</strong> {booking.notes}</p>}
+              {booking.source === 'public' && (
+                <p className="mt-2 text-xs text-pink-700">Pedido feito no site (/festas), sem precisar de conta. O encarregado acompanha e paga o sinal pelo link do email.</p>
+              )}
             </div>
           )}
           {activeCardTab === "extras" && (

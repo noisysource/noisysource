@@ -47,6 +47,7 @@ All under `_apps/arcoiris/` in the `(default)` database. Key collections:
 - `config/studyCenter` — study room pricing config
 - `events` / `eventModifications` — calendar events
 - `bookings` — party bookings
+- `adhocEvents` / `adhocEventRegistrations` — one-off events (Halloween, strike days), open to guests; written only by Cloud Functions (`functions/src/kidclub/adhocEvents.ts`)
 - `families` / `children` — client family model
 - `employees` — staff records
 - `expenses` / `incomes` — financial tracking
