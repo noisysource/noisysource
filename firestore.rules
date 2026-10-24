@@ -348,6 +348,10 @@ service cloud.firestore {
       // who, the bridge decides how much.
       allow read, write: if isDomoticsOwner() && docId == 'automation';
       allow read: if isBridge() && docId == 'automation';
+      // E13 guard on/off (domotics-bridge/src/guard.ts): it switches the heat
+      // pump off and on by itself, so it is held to the automation's rule.
+      allow read, write: if isDomoticsOwner() && docId == 'guard';
+      allow read: if isBridge() && docId == 'guard';
     }
 
     // Relay between the house and the app when away from the LAN. At home the
@@ -379,6 +383,17 @@ service cloud.firestore {
     match /domotics_state/{docId} {
       allow read: if isDomoticsOwner();
       allow write: if isBridge();
+    }
+
+    // Heat pump faults and on/off transitions, recorded by the bridge
+    // (domotics-bridge/src/incidents.ts) for the Reports page. A record of
+    // what happened in the house: the owner reads it, only the bridge writes
+    // it, and nobody deletes it from a client. The bridge writes each document
+    // whole under a fixed id, so create + update is all it needs; it never reads
+    // them back.
+    match /domotics_incidents/{docId} {
+      allow read: if isDomoticsOwner();
+      allow create, update: if isBridge();
     }
 
     match /domotics_commands/{docId} {

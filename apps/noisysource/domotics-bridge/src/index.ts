@@ -10,6 +10,13 @@ import {
   createAutomation, parseConfig,
   type AutomationConfig, type AutomationStatus, type PumpReading, type ZoneReading,
 } from './automation';
+import { PUMP_FAULT_CODES, decodeFaults } from './faults';
+import {
+  createRecorder, type Incident, type PumpSample, type RecorderSnapshot, type SwitchSource,
+} from './incidents';
+import {
+  createGuard, parseGuardConfig, INITIAL_GUARD, type GuardConfig, type GuardState, type GuardStatus,
+} from './guard';
 
 /**
  * Domotics bridge.
@@ -43,6 +50,17 @@ const PROJECT_ID = process.env.GCLOUD_PROJECT ?? 'kidclub-dev';
  */
 const ACTIVE_POLL_MS = Number(process.env.POLL_MS ?? 30_000);
 const IDLE_POLL_MS = Number(process.env.IDLE_POLL_MS ?? 300_000);
+/**
+ * The heat pump alone is read at this rate even while nobody is watching: an
+ * incident needs the minutes before a trip, and the E13 guard has to catch the
+ * compressor idling at the setpoint within a reading or two. It is one
+ * mains-powered module, and the hand-run guard kept the whole bridge at the
+ * active rate from 2026-10-23 without trouble. The thermostats keep their
+ * idle rate.
+ */
+const PUMP_POLL_MS = Number(process.env.PUMP_POLL_MS ?? 30_000);
+/** The heat pump's Tuya category (see dpmap.ts). */
+const PUMP_CATEGORY = 'znrb';
 /** How long after a request we still consider someone to be watching. */
 const ACTIVE_WINDOW_MS = 120_000;
 /**
@@ -80,6 +98,10 @@ const AUTOMATION_DOC = 'domotics_config/automation';
 /** Settings change rarely; re-reading every couple of minutes is plenty and costs ~700 reads a day. */
 const AUTOMATION_SETTINGS_EVERY_MS = 2 * 60_000;
 const COMMANDS = 'domotics_commands';
+/** E13 guard on/off, set in the app (see guard.ts). Read on the automation's cadence. */
+const GUARD_DOC = 'domotics_config/guard';
+/** Heat pump faults and on/off transitions (see incidents.ts), for the Reports page. */
+const INCIDENTS = 'domotics_incidents';
 /**
  * Administration requests. Kept apart from device commands because they are a
  * different kind of thing with a different blast radius, and mixing them would
@@ -132,6 +154,8 @@ let state: {
   inverter?: InverterReading;
   /** What the heating automation decided last, and why — shown in the app. */
   automation?: AutomationStatus;
+  /** What the E13 guard is doing — shown in the app. */
+  guard?: GuardStatus;
   updatedAt: number;
 } = { devices: [], updatedAt: 0 };
 /** Per-device cool-off after failures. Absent means "due now". */
@@ -223,12 +247,10 @@ async function refreshAutomationSettings() {
   }
 }
 
-/** Any of the pump's fault bitmaps set. */
-const PUMP_FAULT_CODES = ['fault', 'smart_system', 'power_system', 'ithium_battery_system', 'electronic_system', 'bcu_com_state'];
 const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
 
 const automate = createAutomation(async (deviceId, commands) => {
-  await runCommand(deviceId, commands);
+  await runCommand(deviceId, commands, 'automation');
 });
 let automating = false;
 
@@ -281,6 +303,165 @@ async function runAutomation() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Heat pump incidents and the E13 guard
+// ---------------------------------------------------------------------------
+
+const GUARD_CONFIG_CACHE = join(__dirname, '..', 'guard-config.json');
+const GUARD_STATE_FILE = join(__dirname, '..', 'guard-state.json');
+const INCIDENTS_STATE_FILE = join(__dirname, '..', 'incidents-state.json');
+const INCIDENTS_PENDING_FILE = join(__dirname, '..', 'incidents-pending.json');
+
+/** Dates go to disk as ISO strings; these files hold no other strings shaped like one. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+function readJson<T>(path: string): T | undefined {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'), (_k, v) =>
+      typeof v === 'string' && ISO_DATE.test(v) ? new Date(v) : v) as T;
+  } catch {
+    return undefined;
+  }
+}
+function writeJson(path: string, value: unknown) {
+  try {
+    writeFileSync(path, JSON.stringify(value));
+  } catch (err) {
+    console.warn(`[bridge] could not write ${path}:`, (err as Error).message);
+  }
+}
+
+/** Like the automation settings: Firestore-first, cached, and a cloud outage keeps the last ones. */
+let guardConfig: GuardConfig = parseGuardConfig(readJson(GUARD_CONFIG_CACHE) ?? {});
+let guardSettingsAt = 0;
+
+async function refreshGuardSettings() {
+  if (!db || Date.now() - guardSettingsAt < AUTOMATION_SETTINGS_EVERY_MS) return;
+  guardSettingsAt = Date.now();
+  try {
+    // A missing document means off.
+    const next = parseGuardConfig((await db.getDoc(GUARD_DOC)) ?? {});
+    if (next.enabled !== guardConfig.enabled) {
+      console.log(`[guard] switched ${next.enabled ? 'on' : 'off'} in the app`);
+      guardConfig = next;
+      writeJson(GUARD_CONFIG_CACHE, next);
+    }
+  } catch (err) {
+    console.warn('[guard] could not read settings, keeping the last ones:', (err as Error).message);
+  }
+}
+
+/** Saved so a rest in progress survives a restart and still ends with the pump back on. */
+const guard = createGuard({ ...INITIAL_GUARD, ...readJson<GuardState>(GUARD_STATE_FILE) });
+
+/**
+ * Incident documents waiting to be written, by id. Kept on disk too: a trip
+ * during a network gap (or before the rules allow the write) must still reach
+ * the Reports page. A later version of a document replaces the queued one.
+ */
+const pendingIncidents = new Map<string, Incident>(
+  Object.entries(readJson<Record<string, Incident>>(INCIDENTS_PENDING_FILE) ?? {}),
+);
+const PENDING_MAX = 200;
+let incidentFailures = 0;
+let incidentRetryAt = 0;
+let flushingIncidents = false;
+let recorded = false;
+
+const recorder = createRecorder((id, doc) => {
+  // A copy: the recorder keeps changing its open incident.
+  pendingIncidents.delete(id);
+  pendingIncidents.set(id, structuredClone(doc));
+  while (pendingIncidents.size > PENDING_MAX) pendingIncidents.delete(pendingIncidents.keys().next().value!);
+  writeJson(INCIDENTS_PENDING_FILE, Object.fromEntries(pendingIncidents));
+  recorded = true;
+  console.log(`[incident] ${id}`);
+}, { origin: 'bridge' }, readJson<RecorderSnapshot>(INCIDENTS_STATE_FILE));
+
+/**
+ * A few writes per incident, so the free tier never notices. Failures back off
+ * up to half an hour: a 403 here means the rules don't allow it yet, and
+ * retrying that every poll would only fill the log.
+ */
+async function flushIncidents() {
+  if (!db || flushingIncidents || pendingIncidents.size === 0 || Date.now() < incidentRetryAt) return;
+  flushingIncidents = true;
+  try {
+    for (const [id, doc] of [...pendingIncidents]) {
+      await db.setDoc(`${INCIDENTS}/${id}`, doc as unknown as Record<string, unknown>);
+      // A newer version may have been queued while this one was in flight.
+      if (pendingIncidents.get(id) === doc) pendingIncidents.delete(id);
+    }
+    incidentFailures = 0;
+  } catch (err) {
+    incidentFailures++;
+    const delay = Math.min(30 * 60_000, 30_000 * 2 ** (incidentFailures - 1));
+    incidentRetryAt = Date.now() + delay;
+    console.warn(`[incident] write failed, retrying in ${Math.round(delay / 1000)}s:`, (err as Error).message);
+  } finally {
+    writeJson(INCIDENTS_PENDING_FILE, Object.fromEntries(pendingIncidents));
+    flushingIncidents = false;
+  }
+}
+
+/** After every poll: record the pump's reading, then let the guard act on it. */
+async function watchPump(pumpFresh: boolean) {
+  const pump = state.devices.find(d => d.category === PUMP_CATEGORY);
+  if (!pump) return;
+  const now = Date.now();
+  let sample: PumpSample | undefined;
+  if (pumpFresh && pump.online) {
+    const s = new Map(pump.status.map(x => [x.code, x.value]));
+    const whole = (code: string) => (typeof s.get(code) === 'number' ? (s.get(code) as number) : undefined);
+    const zones = state.devices.filter(d => d.category === 'wk' && d.online);
+    sample = {
+      t: now,
+      on: s.get('switch') === true,
+      hz: whole('temp_current') ?? 0,
+      sp: whole('p02_heating'),
+      out: tenths(s.get('venting_temp')),
+      inn: tenths(s.get('coiler_temp')),
+      dis: tenths(s.get('compressor_strength')),
+      outdoor: tenths(s.get('temp_top')),
+      coil: tenths(s.get('power_consumption')),
+      suct: tenths(s.get('temp_bottom')),
+      faults: decodeFaults(code => s.get(code)),
+      valves: zones.filter(z => z.status.some(x => x.code === 'valve_state' && x.value === 'open')).length,
+      zones: zones.length,
+    };
+    recorded = false;
+    recorder.observe({ id: pump.id, name: pump.name }, sample);
+    if (recorded) writeJson(INCIDENTS_STATE_FILE, recorder.snapshot());
+  } else {
+    recorder.gap();
+  }
+
+  await refreshGuardSettings();
+  const before = JSON.stringify(guard.state());
+  const d = guard.decide(guardConfig, { now, pump: sample });
+  let status = d.status;
+  if (d.action) {
+    const { on, reason, next } = d.action;
+    try {
+      await runCommand(pump.id, [{ code: 'switch', value: on }], 'guard', reason);
+      guard.commit(next);
+      console.log(`[guard] pump ${on ? 'ON' : 'OFF'}: ${reason}`);
+    } catch (err) {
+      console.warn(`[guard] could not switch the pump ${on ? 'on' : 'off'}, trying again next poll:`, (err as Error).message);
+      status = { ...status, mode: guard.state().mode, restUntil: null, note: 'O comando à bomba falhou — volta a tentar na próxima leitura' };
+    }
+  }
+  if (JSON.stringify(guard.state()) !== before) writeJson(GUARD_STATE_FILE, guard.state());
+  state = { ...state, guard: status };
+}
+
+/** What makes a publish worth sending straight away, even when nobody is watching. */
+function pumpHeadline() {
+  const pump = state.devices.find(d => d.category === PUMP_CATEGORY);
+  const s = new Map((pump?.status ?? []).map(x => [x.code, x.value]));
+  return JSON.stringify([s.get('switch'), ...PUMP_FAULT_CODES.map(c => s.get(c)), state.guard?.mode]);
+}
+let lastHeadline = '';
+
 /**
  * Mirror state to Firestore so the app can read it from outside the house.
  *
@@ -302,9 +483,16 @@ async function publish() {
   // of twenty thousand.
   // The automation's evaluation time changes every step; what it decided does not.
   const { evaluatedAt: _evaluatedAt, ...automation } = state.automation ?? ({} as Partial<AutomationStatus>);
-  const fingerprint = JSON.stringify({ devices: state.devices, inverter: state.inverter, automation });
+  const { evaluatedAt: _guardAt, ...guardStatus } = state.guard ?? ({} as Partial<GuardStatus>);
+  const fingerprint = JSON.stringify({ devices: state.devices, inverter: state.inverter, automation, guard: guardStatus });
   if (fingerprint === lastRelayFingerprint) return;
-  if (Date.now() - lastRelayAt < RELAY_MIN_INTERVAL_MS) return;
+  // The pump is read every 30s even when nobody is looking (PUMP_POLL_MS), and
+  // its readings always move. Unwatched, that would mean a write every poll
+  // for nobody, so the idle rate applies, unless the pump switched, faulted
+  // or the guard changed what it is doing.
+  const headline = pumpHeadline();
+  const minGap = isWatched() || headline !== lastHeadline ? RELAY_MIN_INTERVAL_MS : IDLE_POLL_MS;
+  if (Date.now() - lastRelayAt < minGap) return;
   try {
     await db.setDoc(STATE_DOC, {
       devices: state.devices,
@@ -313,6 +501,7 @@ async function publish() {
       // last good figures on display as though they were current.
       inverter: state.inverter ?? null,
       automation: state.automation ?? null,
+      guard: state.guard ?? null,
       // Tells the app this bridge understands `{watch: true}` relay messages.
       // An older bridge treats one as a failed command, so the app only sends
       // them when it sees this.
@@ -320,6 +509,7 @@ async function publish() {
       updatedAt: new Date(),
     });
     lastRelayFingerprint = fingerprint;
+    lastHeadline = headline;
     lastRelayAt = Date.now();
   } catch (err) {
     // Losing the relay must never affect LAN control, so this is only logged.
@@ -494,18 +684,26 @@ async function handleRelayCommand(docId: string, data: Record<string, unknown>) 
  * a person opening the app is a strong enough signal to be worth one immediate
  * attempt on everything, rather than making them wait out a 5-minute cool-off.
  */
+let lastFullPollAt = 0;
+
 async function poll(force = false) {
   if (polling) return;
   polling = true;
   try {
     const now = Date.now();
+    // Between full polls, only the pump is read (see PUMP_POLL_MS).
+    const full = force || isWatched() || now - lastFullPollAt >= IDLE_POLL_MS - 1000;
+    const wanted = full ? devices : devices.filter(d => d.category === PUMP_CATEGORY);
     const due = force
-      ? devices
-      : devices.filter(d => (backoff.get(d.id)?.nextAt ?? 0) <= now);
+      ? wanted
+      : wanted.filter(d => (backoff.get(d.id)?.nextAt ?? 0) <= now);
     const results = await readAll(due);
+    if (full) lastFullPollAt = now;
     for (const r of results) noteResult(r.id, r.online);
 
-    if (results.length > 0) {
+    // Only full polls count: the pump alone being unreachable (a breaker
+    // reset) is not the process-level wedge this watches for.
+    if (full && results.length > 0) {
       totalFailureStreak = results.every(r => !r.online) ? totalFailureStreak + 1 : 0;
       if (totalFailureStreak >= TOTAL_FAILURE_LIMIT) {
         console.error(
@@ -527,6 +725,8 @@ async function poll(force = false) {
       const fresh = byId.get(cfg.id);
       if (fresh?.online) return fresh;
       const prev = state.devices.find(p => p.id === cfg.id);
+      // Not asked this time (a pump-only poll): left exactly as it was.
+      if (!full && !wanted.includes(cfg) && prev) return prev;
       if (prev && prev.status.length > 0) {
         return { ...prev, online: false, lastSeen: prev.lastSeen ?? state.updatedAt };
       }
@@ -540,14 +740,18 @@ async function poll(force = false) {
     const inverter = await readInverter();
 
     const changed = JSON.stringify(next) !== JSON.stringify(state.devices);
-    state = { devices: next, inverter, automation: state.automation, updatedAt: Date.now() };
+    state = { ...state, devices: next, inverter, updatedAt: Date.now() };
     if (changed) {
       const online = next.filter(d => d.online).length;
       console.log(`[state] ${online}/${next.length} online (changed)`);
     }
-    // Decide on what was just read, then publish both together.
+    // Record and guard the pump, decide on what was just read, then publish it all together.
+    await watchPump(results.some(r => r.category === PUMP_CATEGORY && r.online));
     await runAutomation();
-    if (RELAY) void publish();
+    if (RELAY) {
+      void publish();
+      void flushIncidents();
+    }
   } catch (err) {
     console.error('[poll] failed:', (err as Error).message);
   } finally {
@@ -563,6 +767,9 @@ async function poll(force = false) {
 async function runCommand(
   deviceId: string,
   commands: Array<{ code: string; value: unknown }>,
+  /** Who asked: the app (LAN or relay), the automation or the guard. Recorded with the switch it causes. */
+  source: SwitchSource = 'app',
+  reason: string | null = null,
 ) {
   const config = devices.find(d => d.id === deviceId);
   if (!config) throw new Error(`unknown device ${deviceId}`);
@@ -580,7 +787,11 @@ async function runCommand(
   if (Object.keys(dps).length === 0) throw new Error('no known datapoints in command');
 
   await sendCommands(config, dps);
-  console.log(`[command] ${config.name} <- ${JSON.stringify(dps)}`);
+  console.log(`[command] ${config.name} <- ${JSON.stringify(dps)}${source === 'app' ? '' : ` (${source})`}`);
+  const sw = dps[dpForCode(config.category, 'switch') ?? ''];
+  if (config.category === PUMP_CATEGORY && typeof sw === 'boolean') {
+    recorder.noteCommand(sw, source, reason, Date.now());
+  }
 }
 
 function isWatched() {
@@ -593,7 +804,8 @@ function isWatched() {
  */
 async function loop() {
   await poll();
-  setTimeout(() => void loop(), isWatched() ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+  const pumpDue = devices.some(d => d.category === PUMP_CATEGORY) ? PUMP_POLL_MS : IDLE_POLL_MS;
+  setTimeout(() => void loop(), isWatched() ? ACTIVE_POLL_MS : Math.min(pumpDue, IDLE_POLL_MS));
 }
 
 async function main() {

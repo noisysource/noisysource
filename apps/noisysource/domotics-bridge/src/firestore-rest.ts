@@ -49,7 +49,8 @@ function encode(value: unknown): FirestoreValue {
   return { mapValue: { fields: encodeFields(value as Record<string, unknown>) } };
 }
 
-function encodeFields(data: Record<string, unknown>): Record<string, FirestoreValue> {
+/** Exported for deploy/backfill-incidents.cjs, which writes with an admin token instead. */
+export function encodeFields(data: Record<string, unknown>): Record<string, FirestoreValue> {
   const fields: Record<string, FirestoreValue> = {};
   for (const [key, val] of Object.entries(data)) {
     if (val !== undefined) fields[key] = encode(val);
