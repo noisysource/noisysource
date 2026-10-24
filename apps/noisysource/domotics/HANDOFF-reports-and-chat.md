@@ -66,8 +66,61 @@ Read `STATUS.md` first, especially the 2026-10-21 → 10-24 entries on the E13 t
 - **Language:** answer in the language asked. The app UI and the technician material are in pt-PT.
 - **Where in the UI:** a chat button on the house screen, opening a panel over it. It must work on the phone and on the future wall tablet.
 
-### Questions for Renato
-1. **Anthropic account:** does NoisySource have one for API use, with a key? The repo has no Anthropic SDK or key yet.
-2. **Monthly spend cap:** what figure? It has to be set at the provider before this ships.
-3. **Actions:** propose + confirm (recommended), or questions only for the first version?
-4. **Who can use it:** Renato only, or also his wife? That depends on the household allowlist (STATUS plan item 3), which isn't built yet.
+### Decided (Renato, 2026-10-24)
+- **Actions with a confirm tap.** Nothing reaches a device until he taps.
+- **Renato only** (admin@kidclub.pt) for now.
+- **What it must handle:**
+  - "Have the house warm by HH:MM." This needs the automation's one-off "warm by" target (session C below); until that ships, the chat says it can't do it yet.
+  - Battery, PV and consumption questions.
+  - Lights and blinds (switch, dim, open/close).
+  - The heating state and why.
+
+### Billing
+- **A Claude.ai subscription doesn't cover this.** Renato has a monthly Claude subscription, but an app calling the API needs an API account (Claude Console) with its own key and pay-as-you-go credits.
+- **Hard cap:** prepaid credits with auto-reload **off** cap the spend at whatever was loaded. That fits the root CLAUDE.md rule (a hard cap at the provider, not just an alert).
+- **Estimate** (2026-10 prices; per question ≈ 2 API calls, ~4k cached tokens of system prompt + tools, ~5k uncached, ~1k out; a sporadic chat mostly pays a cache write on its first call):
+
+  | Model | Per question | 3–10 questions/day |
+  |---|---|---|
+  | Opus 5.5 ($4 / $20 per MTok) | ~$0.05–0.06 | ~$5–18/month |
+  | Sonnet 5.5 ($2 / $10) | ~$0.02–0.03 | ~$3–9/month |
+  | Haiku 5.5 ($0.10 / $0.50) | well under $0.01 | under $0.50/month |
+
+  Plan for warm-by requests to cost 2–3× a simple question. Measure real usage from `response.usage` once it runs. Cloud Functions stay in the free tier at this volume.
+
+### Still open
+1. Renato creates the API account and key, and loads the prepaid credits (auto-reload off). The key goes into `firebase functions:secrets`, set by him.
+2. Which model? The claude-api skill defaults to Opus 5.5; Sonnet 5.5 costs about half. Renato's call.
+
+---
+
+## Next sessions — order and prompts
+
+**Before any of them:**
+- PR #106 (`agent/domotics-3d`) must be merged into `staging`, so new branches have the 3D app and this file.
+- Its dev deploy fails at Functions until PR #110 (`agent/kidclub-events`) is in `staging`, because #110's preview functions are on kidclub-dev.
+- **Don't push #106 before #110 merges:** every push redeploys #106's rules (staging + #106, without #110's) and wipes #110's rules on dev.
+- So: merge #110 → merge `staging` into #106, push → dev deploy green → Renato tests → merge #106.
+
+**A. Thermostat keys + ARP pin script** (independent; no worktree for the key refresh, its own branch for the script fix):
+> Domotics: 4 of the 6 Tuya thermostats (Quarto, Quarto Diniz, Sala, Master bedroom) have rejected the Pi bridge with ECONNRESET since 21–22/10, probably because their local keys changed. Read apps/noisysource/domotics/STATUS.md first. Run domotics-bridge/deploy/sync-tuya-keys.js as a preview, then with --write. Restart the bridge on the Pi (pi@192.168.1.125) and confirm all 7 devices are online; re-pin the repeater ARP entries if the restart clears them (STATUS has the command). Then, in its own worktree and branch off staging, fix pin-device-arp.sh so it keeps a pin while TCP 6668 still answers through it, instead of clearing it. Finally, tell me how to block the thermostats' internet access on the MEO router while keeping the heat pump online. Don't change the heat pump or the E13 guard running on the Pi.
+
+**B. Reports page + incidents + guard inside the bridge** (after #106 merges):
+> Build the domotics Reports page described in apps/noisysource/domotics/HANDOFF-reports-and-chat.md, section 1. Read STATUS.md first. Work in a new worktree off staging (branch agent/domotics-reports).
+> - The bridge records incidents (fault start/end with the readings before and after) and pump on/off transitions in domotics_incidents.
+> - Move the E13 guard (domotics-bridge/deploy/e13-guard.py, now running by hand on the Pi) into the bridge, with an on/off setting in the app.
+> - Backfill the E13 history from the logs in domotics-bridge/deploy/.
+> - The page groups incidents by code and shows charts of the pump values; there's a printable pt-PT version for the technicians.
+> - Add rules and a rules test.
+> - Deploy the app to dev (hosting only) and the bridge to the Pi. I test the UI myself.
+> - Keep the hand-run guard running until the bridge version is live, then stop it with `touch ~/e13-watch/guard.stop`.
+
+**C. Heating automation fixes + "warm by HH:MM"** (after B merges; both touch bridge `src/index.ts`):
+> The domotics heating automation (domotics-bridge/src/automation.ts; design in HANDOFF-heating-automation.md) has been in dry-run since a cold morning on 20/10. Read STATUS.md first, especially "Next step" item 0 and the E13 entries from 21–24/10. Then:
+> - Apply the fixes listed there: recovery mode, respect a water setpoint changed by hand, faster correction, comfort 24 °C.
+> - Make the automation consistent with the E13 findings: never let the pump idle at the setpoint and then speed up again; use the guard's off-and-rest approach.
+> - Add a one-off "warm by HH:MM" target. Compute the start time from the observed warm-up (floor warm in ~1.5–2 h; rooms rise ~0.3 °C/h; refine it from the incidents data). Show it in the automation card and make it settable from the app, through a function the chat can call later.
+> - New worktree off staging; dry-run first; I decide when it goes live.
+
+**D. Chat** (after C merges, or before it with warm-by left out; needs the API key and model choice first):
+> Build the domotics in-app chat described in apps/noisysource/domotics/HANDOFF-reports-and-chat.md, section 2. Decisions: actions only after I tap to confirm; only me (admin@kidclub.pt); it must handle "have the house warm by HH:MM" (through the automation's warm-by target), battery/PV/consumption questions, lights and blinds, and the heating state. Model: <Opus 5.5 / Sonnet 5.5>. Load the claude-api and new-metered-api-checklist skills before writing any code. The API key is in firebase functions:secrets (I set it). Include a daily message cap and a tool-loop cap in code. Commands go through the existing Legrand/relay paths, never directly. Dev only, new worktree off staging.
