@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-24
 
 ## Currently working on
 **UI refactor: 3D house + an app for a wall tablet and two iPhones** (Renato's request, 2026-10-17). Branch `agent/domotics-3d`, worktree `.claude/worktrees/domotics-3d`, rebased onto `staging` after #95 merged (2026-10-17). PR → `staging` (see Next step).
@@ -99,10 +99,12 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 2026-10-02 — Heat pump fault codes + corrected heat pump readings (PR #73, merged to `staging`). The unit is a **Zantia Vancouver 13 (single-phase, R32)**, manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. Datapoint table in `domotics-bridge/README.md` → "Heat pump"; fault bitmaps decoded in `src/data/heatpumpFaults.ts`; active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
 ## Next step
+- **New (Renato, 2026-10-24): reports page + app chat.** Design and open questions in `HANDOFF-reports-and-chat.md`. Build them in their own branches/sessions, reports first. The E13 guard script, the logger data and the technician report are now in `domotics-bridge/deploy/` (`e13-guard.py`, `e13-2026-10-22-to-24.jsonl.gz`, `relatorio-e13-2026-10-23.html`).
+- **Before 2026-10-26 09:00:** the guard on the Pi stops by itself then. If the technicians haven't fixed the pump, restart it: `cd ~/e13-watch && setsid nohup python3 guard.py <new end, ISO> > guard.out 2>&1 < /dev/null &`. The 20-s logger (`run2.sh`) ends 2026-10-25 09:00.
 0. **Heating automation — back in simulation since 2026-10-20 15:51 after a cold morning (below). Do not set it live again until the fixes are in.** Fixes needed: (a) recovery mode — never lower the water while zones are below target, use the top of the range until they reach it; (b) respect a water setpoint changed by hand, like zones; (c) log pump on/off and fault transitions in the bridge; (d) faster correction. Also comfort is currently set to 23 °C in the settings (Renato said ~24). Previously: **built 2026-10-19, deployed OFF.** To start: app → Clima → "Automação do aquecimento" → Configurar → "Automação ligada" on, leave "Só simular" on, Guardar. For a day, read the card's "Últimas ações" (marked *simulado*) against how the house feels; then turn "Só simular" off. Design: `HANDOFF-heating-automation.md`. Renato also to set the RENAC battery not to discharge during vazio.
 1. **Heat pump: E13 is active again (seen 2026-10-17 13:18 UTC)** — see "Anything risky". Physical/installer issue, not software.
 2. **OAuth redirect URI (Renato, Google Cloud console, project kidclub-dev)**: APIs & Services → Credentials → OAuth 2.0 Client IDs → "Web client (auto created by Google Service)" → Authorized redirect URIs → add `https://kidclub-dev-domotics.web.app/__/auth/handler` → Save. (gcloud can't edit this client.) Until then sign-in fails only inside the installed app; browser tabs still work.
-3. **Deploy the app to the dev site** (CI doesn't deploy domotics hosting; firebase CLI needs `firebase login --reauth` first): `pnpm --filter domotics build:staging && npx firebase-tools@13 deploy --only hosting:domotics --project=kidclub-dev`.
+3. ✅ **Deployed by hand 2026-10-24 ~19:50** (hosting only, `build:staging`, bundle projectId `kidclub-dev`). CI now does deploy domotics hosting for this PR, but its Functions job is blocked until PR #110 merges (see Last completed). Manual command, for reference: `pnpm --filter domotics build:staging && npx firebase-tools@13 deploy --only hosting:domotics --project=kidclub-dev`.
 4. **Redeploy the bridge on the Pi** (`domotics-bridge/deploy/README.md` step 3, then `sudo systemctl restart domotics-bridge`) — for remote freshness and failed-command cleanup. Optional for everything else.
 5. **On the iPhone**: Safari → https://kidclub-dev-domotics.web.app → Share → Add to Home Screen → open "Casa" → Entrar. Lights/blinds should work there (home or away). Report what to change in the 3D UI.
 6. Merge the PR into `staging`; then household allowlist (plan 3), then tablet + LAN lights via the Pi (plan 4).
