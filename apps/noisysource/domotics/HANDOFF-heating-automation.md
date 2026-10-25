@@ -21,10 +21,10 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge`): it is always o
 ## The rules
 
 1. **Weather-compensated flow temperature** (the biggest saving: ~2–3% less electricity per °C cooler water). Flow setpoint `p02_heating` (Tuya dp 117, writable: proven 2026-10-20):
-   `flow = clamp(30 + (15 − outdoor) × 0.8, 28, 38)` → 30 °C at 15 °C outside, 34 °C at 10 °C, 38 °C at 5 °C.
+   `flow = clamp(30 + (15 − outdoor) × 0.8, 28, 45)` → 30 °C at 15 °C outside, 34 °C at 10 °C, 38 °C at 5 °C. Top of the range 45 °C (Renato, 2026-10-25; was 38).
    - **Shortfall** = how far each room is below the target its thermostat has, averaged (a room above target counts as 0, so it can't make up for a cold one).
    - **Correction** (faster since 2026-10-25): shortfall > 0.25 °C for 30 min → +1 °C, up to +4; at target (≤ 0.05) for an hour → −1.
-   - **Recovery** (2026-10-25): shortfall > 0.5 °C → water at the top of the range (38) until it is ≤ 0.2. On 20/10 the curve lowered the water overnight to 29–31 °C while the slab was still recovering, and the house woke at 21.7–22.8 °C.
+   - **Recovery** (2026-10-25): shortfall > 0.5 °C → water at the top of the range (45) until it is ≤ 0.2. On 20/10 the curve lowered the water overnight to 29–31 °C while the slab was still recovering, and the house woke at 21.7–22.8 °C.
    - **Never lowered while the rooms are below target** (shortfall > 0.2), and then only 1 °C per 30 min. Raised at most every 15 min. Only changes ≥ 1 °C are written.
    - **A setpoint the automation didn't send is someone's** (SmartLife, the panel, the technicians): left alone until the next period, like a zone. So is the one found when the bridge starts, unless it is the last one the automation sent (kept in `automation-state.json`).
 2. **Time-of-day room targets** (written to the thermostats' `temp_set`):
@@ -33,7 +33,7 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge`): it is always o
    - 18:00–22:00 (expensive evening): **23.5** — coast on the stored heat.
    - 22:00–05:00 (vazio): **24.0**.
    All configurable per zone later; one house-wide schedule first. Hard limits 21–25 °C.
-3. **Pump follows the zones**: if every zone valve has been closed for ≥ 20 min, switch the pump off; switch it on when any zone opens. Minimum on time 30 min, minimum off time 15 min. Needs at least half the thermostats answering: with fewer (only 1–2 answered on 22–25/10), "all closed" means nothing.
+3. **Pump follows the zones**: if every zone valve has been closed for ≥ 20 min, switch the pump off; switch it on when any zone opens. Minimum on time 30 min, minimum off time 15 min. Whoever switched it off (the automation, the guard's rest, SmartLife, the panel, the technicians), it comes back on when heat is wanted; the guard's rest and a fault still come first. Needs at least half the thermostats answering: with fewer (only 1–2 answered on 22–25/10), "all closed" means nothing.
 3b. **Never idle at the setpoint** (2026-10-25, from the E13 trips): every trip came after the water reached the setpoint, the compressor dropped to its minimum (35–45 Hz), idled 4–25 min and then sped up again; starts from standstill never tripped (11 of 11). So:
    - at the setpoint with the compressor ≤ 45 Hz (water ≥ setpoint − 1.5, 4 min after a switch-on), the pump is switched off and rests 60 min. With the E13 guard on, the guard does it; with it off, the automation does;
    - after a rest it comes back on only when a zone wants heat (or recovery, or a warm-by). With the guard's rests, the automation (live only) asks the guard to carry on resting while nothing wants heat (`holdRest`), and never switches on a pump the guard parked;
@@ -44,14 +44,14 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge`): it is always o
    - Rooms: ~0.3 °C/h once the floor is warm (observed; no room history exists to check it against).
    - Both are learned live (`automation-state.json`; the card shows them): every start after a ≥ 30 min stop measures the floor, and every 1–2 h of rooms below target with a warm floor measures their rise.
    - From the start until the time: room targets at least the requested one, water at the top of the range while short. Then the target is held for an hour and the request is done. The card shows the start, the expected arrival (and if late), and how the house was at the time.
-   - It never switches on a pump switched off by hand; the card says so if that is why it won't make it.
+   - A pump switched off from outside is switched back on for it, like any other heat request (rule 3).
 5. **No large setbacks**: never schedule more than 1 °C below comfort — the slab takes hours to recover and recovery is the expensive, low-efficiency part.
 
 ## Safety
 
 - **Never act on a faulted pump**: any fault bit set → stop all automation writes to the pump, leave it as it is, surface the fault (the 2026-10-02 / 10-17 E13 high-pressure history is why; lower flow temperatures also lower that risk).
 - Every write rate-limited per device (≥ 10 min apart, except the pump on/off minimums above), bounded by the hard limits, and logged with its reason.
-- Manual change wins: if a thermostat or the pump is changed by hand (app or device), the automation leaves that device alone until the next scheduled period.
+- Manual change wins: if a thermostat or the pump's water setpoint is changed by hand (app or device), the automation leaves it alone until the next scheduled period. **Not the pump's on/off** (Renato, 2026-10-25: the automation is obeyed whoever switched the pump off): an off from outside is switched back on when heat is wanted, after the minimum off time.
 - If the bridge loses the devices or Firestore, it does nothing new — it never retries writes in a loop (root CLAUDE.md: looping calls are the main cost risk; here they would also be hardware wear).
 
 ## Rollout

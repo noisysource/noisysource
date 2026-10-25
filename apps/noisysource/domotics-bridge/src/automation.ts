@@ -74,7 +74,7 @@ export const DEFAULT_CONFIG: AutomationConfig = {
   preheat: { from: '05:00', to: '08:00', delta: 0.5 },
   evening: { from: '18:00', to: '22:00', delta: -0.5 },
   solarBoost: { enabled: true, delta: 0.5, exportW: 800 },
-  flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 38 },
+  flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 45 },
   recovery: { enabled: true },
   rest: { enabled: true, minutes: 60 },
   pumpFollowsZones: { enabled: true, idleMin: 20, minOnMin: 30, minOffMin: 15 },
@@ -398,7 +398,10 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       running,
       waterIn: p?.waterIn,
       zones: known,
-      available: !!p && p.online && !p.fault && (p.on || guardResting || ownOff !== null),
+      // Off is "available" when something will switch it back on: the guard, or
+      // a live automation, whoever switched it off.
+      available: !!p && p.online && !p.fault
+        && (p.on || guardResting || ownOff !== null || (cfg.enabled && !cfg.dryRun && cfg.pumpFollowsZones.enabled)),
     });
     const model = learner.model();
 
@@ -616,12 +619,17 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
               reasons.push(`Todas as válvulas fechadas há ${Math.round(idle)} min — desliga aos ${pz.idleMin} min.`);
             }
           }
-        } else if (!ownOff) {
-          pumpHold = 'bomba desligada à mão — a automação não a liga';
+        } else if (!ownOff && !pz.enabled && !drive) {
+          // Switching on and off is turned off in the settings; only recovery or a requested time switch it on.
+          reasons.push('Bomba desligada — ligar e desligar pelas zonas está desativado.');
         } else if (!heatWanted) {
-          reasons.push(`Bomba desligada pela automação (${ownOff.why === 'rest' ? 'descanso no setpoint' : 'sem pedidos de calor'}) — liga quando uma zona pedir calor.`);
-        } else if (t < ownOff.until) {
-          reasons.push(`Bomba em descanso — liga às ${clock(ownOff.until)}.`);
+          reasons.push(`Bomba desligada ${ownOff ? `pela automação (${ownOff.why === 'rest' ? 'descanso no setpoint' : 'sem pedidos de calor'})` : 'de fora da automação'} — liga quando uma zona pedir calor.`);
+        } else if (t < (ownOff?.until ?? pumpSeen.since + pz.minOffMin * MIN)) {
+          // Whoever switched it off, the automation switches it back on (Renato,
+          // 2026-10-25), but not straight after an off from outside.
+          reasons.push(ownOff
+            ? `Bomba em descanso — liga às ${clock(ownOff.until)}.`
+            : `Bomba desligada de fora às ${clock(pumpSeen.since)} — liga às ${clock(pumpSeen.since + pz.minOffMin * MIN)}.`);
         } else if (recentlySwitched(true)) {
           reasons.push('Bomba: pedido para ligar enviado, a aguardar.');
         } else {
@@ -632,10 +640,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
     }
     if (pumpHold) reasons.push(`Bomba: ${pumpHold}.`);
     if (warmBy && pumpHold && (warmBy.phase === 'waiting' || warmBy.phase === 'heating')) {
-      const why = p?.online && !p.on && !p.fault
-        ? 'a bomba foi desligada à mão e a automação não a liga — ligue-a para aquecer a tempo'
-        : `${pumpHold}, assim não aquece`;
-      warmBy = { ...warmBy, note: `${warmBy.note} Atenção: ${why}.` };
+      warmBy = { ...warmBy, note: `${warmBy.note} Atenção: ${pumpHold}, assim não aquece.` };
     }
 
     memo = memoryOut();

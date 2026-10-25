@@ -451,7 +451,7 @@ function Settings({ canEdit }: { canEdit: boolean }) {
           </Group>
 
           <Group title="Bomba">
-            <Toggle on={cfg.pumpFollowsZones.enabled} onChange={v => patch('pumpFollowsZones', { ...cfg.pumpFollowsZones, enabled: v })} hint="Desliga a bomba quando nenhuma zona pede calor; liga quando uma pede. Nunca liga uma bomba desligada à mão, nem mexe numa bomba em avaria.">
+            <Toggle on={cfg.pumpFollowsZones.enabled} onChange={v => patch('pumpFollowsZones', { ...cfg.pumpFollowsZones, enabled: v })} hint="Desliga a bomba quando nenhuma zona pede calor; liga quando uma pede, seja quem for que a desligou (depois do mínimo desligada). Nunca mexe numa bomba em avaria.">
               Desligar sem pedidos de calor
             </Toggle>
             <Stepper label="Válvulas fechadas há" value={cfg.pumpFollowsZones.idleMin} step={5} min={5} max={240} unit=" min" onChange={v => patch('pumpFollowsZones', { ...cfg.pumpFollowsZones, idleMin: v })} />

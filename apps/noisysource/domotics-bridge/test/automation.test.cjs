@@ -24,7 +24,7 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
   assert.equal(periodAt(cfg, at(23, 0)), 'night');
   assert.equal(periodAt(cfg, at(3, 0)), 'night');
   assert.equal(flowFor(cfg, 11, 0), 33);
-  assert.equal(flowFor(cfg, -5, 0), 38);   // clamped at max
+  assert.equal(flowFor(cfg, -5, 0), 45);   // clamped at max
   assert.equal(flowFor(cfg, 25, 0), 28);   // clamped at min
   assert.equal(cfg.comfort, 24);
 
@@ -77,15 +77,32 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     reset();
   }
 
-  // 5. Pump switched off by hand (not by us): never switched on by the automation — in dry-run either.
+  // 5. Pump switched off from outside (not by us): switched back on when a zone
+  // wants heat, after the minimum off time (Renato, 2026-10-25). In dry-run only recorded.
   for (const c of [cfg, dryCfg]) {
     const tick = fresh(33);
-    const open = zones(24, { open: true });
-    const s = await tick(c, { now: at(23, 0), zones: open, pump: pump({ on: false, hz: 0, flowSetpoint: 33 }) });
-    await tick(c, { now: at(23, 30), zones: open, pump: pump({ on: false, hz: 0, flowSetpoint: 33 }) });
-    assert.ok(!sent.includes('hp:switch=true'));
-    assert.ok(!s.actions.some(a => /ligar/.test(a.what)), 'not even simulated');
-    assert.match(s.pumpHold, /à mão/);
+    const off = pump({ on: false, hz: 0, flowSetpoint: 33 });
+    let s = await tick(c, { now: at(23, 0), zones: zones(24, { open: false }), pump: off });
+    assert.ok(s.reasons.some(r => /de fora da automação — liga quando uma zona pedir calor/.test(r)), 'valves closed: stays off');
+    s = await tick(c, { now: at(23, 5), zones: zones(24, { open: true }), pump: off });
+    assert.ok(s.reasons.some(r => /desligada de fora às 23:00 — liga às 23:15/.test(r)));
+    assert.equal(s.pumpHold, undefined);
+    s = await tick(c, { now: at(23, 16), zones: zones(24, { open: true }), pump: off });
+    assert.deepEqual(sent, c.dryRun ? [] : ['hp:switch=true']);
+    assert.ok(s.actions.some(a => /^ligar \(uma zona pede calor\)/.test(a.what) && a.sent === !c.dryRun));
+    reset();
+  }
+  // 5b. With on/off by zones disabled it is left off, unless recovery needs it.
+  {
+    const noPz = parseConfig({ enabled: true, dryRun: false, pumpFollowsZones: { enabled: false } });
+    let s = await fresh(33)(noPz, { now: at(12, 0), zones: zones(24), pump: pump({ on: false, hz: 0, flowSetpoint: 33 }) });
+    assert.deepEqual(sent, []);
+    assert.ok(s.reasons.some(r => /pelas zonas está desativado/.test(r)));
+    const tick = fresh(45);
+    const off = pump({ on: false, hz: 0, flowSetpoint: 45 });
+    await tick(noPz, { now: at(12, 0), zones: zones(24, { current: 22.5 }), pump: off });
+    await tick(noPz, { now: at(12, 16), zones: zones(24, { current: 22.5 }), pump: off });
+    assert.deepEqual(sent, ['hp:switch=true'], 'recovery switches it on');
     reset();
   }
 
@@ -151,21 +168,21 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     reset();
   }
 
-  // 12. Recovery: rooms 1.5° short → water to the top of the range (38) straight
+  // 12. Recovery: rooms 1.5° short → water to the top of the range (45) straight
   // away; back within 0.2° → recovery ends and the water comes down a degree at a time.
   {
     const tick = fresh(33);
     let s = await tick(cfg, { now: at(9, 0), zones: zones(24, { current: 22.5 }), pump: pump({ flowSetpoint: 33, hz: 70, waterOut: 30 }) });
     assert.equal(s.recovery, true);
-    assert.equal(s.flowTarget, 38);
-    assert.deepEqual(sent, ['hp:p02_heating=38']);
+    assert.equal(s.flowTarget, 45);
+    assert.deepEqual(sent, ['hp:p02_heating=45']);
     assert.ok(s.reasons.some(r => /Recuperação/.test(r)));
     reset();
-    s = await tick(cfg, { now: at(13, 0), zones: zones(24, { current: 23.6 }), pump: pump({ flowSetpoint: 38 }) });
+    s = await tick(cfg, { now: at(13, 0), zones: zones(24, { current: 23.6 }), pump: pump({ flowSetpoint: 45 }) });
     assert.equal(s.recovery, true, 'still 0.4° short: carries on');
-    s = await tick(cfg, { now: at(14, 0), zones: zones(24, { current: 23.9 }), pump: pump({ flowSetpoint: 38 }) });
+    s = await tick(cfg, { now: at(14, 0), zones: zones(24, { current: 23.9 }), pump: pump({ flowSetpoint: 45 }) });
     assert.equal(s.recovery, false);
-    assert.deepEqual(sent, ['hp:p02_heating=37']);
+    assert.deepEqual(sent, ['hp:p02_heating=44']);
     reset();
   }
 
@@ -186,8 +203,8 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     const cold = [21.7, 22.0, 22.4, 22.8, 22.6, 21.9].map((c, i) => ({ id: `z${i}`, name: `z${i}`, online: true, current: c, target: 23, mode: 'manual', valveOpen: i === 0 }));
     const s = await tick(parseConfig({ enabled: true, dryRun: false, comfort: 23 }), { now: at(7, 0, 20), zones: cold, pump: pump({ outdoor: 12, flowSetpoint: 31, hz: 0, waterOut: 30 }) });
     assert.equal(s.recovery, true);
-    assert.equal(s.flowTarget, 38);
-    assert.ok(sent.includes('hp:p02_heating=38'));
+    assert.equal(s.flowTarget, 45);
+    assert.ok(sent.includes('hp:p02_heating=45'));
     reset();
   }
 
@@ -221,7 +238,7 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
   // while it is off, and switches it back on after the rest.
   {
     const tick = fresh(33);
-    const short = zones(24, { current: 22.5 }); // recovery: wants 38
+    const short = zones(24, { current: 22.5 }); // recovery: wants 45
     const idle = pump({ flowSetpoint: 33, hz: 40, waterOut: 32.5 });
     let s = await tick(cfg, { now: at(9, 0), zones: short, pump: idle });
     assert.deepEqual(sent, [], 'no raise while idling, no rest during the grace after switching on');
@@ -232,12 +249,12 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     reset();
     const off = pump({ on: false, hz: 0, flowSetpoint: 33, waterOut: 31 });
     s = await tick(cfg, { now: at(9, 6), zones: short, pump: off });
-    assert.deepEqual(sent, ['hp:p02_heating=38'], 'raised while off');
+    assert.deepEqual(sent, ['hp:p02_heating=45'], 'raised while off');
     reset();
-    s = await tick(cfg, { now: at(9, 40), zones: short, pump: pump({ on: false, hz: 0, flowSetpoint: 38, waterOut: 28 }) });
+    s = await tick(cfg, { now: at(9, 40), zones: short, pump: pump({ on: false, hz: 0, flowSetpoint: 45, waterOut: 28 }) });
     assert.deepEqual(sent, [], 'still resting');
     assert.ok(s.reasons.some(r => /liga às/.test(r)));
-    s = await tick(cfg, { now: at(10, 6), zones: short, pump: pump({ on: false, hz: 0, flowSetpoint: 38, waterOut: 26 }) });
+    s = await tick(cfg, { now: at(10, 6), zones: short, pump: pump({ on: false, hz: 0, flowSetpoint: 45, waterOut: 26 }) });
     assert.deepEqual(sent, ['hp:switch=true'], 'back on from standstill after the rest');
     reset();
   }
@@ -294,8 +311,8 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     s = await tick(cfg, { now: at(0, 0, 20), zones: zones(24, { current: 23.5 }), pump: standby, warmBy: req });
     assert.equal(s.warmBy.phase, 'heating');
     assert.equal(s.roomTarget, 25);
-    assert.equal(s.flowTarget, 38);
-    assert.deepEqual(sent, ['z1:temp_set=250', 'z2:temp_set=250', 'hp:p02_heating=38']);
+    assert.equal(s.flowTarget, 45);
+    assert.deepEqual(sent, ['z1:temp_set=250', 'z2:temp_set=250', 'hp:p02_heating=45']);
     reset();
     // 07:00: holding, with how the house was then.
     s = await tick(cfg, { now: at(7, 0, 20), zones: zones(25, { current: 24.8 }), pump: standby, warmBy: req });
@@ -321,7 +338,7 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
   }
 
   // 22. Warm-by in dry-run: planned and shown, nothing sent. Automation off: kept, but it says it won't heat.
-  // Pump switched off by hand: it says that too.
+  // Pump switched off from outside: no warning, the requested time switches it on.
   {
     const req = { at: at(7, 0, 20).getTime(), target: null, setAt: null, source: 'app' };
     let s = await fresh(33)(dryCfg, { now: at(23, 0), zones: zones(24, { current: 23 }), pump: pump({ flowSetpoint: 33 }), warmBy: req });
@@ -329,8 +346,16 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     assert.deepEqual(sent, []);
     s = await fresh(33)(parseConfig({}), { now: at(23, 0), zones: zones(24), pump: pump(), warmBy: req });
     assert.match(s.warmBy.note, /desligada/);
-    s = await fresh(33)(cfg, { now: at(23, 0), zones: zones(24, { current: 23 }), pump: pump({ on: false, hz: 0, flowSetpoint: 33 }), warmBy: req });
-    assert.match(s.warmBy.note, /desligada à mão .* ligue-a para aquecer a tempo/);
+    const tick = fresh(33);
+    const closed = zones(24, { current: 23, open: false });
+    const off = pump({ on: false, hz: 0, flowSetpoint: 33 });
+    s = await tick(cfg, { now: at(23, 0), zones: closed, pump: off, warmBy: req });
+    assert.equal(s.warmBy.phase, 'waiting');
+    assert.doesNotMatch(s.warmBy.note, /Atenção/);
+    assert.ok(!sent.includes('hp:switch=true'), 'nothing wants heat yet');
+    s = await tick(cfg, { now: at(4, 0, 20), zones: closed, pump: off, warmBy: req });
+    assert.equal(s.warmBy.phase, 'heating');
+    assert.ok(sent.includes('hp:switch=true'), 'the requested time switches it on');
     reset();
   }
 
