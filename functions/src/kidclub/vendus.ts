@@ -262,21 +262,43 @@ export interface VendusDocumentFull extends VendusDocument {
   taxes?: VendusTaxLine[];
 }
 
-/** List FR documents in a date range. Handles Vendus pagination automatically. */
+const LIST_PAGE_SIZE = 50;
+// 40 pages x 50 = 2000 FR documents in one range: far above a KidClub quarter.
+// Hitting it throws rather than returning a short list, because a truncated
+// list would silently understate getKidclubVatSummary's totals.
+const LIST_MAX_PAGES = 40;
+
+/**
+ * List FR documents dated dateFrom..dateTo (YYYY-MM-DD, both inclusive).
+ * Handles Vendus pagination, capped at LIST_MAX_PAGES requests.
+ *
+ * The date filters are `since`/`until`. `date_from`/`date_to` are rejected
+ * with 403 P001 "O campo date_from não é permitido" (checked against live
+ * Vendus 2026-10-25). `per_page` is sent explicitly, because the
+ * `rows.length < LIST_PAGE_SIZE` stop condition depends on it.
+ */
 export async function listDocuments(dateFrom: string, dateTo: string): Promise<VendusDocument[]> {
   const all: VendusDocument[] = [];
-  let page = 1;
-  while (true) {
+  for (let page = 1; page <= LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({
+      since: dateFrom,
+      until: dateTo,
+      type: "FR",
+      per_page: String(LIST_PAGE_SIZE),
+      page: String(page),
+    });
     const chunk = await request<VendusDocument[] | { data?: VendusDocument[] }>(
-      "GET", `/documents/?date_from=${dateFrom}&date_to=${dateTo}&type=FR&page=${page}`
+      "GET", `/documents/?${query.toString()}`
     );
     const rows = Array.isArray(chunk) ? chunk : (chunk as any).data ?? [];
-    if (!rows.length) break;
+    if (!rows.length) return all;
     all.push(...rows);
-    if (rows.length < 50) break;
-    page++;
+    if (rows.length < LIST_PAGE_SIZE) return all;
   }
-  return all;
+  throw new Error(
+    `[Vendus] listDocuments ${dateFrom}..${dateTo}: still full after ${LIST_MAX_PAGES} pages ` +
+    `(${all.length} documents); stopping rather than returning a partial list`
+  );
 }
 
 /** Fetch a single document with full tax breakdown. */

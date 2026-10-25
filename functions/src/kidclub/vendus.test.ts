@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../externalGuard", () => ({ assertExternalCallsAllowed: vi.fn() }));
 vi.mock("./vendusClientCap", () => ({ reserveVendusClientCreation: vi.fn(async () => {}) }));
 
-import { createInvoice, createOrUpdateClient, VendusClientPayload } from "./vendus";
+import { createInvoice, createOrUpdateClient, listDocuments, VendusClientPayload } from "./vendus";
 import { reserveVendusClientCreation } from "./vendusClientCap";
 
 type Reply = { status?: number; body: unknown };
@@ -329,5 +329,55 @@ describe("createInvoice", () => {
 
     expect(calls[0].body.client).toEqual({ id: 42 });
     expect(calls[0].body).not.toHaveProperty("notes");
+  });
+});
+
+describe("listDocuments", () => {
+  const doc = (id: number) => ({ id, number: `FR 01P2026/${id}`, date: "2026-10-12" });
+  const docs = (from: number, n: number) => Array.from({ length: n }, (_, i) => doc(from + i));
+  const pageOf = (url: string) => new URL(url).searchParams.get("page");
+
+  it("filters with since/until (date_from/date_to get a 403 from Vendus), type=FR, explicit per_page=50", async () => {
+    const calls = stubFetch([{ body: docs(1, 3) }]);
+
+    const result = await listDocuments("2026-10-01", "2026-12-31");
+
+    expect(result.map((d) => d.id)).toEqual([1, 2, 3]);
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
+    expect(calls[0].url).toBe(
+      "https://www.vendus.pt/ws/v1.1/documents/?since=2026-10-01&until=2026-12-31&type=FR&per_page=50&page=1",
+    );
+    expect(calls[0].url).not.toMatch(/date_from|date_to/);
+  });
+
+  it("follows pages while they're full (50), stops at the first short one", async () => {
+    const calls = stubFetch([{ body: docs(1, 50) }, { body: { data: docs(51, 7) } }]);
+
+    const result = await listDocuments("2026-07-01", "2026-09-30");
+
+    expect(result).toHaveLength(57);
+    expect(calls.map((c) => pageOf(c.url))).toEqual(["1", "2"]);
+    for (const c of calls) expect(new URL(c.url).searchParams.get("per_page")).toBe("50");
+  });
+
+  it("an exact multiple of 50: the next, empty page ends the list", async () => {
+    const calls = stubFetch([{ body: docs(1, 50) }, { body: [] }]);
+
+    expect(await listDocuments("2026-07-01", "2026-09-30")).toHaveLength(50);
+    expect(calls.map((c) => pageOf(c.url))).toEqual(["1", "2"]);
+  });
+
+  it("bounded: stops after 40 full pages and throws instead of returning a partial list", async () => {
+    const calls = stubFetch(Array.from({ length: 41 }, (_, i) => ({ body: docs(i * 50 + 1, 50) })));
+
+    await expect(listDocuments("2026-01-01", "2026-12-31")).rejects.toThrow(/still full after 40 pages \(2000 documents\)/);
+    expect(calls).toHaveLength(40);
+    expect(pageOf(calls[39].url)).toBe("40");
+  });
+
+  it("a Vendus error is not swallowed (the old date_from 403 surfaced to getKidclubVatSummary's caller)", async () => {
+    stubFetch([{ status: 403, body: { errors: [{ code: "P001", message: "O campo date_from não é permitido." }] } }]);
+
+    await expect(listDocuments("2026-10-01", "2026-12-31")).rejects.toThrow(/failed \(403\)/);
   });
 });
