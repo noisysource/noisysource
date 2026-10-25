@@ -356,6 +356,10 @@ service cloud.firestore {
       // by the owner and the bridge; written only by the `domoticsWarmBy`
       // callable (Admin SDK), which checks every request, so no client writes.
       allow read: if (isDomoticsOwner() || isBridge()) && docId == 'warm_by';
+      // Electricity tariff for the Energia page (packages/shared/lib/energyBill.ts):
+      // prices, potência, billing day. The owner's alone; the bridge records kWh
+      // and never needs a price.
+      allow read, write: if isDomoticsOwner() && docId == 'tariff';
     }
 
     // Relay between the house and the app when away from the LAN. At home the
@@ -398,6 +402,16 @@ service cloud.firestore {
     match /domotics_incidents/{docId} {
       allow read: if isDomoticsOwner();
       allow create, update: if isBridge();
+    }
+
+    // kWh history, recorded by the bridge (domotics-bridge/src/energy.ts) for
+    // the Energia page: one document per Lisbon day, one field per 15-minute
+    // slot. Like the incidents: the owner reads, only the bridge writes, nobody
+    // deletes. The bridge patches one slot at a time, so create + update is all
+    // it needs, and only under a date id; it never reads them back.
+    match /domotics_energy/{docId} {
+      allow read: if isDomoticsOwner();
+      allow create, update: if isBridge() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
     }
 
     match /domotics_commands/{docId} {
