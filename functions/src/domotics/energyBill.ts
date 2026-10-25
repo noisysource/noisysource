@@ -187,7 +187,11 @@ export interface Tariff {
   powerKva: number;
   /** €/day, sem IVA. */
   powerPerDay: number;
-  /** €/kWh paid for export. 0 = no selling contract. No VAT (a private seller). */
+  /**
+   * €/kWh paid for what goes to the grid. 0 = no selling contract: the house
+   * sends some (the inverter regulating, and surplus when the battery is
+   * full), unpaid. That is Renato's case. No VAT if it were paid (a private seller).
+   */
   exportPrice: number;
   /** Imposto especial sobre o consumo, €/kWh. */
   iecPerKwh: number;
@@ -330,7 +334,7 @@ export interface BillInput {
   /** kWh bought, by period. */
   kwhVazio: number;
   kwhFora: number;
-  /** kWh sold. */
+  /** kWh sent to the grid (paid only if the tariff has an export price). */
   kwhExport: number;
   /** Days billed (may be fractional: a period so far). */
   days: number;
@@ -352,7 +356,7 @@ export interface Bill {
   /** IVA by rate: base and tax, €. */
   vat: Array<{ rate: number; base: number; tax: number }>;
   vatTotal: number;
-  /** € paid for exports (not taxed). */
+  /** € paid for what was sent to the grid (not taxed); 0 without an export price. */
   exportCredit: number;
   /** € to pay: net + VAT − export credit. */
   total: number;
@@ -404,15 +408,15 @@ export function computeBill(input: BillInput, tariff: Tariff): Bill {
 }
 
 export interface Scenarios {
-  /** What was paid: the energy actually bought, minus what was sold. */
+  /** What was paid: the energy actually bought (minus any export payment). */
   actual: Bill;
   /** Every kWh the house used bought from the grid, at the price of its hour. */
   withoutSystem: Bill;
-  /** Panels, no battery: what the panels covered as it was produced, the rest bought, the surplus sold. */
+  /** Panels, no battery: what the panels covered as it was produced, the rest bought, the surplus sent to the grid. */
   pvOnly: Bill;
   /** withoutSystem − actual. */
   saving: number;
-  /** withoutSystem − pvOnly: solar used as it was produced (plus its surplus sold). */
+  /** withoutSystem − pvOnly: solar used as it was produced (plus any export payment for its surplus). */
   savingPv: number;
   /** pvOnly − actual: energy stored and used later, less what charging it cost. */
   savingBattery: number;
@@ -423,7 +427,7 @@ export function computeScenarios(s: EnergySummary, days: number, tariff: Tariff)
   const kWh = (wh: number) => wh / 1000;
   const actual = computeBill({ kwhVazio: kWh(s.vazio.imp), kwhFora: kWh(s.fora.imp), kwhExport: kWh(s.total.exp), days }, tariff);
   const withoutSystem = computeBill({ kwhVazio: kWh(s.vazio.load), kwhFora: kWh(s.fora.load), kwhExport: 0, days }, tariff);
-  // Without the battery, what it supplied is bought instead, and the PV it took is sold.
+  // Without the battery, what it supplied is bought instead, and the PV it took goes to the grid.
   const d = derivedFlows(s.total);
   const pvOnly = computeBill({
     kwhVazio: kWh(s.vazio.load - s.vazio.pvLoad),
@@ -511,4 +515,118 @@ export function projectBill(
     projectedEnergy: projectedSummary,
     basisDays: scale > 0 ? basisDays : 0,
   };
+}
+
+// --- Solar surplus ------------------------------------------------------------------------
+// Renato doesn't sell to the grid: what goes there is given away. Most of it is
+// the inverter regulating around zero (tens of watts); the part worth pointing
+// out is real surplus, above all with the battery full, because that energy
+// could have been used in the house instead of bought later.
+
+/** Below this average a slot's export is the inverter regulating, not surplus (W; 25 Wh in a 15-minute slot). */
+export const SURPLUS_MIN_W = 100;
+const SURPLUS_MIN_WH = SURPLUS_MIN_W * (SLOT_SEC / 3600);
+/**
+ * From this SoC (%) the battery counts as full. Integer readings, and an LFP
+ * battery tapers its charge over the last few percent, so "100" would miss
+ * most of the time it's effectively full.
+ */
+export const BATTERY_FULL_SOC = 97;
+
+/**
+ * Whether the battery wasn't taking the surplus: at least BATTERY_FULL_SOC at
+ * the end of the slot, or charging less than SURPLUS_MIN_W on average while
+ * solar was going to the grid. The second catches a battery whose ceiling is
+ * set under 97 %, or one that has stopped charging for any other reason.
+ */
+export function batteryNotTaking(slot: Pick<EnergySlot, 'soc' | 'chg'>): boolean {
+  return (slot.soc !== undefined && slot.soc >= BATTERY_FULL_SOC) || slot.chg < SURPLUS_MIN_WH;
+}
+
+export interface SurplusSummary {
+  /** Wh sent to the grid, all of it (unpaid without an export price). */
+  exp: number;
+  /** Of which solar surplus: slots averaging at least SURPLUS_MIN_W of PV to the grid. The rest is regulation. */
+  surplus: number;
+  /** Of the surplus, sent while the battery was full or not taking it. */
+  full: number;
+  /**
+   * € the surplus would have saved had it been used in the house instead of
+   * bought, at the price of its hour (energy + IEC, standard VAT), less any
+   * export payment. An opportunity, not lost income.
+   */
+  value: number;
+  valueFull: number;
+  /** Surplus Wh by local hour of day, 0–23; all, and with the battery full. */
+  byHour: number[];
+  byHourFull: number[];
+  /** Days with readings in the range, for per-day averages. */
+  days: number;
+  /** Slots with surplus and the battery full, by start (ms) — for the day view. */
+  fullSlots: Array<{ t: number; wh: number }>;
+}
+
+/** The solar surplus in the slots of `days` that start in [from, to). */
+export function surplusOf(
+  days: EnergyDay[],
+  tariff: Tariff,
+  range: { from: number; to: number; now: number },
+): SurplusSummary {
+  const out: SurplusSummary = {
+    exp: 0, surplus: 0, full: 0, value: 0, valueFull: 0,
+    byHour: new Array(24).fill(0), byHourFull: new Array(24).fill(0), days: 0, fullSlots: [],
+  };
+  const vat = 1 + tariff.vatStandard / 100;
+  const end = Math.min(range.to, range.now);
+  for (const day of days) {
+    let seen = false;
+    day.slots.forEach((slot, i) => {
+      const t = day.start + i * SLOT_MS;
+      if (!slot || slot.sec <= 0 || t < range.from || t >= end) return;
+      seen = true;
+      out.exp += slot.exp;
+      // Solar only: what the battery itself sent to the grid isn't surplus.
+      const pvGrid = derivedFlows(slot).pvGrid;
+      if (pvGrid < SURPLUS_MIN_WH) return;
+      const price = (isVazio(t, tariff) ? tariff.priceVazio : tariff.priceForaVazio) + tariff.iecPerKwh;
+      const worth = (pvGrid / 1000) * Math.max(0, price * vat - tariff.exportPrice);
+      const hour = Math.floor(lisbonMinutes(t) / 60);
+      out.surplus += pvGrid;
+      out.value += worth;
+      out.byHour[hour] += pvGrid;
+      if (batteryNotTaking(slot)) {
+        out.full += pvGrid;
+        out.valueFull += worth;
+        out.byHourFull[hour] += pvGrid;
+        out.fullSlots.push({ t, wh: pvGrid });
+      }
+    });
+    if (seen) out.days++;
+  }
+  out.value = r2(out.value);
+  out.valueFull = r2(out.valueFull);
+  return out;
+}
+
+/**
+ * The shortest run of whole hours holding at least `share` of `byHour`'s total
+ * — "the surplus is mostly between 12:00 and 15:00". [from, to) in hours;
+ * null when there is nothing.
+ */
+export function surplusWindow(byHour: number[], share = 0.75): { from: number; to: number; share: number } | null {
+  const total = byHour.reduce((a, b) => a + b, 0);
+  if (total <= 0) return null;
+  let best: { from: number; to: number; sum: number } | null = null;
+  for (let from = 0; from < 24; from++) {
+    let sum = 0;
+    for (let to = from + 1; to <= 24; to++) {
+      sum += byHour[to - 1];
+      if (sum >= share * total) {
+        const len = to - from;
+        if (!best || len < best.to - best.from || (len === best.to - best.from && sum > best.sum)) best = { from, to, sum };
+        break;
+      }
+    }
+  }
+  return best && { from: best.from, to: best.to, share: best.sum / total };
 }

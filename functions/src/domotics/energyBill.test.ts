@@ -4,6 +4,7 @@ import { join } from "path";
 import {
   DEFAULT_TARIFF, SLOT_MS, addDays, billingPeriod, computeBill, computeScenarios, dayStart, derivedFlows,
   isVazio, lisbonDate, lisbonOffsetMs, parseEnergyDay, parseTariff, projectBill, slotsInDay, summarize,
+  surplusOf, surplusWindow, batteryNotTaking, BATTERY_FULL_SOC,
   zeroFlows, type EnergyDay, type EnergySlot, type Tariff,
 } from "./energyBill";
 
@@ -250,5 +251,57 @@ describe("projectBill", () => {
     const p = projectBill([], [], T, now);
     expect(p.basisDays).toBe(0);
     expect(p.projectedEnergy.total.imp).toBe(0);
+  });
+});
+
+describe("solar surplus", () => {
+  const date = "2026-11-10";
+  const from = dayStart(date);
+  const range = { from, to: from + 24 * HOUR, now: from + 25 * HOUR };
+  // Renato's tariff shape: no export price.
+  const t: Tariff = { ...T, exportPrice: 0, priceForaVazio: 0.164475, priceVazio: 0.095115 };
+
+  it("separates regulation, surplus while charging, and surplus with the battery full", () => {
+    const d = day(date, (_i, tt) => {
+      const h = hourOf(tt);
+      // 10–12: charging hard, a little surplus over the charge limit.
+      if (h >= 10 && h < 12) return { pv: 1100, load: 200, pvLoad: 200, chg: 750, exp: 150, soc: 80 };
+      // 12–15: battery full, everything spare goes to the grid.
+      if (h >= 12 && h < 15) return { pv: 1100, load: 200, pvLoad: 200, chg: 0, exp: 900, soc: 100 };
+      // Otherwise the inverter's regulation: a few Wh out now and then.
+      return { load: 200, imp: 205, exp: 5, soc: 50 };
+    });
+    const s = surplusOf([d], t, range);
+    expect(s.exp).toBe(8 * 150 + 12 * 900 + 76 * 5);
+    expect(s.surplus).toBe(8 * 150 + 12 * 900); // the 5 Wh slots are regulation
+    expect(s.full).toBe(12 * 900);
+    expect(s.fullSlots).toHaveLength(12);
+    expect(s.byHourFull.slice(12, 15)).toEqual([3600, 3600, 3600]);
+    expect(s.byHour[10]).toBe(600);
+    // 10.8 kWh fora de vazio at (0.164475 + 0.001) × 1.23.
+    expect(s.valueFull).toBeCloseTo(10.8 * 0.165475 * 1.23, 2);
+    expect(s.days).toBe(1);
+    expect(surplusWindow(s.byHourFull)).toEqual({ from: 12, to: 15, share: 1 });
+  });
+
+  it("the battery's own export isn't solar surplus", () => {
+    const d = day(date, () => ({ load: 300, dis: 800, batLoad: 300, exp: 500, soc: 60 }));
+    const s = surplusOf([d], t, range);
+    expect(s.exp).toBe(96 * 500);
+    expect(s.surplus).toBe(0);
+  });
+
+  it("counts a battery that has stopped charging as full, whatever its SoC says", () => {
+    expect(batteryNotTaking({ soc: BATTERY_FULL_SOC, chg: 400 })).toBe(true);
+    expect(batteryNotTaking({ soc: 90, chg: 10 })).toBe(true);
+    expect(batteryNotTaking({ soc: 90, chg: 400 })).toBe(false);
+    expect(batteryNotTaking({ chg: 400 })).toBe(false);
+  });
+
+  it("finds the main window of the day", () => {
+    const byHour = new Array(24).fill(0);
+    byHour[11] = 100; byHour[12] = 400; byHour[13] = 500; byHour[14] = 300; byHour[15] = 50;
+    expect(surplusWindow(byHour)).toEqual({ from: 12, to: 15, share: 1200 / 1350 });
+    expect(surplusWindow(new Array(24).fill(0))).toBeNull();
   });
 });
