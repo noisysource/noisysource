@@ -49,3 +49,9 @@ export const setStateFn = httpsCallable<{
     brightness?: number;
   }>;
 }>(fns, 'legrandSetState');
+
+/** The heating automation's one-off "warm by HH:MM" (functions/src/domotics/warmBy.ts). Owner only. */
+export const warmByFn = httpsCallable<
+  { time?: string; target?: number | null; clear?: boolean; source?: 'app' | 'chat' },
+  { cleared: boolean; at?: string; target?: number | null; local?: string; day?: string }
+>(fns, 'domoticsWarmBy');

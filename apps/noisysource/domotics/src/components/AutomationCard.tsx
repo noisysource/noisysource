@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, Minus, Plus, Bot } from 'lucide-react';
+import { ChevronDown, ChevronUp, Minus, Plus, Bot, AlarmClock } from 'lucide-react';
 import {
-  DEFAULT_AUTOMATION, loadAutomationConfig, saveAutomationConfig,
-  type AutomationConfig, type AutomationStatus,
+  DEFAULT_AUTOMATION, clearWarmBy, loadAutomationConfig, saveAutomationConfig, setWarmBy,
+  type AutomationConfig, type AutomationStatus, type WarmByStatus, type WarmupModel,
 } from '../data/automation';
 import { ago } from './HealthChips';
 
@@ -42,6 +42,13 @@ function Pill({ tone, children }: { tone: 'ok' | 'info' | 'idle' | 'warn'; child
 }
 
 const hhmm = (ms: number) => new Date(ms).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+/** "07:00 amanhã" — the requests are at most a day ahead. */
+function whenLabel(ms: number, now: number) {
+  const d = new Date(ms);
+  const tomorrow = new Date(now + 86_400_000);
+  return `${hhmm(ms)}${sameDay(d, new Date(now)) ? ' hoje' : sameDay(d, tomorrow) ? ' amanhã' : ''}`;
+}
 
 export default function AutomationCard({ status, canEdit }: Props) {
   const [now, setNow] = useState(Date.now);
@@ -90,6 +97,8 @@ export default function AutomationCard({ status, canEdit }: Props) {
               <span className={label}>Água (pavimento)</span>
               <span className="text-sm text-zinc-100 tabular-nums">
                 {status.flowTarget !== undefined ? `${status.flowTarget}°` : '—'}
+                {status.flowManual && <span className="text-zinc-400 text-xs"> · à mão</span>}
+                {status.recovery && !status.flowManual && <span className="text-amber-300 text-xs"> · recuperação</span>}
               </span>
             </div>
             <div className="flex flex-col">
@@ -102,6 +111,16 @@ export default function AutomationCard({ status, canEdit }: Props) {
 
           {status.pumpHold && (
             <p className="text-xs text-amber-300 leading-snug">Bomba: {status.pumpHold}.</p>
+          )}
+          {status.recovery && (
+            <p className="text-xs text-amber-300 leading-snug">
+              Recuperação: divisões {status.shortfall?.toFixed(1)}° abaixo do alvo em média — água no máximo até chegarem lá.
+            </p>
+          )}
+          {status.restUntil !== undefined && (
+            <p className="text-xs text-sky-300 leading-snug">
+              Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint — é aí que o E13 dispara).
+            </p>
           )}
 
           <ul className="flex flex-col gap-1">
@@ -140,8 +159,122 @@ export default function AutomationCard({ status, canEdit }: Props) {
         </div>
       )}
 
+      {status && <WarmBy status={status.warmBy ?? null} model={status.model} canEdit={canEdit} now={now} />}
+
       <Settings canEdit={canEdit} />
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Warm by HH:MM
+// ---------------------------------------------------------------------------
+
+const PHASE: Record<WarmByStatus['phase'], { text: string; tone: 'ok' | 'info' | 'idle' | 'warn' }> = {
+  waiting: { text: 'Agendado', tone: 'info' },
+  heating: { text: 'A aquecer', tone: 'ok' },
+  holding: { text: 'Hora chegou', tone: 'idle' },
+  done: { text: 'Terminado', tone: 'idle' },
+};
+
+function errorText(err: unknown) {
+  const e = err as { code?: string; message?: string };
+  if (e.code === 'functions/permission-denied') return 'Só o dono da casa pode marcar.';
+  if (e.code === 'functions/unauthenticated') return 'Inicie sessão para marcar.';
+  if (e.code === 'functions/invalid-argument') return `Pedido inválido: ${e.message}`;
+  return 'Não foi possível guardar o pedido.';
+}
+
+/**
+ * The one-off "warm by HH:MM": the bridge's plan for it (when it starts, why,
+ * how it went), and — signed in — setting or cancelling it through the
+ * `domoticsWarmBy` callable, which the chat will use too.
+ */
+function WarmBy({ status, model, canEdit, now }: {
+  status: WarmByStatus | null; model?: WarmupModel; canEdit: boolean; now: number;
+}) {
+  const [time, setTime] = useState('07:00');
+  const [target, setTarget] = useState(status?.target ?? DEFAULT_AUTOMATION.comfort);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** Saved here, not yet in the bridge's status (it reads the request every 2 min). */
+  const [sent, setSent] = useState<string | null>(null);
+
+  async function run(fn: () => Promise<unknown>, done: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      setSent(done);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const phase = status ? PHASE[status.phase] : null;
+  const input = 'bg-zinc-800 border border-zinc-700 rounded-md px-1.5 py-1 text-sm text-zinc-100 tabular-nums';
+  const btn = 'w-7 h-7 flex items-center justify-center rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 disabled:opacity-30';
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-zinc-800 pt-3">
+      <div className="flex items-center gap-2">
+        <AlarmClock size={13} className="text-zinc-400" />
+        <span className={`flex-1 ${label}`}>Quente às…</span>
+        {phase && <Pill tone={status!.late && status!.phase !== 'done' ? 'warn' : phase.tone}>{phase.text}</Pill>}
+      </div>
+
+      {status ? (
+        <>
+          <p className="text-sm text-zinc-100 tabular-nums">
+            {whenLabel(status.at, now)} · {status.target}°
+            {status.current !== null && <span className="text-zinc-500 text-xs"> · agora {status.current}°</span>}
+          </p>
+          <p className={`text-xs leading-snug ${status.late ? 'text-amber-300' : 'text-zinc-400'}`}>{status.note}</p>
+        </>
+      ) : (
+        <p className="text-xs text-zinc-500">Sem pedido. Marque uma hora e a automação começa a aquecer a tempo.</p>
+      )}
+
+      {model && (
+        <p className="text-[11px] text-zinc-500 leading-snug">
+          Como a casa aquece: chão quente ~{model.floorMin} min depois de a bomba arrancar
+          {model.floorSamples > 0 ? ` (${model.floorSamples} medições)` : ' (dos registos de 21–24/10)'}; divisões
+          {' '}{model.roomRatePerH.toFixed(2).replace('.', ',')}°/h
+          {model.roomSamples > 0 ? ` (${model.roomSamples} medições)` : ' (valor inicial, a aprender)'}.
+        </p>
+      )}
+
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input type="time" className={input} value={time} onChange={e => setTime(e.target.value)} aria-label="Hora" />
+          <button type="button" className={btn} onClick={() => setTarget(t => Math.max(18, t - 0.5))} disabled={target <= 18} aria-label="Menos"><Minus size={13} /></button>
+          <span className="w-10 text-center text-sm tabular-nums text-zinc-100">{target.toFixed(1)}°</span>
+          <button type="button" className={btn} onClick={() => setTarget(t => Math.min(26, t + 0.5))} disabled={target >= 26} aria-label="Mais"><Plus size={13} /></button>
+          <button
+            type="button"
+            onClick={() => void run(() => setWarmBy(time, target), `Pedido para as ${time} guardado — o Pi faz o plano em até 2 min.`)}
+            disabled={busy || !/^\d{2}:\d{2}$/.test(time)}
+            className="ml-auto text-xs px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 font-semibold disabled:opacity-40"
+          >
+            {busy ? 'A guardar…' : status ? 'Mudar' : 'Marcar'}
+          </button>
+          {status && status.phase !== 'done' && (
+            <button
+              type="button"
+              onClick={() => void run(clearWarmBy, 'Pedido cancelado — o Pi deixa-o em até 2 min.')}
+              disabled={busy}
+              className="text-xs px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+          )}
+        </div>
+      )}
+      {sent && <p className="text-[11px] text-emerald-300">{sent}</p>}
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
   );
 }
 
@@ -302,6 +435,19 @@ function Settings({ canEdit }: { canEdit: boolean }) {
             <Stepper label="Por cada grau mais frio" value={cfg.flow.slope} step={0.1} min={0} max={3} unit="°" onChange={v => patch('flow', { ...cfg.flow, slope: v })} />
             <Stepper label="Mínimo" value={cfg.flow.min} step={1} min={25} max={cfg.flow.max} unit="°" onChange={v => patch('flow', { ...cfg.flow, min: v })} />
             <Stepper label="Máximo" value={cfg.flow.max} step={1} min={cfg.flow.min} max={45} unit="°" onChange={v => patch('flow', { ...cfg.flow, max: v })} />
+          </Group>
+
+          <Group title="Recuperação">
+            <Toggle on={cfg.recovery.enabled} onChange={v => patch('recovery', { enabled: v })} hint="Divisões mais de 0,5° abaixo do alvo: água no máximo até lá chegarem. Nunca baixa a água enquanto estiverem abaixo.">
+              Recuperar depressa
+            </Toggle>
+          </Group>
+
+          <Group title="Descanso no setpoint (E13)">
+            <Toggle on={cfg.rest.enabled} onChange={v => patch('rest', { ...cfg.rest, enabled: v })} hint="Quando a água chega ao setpoint com o compressor no mínimo, desliga e descansa em vez de ficar parada e voltar a acelerar. Com a proteção E13 ligada é ela que desliga.">
+              Desligar em vez de ficar parada
+            </Toggle>
+            <Stepper label="Descanso" value={cfg.rest.minutes} step={15} min={15} max={240} unit=" min" onChange={v => patch('rest', { ...cfg.rest, minutes: v })} />
           </Group>
 
           <Group title="Bomba">

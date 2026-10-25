@@ -98,8 +98,23 @@ export function demoAutomation(): AutomationStatus {
     ],
     actions: [
       { at: now - 4 * 60_000, device: 'Sala therm', what: 'alvo 24°C → 24.5°C', sent: false },
-      { at: now - 9 * 60_000, device: 'Bomba de calor', what: 'água 42°C → 30°C', sent: false },
+      { at: now - 9 * 60_000, device: 'Bomba de calor', what: 'água 42°C → 41°C (desce 1° de cada vez até 30°C)', sent: false },
     ],
+    warmBy: {
+      at: now + 9 * 3600_000,
+      target: 24,
+      setAt: now - 3600_000,
+      source: 'app',
+      phase: 'waiting',
+      startAt: now + 4 * 3600_000,
+      leadMin: 300,
+      current: 23.2,
+      expectedAt: now + 8.5 * 3600_000,
+      late: false,
+      outcome: null,
+      note: 'Começa a aquecer mais tarde (faltam 0,8° · chão ~90 min + divisões a 0,30°/h + 30 min de margem).',
+    },
+    model: { floorMin: 90, roomRatePerH: 0.3, floorSamples: 2, roomSamples: 0 },
     evaluatedAt: now,
   };
 }
