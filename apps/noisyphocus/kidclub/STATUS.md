@@ -113,7 +113,8 @@ after the first real deploy.
 
 **🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`, NOT in prod.** `listDocuments` (`vendus.ts`) filtered
 with `date_from`/`date_to`, which live Vendus rejects with 403 `P001`, so `getKidclubVatSummary` (FinHub → IVA,
-NoisyPhocus) failed. #116 switches it to `since`/`until` with `per_page=50` and a 40-page cap. It reaches prod only via
+NoisyPhocus) failed. #116 switches it to `since`/`until` with `per_page=50` and a 40-page cap, and treats Vendus's
+empty-page answer (404 `A001` "No data", verified live 2026-10-25) as the end of the list. It reaches prod only via
 the next `staging` → `main` promotion. After that, check the IVA page on prod: the KidClub rows should be there with no
 "Erro Vendus" banner.
 

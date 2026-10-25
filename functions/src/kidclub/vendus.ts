@@ -26,7 +26,8 @@ function registerId(): number {
   return parseInt(id, 10);
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** One Vendus call; returns status and parsed body without judging them. */
+async function send(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; data: any }> {
   assertExternalCallsAllowed("Vendus");
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
@@ -37,7 +38,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json() as any;
-  if (!res.ok) throw new Error(`Vendus ${method} ${path} failed (${res.status}): ${JSON.stringify(data)}`);
+  return { ok: res.ok, status: res.status, data };
+}
+
+function failure(method: string, path: string, status: number, data: unknown): Error {
+  return new Error(`Vendus ${method} ${path} failed (${status}): ${JSON.stringify(data)}`);
+}
+
+/** One Vendus call; throws on any non-2xx. */
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const { ok, status, data } = await send(method, path, body);
+  if (!ok) throw failure(method, path, status, data);
   return data as T;
 }
 
@@ -269,6 +280,15 @@ const LIST_PAGE_SIZE = 50;
 const LIST_MAX_PAGES = 40;
 
 /**
+ * Vendus's "no rows" answer to a list query: 404 with errors[].code "A001"
+ * (body `{"errors":[{"code":"A001","message":"No data"}]}`, checked against
+ * live Vendus 2026-10-25 on an empty range). Any other 404 is a real error.
+ */
+function isNoData(status: number, data: any): boolean {
+  return status === 404 && Array.isArray(data?.errors) && data.errors.some((e: any) => e?.code === "A001");
+}
+
+/**
  * List FR documents dated dateFrom..dateTo (YYYY-MM-DD, both inclusive).
  * Handles Vendus pagination, capped at LIST_MAX_PAGES requests.
  *
@@ -276,6 +296,10 @@ const LIST_MAX_PAGES = 40;
  * with 403 P001 "O campo date_from não é permitido" (checked against live
  * Vendus 2026-10-25). `per_page` is sent explicitly, because the
  * `rows.length < LIST_PAGE_SIZE` stop condition depends on it.
+ *
+ * An empty page comes back as 404 A001 (see isNoData), not as `[]`: that ends
+ * the list, so a range with no FRs is `[]` and an exact multiple of 50 stops
+ * on the empty page after it. Every other non-2xx throws.
  */
 export async function listDocuments(dateFrom: string, dateTo: string): Promise<VendusDocument[]> {
   const all: VendusDocument[] = [];
@@ -287,9 +311,13 @@ export async function listDocuments(dateFrom: string, dateTo: string): Promise<V
       per_page: String(LIST_PAGE_SIZE),
       page: String(page),
     });
-    const chunk = await request<VendusDocument[] | { data?: VendusDocument[] }>(
-      "GET", `/documents/?${query.toString()}`
-    );
+    const path = `/documents/?${query.toString()}`;
+    const { ok, status, data } = await send("GET", path);
+    if (!ok) {
+      if (isNoData(status, data)) return all;
+      throw failure("GET", path, status, data);
+    }
+    const chunk = data as VendusDocument[] | { data?: VendusDocument[] };
     const rows = Array.isArray(chunk) ? chunk : (chunk as any).data ?? [];
     if (!rows.length) return all;
     all.push(...rows);

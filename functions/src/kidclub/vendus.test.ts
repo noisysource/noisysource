@@ -336,6 +336,8 @@ describe("listDocuments", () => {
   const doc = (id: number) => ({ id, number: `FR 01P2026/${id}`, date: "2026-10-12" });
   const docs = (from: number, n: number) => Array.from({ length: n }, (_, i) => doc(from + i));
   const pageOf = (url: string) => new URL(url).searchParams.get("page");
+  // What live Vendus answers for a page with no rows (checked 2026-10-25 on an empty range).
+  const NO_DATA: Reply = { status: 404, body: { errors: [{ code: "A001", message: "No data" }] } };
 
   it("filters with since/until (date_from/date_to get a 403 from Vendus), type=FR, explicit per_page=50", async () => {
     const calls = stubFetch([{ body: docs(1, 3) }]);
@@ -360,11 +362,34 @@ describe("listDocuments", () => {
     for (const c of calls) expect(new URL(c.url).searchParams.get("per_page")).toBe("50");
   });
 
-  it("an exact multiple of 50: the next, empty page ends the list", async () => {
-    const calls = stubFetch([{ body: docs(1, 50) }, { body: [] }]);
+  it("an exact multiple of 50: the next page's 404 A001 (no data) ends the list", async () => {
+    const calls = stubFetch([{ body: docs(1, 50) }, { body: docs(51, 50) }, NO_DATA]);
 
-    expect(await listDocuments("2026-07-01", "2026-09-30")).toHaveLength(50);
-    expect(calls.map((c) => pageOf(c.url))).toEqual(["1", "2"]);
+    const result = await listDocuments("2026-07-01", "2026-09-30");
+
+    expect(result.map((d) => d.id)).toEqual(docs(1, 100).map((d) => d.id));
+    expect(calls.map((c) => pageOf(c.url))).toEqual(["1", "2", "3"]);
+  });
+
+  it("no FRs in the range: page 1's 404 A001 (no data) is an empty list, not an error", async () => {
+    const calls = stubFetch([NO_DATA]);
+
+    expect(await listDocuments("2026-10-22", "2026-10-25")).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a 404 that isn't A001 still throws, on page 1 or later", async () => {
+    const otherNotFound: Reply[] = [
+      { status: 404, body: { errors: [{ code: "A002", message: "Not found" }] } },
+      { status: 404, body: {} },
+    ];
+    for (const reply of otherNotFound) {
+      stubFetch([reply]);
+      await expect(listDocuments("2026-10-01", "2026-12-31")).rejects.toThrow(/GET \/documents\/\?since=.* failed \(404\)/);
+
+      stubFetch([{ body: docs(1, 50) }, reply]);
+      await expect(listDocuments("2026-10-01", "2026-12-31")).rejects.toThrow(/failed \(404\)/);
+    }
   });
 
   it("bounded: stops after 40 full pages and throws instead of returning a partial list", async () => {
@@ -375,9 +400,9 @@ describe("listDocuments", () => {
     expect(pageOf(calls[39].url)).toBe("40");
   });
 
-  it("a Vendus error is not swallowed (the old date_from 403 surfaced to getKidclubVatSummary's caller)", async () => {
+  it("a Vendus error is not swallowed (the old date_from 403 P001 surfaced to getKidclubVatSummary's caller)", async () => {
     stubFetch([{ status: 403, body: { errors: [{ code: "P001", message: "O campo date_from não é permitido." }] } }]);
 
-    await expect(listDocuments("2026-10-01", "2026-12-31")).rejects.toThrow(/failed \(403\)/);
+    await expect(listDocuments("2026-10-01", "2026-12-31")).rejects.toThrow(/failed \(403\).*P001/);
   });
 });
