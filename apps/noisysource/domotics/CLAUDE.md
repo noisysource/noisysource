@@ -6,6 +6,7 @@
 Home automation for Renato's house: lights, blinds, and climate control, plus a live dashboard. Two separate device ecosystems, both behind cloud APIs with a local bridge in front for speed:
 - **Legrand** (lights, blinds) — via the **Netatmo API** (`functions/src/domotics/legrand.ts`)
 - **Tuya/SmartLife** (thermostats, heat pump) — via the **Tuya Cloud API**, EU data centre (`functions/src/domotics/tuya.ts`)
+  - The heat pump (Zantia Vancouver 13) is **dedicated to underfloor heating**. Domestic hot water (AQS) comes from a separate heat pump that is not integrated, so this pump's DHW tank reading and DHW setpoint mean nothing — mode "Heating" is correct, and a cold DHW tank is not a fault (Renato, 2026-10-19).
 
 There is no Shelly integration and no amps/watts/kWh energy monitoring — despite earlier planning docs, those were never built.
 
@@ -38,8 +39,11 @@ A Raspberry Pi on the house LAN (`192.168.1.125`) runs a bridge service that tal
 ## Firestore Collections
 Prefixed `domotics_`:
 - `domotics_config/netatmo`, `domotics_config/tuya` — OAuth credentials for each cloud API (sensitive — see Notes)
-- `domotics_state/tuya` — last known device/inverter state, published by the bridge
+- `domotics_config/automation` — heating automation settings (owner read/write, bridge read)
+- `domotics_config/guard` — E13 guard on/off (owner read/write, bridge read)
+- `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. automation and guard status)
 - `domotics_commands` — command queue the bridge drains when off-LAN
+- `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page (owner read, bridge create/update, no deletes)
 
 ---
 
@@ -66,7 +70,7 @@ Both Netatmo and Tuya are metered cloud APIs — this is exactly the class of bu
 
 ## Notes
 - `domotics_config/netatmo` (OAuth client id/secret/refresh token) was **world-readable from 2026-08-05 to 2026-08-09** — confirm it's been rotated in the Netatmo console before treating those credentials as trustworthy; check `firestore.rules` covers `domotics_config` correctly before touching it.
-- The Pi is a 256MB Raspberry Pi 1 Model B Rev 2, MAC `b8:27:eb:bd:be:8c`, key-based SSH as `pi`. Five of the seven Tuya devices sit behind a WiFi repeater and share its MAC (`d6:35:38:f6:ea:21`) from the Pi's wired side; Sala and Master bedroom are on the main router's WiFi and answer with their own MACs. `deploy/pin-device-arp.sh` works around the repeater's proxy-ARP refusing some IPs, but its majority vote can elect a single device's own MAC (it did, 2026-10-16 — see STATUS.md). Device IPs are DHCP-assigned and do move; after a reshuffle, rerun `deploy/sync-tuya-keys.js --write`. Remove the ARP workaround if devices ever move off the repeater.
+- The Pi is a 256MB Raspberry Pi 1 Model B Rev 2, MAC `b8:27:eb:bd:be:8c`, key-based SSH as `pi`. Five of the seven Tuya devices sit behind a WiFi repeater and share its MAC (`d6:35:38:f6:ea:21`) from the Pi's wired side; Sala and Master bedroom are on the main router's WiFi and answer with their own MACs. `deploy/pin-device-arp.sh` works around the repeater's proxy-ARP refusing some IPs, but its majority vote can elect a single device's own MAC (it did, 2026-10-16 — see STATUS.md). Since 2026-10-25 the seven Tuya devices have DHCP reservations on the MEO router (GR141IG, LAN → Leases estáticas): Sala .230, Master bedroom .231, Quarto .232, Kids Bathroom .233, Hall quartos .234, Quarto Diniz .235, heat pump .236; the inverter (static on the device, Modbus TCP) is reserved at .117. That router refuses to reserve an address that is currently leased, so a new reservation must use a free address and the device moves once. Run `deploy/sync-tuya-keys.js --write` after any change. Router 5 GHz is fixed on channel 36: on the default "Auto" it sat on DFS channel 100, and the Xiaomi repeater dropped off for ~30 min at a time. Remove the ARP workaround if devices ever move off the repeater.
 - Previous energy monitoring work exists in a separate repo — review before building energy features, if that's ever picked back up.
 
 ---

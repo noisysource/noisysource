@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server, Thermometer, AlertTriangle,
+  Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server, Thermometer, Box, ClipboardList,
 } from 'lucide-react';
 import type {
-  Device, DevicePlacement, HeatPumpDevice, LightCommand, BlindCommand,
+  Device, DevicePlacement, LightCommand, BlindCommand,
   ThermostatCommand, HeatPumpCommand,
 } from '@shared/models/Device';
 import type { FloorPlan, InfraItem, InfraKind, InfraLayer, PlanRoom, Wall } from '@shared/models/Room';
@@ -13,58 +13,14 @@ import type { DeviceStatus } from '../App';
 import type { EnergyReading } from '../data/energy';
 import { batteryFlow, gridFlow, solarShare, formatWatts } from '../data/energy';
 import type { User } from 'firebase/auth';
-import { faultMeaning } from '../data/heatpumpFaults';
 import Clock from './Clock';
 import ClimatePanel from './ClimatePanel';
+import HealthChips, { FaultBanner } from './HealthChips';
 import FloorPlanSvg, { type EditTarget } from './FloorPlan';
 
 const DEVICE_ICON: Record<Device['type'], string> = {
   light: '💡', blind: '🪟', thermostat: '🌡️', heatpump: '🔥',
 };
-
-type Tone = 'ok' | 'warn' | 'bad' | 'idle';
-
-const TONE: Record<Tone, { chip: string; dot: string }> = {
-  ok: { chip: 'bg-emerald-950/70 text-emerald-300', dot: 'bg-emerald-400' },
-  warn: { chip: 'bg-amber-950/70 text-amber-300', dot: 'bg-amber-400' },
-  bad: { chip: 'bg-red-950 text-red-300', dot: 'bg-red-400' },
-  idle: { chip: 'bg-zinc-800 text-zinc-400', dot: 'bg-zinc-500' },
-};
-
-/**
- * A health indicator that is always there, green included. The old header
- * only ever showed bad news, so a working house looked identical to a page
- * that hadn't loaded anything yet.
- */
-function StatusChip({ tone, title, onClick, children }: {
-  tone: Tone; title?: string; onClick?: () => void; children: ReactNode;
-}) {
-  const cls = `flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg whitespace-nowrap ${TONE[tone].chip}`;
-  const dot = <span className={`w-1.5 h-1.5 rounded-full ${TONE[tone].dot}`} />;
-  return onClick ? (
-    <button className={`${cls} hover:brightness-125 transition`} title={title} onClick={onClick}>
-      {dot}{children}
-    </button>
-  ) : (
-    <span className={cls} title={title}>{dot}{children}</span>
-  );
-}
-
-function ago(ms: number) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s} s`;
-  const m = Math.round(s / 60);
-  return m < 60 ? `${m} min` : `${Math.round(m / 60)} h`;
-}
-
-/**
- * Past this, the reading is older than the bridge would ever leave it. Away
- * from home nothing tells the bridge it's being watched (only LAN requests
- * do), so it publishes to the relay at its idle rate — every 5 min — and a
- * 3-minute-old reading is normal, not a warning. The relay itself gives up at
- * 15 min (bridge.ts), where the chip turns red instead.
- */
-const STALE_AFTER_MS = 7 * 60_000;
 
 const PANEL_PREF = 'domotics.climatePanel';
 
@@ -92,6 +48,9 @@ interface Props {
   onSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onOpenAdmin: () => void;
+  onOpenReports: () => void;
+  /** Back to the 3D house — this 2D plan is the editor and the detailed view. */
+  onShow3D: () => void;
   editMode: boolean;
   editTarget: EditTarget;
   selectedId: string | null;
@@ -114,7 +73,7 @@ interface Props {
 
 export default function PlanScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
-  onSignIn, onSignOut, onOpenAdmin,
+  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onShow3D,
   editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
@@ -132,13 +91,6 @@ export default function PlanScreen({
    */
   const [viewLayer, setViewLayer] = useState<InfraLayer | 'all'>('all');
   const [panelOpen, setPanelOpen] = useState(initialPanelOpen);
-  /** Ticks so "updated N s ago" stays honest between polls. */
-  const [now, setNow] = useState(Date.now);
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5000);
-    return () => clearInterval(id);
-  }, []);
 
   function togglePanel() {
     setPanelOpen(open => {
@@ -146,29 +98,6 @@ export default function PlanScreen({
       return !open;
     });
   }
-
-  const climate = devices.filter(d => d.vendor === 'tuya');
-  const climateOnline = climate.filter(d => d.online !== false).length;
-  const faulty = devices.filter(
-    (d): d is HeatPumpDevice => d.type === 'heatpump' && d.state.faults.length > 0,
-  );
-  const bridgeAge = bridgeUpdatedAt ? now - bridgeUpdatedAt : undefined;
-
-  const climateChip: { tone: Tone; text: string } =
-    bridgeStatus === 'loading' ? { tone: 'idle', text: 'Clima…' }
-    : bridgeStatus !== 'ok' ? { tone: 'bad', text: 'Clima offline' }
-    : {
-        tone: climateOnline < climate.length || (bridgeAge ?? 0) > STALE_AFTER_MS ? 'warn' : 'ok',
-        text: `Clima · ${climateOnline}/${climate.length}${
-          bridgeAge !== undefined && bridgeAge > STALE_AFTER_MS ? ` · há ${ago(bridgeAge)}` : ''
-        }`,
-      };
-
-  const lightsChip: { tone: Tone; text: string } =
-    deviceStatus === 'ok' ? { tone: 'ok', text: 'Luzes e estores' }
-    : deviceStatus === 'signin' ? { tone: 'warn', text: 'Luzes: entrar' }
-    : deviceStatus === 'loading' ? { tone: 'idle', text: 'Luzes…' }
-    : { tone: 'bad', text: 'Luzes offline' };
 
   const selectedRoom = plan.rooms.find(r => r.id === selectedId) ?? null;
   const infra = plan.infrastructure ?? [];
@@ -323,23 +252,13 @@ export default function PlanScreen({
         <div className="flex items-center gap-3">
           <span className="text-2xl select-none" aria-hidden="true">🏠</span>
           <h1 className="text-lg font-semibold tracking-wide text-zinc-100">Domotics</h1>
-          <StatusChip
-            tone={climateChip.tone}
-            title={bridgeAge !== undefined
-              ? `Termóstatos e bomba de calor, via ponte (Raspberry Pi) — lido há ${ago(bridgeAge)}`
-              : 'Termóstatos e bomba de calor, via ponte (Raspberry Pi)'}
-          >
-            {climateChip.text}
-          </StatusChip>
-          <StatusChip
-            tone={lightsChip.tone}
-            title={deviceStatus === 'signin'
-              ? 'As luzes e estores (Legrand) precisam de sessão iniciada — toque para entrar'
-              : 'Luzes e estores (Legrand / Netatmo)'}
-            onClick={deviceStatus === 'signin' ? () => void onSignIn() : undefined}
-          >
-            {lightsChip.text}
-          </StatusChip>
+          <HealthChips
+            devices={devices}
+            deviceStatus={deviceStatus}
+            bridgeStatus={bridgeStatus}
+            bridgeUpdatedAt={bridgeUpdatedAt}
+            onSignIn={onSignIn}
+          />
         </div>
 
         <div className="flex items-center gap-2">
@@ -417,6 +336,14 @@ export default function PlanScreen({
             </>
           ) : (
             <>
+              <button
+                onClick={onShow3D}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-sky-950 hover:bg-sky-900 text-sky-200 text-sm transition-colors mr-1"
+                title="Ver a casa em 3D"
+              >
+                <Box size={15} strokeWidth={2} />
+                3D
+              </button>
               <div className="flex rounded-xl bg-zinc-900 border border-zinc-800 p-0.5 mr-1">
                 {([
                   ['all', 'Tudo'],
@@ -452,6 +379,16 @@ export default function PlanScreen({
               {/* Signed in only: every action behind it needs an identity the
                   rules will accept, so offering it signed out would only ever
                   produce a permission error. */}
+              {user && (
+                <button
+                  onClick={onOpenReports}
+                  className="flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors mr-1"
+                  aria-label="Relatórios"
+                  title="Relatórios — avarias da bomba"
+                >
+                  <ClipboardList size={15} strokeWidth={2} />
+                </button>
+              )}
               {user && (
                 <button
                   onClick={onOpenAdmin}
@@ -495,21 +432,7 @@ export default function PlanScreen({
         </div>
       </header>
 
-      {/* A fault is the one thing that must not depend on opening the right
-          popover — it goes across the top, whatever else is on screen. */}
-      {faulty.length > 0 && (
-        <div className="flex items-start gap-3 px-6 py-2.5 bg-red-950 border-b border-red-800 text-sm text-red-100 shrink-0">
-          <AlertTriangle size={18} className="text-red-400 shrink-0 mt-px" />
-          <div className="flex-1 min-w-0">
-            {faulty.map(d => (
-              <p key={d.id}>
-                <b>Avaria — {d.name}:</b>{' '}
-                {d.state.faults.map(code => `${code} ${faultMeaning(code)}`).join(' · ')}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
+      <FaultBanner devices={devices} />
 
       <div className="flex-1 min-h-0 flex relative">
         <main className="flex-1 min-w-0 p-4 overflow-hidden">

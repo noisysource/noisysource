@@ -125,7 +125,39 @@ same. ×10 = tenths of a degree.
 | 123 | `bcu_com_state` | fault bitmap (IPM sub-codes E20_x) |
 
 The bit → E-code tables for the bitmaps, and what each code means, live in the
-app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts`.
+app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts` (a copy of the bit
+tables is in `src/faults.ts`, for the incidents).
+
+### Incidents and the E13 guard
+
+- **The pump is read every 30 s even when nobody is watching** (`PUMP_POLL_MS`;
+  the thermostats keep the 5-min idle rate). Unwatched, the state is still only
+  published every 5 min, unless the pump switches, faults or the guard changes mode.
+- **Incidents** (`src/incidents.ts`) go to `domotics_incidents/{id}` for the app's
+  Reports page: a fault with 30 min of readings before it and 5 min after, how it
+  ended (`self` / `reset`, lockout = second trip within 20 min or still faulted
+  after 10 min), the restart time; and every on/off with who caused it (`app`,
+  `automation`, `guard`, `outside` = not through this bridge). Writes are queued
+  in `incidents-pending.json` and retried with backoff, so a network gap or a
+  missing rule loses nothing. Ids are stable (`fault-<UTC start>-<code>`).
+- **E13 guard** (`src/guard.ts`, was `deploy/e13-guard.py`): with
+  `domotics_config/guard` `{enabled: true}` (app: Relatórios or Clima → "Proteção
+  E13"), switches the pump off for 60 min when it idles at the setpoint (≤ 45 Hz,
+  water ≥ setpoint − 1.5) and for 120 min straight after a trip; still faulted
+  within 3 min of a switch-on = lockout, and it stops acting until the fault
+  clears. Never switches on a pump someone else switched off. Switched off in the
+  app while resting, it switches the pump back on. State in `guard-state.json`,
+  so a rest survives a restart. Log lines: `[guard]`, `[incident]`. With the
+  heating automation running live, a rest that is due to end carries on while no
+  zone wants heat (`holdRest`, sent by the automation) and ends as soon as one does.
+- **Heating automation** (`src/automation.ts`, `src/warmby.ts`; design in
+  `apps/noisysource/domotics/HANDOFF-heating-automation.md`): settings in
+  `domotics_config/automation`, the one-off "warm by HH:MM" in
+  `domotics_config/warm_by` (both read every 2 min, cached in
+  `automation-config.json` / `warm-by.json`). The warm-up model it learns and the
+  last water setpoint it sent are in `automation-state.json`. Log lines: `[automation]`.
+- **History**: `deploy/backfill-incidents.cjs` replays the hand-run logger's
+  files through the same recorder (see its header). Tests: `pnpm test`.
 
 ## Moving to the Raspberry Pi
 

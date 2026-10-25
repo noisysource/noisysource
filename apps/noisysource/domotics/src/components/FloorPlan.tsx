@@ -10,6 +10,7 @@ import type { EnergyReading } from '../data/energy';
 import { formatWatts } from '../data/energy';
 import { faultMeaning } from '../data/heatpumpFaults';
 import { heatPumpModeLabel } from '../data/tuyaData';
+import { placeDevices, roomStats } from '../data/placement';
 
 /** Which layer the edit gestures act on. */
 export type EditTarget = 'rooms' | 'devices' | 'walls';
@@ -148,45 +149,6 @@ function wrapText(text: string, maxChars: number): string[] {
   return lines;
 }
 
-/**
- * Starting position for a device nobody has placed yet: lights in a grid across
- * the upper half of the room, blinds in a row along the bottom edge where the
- * windows tend to be. Deterministic, so markers don't shuffle between renders.
- */
-function autoPlace(kind: Device['type'], i: number, total: number): DevicePlacement {
-  if (kind === 'blind') return { rx: (i + 0.5) / total, ry: 0.86 };
-  // Climate devices get their own band so they don't land under the lights.
-  if (kind === 'thermostat') return { rx: (i + 0.5) / total, ry: 0.68 };
-  if (kind === 'heatpump') return { rx: (i + 0.5) / total, ry: 0.5 };
-  const cols = Math.ceil(Math.sqrt(total));
-  const rows = Math.ceil(total / cols);
-  return {
-    rx: ((i % cols) + 0.5) / cols,
-    ry: 0.16 + ((Math.floor(i / cols) + 0.5) / rows) * 0.44,
-  };
-}
-
-function roomStats(devices: Device[], roomId: string) {
-  const inRoom = devices.filter(d => d.roomId === roomId);
-  const lights = inRoom.filter(d => d.type === 'light');
-  const lit = lights.filter(d => d.type === 'light' && d.state.on).length;
-  const blinds = inRoom.filter(d => d.type === 'blind');
-  // Only a reachable thermostat contributes a reading; an unreachable one
-  // reports 0 °C, which must never be shown as though it were real.
-  const thermo = inRoom.find(
-    (d): d is Extract<Device, { type: 'thermostat' }> =>
-      d.type === 'thermostat' && d.online !== false,
-  );
-  return {
-    count: inRoom.length,
-    lights: lights.length,
-    lit,
-    blinds: blinds.length,
-    temp: thermo?.state.current,
-    heating: thermo?.state.heating ?? false,
-  };
-}
-
 export default function FloorPlan({
   rooms, devices, placements, grid, editMode, editTarget, selectedId, externalDragId,
   onSelect, onOpenRoom, onChange, onPlaceDevice, onExternalDragEnd,
@@ -228,34 +190,10 @@ export default function FloorPlan({
   }, [rooms]);
 
   /** Absolute plan position of every device whose room still exists. */
-  const markers = useMemo(() => {
-    const byRoom = new Map<string, Device[]>();
-    for (const d of devices) {
-      const list = byRoom.get(d.roomId);
-      if (list) list.push(d); else byRoom.set(d.roomId, [d]);
-    }
-    const out: Array<{ device: Device; cx: number; cy: number }> = [];
-    for (const [roomId, list] of byRoom) {
-      const room = roomById.get(roomId);
-      if (!room) continue; // unplaced — lives in the sidebar until dragged on
-      // Annotated as Device[] so indexing by device.type doesn't produce a
-      // union of array types, whose .indexOf() would demand LightDevice &
-      // BlindDevice — an impossible intersection.
-      const sameKind: Record<Device['type'], Device[]> = {
-        light: list.filter(d => d.type === 'light'),
-        blind: list.filter(d => d.type === 'blind'),
-        thermostat: list.filter(d => d.type === 'thermostat'),
-        heatpump: list.filter(d => d.type === 'heatpump'),
-      };
-      for (const device of list) {
-        const peers = sameKind[device.type];
-        const p = placements[device.id]
-          ?? autoPlace(device.type, peers.indexOf(device), peers.length);
-        out.push({ device, cx: room.x + p.rx * room.w, cy: room.y + p.ry * room.h });
-      }
-    }
-    return out;
-  }, [devices, placements, roomById]);
+  const markers = useMemo(
+    () => placeDevices(devices, roomById, placements),
+    [devices, placements, roomById],
+  );
 
   /** Client coords -> plan metres. */
   function toPlanXY(clientX: number, clientY: number) {

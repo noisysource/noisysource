@@ -3,6 +3,8 @@ import {
 } from 'firebase/firestore';
 import type { TuyaDevice } from '../data/tuyaData';
 import type { EnergyReading } from '../data/energy';
+import type { AutomationStatus } from '../data/automation';
+import type { GuardStatus } from '../data/guard';
 import { db } from './firebase';
 import { isLanOrigin } from './origin';
 
@@ -48,6 +50,10 @@ export interface BridgeState {
   devices: TuyaDevice[];
   /** Absent if the bridge could not reach the inverter. */
   inverter?: EnergyReading;
+  /** What the heating automation decided last; absent on a bridge that predates it. */
+  automation?: AutomationStatus;
+  /** What the E13 guard is doing; absent on a bridge that predates it. */
+  guard?: GuardStatus;
   updatedAt: number;
 }
 
@@ -123,18 +129,28 @@ export async function sendBridgeCommand(
 /** How stale relayed state may be before it is treated as no answer at all. */
 const RELAY_MAX_AGE_MS = 15 * 60_000;
 
+/** Whether the bridge publishing the relay understands `{watch: true}`. */
+let relayWatchable = false;
+
 async function fetchRelayState(): Promise<BridgeState | null> {
   try {
     const snap = await getDoc(doc(db, 'domotics_state', 'tuya'));
     if (!snap.exists()) return null;
     const data = snap.data() as {
       devices?: TuyaDevice[]; inverter?: EnergyReading; updatedAt?: { toMillis(): number };
+      watchable?: boolean;
+      automation?: AutomationStatus | null;
+      guard?: GuardStatus | null;
     };
+    relayWatchable = data.watchable === true;
     const updatedAt = data.updatedAt?.toMillis?.() ?? 0;
     // A bridge that stopped days ago should read as offline, not as a house
     // frozen at whatever it last saw.
     if (!data.devices || Date.now() - updatedAt > RELAY_MAX_AGE_MS) return null;
-    return { devices: data.devices, inverter: data.inverter, updatedAt };
+    return {
+      devices: data.devices, inverter: data.inverter,
+      automation: data.automation ?? undefined, guard: data.guard ?? undefined, updatedAt,
+    };
   } catch {
     return null;
   }
@@ -149,4 +165,31 @@ async function queueRelayCommand(
     commands,
     createdAt: serverTimestamp(),
   });
+}
+
+/** How often an app away from home tells the bridge it's open. */
+const WATCH_EVERY_MS = 90_000;
+let lastWatchAt = 0;
+
+/**
+ * Away from home, tell the bridge someone is looking.
+ *
+ * The bridge polls the devices every 30s while watched and every 5 min
+ * otherwise, and "watched" used to mean a LAN request — so a phone outside the
+ * house always saw readings up to five minutes old. This queues a no-op
+ * `{watch: true}` message on the existing command relay, which the bridge
+ * already checks every 10s, at most once per 90s while the app is open.
+ *
+ * Sent only when the bridge has said it understands the message: an older
+ * bridge would record it as a failed command and keep it, and every kept
+ * document is re-read on each of its polls.
+ */
+export async function announceWatching() {
+  if (directWorks || !relayWatchable || Date.now() - lastWatchAt < WATCH_EVERY_MS) return;
+  lastWatchAt = Date.now();
+  try {
+    await addDoc(collection(db, 'domotics_commands'), { watch: true, createdAt: serverTimestamp() });
+  } catch {
+    // Signed out or offline: nothing to announce, and nothing to retry.
+  }
 }

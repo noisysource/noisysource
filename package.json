@@ -22,7 +22,8 @@
     "terraform:init": "cd infra/gcp/terraform && terraform init",
     "terraform:plan": "cd infra/gcp/terraform && terraform plan",
     "terraform:apply": "cd infra/gcp/terraform && terraform apply",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-parent-portal.rules-test.cjs\""
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-parent-portal.rules-test.cjs\"",
+    "test:rules:domotics": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/domotics-automation.rules-test.cjs && node scripts/rules-tests/domotics-incidents.rules-test.cjs\""
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
