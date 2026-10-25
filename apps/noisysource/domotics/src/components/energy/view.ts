@@ -1,6 +1,6 @@
 import {
   SLOT_MS, SLOT_SEC, addDays, addFlows, dayStart, daysBetween, derivedFlows, isVazio, lisbonDate, lisbonOffsetMs,
-  zeroFlows, type EnergyDay, type EnergyFlows, type Tariff,
+  slotSurplus, zeroFlows, type EnergyDay, type EnergyFlows, type Tariff,
 } from '@shared/lib/energyBill';
 
 /** Periods, chart buckets and number formatting for the Energia page. Pure. */
@@ -92,10 +92,13 @@ export interface Bucket {
   expectedSec: number;
   /** Hour buckets only: in vazio. */
   vazio?: boolean;
+  /** Solar surplus sent to the grid (unpaid), Wh; and the part with the battery full. */
+  surplus: number;
+  surplusFull: number;
 }
 
 function emptyBucket(start: number, end: number, label: string, title: string): Bucket {
-  return { start, end, label, title, flows: zeroFlows(), coveredSec: 0, expectedSec: 0 };
+  return { start, end, label, title, flows: zeroFlows(), coveredSec: 0, expectedSec: 0, surplus: 0, surplusFull: 0 };
 }
 
 /** The period cut into chart buckets — hours of a day, days of a week or month, months of a year. */
@@ -143,6 +146,11 @@ export function bucketize(p: Period, days: EnergyDay[], tariff: Tariff, now: num
       if (!b) return;
       addFlows(b.flows, slot);
       b.coveredSec += slot.sec;
+      const sp = slotSurplus(slot);
+      if (sp) {
+        b.surplus += sp.wh;
+        if (sp.full) b.surplusFull += sp.wh;
+      }
     });
   }
   return out;
@@ -205,3 +213,6 @@ export function fmtDuration(sec: number): string {
   const m = min % 60;
   return m ? `${h} h ${m} min` : `${h} h`;
 }
+
+/** '12:00–15:00'. */
+export const fmtHours = (from: number, to: number) => `${String(from).padStart(2, '0')}:00–${String(to % 24).padStart(2, '0')}:00`;

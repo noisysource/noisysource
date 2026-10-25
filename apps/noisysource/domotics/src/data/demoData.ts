@@ -60,15 +60,15 @@ export function demoClimate(): Device[] {
   return [...thermostats, pump];
 }
 
-/** A sunny afternoon: panels producing, battery charging, a little exported. */
+/** A sunny afternoon with the battery full: the spare solar goes to the grid, unpaid (shows the surplus hint). */
 export function demoEnergy(): EnergyReading {
   return {
     online: true,
     pvPowerW: 3720,
     consumptionW: 719,
-    batteryPowerW: 2850,
-    gridPowerW: 150,
-    soc: 86,
+    batteryPowerW: 40,
+    gridPowerW: 2961,
+    soc: 99,
     readAt: Date.now(),
   };
 }

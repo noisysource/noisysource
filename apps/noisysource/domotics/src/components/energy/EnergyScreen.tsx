@@ -4,16 +4,20 @@ import {
   Settings2, Sun, Zap,
 } from 'lucide-react';
 import {
-  addDays, billingPeriod, computeScenarios, dayStart, derivedFlows, lisbonDate, parseTariff, projectBill, summarize,
-  type EnergyDay, type Projection, type Tariff,
+  BATTERY_FULL_SOC, SURPLUS_MIN_W, addDays, billingPeriod, computeScenarios, dayStart, derivedFlows, lisbonDate,
+  parseTariff, projectBill, summarize, surplusOf, surplusWindow,
+  type EnergyDay, type Projection, type SurplusSummary, type Tariff,
 } from '@shared/lib/energyBill';
 import { loadEnergyDays, loadTariff } from '../../data/energyHistory';
-import { batteryFlow, formatWatts, gridFlow, type EnergyReading } from '../../data/energy';
+import { batteryFlow, formatWatts, gridFlow, liveSurplus, type EnergyReading } from '../../data/energy';
+import { DEFAULT_AUTOMATION, loadAutomationConfig } from '../../data/automation';
+import { DEMO } from '../../data/demoData';
+import SurplusNow from '../SurplusNow';
 import EnergyChart from './EnergyChart';
 import TariffEditor from './TariffEditor';
 import {
-  bucketize, coverageOf, fmtDuration, fmtEur, fmtKwh, fmtPct, fmtWhen, grainOf, lastRecorded, periodContaining,
-  periodLabel, shiftPeriod, socSeries, type Period, type PeriodKind,
+  bucketize, coverageOf, fmtDuration, fmtEur, fmtHours, fmtKwh, fmtPct, fmtWhen, grainOf, lastRecorded,
+  periodContaining, periodLabel, shiftPeriod, socSeries, type Grain, type Period, type PeriodKind,
 } from './view';
 
 /**
@@ -65,10 +69,14 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  /** The heating automation's solar boost, to link the surplus to it. */
+  const [boost, setBoost] = useState<{ enabled: boolean; exportW: number; delta: number } | null>(null);
 
   useEffect(() => {
     if (!canRead) return;
     loadTariff().then(setTariff).catch(() => { /* defaults, labelled as estimates */ });
+    if (DEMO) setBoost(DEFAULT_AUTOMATION.solarBoost);
+    else loadAutomationConfig().then(c => setBoost(c.solarBoost)).catch(() => { /* the note just isn't shown */ });
   }, [canRead]);
 
   useEffect(() => {
@@ -118,6 +126,7 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
       summary,
       billedDays,
       scenarios: computeScenarios(summary, billedDays, tariff),
+      surplus: surplusOf(days, tariff, range),
       buckets: bucketize(period, days, tariff, now),
       soc: grainOf(period) === 'hour' ? socSeries(days, range.from, range.to) : undefined,
       last: lastRecorded(days),
@@ -161,6 +170,7 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto px-4 py-4 flex flex-col gap-5" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}>
           {live?.online && <LiveStrip live={live} />}
+          {live?.online && liveSurplus(live) && <SurplusNow surplus={liveSurplus(live)!} />}
 
           {!canRead && (
             <p className="text-sm text-zinc-400 leading-relaxed">
@@ -212,7 +222,7 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <Tile title="Custo do período" value={fmtEur(view.scenarios.actual.total)}
-                    hint={`inclui potência e taxas de ${fmtDays(view.billedDays)}${view.scenarios.actual.exportCredit > 0 ? ` · venda −${fmtEur(view.scenarios.actual.exportCredit)}` : ''}`} />
+                    hint={`inclui potência e taxas de ${fmtDays(view.billedDays)}${view.scenarios.actual.exportCredit > 0 ? ` · excedente pago −${fmtEur(view.scenarios.actual.exportCredit)}` : ''}`} />
                   <Tile title="Sem painéis nem bateria" value={fmtEur(view.scenarios.withoutSystem.total)} tone="text-zinc-300"
                     hint="toda a energia comprada à rede, ao preço da hora" />
                   <Tile title="Poupança" value={fmtEur(view.scenarios.saving)} tone="text-emerald-300"
@@ -225,6 +235,8 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
                   ? <p className="text-sm text-zinc-400">Este período ainda não começou.</p>
                   : <EnergyChart buckets={view.buckets} grain={grain} soc={view.soc} />}
               </section>
+
+              {view.summary.coveredSec > 0 && <SurplusSection s={view.surplus} grain={grain} tariff={tariff} boost={boost} />}
             </div>
           )}
 
@@ -264,7 +276,7 @@ function LiveStrip({ live }: { live: EnergyReading }) {
         {battery !== 'idle' && <span className="opacity-80">{battery === 'in' ? '↑' : '↓'}{formatWatts(abs(live.batteryPowerW))}</span>}
       </span>
       <span className={`${item} ${grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'}`}>
-        <Zap size={13} />{grid === 'out' ? 'a vender ' : grid === 'in' ? 'a comprar ' : 'rede '}{formatWatts(abs(live.gridPowerW))}
+        <Zap size={13} />{grid === 'out' ? 'a enviar ' : grid === 'in' ? 'a comprar ' : 'rede '}{formatWatts(abs(live.gridPowerW))}
       </span>
     </div>
   );
@@ -350,8 +362,8 @@ function EnergyTiles({ summary, tariff }: { summary: ReturnType<typeof summarize
         hint={d.selfConsumption !== undefined ? `${fmtPct(d.selfConsumption)} usada em casa` : undefined} />
       <Tile title="Comprado à rede" icon={<Zap size={12} />} value={fmtKwh(t.imp)} tone="text-sky-300"
         hint={`vazio ${fmtKwh(summary.vazio.imp)} · fora ${fmtKwh(summary.fora.imp)}`} />
-      <Tile title="Vendido à rede" icon={<Zap size={12} />} value={fmtKwh(t.exp)}
-        hint={tariff.exportPrice > 0 ? `a ${String(tariff.exportPrice).replace('.', ',')} €/kWh` : t.exp > 0 ? 'sem preço de venda no tarifário' : undefined} />
+      <Tile title="Enviado à rede" icon={<Zap size={12} />} value={fmtKwh(t.exp)}
+        hint={tariff.exportPrice > 0 ? `pago a ${String(tariff.exportPrice).replace('.', ',')} €/kWh` : 'sem pagamento (ver excedente)'} />
       <Tile title="Bateria carregou" icon={<BatteryCharging size={12} />} value={fmtKwh(t.chg)} tone="text-emerald-300"
         hint={t.gridBat > 0 ? `${fmtKwh(t.gridBat)} da rede` : 'do sol'} />
       <Tile title="Bateria descarregou" icon={<Battery size={12} />} value={fmtKwh(t.dis)} tone="text-emerald-300"
@@ -415,7 +427,7 @@ function BillCard({ p, tariff, estimate }: { p: Projection; tariff: Tariff; esti
                   ))}
                   {b.exportCredit > 0 && (
                     <tr className="border-b border-zinc-800/60">
-                      <td className="px-1 py-1.5 text-zinc-300">Venda à rede</td>
+                      <td className="px-1 py-1.5 text-zinc-300">Excedente pago pela rede</td>
                       <td className="px-1 py-1.5 text-zinc-500">{kwh(p.projectedEnergy.total.exp)}</td>
                       <td className="px-1 py-1.5 text-right text-zinc-200">−{fmtEur(b.exportCredit)}</td>
                     </tr>
@@ -455,13 +467,123 @@ function HowItWorks() {
           </li>
           <li>
             <b className="text-zinc-300">Sem painéis nem bateria</b>: toda a energia que a casa gastou comprada à rede, ao preço da hora em
-            que foi gasta. <b className="text-zinc-300">Só painéis</b>: o que o sol cobriu na hora, o resto comprado, o excedente vendido.
+            que foi gasta. <b className="text-zinc-300">Só painéis</b>: o que o sol cobriu na hora, o resto comprado, o excedente enviado à rede.
             A poupança dos painéis é a diferença entre os dois; a da bateria, entre "só painéis" e o real (energia guardada e usada mais
             tarde, menos o que custou carregá-la).
           </li>
           <li>Potência, contribuição audiovisual e taxa DGEG contam pelos dias do período e são iguais nos três casos.</li>
+          <li>
+            <b className="text-zinc-300">Excedente</b>: energia dos painéis que foi para a rede em períodos de 15 minutos com mais de{' '}
+            {SURPLUS_MIN_W} W em média; abaixo disso é o inversor a regular e não conta. "Bateria cheia": {BATTERY_FULL_SOC} % ou mais no
+            fim do período, ou a bateria a carregar menos de {SURPLUS_MIN_W} W enquanto o sol ia para a rede. O valor é o que essa energia
+            teria poupado se fosse usada em casa em vez de comprada, ao preço dessa hora com IVA; não é dinheiro perdido, porque não há
+            contrato de venda.
+          </li>
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * Solar the house sent to the grid for nothing, above all with the battery
+ * full: how much, what it would have been worth used instead of bought, and
+ * when in the day it happens — the useful part ("run the machines, heat the
+ * slab between 12:00 and 15:00").
+ */
+function SurplusSection({ s, grain, tariff, boost }: {
+  s: SurplusSummary;
+  grain: Grain;
+  tariff: Tariff;
+  boost: { enabled: boolean; exportW: number; delta: number } | null;
+}) {
+  const regulation = Math.max(0, s.exp - s.surplus);
+  // The advice is about energy nothing else wanted: the battery-full hours when there are any.
+  const win = surplusWindow(s.full > 0 ? s.byHourFull : s.byHour);
+  const paid = tariff.exportPrice > 0;
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 flex flex-col gap-3">
+      <div className="flex flex-col gap-0.5">
+        <h2 className="text-base font-semibold text-zinc-100">Excedente solar</h2>
+        <p className="text-xs text-zinc-500 leading-relaxed">
+          Energia dos painéis que foi para a rede {paid ? 'paga a ' + String(tariff.exportPrice).replace('.', ',') + ' €/kWh' : 'sem pagamento'} e
+          que podia ter sido usada em casa.
+        </p>
+      </div>
+      {s.surplus === 0 ? (
+        <p className="text-sm text-zinc-400">
+          Sem excedente neste período: o sol foi todo usado em casa ou guardado na bateria
+          {regulation > 0 ? ` (só ${fmtKwh(regulation)} de regulação do inversor foram para a rede)` : ''}.
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <Tile title="Excedente enviado à rede" value={fmtKwh(s.surplus)} tone="text-amber-200"
+              hint={regulation > 0 ? `mais ${fmtKwh(regulation)} de regulação do inversor` : paid ? undefined : 'sem pagamento'} />
+            <Tile title="Com a bateria cheia" value={fmtKwh(s.full)}
+              hint={`${fmtPct(s.full / s.surplus)} do excedente${grain !== 'hour' && s.days > 1 ? ` · ${fmtKwh(s.full / s.days)} por dia` : ''}`} />
+            <Tile title="Valor se fosse usado" value={fmtEur(s.value)} tone="text-emerald-300"
+              hint={<>poupança possível, não receita · {fmtEur(s.valueFull)} com a bateria cheia</>} />
+          </div>
+          {win && (
+            <p className="text-sm text-zinc-300 leading-relaxed">
+              {grain === 'hour' ? 'Neste dia, o excedente' : 'O excedente costuma ser'} sobretudo entre as{' '}
+              <b className="text-zinc-100">{fmtHours(win.from, win.to)}</b> ({fmtPct(win.share)}
+              {s.full > 0 ? ' do que foi com a bateria cheia' : ''}). É a altura de pôr máquinas a trabalhar, usar o forno ou aquecer o
+              pavimento: essa energia já está paga.
+              {grain === 'hour' && s.full > 0 && ' As horas marcadas no gráfico tiveram excedente com a bateria cheia.'}
+            </p>
+          )}
+          {grain !== 'hour' && <HourProfile s={s} />}
+        </>
+      )}
+      {boost?.enabled && (
+        <p className="text-[11px] text-zinc-500 leading-relaxed">
+          A automação do aquecimento já aproveita parte disto: durante o dia, com {boost.exportW} W ou mais a ir para a rede, sobe{' '}
+          {String(boost.delta).replace('.', ',')}° o alvo das divisões para guardar calor no pavimento (bónus solar, nas definições da
+          automação; só atua com a automação ligada e fora de simulação).
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Surplus by hour of day, averaged per day with readings: when in the day the panels outrun the house and the battery. */
+function HourProfile({ s }: { s: SurplusSummary }) {
+  const perDay = (wh: number) => wh / Math.max(1, s.days);
+  const max = Math.max(...s.byHour.map(perDay), 1);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[color:var(--viz-ink-2)]">
+        <span className="text-zinc-500">Por hora do dia, média por dia</span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--viz-surplus)' }} aria-hidden="true" /> com a bateria cheia
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--viz-solar)', opacity: 0.55 }} aria-hidden="true" /> com a bateria a carregar
+        </span>
+      </div>
+      <div
+        className="flex items-end gap-px h-16"
+        role="img"
+        aria-label={`Excedente por hora do dia: máximo ${fmtKwh(max)} por dia`}
+      >
+        {s.byHour.map((wh, h) => {
+          const full = perDay(s.byHourFull[h]);
+          const rest = perDay(wh) - full;
+          return (
+            <div key={h} className="flex-1 h-full flex flex-col justify-end" title={`${fmtHours(h, h + 1)}: ${fmtKwh(perDay(wh))} por dia (${fmtKwh(full)} com a bateria cheia)`}>
+              <div style={{ height: `${(rest / max) * 100}%`, background: 'var(--viz-solar)', opacity: 0.55 }} />
+              <div style={{ height: `${(full / max) * 100}%`, background: 'var(--viz-surplus)' }} />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex text-[10px] text-zinc-500 tabular-nums">
+        {Array.from({ length: 24 }, (_, h) => (
+          <span key={h} className="flex-1 text-center">{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>
+        ))}
+      </div>
+    </div>
   );
 }

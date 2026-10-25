@@ -86,6 +86,7 @@ export default function EnergyChart({ buckets, grain, soc }: Props) {
   }, [buckets, width, showSoc]);
 
   const { step, barW, x, max, top1, top2, top3, y, height, every } = geo;
+  const hasFullSurplus = buckets.some(b => b.surplusFull > 0);
   const h = hover !== null ? buckets[hover] : null;
 
   function onMove(e: PointerEvent<SVGRectElement>) {
@@ -156,6 +157,12 @@ export default function EnergyChart({ buckets, grain, soc }: Props) {
             Bateria %
           </span>
         )}
+        {grain === 'hour' && hasFullSurplus && (
+          <span className="flex items-center gap-1.5">
+            <svg width="10" height="10" aria-hidden="true"><path d="M5 9 L1 2 H9 Z" fill="var(--viz-surplus)" /></svg>
+            Excedente com a bateria cheia
+          </span>
+        )}
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
@@ -194,6 +201,13 @@ export default function EnergyChart({ buckets, grain, soc }: Props) {
                 <line x1={x(i)} x2={x(i) + barW} y1={top1 + PANEL_H + 4} y2={top1 + PANEL_H + 4}
                   stroke="var(--viz-muted)" strokeWidth={2} strokeDasharray="2 2" />
               )}
+              {/* Day view: solar going to the grid with the battery full — energy that could have been used. */}
+              {grain === 'hour' && b.surplusFull > 0 && (() => {
+                const cx = x(i) + barW / 2;
+                const top = y(top2, b.flows.pv) - 3;
+                const w = Math.min(5, Math.max(3, barW / 2));
+                return <path d={`M${cx} ${top} L${cx - w} ${top - 7} H${cx + w} Z`} fill="var(--viz-surplus)" />;
+              })()}
             </g>
           );
         })}
@@ -257,7 +271,7 @@ function Tooltip({ b, soc, leftPct, flip }: { b: Bucket; soc?: number; leftPct: 
   );
   return (
     <div
-      className="pointer-events-none absolute z-10 top-6 w-56 rounded-lg border border-zinc-700 bg-zinc-950/95 px-2.5 py-2 text-[11px] shadow-lg flex flex-col gap-0.5 tabular-nums"
+      className="pointer-events-none absolute z-10 top-6 w-64 rounded-lg border border-zinc-700 bg-zinc-950/95 px-2.5 py-2 text-[11px] shadow-lg flex flex-col gap-0.5 tabular-nums"
       style={{ left: `${leftPct}%`, transform: flip ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)' }}
     >
       <span className="text-zinc-300 font-medium">{b.title}{b.vazio ? ' · vazio' : ''}</span>
@@ -274,7 +288,8 @@ function Tooltip({ b, soc, leftPct, flip }: { b: Bucket; soc?: number; leftPct: 
           <span className="mt-1 text-zinc-500">Solar · {fmtKwh(b.flows.pv)}</span>
           {row(SOLAR, 'para a casa', s.solar.house)}
           {row(BATTERY, 'para a bateria', s.solar.battery)}
-          {row(GRID, 'para a rede', s.solar.grid)}
+          {row(GRID, 'para a rede (sem pagamento)', s.solar.grid)}
+          {b.surplusFull > 0 && <span className="text-amber-200">Com a bateria cheia: {fmtKwh(b.surplusFull)} que podiam ter sido usados em casa.</span>}
           {b.flows.gridBat > 0 && <span className="mt-1 text-zinc-400">Bateria carregada da rede: {fmtKwh(b.flows.gridBat)}</span>}
           {d.selfSufficiency !== undefined && <span className="mt-1 text-zinc-400">Autossuficiência {fmtPct(d.selfSufficiency)}</span>}
           {soc !== undefined && <span className="text-zinc-400">Bateria no fim: {soc}%</span>}

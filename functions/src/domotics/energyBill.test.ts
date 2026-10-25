@@ -4,7 +4,7 @@ import { join } from "path";
 import {
   DEFAULT_TARIFF, SLOT_MS, addDays, billingPeriod, computeBill, computeScenarios, dayStart, derivedFlows,
   isVazio, lisbonDate, lisbonOffsetMs, parseEnergyDay, parseTariff, projectBill, slotsInDay, summarize,
-  surplusOf, surplusWindow, batteryNotTaking, BATTERY_FULL_SOC,
+  surplusOf, surplusWindow, batteryNotTaking, BATTERY_FULL_SOC, SURPLUS_MIN_W,
   zeroFlows, type EnergyDay, type EnergySlot, type Tariff,
 } from "./energyBill";
 
@@ -296,6 +296,12 @@ describe("solar surplus", () => {
     expect(batteryNotTaking({ soc: 90, chg: 10 })).toBe(true);
     expect(batteryNotTaking({ soc: 90, chg: 400 })).toBe(false);
     expect(batteryNotTaking({ chg: 400 })).toBe(false);
+  });
+
+  it("the app's live hint uses the same thresholds (apps/noisysource/domotics/src/data/energy.ts)", () => {
+    const app = readFileSync(join(__dirname, "../../../apps/noisysource/domotics/src/data/energy.ts"), "utf8");
+    expect(Number(/const SURPLUS_MIN_W = (\d+);/.exec(app)?.[1])).toBe(SURPLUS_MIN_W);
+    expect(Number(/const BATTERY_FULL_SOC = (\d+);/.exec(app)?.[1])).toBe(BATTERY_FULL_SOC);
   });
 
   it("finds the main window of the day", () => {

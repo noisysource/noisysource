@@ -94,12 +94,14 @@ function simulateDay(date: string, now: number): EnergyDay {
     soc += (chgW * EFFICIENCY - disW / EFFICIENCY) * 0.25 / BATTERY_WH;
     soc = Math.min(1, Math.max(0, soc));
 
+    // The inverter regulating around zero: a few watts each way, which isn't surplus.
+    const jitterW = sun > 0 && surplus === 0 ? 40 * r() : 0;
     const wh = (w: number) => Math.round(w * 0.25);
     slots.push({
       pv: wh(pvW),
       load: wh(loadW),
-      imp: wh(deficit),
-      exp: wh(surplus),
+      imp: wh(deficit + jitterW),
+      exp: wh(surplus + jitterW),
       chg: wh(chgW),
       dis: wh(disW),
       pvLoad: wh(pvLoadW),

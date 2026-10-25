@@ -95,7 +95,6 @@ export default function TariffEditor({ tariff, canSave, onSaved, onClose }: Prop
           </Field>
           <Field label="Potência contratada">{num('powerKva', '0.01', 'kVA')}</Field>
           <Field label="Termo de potência" hint={dflt('powerPerDay')}>{num('powerPerDay', '0.0001', '€/dia')}</Field>
-          <Field label="Venda à rede" hint="0 se não tem contrato de venda do excedente">{num('exportPrice', '0.0001', '€/kWh')}</Field>
           <Field label="A fatura começa no dia" hint="Dia do mês em que começa cada período de faturação">
             <input type="number" min={1} max={28} step={1} className={input} value={t.billingDay}
               onChange={e => setT(prev => ({ ...prev, billingDay: Number(e.target.value) }))} />
@@ -115,6 +114,12 @@ export default function TariffEditor({ tariff, canSave, onSaved, onClose }: Prop
             <Field label="kWh com IVA reduzido" hint="Por cada 30 dias; só até 6,9 kVA. 0 se não se aplica.">{num('vatReducedKwh', '1', 'kWh')}</Field>
             <Field label="IVA da potência" hint="6 % até 3,45 kVA, 23 % acima">{num('vatPower', '1', '%')}</Field>
             <Field label="IVA da contribuição audiovisual">{num('vatCav', '1', '%')}</Field>
+            <div className="col-span-2">
+              <Field label="Pagamento do excedente enviado à rede"
+                hint="0 = não vende: o que vai para a rede é oferecido (é o caso desta casa). Só para um contrato de venda (UPAC).">
+                {num('exportPrice', '0.0001', '€/kWh')}
+              </Field>
+            </div>
           </div>
         )}
 

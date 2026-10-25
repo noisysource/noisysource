@@ -11,10 +11,11 @@ import type { FloorPlan } from '@shared/models/Room';
 import type { User } from 'firebase/auth';
 import type { DeviceStatus } from '../App';
 import type { EnergyReading } from '../data/energy';
-import { batteryFlow, formatWatts, gridFlow, solarShare } from '../data/energy';
+import { batteryFlow, formatWatts, gridFlow, liveSurplus, solarShare } from '../data/energy';
 import { roomStats } from '../data/placement';
 import type { HouseMode } from './house3d/House3D';
 import ClimatePanel from './ClimatePanel';
+import SurplusNow from './SurplusNow';
 import Clock from './Clock';
 import HealthChips, { FaultBanner } from './HealthChips';
 import RoomPanel from './RoomPanel';
@@ -354,6 +355,7 @@ function TempLegend({ outdoor }: { outdoor?: number }) {
 function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => void }) {
   const battery = batteryFlow(energy);
   const grid = gridFlow(energy);
+  const surplus = liveSurplus(energy);
   const abs = (w?: number) => (w === undefined ? undefined : Math.abs(w));
   const item = 'flex items-center gap-1 whitespace-nowrap';
   return (
@@ -375,6 +377,11 @@ function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => 
         <Zap size={13} />
         {grid === 'out' ? '↑' : grid === 'in' ? '↓' : ''}{formatWatts(abs(energy.gridPowerW))}
       </span>
+      {surplus && (
+        <span className={`${item} rounded-md bg-amber-400/15 px-1.5 text-amber-200`} title="Excedente solar a ir para a rede, sem pagamento">
+          excedente ~{formatWatts(surplus.exportW)}
+        </span>
+      )}
     </button>
   );
 }
@@ -501,6 +508,7 @@ function EnergyCard({ energy, onOpen }: { energy: EnergyReading; onOpen?: () => 
   const battery = batteryFlow(energy);
   const grid = gridFlow(energy);
   const share = solarShare(energy);
+  const surplus = liveSurplus(energy);
   const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
   return (
     <section id="energia" className="flex flex-col gap-2 scroll-mt-4">
@@ -535,7 +543,7 @@ function EnergyCard({ energy, onOpen }: { energy: EnergyReading; onOpen?: () => 
           </div>
           <div className="flex flex-col">
             <span className={label}>
-              Rede{grid === 'out' ? ' · a exportar' : grid === 'in' ? ' · a importar' : ''}
+              Rede{grid === 'out' ? ' · a enviar' : grid === 'in' ? ' · a comprar' : ''}
             </span>
             <span className={`text-base tabular-nums ${
               grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'
@@ -552,6 +560,7 @@ function EnergyCard({ energy, onOpen }: { energy: EnergyReading; onOpen?: () => 
             </div>
           </div>
         )}
+        {surplus && <SurplusNow surplus={surplus} />}
       </div>
     </section>
   );

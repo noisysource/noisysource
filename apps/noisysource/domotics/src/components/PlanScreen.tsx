@@ -11,7 +11,7 @@ import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
 import type { EnergyReading } from '../data/energy';
-import { batteryFlow, gridFlow, solarShare, formatWatts } from '../data/energy';
+import { batteryFlow, gridFlow, liveSurplus, solarShare, formatWatts } from '../data/energy';
 import type { User } from 'firebase/auth';
 import Clock from './Clock';
 import ClimatePanel from './ClimatePanel';
@@ -525,6 +525,7 @@ export default function PlanScreen({
         const battery = batteryFlow(energy);
         const grid = gridFlow(energy);
         const share = solarShare(energy);
+        const surplus = liveSurplus(energy);
         const cell = 'flex flex-col gap-0.5 min-w-[104px]';
         const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
         return (
@@ -557,7 +558,7 @@ export default function PlanScreen({
 
             <div className={cell}>
               <span className={label}>
-                Rede {grid === 'out' ? '· a exportar' : grid === 'in' ? '· a importar' : ''}
+                Rede {grid === 'out' ? '· a enviar' : grid === 'in' ? '· a comprar' : ''}
               </span>
               <span className={`text-lg tabular-nums ${
                 grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'
@@ -565,6 +566,13 @@ export default function PlanScreen({
                 {formatWatts(energy.gridPowerW === undefined ? undefined : Math.abs(energy.gridPowerW))}
               </span>
             </div>
+
+            {surplus && (
+              <div className={cell} title="Excedente solar a ir para a rede, sem pagamento: a bateria não o aceita">
+                <span className={label}>Excedente solar</span>
+                <span className="text-lg text-amber-200 tabular-nums">~{formatWatts(surplus.exportW)}</span>
+              </div>
+            )}
 
             {share !== undefined && (
               <div className="flex-1 min-w-[160px] flex flex-col gap-1.5">

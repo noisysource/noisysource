@@ -116,6 +116,9 @@ input[type='range'].slider-blind::-moz-range-thumb {
   --viz-battery: #199e70;
   --viz-net: #3987e5;
   --viz-soc: #9085e9;
+  /* Surplus with the battery full: a marker, not a series. A pale amber that
+     reads as "the sun's" but stands apart from the solar bars. */
+  --viz-surplus: #fde68a;
 }
 
 .viz-light {

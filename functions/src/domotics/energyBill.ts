@@ -543,6 +543,13 @@ export function batteryNotTaking(slot: Pick<EnergySlot, 'soc' | 'chg'>): boolean
   return (slot.soc !== undefined && slot.soc >= BATTERY_FULL_SOC) || slot.chg < SURPLUS_MIN_WH;
 }
 
+/** One slot's solar surplus (Wh of PV to the grid) and whether the battery was full; null below SURPLUS_MIN_W. */
+export function slotSurplus(slot: EnergySlot): { wh: number; full: boolean } | null {
+  // Solar only: what the battery itself sent to the grid isn't surplus.
+  const wh = derivedFlows(slot).pvGrid;
+  return wh >= SURPLUS_MIN_WH ? { wh, full: batteryNotTaking(slot) } : null;
+}
+
 export interface SurplusSummary {
   /** Wh sent to the grid, all of it (unpaid without an export price). */
   exp: number;
@@ -585,16 +592,16 @@ export function surplusOf(
       if (!slot || slot.sec <= 0 || t < range.from || t >= end) return;
       seen = true;
       out.exp += slot.exp;
-      // Solar only: what the battery itself sent to the grid isn't surplus.
-      const pvGrid = derivedFlows(slot).pvGrid;
-      if (pvGrid < SURPLUS_MIN_WH) return;
+      const sp = slotSurplus(slot);
+      if (!sp) return;
+      const pvGrid = sp.wh;
       const price = (isVazio(t, tariff) ? tariff.priceVazio : tariff.priceForaVazio) + tariff.iecPerKwh;
       const worth = (pvGrid / 1000) * Math.max(0, price * vat - tariff.exportPrice);
       const hour = Math.floor(lisbonMinutes(t) / 60);
       out.surplus += pvGrid;
       out.value += worth;
       out.byHour[hour] += pvGrid;
-      if (batteryNotTaking(slot)) {
+      if (sp.full) {
         out.full += pvGrid;
         out.valueFull += worth;
         out.byHourFull[hour] += pvGrid;
