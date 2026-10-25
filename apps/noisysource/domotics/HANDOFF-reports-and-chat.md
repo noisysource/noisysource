@@ -8,6 +8,8 @@ Read `STATUS.md` first, especially the 2026-10-21 → 10-24 entries on the E13 t
 
 ## 1. Reports page ("Relatórios")
 
+> **Built 2026-10-25** on `agent/domotics-reports` (branched off `agent/domotics-3d`, since #106 wasn't merged yet). What shipped and what's left: `STATUS.md`. The design below is what was built, with the guard inside the bridge (Renato: yes).
+
 ### What Renato asked for
 "The current report within a page that could have reports on multiple errors that could happen with their respective values displayed. A dedicated page maybe."
 

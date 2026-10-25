@@ -16,6 +16,7 @@
 //   node deploy/backfill-incidents.cjs --write     # writes to kidclub-dev, as you (gcloud)
 //   ... --log ~/e13-2026-10-22.jsonl@2026-10-22    # a newer copy of the 20 s log from the Pi
 //   ... --until 2026-10-25T10:00:00Z               # stop where the bridge started recording live
+//   ... --guard-log ~/guard.log                    # the hand-run guard's log: its switches get attributed to it
 //
 // Writes go through the Firestore REST API with your gcloud token (admin,
 // bypasses the rules), never the bridge's account.
@@ -184,9 +185,26 @@ function notesOnly(device) {
   ];
 }
 
+/**
+ * The hand-run guard's own record of what it switched (`~/e13-watch/guard.log`
+ * on the Pi): "YYYY-MM-DD HH:MM:SS <what>", local time.
+ */
+function readGuardLog(path) {
+  const out = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) (.*)$/.exec(line);
+    if (!m) continue;
+    const on = /switching ON|switched the pump back ON/.test(m[3]) ? true : /switching OFF/.test(m[3]) ? false : undefined;
+    if (on === undefined) continue;
+    out.push({ at: lisbon(m[1], m[2]), on, source: 'guard', note: `Proteção E13 (script manual): ${m[3]}` });
+  }
+  return out;
+}
+
 // --- Replay ----------------------------------------------------------------
 
-function replay(logs, device, until) {
+function replay(logs, device, until, guardSwitches = []) {
+  const known = [...KNOWN_SWITCHES, ...guardSwitches];
   const docs = new Map();
   for (const spec of logs) {
     const at = spec.lastIndexOf('@');
@@ -216,13 +234,13 @@ function replay(logs, device, until) {
   for (const [, doc] of docs) {
     const t = doc.at.getTime();
     if (doc.kind === 'switch') {
-      const k = KNOWN_SWITCHES.find(x => x.on === doc.on && Math.abs(x.at - t) <= 3 * 60_000);
+      const k = known.find(x => x.on === doc.on && Math.abs(x.at - t) <= 3 * 60_000);
       if (k) { doc.source = k.source; doc.note = k.note; }
     } else {
       const k = KNOWN_FAULTS.find(x => Math.abs(x.at - t) <= 3 * 60_000);
       if (k) doc.note = [k.note, doc.note].filter(Boolean).join(' ');
       for (const a of doc.actions) {
-        const ks = KNOWN_SWITCHES.find(x => (x.on ? 'on' : 'off') === a.what && Math.abs(x.at - a.at) <= 3 * 60_000);
+        const ks = known.find(x => (x.on ? 'on' : 'off') === a.what && Math.abs(x.at - a.at) <= 3 * 60_000);
         if (ks) a.by = ks.source;
       }
     }
@@ -257,7 +275,8 @@ async function main() {
     }
   }
 
-  const docs = replay(logs, device, until);
+  const guardSwitches = opt('--guard-log') ? readGuardLog(resolve(opt('--guard-log'))) : [];
+  const docs = replay(logs, device, until, guardSwitches);
   const rows = [...docs].sort((a, b) => a[1].at - b[1].at);
   for (const [id, d] of rows) {
     const when = d.at.toLocaleString('pt-PT', { timeZone: 'Europe/Lisbon' });

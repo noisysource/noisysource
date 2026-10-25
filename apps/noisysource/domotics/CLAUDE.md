@@ -39,8 +39,11 @@ A Raspberry Pi on the house LAN (`192.168.1.125`) runs a bridge service that tal
 ## Firestore Collections
 Prefixed `domotics_`:
 - `domotics_config/netatmo`, `domotics_config/tuya` — OAuth credentials for each cloud API (sensitive — see Notes)
-- `domotics_state/tuya` — last known device/inverter state, published by the bridge
+- `domotics_config/automation` — heating automation settings (owner read/write, bridge read)
+- `domotics_config/guard` — E13 guard on/off (owner read/write, bridge read)
+- `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. automation and guard status)
 - `domotics_commands` — command queue the bridge drains when off-LAN
+- `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page (owner read, bridge create/update, no deletes)
 
 ---
 

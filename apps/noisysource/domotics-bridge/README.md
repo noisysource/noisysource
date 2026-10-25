@@ -125,7 +125,31 @@ same. ×10 = tenths of a degree.
 | 123 | `bcu_com_state` | fault bitmap (IPM sub-codes E20_x) |
 
 The bit → E-code tables for the bitmaps, and what each code means, live in the
-app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts`.
+app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts` (a copy of the bit
+tables is in `src/faults.ts`, for the incidents).
+
+### Incidents and the E13 guard
+
+- **The pump is read every 30 s even when nobody is watching** (`PUMP_POLL_MS`;
+  the thermostats keep the 5-min idle rate). Unwatched, the state is still only
+  published every 5 min, unless the pump switches, faults or the guard changes mode.
+- **Incidents** (`src/incidents.ts`) go to `domotics_incidents/{id}` for the app's
+  Reports page: a fault with 30 min of readings before it and 5 min after, how it
+  ended (`self` / `reset`, lockout = second trip within 20 min or still faulted
+  after 10 min), the restart time; and every on/off with who caused it (`app`,
+  `automation`, `guard`, `outside` = not through this bridge). Writes are queued
+  in `incidents-pending.json` and retried with backoff, so a network gap or a
+  missing rule loses nothing. Ids are stable (`fault-<UTC start>-<code>`).
+- **E13 guard** (`src/guard.ts`, was `deploy/e13-guard.py`): with
+  `domotics_config/guard` `{enabled: true}` (app: Relatórios or Clima → "Proteção
+  E13"), switches the pump off for 60 min when it idles at the setpoint (≤ 45 Hz,
+  water ≥ setpoint − 1.5) and for 120 min straight after a trip; still faulted
+  within 3 min of a switch-on = lockout, and it stops acting until the fault
+  clears. Never switches on a pump someone else switched off. Switched off in the
+  app while resting, it switches the pump back on. State in `guard-state.json`,
+  so a rest survives a restart. Log lines: `[guard]`, `[incident]`.
+- **History**: `deploy/backfill-incidents.cjs` replays the hand-run logger's
+  files through the same recorder (see its header). Tests: `pnpm test`.
 
 ## Moving to the Raspberry Pi
 
