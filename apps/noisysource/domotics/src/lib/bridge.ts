@@ -4,6 +4,7 @@ import {
 import type { TuyaDevice } from '../data/tuyaData';
 import type { EnergyReading } from '../data/energy';
 import type { AutomationStatus } from '../data/automation';
+import type { GuardStatus } from '../data/guard';
 import { db } from './firebase';
 import { isLanOrigin } from './origin';
 
@@ -51,6 +52,8 @@ export interface BridgeState {
   inverter?: EnergyReading;
   /** What the heating automation decided last; absent on a bridge that predates it. */
   automation?: AutomationStatus;
+  /** What the E13 guard is doing; absent on a bridge that predates it. */
+  guard?: GuardStatus;
   updatedAt: number;
 }
 
@@ -137,13 +140,17 @@ async function fetchRelayState(): Promise<BridgeState | null> {
       devices?: TuyaDevice[]; inverter?: EnergyReading; updatedAt?: { toMillis(): number };
       watchable?: boolean;
       automation?: AutomationStatus | null;
+      guard?: GuardStatus | null;
     };
     relayWatchable = data.watchable === true;
     const updatedAt = data.updatedAt?.toMillis?.() ?? 0;
     // A bridge that stopped days ago should read as offline, not as a house
     // frozen at whatever it last saw.
     if (!data.devices || Date.now() - updatedAt > RELAY_MAX_AGE_MS) return null;
-    return { devices: data.devices, inverter: data.inverter, automation: data.automation ?? undefined, updatedAt };
+    return {
+      devices: data.devices, inverter: data.inverter,
+      automation: data.automation ?? undefined, guard: data.guard ?? undefined, updatedAt,
+    };
   } catch {
     return null;
   }

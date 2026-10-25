@@ -1,6 +1,6 @@
 import { Component, Suspense, lazy, useCallback, useState, type ReactNode } from 'react';
 import {
-  Battery, BatteryCharging, Flame, Home, Lightbulb, Map as MapIcon, Maximize2, Pencil, Server,
+  Battery, BatteryCharging, ClipboardList, Flame, Home, Lightbulb, Map as MapIcon, Maximize2, Pencil, Server,
   Sun, Thermometer, Zap,
 } from 'lucide-react';
 import type {
@@ -19,7 +19,9 @@ import Clock from './Clock';
 import HealthChips, { FaultBanner } from './HealthChips';
 import RoomPanel from './RoomPanel';
 import AutomationCard from './AutomationCard';
+import GuardCard from './GuardCard';
 import type { AutomationStatus } from '../data/automation';
+import type { GuardStatus } from '../data/guard';
 
 /**
  * Loaded on its own: three.js is most of the app's weight, and the header,
@@ -40,6 +42,7 @@ interface Props {
   onSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onOpenAdmin: () => void;
+  onOpenReports: () => void;
   onShow2D: () => void;
   onStartEdit: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
@@ -49,6 +52,7 @@ interface Props {
   onThermostatCommand: (deviceId: string, command: ThermostatCommand) => void;
   onHeatPumpCommand: (deviceId: string, command: HeatPumpCommand) => void;
   automation?: AutomationStatus;
+  guard?: GuardStatus;
   canEditAutomation: boolean;
 }
 
@@ -94,9 +98,9 @@ const sectionTitle = 'text-[11px] font-semibold uppercase tracking-widest text-z
  */
 export default function HouseScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
-  onSignIn, onSignOut, onOpenAdmin, onShow2D, onStartEdit,
+  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onShow2D, onStartEdit,
   onLightCommand, onLightsSet, onBlindCommand, onBlindsSet, onThermostatCommand, onHeatPumpCommand,
-  automation, canEditAutomation,
+  automation, guard, canEditAutomation,
 }: Props) {
   /**
    * Outdoor temperature from the heat pump's own sensor. Here it reads colder
@@ -183,6 +187,12 @@ export default function HouseScreen({
           <button onClick={onStartEdit} className={iconBtn} aria-label="Editar planta" title="Editar planta">
             <Pencil size={15} />
           </button>
+          {/* Signed in only, like the bridge screen: both read owner-only data. */}
+          {user && (
+            <button onClick={onOpenReports} className={iconBtn} aria-label="Relatórios" title="Relatórios — avarias da bomba">
+              <ClipboardList size={15} />
+            </button>
+          )}
           {user && (
             <button onClick={onOpenAdmin} className={iconBtn} aria-label="Estado da ponte" title="Estado da ponte (Raspberry Pi)">
               <Server size={15} />
@@ -296,6 +306,7 @@ export default function HouseScreen({
           ) : (
             <Overview
               automation={automation}
+              guard={guard}
               canEditAutomation={canEditAutomation}
               mode={mode}
               plan={plan}
@@ -362,9 +373,10 @@ function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => 
 
 /** The panel when no room is selected: what's on, every room, climate, energy. */
 function Overview({
-  automation, canEditAutomation, mode, plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
+  automation, guard, canEditAutomation, mode, plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
 }: {
   automation?: AutomationStatus;
+  guard?: GuardStatus;
   canEditAutomation: boolean;
   mode: HouseMode;
   plan: FloorPlan;
@@ -449,6 +461,7 @@ function Overview({
       <p id="energia" className="text-sm text-zinc-500">Inversor sem ligação — sem dados de energia.</p>
     ),
     automation: <AutomationCard status={automation} canEdit={canEditAutomation} />,
+    guard: <GuardCard status={guard} canEdit={canEditAutomation} />,
     climate: (
       <section className="flex flex-col gap-2">
         <h2 className={sectionTitle}>Clima</h2>
@@ -463,9 +476,9 @@ function Overview({
   };
   // The layer in view leads; the rest follow.
   const order: Array<keyof typeof sections> =
-    mode === 'clima' ? ['automation', 'climate', 'rooms', 'lights', 'energy']
-    : mode === 'energia' ? ['energy', 'automation', 'lights', 'rooms', 'climate']
-    : ['lights', 'rooms', 'energy', 'climate', 'automation'];
+    mode === 'clima' ? ['automation', 'guard', 'climate', 'rooms', 'lights', 'energy']
+    : mode === 'energia' ? ['energy', 'automation', 'guard', 'lights', 'rooms', 'climate']
+    : ['lights', 'rooms', 'energy', 'climate', 'automation', 'guard'];
 
   return (
     <div className="flex flex-col gap-6">

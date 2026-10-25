@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
@@ -9,6 +9,7 @@ import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
 import { DEMO, demoAutomation, demoClimate, demoEnergy, demoLegrand } from './data/demoData';
 import type { AutomationStatus } from './data/automation';
+import type { GuardStatus } from './data/guard';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
 import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
@@ -26,6 +27,9 @@ import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
 import HouseScreen from './components/HouseScreen';
 import RoomDetail from './components/RoomDetail';
+
+/** Opened rarely, and its charts and printout shouldn't weigh on the everyday screen. */
+const ReportsScreen = lazy(() => import('./components/reports/ReportsScreen'));
 
 /**
  * Per-device overrides. Room names used to live here too; they now belong to
@@ -101,9 +105,12 @@ export default function App() {
   /** When the bridge last published, so the admin screen can flag it offline. */
   const [bridgeUpdatedAt, setBridgeUpdatedAt] = useState<number | undefined>();
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showReports, setShowReports] = useState(false);
   const [energy, setEnergy] = useState<EnergyReading | null>(null);
   /** The heating automation's latest decision, reported by the bridge with its state. */
   const [automation, setAutomation] = useState<AutomationStatus | undefined>();
+  /** The E13 guard's status, reported the same way. */
+  const [guard, setGuard] = useState<GuardStatus | undefined>();
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
@@ -307,6 +314,7 @@ export default function App() {
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
         setEnergy(state.inverter ?? null);
         setAutomation(state.automation);
+        setGuard(state.guard);
         setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
         void announceWatching();
@@ -633,6 +641,19 @@ export default function App() {
       );
     }
 
+    if (showReports) {
+      return (
+        <Suspense fallback={<div className="h-screen bg-zinc-950" />}>
+          <ReportsScreen
+            onBack={() => setShowReports(false)}
+            guard={guard}
+            // Owner-only data; on the LAN nobody can sign in.
+            canRead={!!user && !isLanOrigin()}
+          />
+        </Suspense>
+      );
+    }
+
     if (openRoom) {
       return (
         <RoomDetail
@@ -667,6 +688,7 @@ export default function App() {
           onSignIn={requestSignIn}
           onSignOut={signOutUser}
           onOpenAdmin={() => setShowAdmin(true)}
+          onOpenReports={() => setShowReports(true)}
           onShow2D={() => showView('2d')}
           onStartEdit={startEdit}
           onLightCommand={handleLightCommand}
@@ -676,6 +698,7 @@ export default function App() {
           onThermostatCommand={handleThermostatCommand}
           onHeatPumpCommand={handleHeatPumpCommand}
           automation={automation}
+          guard={guard}
           // The settings document is the owner's alone; on the LAN nobody can sign in.
           canEditAutomation={!!user && !isLanOrigin()}
         />
@@ -695,6 +718,7 @@ export default function App() {
         onSignIn={requestSignIn}
         onSignOut={signOutUser}
         onOpenAdmin={() => setShowAdmin(true)}
+        onOpenReports={() => setShowReports(true)}
         onShow3D={() => showView('3d')}
         editMode={editMode}
         editTarget={editTarget}
