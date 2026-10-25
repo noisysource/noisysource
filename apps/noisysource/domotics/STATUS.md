@@ -28,7 +28,7 @@ Plan, in order:
   - Readings more than 3 min apart are a gap, not a straight line.
   - One PATCH per closed slot (~96/day), with only that slot's fields. Backoff 30 s → 30 min, hard cap 300 writes a day.
   - State in `energy-state.json`. `index.ts`: one import and two calls.
-- **Inverter kWh counters: not confirmed, not used.** Read-only Modbus (0x04) from the Mac, 17:46–18:56, ~450 requests. 14 input registers count up in 0.1 kWh steps:
+- **Inverter kWh counters: not confirmed, not used.** Read-only Modbus (0x04) from the Mac, 17:46–18:25, ~280 requests. 14 input registers count up in 0.1 kWh steps:
   - 28/51/90 and 30/52/82 rose with the house load / battery discharge (the dark house ran on the battery).
   - 29/54/59/91 and 56/88/111/113 didn't move.
   - Which flow each one is needs a day with sun, export and charging. So the bridge now reads registers 0–119 (still one request) and logs them per slot, beside the integrated Wh, to `energy-registers.jsonl` on the Pi (5 MB cap).
