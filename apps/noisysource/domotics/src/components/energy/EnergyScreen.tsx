@@ -57,7 +57,8 @@ function EstimateBadge({ show }: { show: boolean }) {
 export default function EnergyScreen({ onBack, canRead, live }: Props) {
   const today = lisbonDate(Date.now());
   const [period, setPeriod] = useState<Period>(() => periodContaining('day', today));
-  const [days, setDays] = useState<EnergyDay[] | null>(null);
+  /** What was last loaded, and for which period: the page shows that until the next one arrives. */
+  const [data, setData] = useState<{ period: Period; days: EnergyDay[] } | null>(null);
   const [tariff, setTariff] = useState<Tariff>(() => parseTariff({}));
   const [bill, setBill] = useState<{ period: EnergyDay[]; recent: EnergyDay[] } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -75,8 +76,9 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    loadEnergyDays(period.from, period.to)
-      .then(d => { if (!cancelled) setDays(d); })
+    const wanted = period;
+    loadEnergyDays(wanted.from, wanted.to)
+      .then(days => { if (!cancelled) setData({ period: wanted, days }); })
       .catch(err => {
         if (cancelled) return;
         setError((err as { code?: string }).code === 'permission-denied'
@@ -85,7 +87,8 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [canRead, period.from, period.to, refresh]);
+    // `period` changes identity only when it changes.
+  }, [canRead, period, refresh]);
 
   // The billing period in progress and the week before it, for the bill card.
   useEffect(() => {
@@ -101,9 +104,12 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
     return () => { cancelled = true; };
   }, [canRead, tariff.billingDay, today, refresh]);
 
-  const grain = grainOf(period);
+  const shown = data?.period ?? period;
+  const grain = grainOf(shown);
+  const stale = !!data && data.period !== period;
   const view = useMemo(() => {
-    if (!days) return null;
+    if (!data) return null;
+    const { period, days } = data;
     const now = Date.now();
     const range = { from: dayStart(period.from), to: dayStart(addDays(period.to, 1)), now };
     const summary = summarize(days, tariff, range);
@@ -113,10 +119,10 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
       billedDays,
       scenarios: computeScenarios(summary, billedDays, tariff),
       buckets: bucketize(period, days, tariff, now),
-      soc: grain === 'hour' ? socSeries(days, range.from, range.to) : undefined,
+      soc: grainOf(period) === 'hour' ? socSeries(days, range.from, range.to) : undefined,
       last: lastRecorded(days),
     };
-  }, [days, tariff, period, grain]);
+  }, [data, tariff]);
   const projection = useMemo(
     () => (bill ? projectBill(bill.period, bill.recent, tariff, Date.now()) : null),
     [bill, tariff],
@@ -124,6 +130,7 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
 
   const next = shiftPeriod(period, 1);
   const isCurrent = period.from <= today && today <= period.to;
+  const shownCurrent = shown.from <= today && today <= shown.to;
   const estimate = !tariff.confirmed;
 
   function setKind(kind: PeriodKind) {
@@ -190,8 +197,8 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
           {canRead && !view && !error && <p className="text-sm text-zinc-500">A carregar…</p>}
 
           {view && (
-            <>
-              <CoverageNote summary={view.summary} last={view.last} isCurrent={isCurrent} />
+            <div className={`flex flex-col gap-5 transition-opacity ${stale ? 'opacity-50' : ''}`} aria-busy={stale}>
+              <CoverageNote summary={view.summary} last={view.last} isCurrent={shownCurrent} />
 
               <section className="flex flex-col gap-2">
                 <h2 className={sectionTitle}>Energia</h2>
@@ -218,7 +225,7 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
                   ? <p className="text-sm text-zinc-400">Este período ainda não começou.</p>
                   : <EnergyChart buckets={view.buckets} grain={grain} soc={view.soc} />}
               </section>
-            </>
+            </div>
           )}
 
           {canRead && projection && <BillCard p={projection} tariff={tariff} estimate={estimate} />}

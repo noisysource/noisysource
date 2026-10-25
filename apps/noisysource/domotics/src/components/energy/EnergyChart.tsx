@@ -64,6 +64,8 @@ function Swatch({ color, label }: { color: string; label: string }) {
 export default function EnergyChart({ buckets, grain, soc }: Props) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
+  // A new period: the old crosshair means nothing.
+  useEffect(() => setHover(null), [buckets]);
   const showSoc = grain === 'hour' && !!soc?.length;
 
   const geo = useMemo(() => {
@@ -114,6 +116,9 @@ export default function EnergyChart({ buckets, grain, soc }: Props) {
   }
 
   const ticks = [0, max / 2, max];
+  // One number of decimals for the whole axis.
+  const tickDigits = max >= 10_000 ? 0 : max >= 1000 ? 1 : 2;
+  const tick = (wh: number) => (wh / 1000).toFixed(tickDigits).replace('.', ',');
   const panel = (top: number, title: string) => (
     <g>
       <text x={M.left} y={top - 6} fontSize={11} fill="var(--viz-ink-2)" fontWeight={600}>{title}</text>
@@ -121,7 +126,7 @@ export default function EnergyChart({ buckets, grain, soc }: Props) {
         <g key={v}>
           <line x1={M.left} x2={width - M.right} y1={y(top, v)} y2={y(top, v)} stroke={v === 0 ? 'var(--viz-axis)' : 'var(--viz-grid)'} strokeWidth={1} />
           <text x={M.left - 6} y={y(top, v)} dy="0.32em" textAnchor="end" fontSize={10} fill="var(--viz-muted)" className="tabular-nums">
-            {fmtKwh(v, false)}
+            {tick(v)}
           </text>
         </g>
       ))}
@@ -173,8 +178,8 @@ export default function EnergyChart({ buckets, grain, soc }: Props) {
             height={(showSoc ? top3 + SOC_H : top2 + PANEL_H) - top1} fill="var(--viz-ink)" opacity={0.07} />
         )}
 
-        {panel(top1, 'Consumo da casa — de onde veio')}
-        {panel(top2, 'Produção solar — para onde foi')}
+        {panel(top1, 'Consumo da casa — de onde veio · kWh')}
+        {panel(top2, 'Produção solar — para onde foi · kWh')}
 
         {buckets.map((b, i) => {
           const s = stacks(b.flows);
