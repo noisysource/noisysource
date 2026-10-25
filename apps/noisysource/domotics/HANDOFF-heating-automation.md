@@ -1,6 +1,6 @@
 # Handoff: heating automation (floor heating, solar, bi-horário)
 
-**Status:** designed 2026-10-19 with Renato, not started. Build on its own branch (`agent/domotics-heating-automation`), after or on top of PR #106.
+**Status:** built 2026-10-19 (PR #106), in dry-run since the cold morning of 2026-10-20. Reworked 2026-10-25 (`agent/domotics-warm-by`) after that morning and the E13 trips of 21–24/10: recovery, hand-set water, faster correction, rest at the setpoint, and "warm by HH:MM". Renato decides when it goes live. What happened on those days: `STATUS.md`.
 
 ## Goal
 
@@ -20,16 +20,32 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge`): it is always o
 
 ## The rules
 
-1. **Weather-compensated flow temperature** (the biggest saving: ~2–3% less electricity per °C cooler water). Flow setpoint `p02_heating` (Tuya dp 117 — **confirm it is writable** before relying on it):
-   `flow = clamp(30 + (15 − outdoor) × 0.8, 28, 38)` → 30 °C at 15 °C outside, 34 °C at 10 °C, 38 °C at 5 °C. Plus a slow correction: if the average room deficit to target is > 0.5 °C for > 2 h, +1 °C (max +3); remove it when rooms are at target. Write at most once per 30 min, only on a change ≥ 1 °C.
+1. **Weather-compensated flow temperature** (the biggest saving: ~2–3% less electricity per °C cooler water). Flow setpoint `p02_heating` (Tuya dp 117, writable: proven 2026-10-20):
+   `flow = clamp(30 + (15 − outdoor) × 0.8, 28, 38)` → 30 °C at 15 °C outside, 34 °C at 10 °C, 38 °C at 5 °C.
+   - **Shortfall** = how far each room is below the target its thermostat has, averaged (a room above target counts as 0, so it can't make up for a cold one).
+   - **Correction** (faster since 2026-10-25): shortfall > 0.25 °C for 30 min → +1 °C, up to +4; at target (≤ 0.05) for an hour → −1.
+   - **Recovery** (2026-10-25): shortfall > 0.5 °C → water at the top of the range (38) until it is ≤ 0.2. On 20/10 the curve lowered the water overnight to 29–31 °C while the slab was still recovering, and the house woke at 21.7–22.8 °C.
+   - **Never lowered while the rooms are below target** (shortfall > 0.2), and then only 1 °C per 30 min. Raised at most every 15 min. Only changes ≥ 1 °C are written.
+   - **A setpoint the automation didn't send is someone's** (SmartLife, the panel, the technicians): left alone until the next period, like a zone. So is the one found when the bridge starts, unless it is the last one the automation sent (kept in `automation-state.json`).
 2. **Time-of-day room targets** (written to the thermostats' `temp_set`):
    - 05:00–08:00 (end of vazio): **24.5** — pre-heat the slab on cheap power.
    - Daytime: **24.0**, raised to **24.5** while *solar boost* applies: exporting > 800 W, or battery ≥ 95% and PV > house load. Drop the boost after 15 min without surplus.
    - 18:00–22:00 (expensive evening): **23.5** — coast on the stored heat.
    - 22:00–05:00 (vazio): **24.0**.
    All configurable per zone later; one house-wide schedule first. Hard limits 21–25 °C.
-3. **Pump follows the zones**: if every zone valve has been closed for ≥ 20 min, switch the pump off; switch it on when any zone opens. Minimum on time 30 min, minimum off time 15 min.
-4. **No large setbacks**: never schedule more than 1 °C below comfort — the slab takes hours to recover and recovery is the expensive, low-efficiency part.
+3. **Pump follows the zones**: if every zone valve has been closed for ≥ 20 min, switch the pump off; switch it on when any zone opens. Minimum on time 30 min, minimum off time 15 min. Needs at least half the thermostats answering: with fewer (only 1–2 answered on 22–25/10), "all closed" means nothing.
+3b. **Never idle at the setpoint** (2026-10-25, from the E13 trips): every trip came after the water reached the setpoint, the compressor dropped to its minimum (35–45 Hz), idled 4–25 min and then sped up again; starts from standstill never tripped (11 of 11). So:
+   - at the setpoint with the compressor ≤ 45 Hz (water ≥ setpoint − 1.5, 4 min after a switch-on), the pump is switched off and rests 60 min. With the E13 guard on, the guard does it; with it off, the automation does;
+   - after a rest it comes back on only when a zone wants heat (or recovery, or a warm-by). With the guard's rests, the automation (live only) asks the guard to carry on resting while nothing wants heat (`holdRest`), and never switches on a pump the guard parked;
+   - the water is never raised while the compressor idles at the setpoint: raised then, it speeds up from its minimum, which is the trip. It is raised while the pump is off, so it restarts from standstill.
+4. **Warm by HH:MM** (2026-10-25, `src/warmby.ts`): a one-off target set from the app's automation card (or, later, the chat) through the `domoticsWarmBy` callable, stored in `domotics_config/warm_by` (the callable is the only writer; 10 min–24 h ahead; no target = comfort).
+   - Start = time − (floor + shortfall ÷ room rate + 30 min margin), with the shortfall measured from the rooms' mean.
+   - Floor: once the pump starts, the water leaving it is warm within ~15 min, but the return water (the slab) keeps climbing. From the 20-s logs of 21–24/10: it levelled off 36–63 min after a start with the water at 34–35 °C, and 73–121 min at the technicians' 44 °C. Default 90 min.
+   - Rooms: ~0.3 °C/h once the floor is warm (observed; no room history exists to check it against).
+   - Both are learned live (`automation-state.json`; the card shows them): every start after a ≥ 30 min stop measures the floor, and every 1–2 h of rooms below target with a warm floor measures their rise.
+   - From the start until the time: room targets at least the requested one, water at the top of the range while short. Then the target is held for an hour and the request is done. The card shows the start, the expected arrival (and if late), and how the house was at the time.
+   - It never switches on a pump switched off by hand; the card says so if that is why it won't make it.
+5. **No large setbacks**: never schedule more than 1 °C below comfort — the slab takes hours to recover and recovery is the expensive, low-efficiency part.
 
 ## Safety
 

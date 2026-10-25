@@ -11,3 +11,6 @@ guard-config.json
 guard-state.json
 incidents-state.json
 incidents-pending.json
+# Heating automation state (see src/automation.ts, src/warmby.ts).
+warm-by.json
+automation-state.json

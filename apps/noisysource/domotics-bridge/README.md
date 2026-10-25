@@ -147,7 +147,15 @@ tables is in `src/faults.ts`, for the incidents).
   within 3 min of a switch-on = lockout, and it stops acting until the fault
   clears. Never switches on a pump someone else switched off. Switched off in the
   app while resting, it switches the pump back on. State in `guard-state.json`,
-  so a rest survives a restart. Log lines: `[guard]`, `[incident]`.
+  so a rest survives a restart. Log lines: `[guard]`, `[incident]`. With the
+  heating automation running live, a rest that is due to end carries on while no
+  zone wants heat (`holdRest`, sent by the automation) and ends as soon as one does.
+- **Heating automation** (`src/automation.ts`, `src/warmby.ts`; design in
+  `apps/noisysource/domotics/HANDOFF-heating-automation.md`): settings in
+  `domotics_config/automation`, the one-off "warm by HH:MM" in
+  `domotics_config/warm_by` (both read every 2 min, cached in
+  `automation-config.json` / `warm-by.json`). The warm-up model it learns and the
+  last water setpoint it sent are in `automation-state.json`. Log lines: `[automation]`.
 - **History**: `deploy/backfill-incidents.cjs` replays the hand-run logger's
   files through the same recorder (see its header). Tests: `pnpm test`.
 
