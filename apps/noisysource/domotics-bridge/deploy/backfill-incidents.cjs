@@ -49,12 +49,17 @@ function wallOf(utc) {
   const p = Object.fromEntries(fmt.formatToParts(new Date(utc)).map(x => [x.type, x.value]));
   return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
 }
-function lisbon(dateStr, timeStr, notBefore) {
+/** Every UTC instant a Lisbon wall time can be: one, or two in the repeated hour. */
+function lisbonAll(dateStr, timeStr) {
   const [y, mo, d] = dateStr.split('-').map(Number);
   const [h, mi, s = 0] = timeStr.split(':').map(Number);
   const wall = Date.UTC(y, mo - 1, d, h, mi, s);
   const found = [60, 0].map(off => wall - off * 60_000).filter(utc => wallOf(utc) === wall).sort((a, b) => a - b);
   if (found.length === 0) throw new Error(`no such Lisbon time ${dateStr} ${timeStr}`);
+  return found;
+}
+function lisbon(dateStr, timeStr, notBefore) {
+  const found = lisbonAll(dateStr, timeStr);
   return found.find(c => notBefore === undefined || c >= notBefore) ?? found[found.length - 1];
 }
 const secs = t => t.split(':').map(Number).reduce((a, v, i) => a + v * [3600, 60, 1][i], 0);
@@ -133,6 +138,7 @@ const KNOWN_SWITCHES = [
   { at: L('2026-10-24', '11:06'), on: false, source: 'guard', note: 'Proteção E13 (script manual): no setpoint a 44 Hz, água a 43 °C — descanso de 60 min.' },
   { at: L('2026-10-24', '12:06'), on: true, source: 'guard', note: 'Proteção E13 (script manual): fim do descanso.' },
   { at: L('2026-10-24', '12:27'), on: false, source: 'outside', note: 'Desligada a 70 Hz, sem avaria. Não foi a proteção nem a ponte.' },
+  { at: L('2026-10-25', '08:41'), on: false, source: 'outside', note: 'Desligada a 42 Hz com a água a 43 °C (setpoint 44), sem avaria. Nenhuma linha da proteção nem comando da ponte.' },
 ];
 /** What the notes add to trips the logs saw. */
 const KNOWN_FAULTS = [
@@ -191,12 +197,17 @@ function notesOnly(device) {
  */
 function readGuardLog(path) {
   const out = [];
+  let prev;
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) (.*)$/.exec(line);
     if (!m) continue;
+    // Every line, not just the switches, so the repeated hour at the clock change resolves forwards.
+    prev = lisbon(m[1], m[2], prev);
     const on = /switching ON|switched the pump back ON/.test(m[3]) ? true : /switching OFF/.test(m[3]) ? false : undefined;
     if (on === undefined) continue;
-    out.push({ at: lisbon(m[1], m[2]), on, source: 'guard', note: `Proteção E13 (script manual): ${m[3]}` });
+    // The guard only writes when it acts, so a line in the repeated hour can't
+    // always be placed; both readings are kept and either may match.
+    out.push({ at: prev, alts: lisbonAll(m[1], m[2]), on, source: 'guard', note: `Proteção E13 (script manual): ${m[3]}` });
   }
   return out;
 }
@@ -234,13 +245,14 @@ function replay(logs, device, until, guardSwitches = []) {
   for (const [, doc] of docs) {
     const t = doc.at.getTime();
     if (doc.kind === 'switch') {
-      const k = known.find(x => x.on === doc.on && Math.abs(x.at - t) <= 3 * 60_000);
+      const near = x => (x.alts ?? [x.at]).some(a => Math.abs(a - t) <= 3 * 60_000);
+      const k = known.find(x => x.on === doc.on && near(x));
       if (k) { doc.source = k.source; doc.note = k.note; }
     } else {
       const k = KNOWN_FAULTS.find(x => Math.abs(x.at - t) <= 3 * 60_000);
       if (k) doc.note = [k.note, doc.note].filter(Boolean).join(' ');
       for (const a of doc.actions) {
-        const ks = known.find(x => (x.on ? 'on' : 'off') === a.what && Math.abs(x.at - a.at) <= 3 * 60_000);
+        const ks = known.find(x => (x.on ? 'on' : 'off') === a.what && (x.alts ?? [x.at]).some(v => Math.abs(v - a.at) <= 3 * 60_000));
         if (ks) a.by = ks.source;
       }
     }
