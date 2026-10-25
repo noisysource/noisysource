@@ -12,8 +12,9 @@
  * rather than drawing a straight line through it.
  *
  * Pure, like automation.ts and incidents.ts: it is fed one reading per poll and
- * hands back the fields to write; index.ts does the writing. Writes stay low: a
- * slot is written once, when it ends, so ~96 writes a day, never one per poll.
+ * hands back the fields to write; energy-store.ts does the writing. Writes stay
+ * low: closed slots wait and go out together about once an hour (~24 writes a
+ * day), never one per poll.
  * Each write touches only its own slot fields (the REST update mask), so a lost
  * state file costs the open slot, never a slot already written.
  */

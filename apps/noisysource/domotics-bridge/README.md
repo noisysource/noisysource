@@ -178,8 +178,10 @@ AC figure later with its history intact.
   confirmed yet (below). Two readings more than 3 min apart aren't joined: that
   time is a gap, and `sec` says so. House consumption is derived (pv − battery −
   grid, like the vendor app), so it includes the inverter's own losses.
-- **Writes**: a slot is written once, when it ends: ~96 PATCHes a day, each with
-  only that slot's fields (so a lost state file can't overwrite a written slot).
+- **Writes**: closed slots wait on the Pi (in `energy-state.json`) and go out
+  together at most once an hour: one PATCH per day document, ~24 a day, each with
+  only the waiting slots' fields (so a lost state file can't overwrite a written
+  slot). The Energia page is therefore up to an hour behind.
   Failures back off 30 s → 30 min; hard cap 300 writes a UTC day. The bridge never
   reads these documents back. Rules: bridge create/update under date ids only.
 - **State**: `energy-state.json` (open slot, last reading, unconfirmed writes),

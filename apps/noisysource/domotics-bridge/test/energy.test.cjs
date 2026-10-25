@@ -7,7 +7,7 @@ const { join } = require('node:path');
 const {
   createEnergyRecorder, flowsOf, lisbonDate, lisbonOffsetMs, dayStart, slotsInDay, slotOf, slotField, SLOT_MS,
 } = require('../lib/energy.js');
-const { createEnergyStore, MAX_WRITES_PER_DAY } = require('../lib/energy-store.js');
+const { createEnergyStore, MAX_WRITES_PER_DAY, WRITE_EVERY_MS } = require('../lib/energy-store.js');
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -185,7 +185,8 @@ async function storeTests() {
     const calls = [];
     const db = { setDoc: async (path, data) => { calls.push({ path, data }); } };
     const path = join(dir, 'a.json');
-    const store = createEnergyStore(db, path, { clock: () => now });
+    // Written as each slot closes (writeEveryMs 0), to see exactly what each write carries.
+    const store = createEnergyStore(db, path, { clock: () => now, writeEveryMs: 0 });
     for (; now <= T0 + 31 * MIN; now += 30_000) await store.observe(inv());
     assert.deepEqual(calls.map(c => c.path), ['domotics_energy/2026-11-10', 'domotics_energy/2026-11-10'], 'one write per closed slot');
     assert.deepEqual(Object.keys(calls[0].data).sort(), ['date', 'q40', 'slots', 'source', 'start', 'updatedAt', 'v']);
@@ -223,21 +224,26 @@ async function storeTests() {
     assert.deepEqual(lines[0].reg, { 30: 10602, 52: 21622 });
   }
   {
-    // A whole day of normal use is well inside the cap: one write per slot.
-    let calls = 0;
-    const db = { setDoc: async () => { calls++; } };
+    // A whole day of normal use: the slots wait on the Pi and go out once an hour,
+    // all of them in one write (the first right away, after a start).
+    assert.equal(WRITE_EVERY_MS, HOUR);
+    const calls = [];
+    const db = { setDoc: async (path, data) => { calls.push(Object.keys(data).filter(k => /^q\d+$/.test(k))); } };
     now = Date.UTC(2026, 10, 11);
     const store = createEnergyStore(db, join(dir, 'c.json'), { clock: () => now });
     for (const end = now + 24 * HOUR; now <= end; now += 30_000) await store.observe(inv());
-    assert.equal(calls, 96);
-    assert.ok(calls < MAX_WRITES_PER_DAY / 2);
+    assert.equal(calls.length, 24, 'hourly, not per slot');
+    assert.deepEqual(calls[0], ['q00']);
+    assert.equal(calls[1].length, 4, 'an hour of slots in one write');
+    assert.equal(new Set(calls.flat()).size, 93, 'every slot but the last 45 min is out; those go next hour');
+    assert.ok(calls.length < MAX_WRITES_PER_DAY / 10);
   }
   {
     // The cap holds whatever happens: with 3 a day, the 4th slot waits for the next UTC day.
     let calls = 0;
     const db = { setDoc: async () => { calls++; } };
     now = Date.UTC(2026, 10, 11, 22, 0);
-    const store = createEnergyStore(db, join(dir, 'd.json'), { clock: () => now, maxWritesPerDay: 3 });
+    const store = createEnergyStore(db, join(dir, 'd.json'), { clock: () => now, maxWritesPerDay: 3, writeEveryMs: 0 });
     const warn = console.warn;
     let warned = 0;
     console.warn = () => { warned++; };

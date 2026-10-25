@@ -31,7 +31,7 @@ Plan, in order:
 - **Bridge**: `src/energy.ts` (pure) integrates the inverter power readings it already takes every poll (~30 s) into 15-minute slots. `src/energy-store.ts` writes them to `domotics_energy/{yyyy-mm-dd}`, one field per slot (`q00`…). Each slot has Wh for pv / load / imp / exp / chg / dis, plus pvLoad / batLoad / gridBat (which source fed the house and the battery), `sec` covered and `soc`.
   - Lisbon days: 100 slots on 25/10, 92 on the March change.
   - Readings more than 3 min apart are a gap, not a straight line.
-  - One PATCH per closed slot (~96/day), with only that slot's fields. Backoff 30 s → 30 min, hard cap 300 writes a day.
+  - Closed slots wait on the Pi and go out together **at most once an hour** (Renato, 2026-10-25): one PATCH per day document, ~24 a day, with only the waiting slots' fields. So the page is up to an hour behind. Backoff 30 s → 30 min, hard cap 300 writes a day. For scale: the whole kidclub-dev project did 1,625 writes and 1,643 reads on 24→25/10 (free quota 20,000 / 50,000 a day).
   - State in `energy-state.json`. `index.ts`: one import and two calls.
 - **Inverter kWh counters: not confirmed, not used.** Read-only Modbus (0x04) from the Mac, 17:46–18:25, ~280 requests. 14 input registers count up in 0.1 kWh steps:
   - 28/51/90 and 30/52/82 rose with the house load / battery discharge (the dark house ran on the battery).
@@ -244,7 +244,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 - A fault only shows while the app is open. If you want to be told when one appears (push/email), that's a new feature — say so.
 
 ## Anything risky in flight
-- **Energia, when the bridge goes on the Pi**: adds ~96 Firestore writes a day to kidclub-dev (hard cap 300), and the inverter read grows from 90 to 120 registers (one request; read that way from the Mac for an hour on 25/10 without trouble). Before the dev rules have `domotics_energy`, the writes are refused and back off to every 30 min. Nothing else changes: no new external or metered API, Modbus stays read-only.
+- **Energia, when the bridge goes on the Pi**: adds ~24 Firestore writes a day to kidclub-dev (hourly; hard cap 300), and the inverter read grows from 90 to 120 registers (one request; read that way from the Mac for an hour on 25/10 without trouble). Before the dev rules have `domotics_energy`, the writes are refused and back off to every 30 min. Nothing else changes: no new external or metered API, Modbus stays read-only.
 - **Dev rules include `domotics_config/warm_by`** (released 2026-10-25 16:35 by hand, then by CI from #117). #106 is closed, so nothing older should redeploy them. If one does, the new bridge logs `could not read the warm-by request` every 2 min and keeps its last request. Harmless.
 - **The automation settings on dev now say comfort 24, roomMax 25, water max 45** (were 23 / 24 / 38). Still dry-run, so nothing is sent. Live, recovery and "quente às" put the water at 45, and an off from outside no longer keeps the pump off.
 - **Dev site https://kidclub-dev-domotics.web.app runs `agent/domotics-reports`** (#106 + Reports) since 2026-10-25. A later push to #106 redeploys #106's hosting over it (Relatórios disappears from dev until this branch is deployed again) — harmless.

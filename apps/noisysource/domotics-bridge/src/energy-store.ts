@@ -11,14 +11,18 @@ import { createEnergyRecorder, INITIAL_ENERGY, SLOT_MS, dayStart, slotField, typ
  * - State (the open slot, the last reading, unconfirmed writes) is saved when a
  *   slot closes, at least every 5 minutes, and on exit: a restart costs at most
  *   the minutes since the last save, and those show as a gap.
- * - Writes: one PATCH per closed slot (~96 a day), only that slot's fields. A
+ * - Writes: closed slots wait on the Pi and go out together, at most once an
+ *   hour: one PATCH per day document, with only the waiting slots' fields
+ *   (~24 a day; Renato, 2026-10-25: keep it on the Pi, write now and then). A
  *   failure backs off from 30 s to 30 min, and there is a hard daily cap well
  *   above normal use, so a fault here can never turn into a write loop.
  */
 
 const COLLECTION = 'domotics_energy';
 const SAVE_EVERY_MS = 5 * 60_000;
-/** ~100 a day in normal use; this is the ceiling, not a target. */
+/** How often the waiting slots are written. The Energia page is at most this far behind. */
+export const WRITE_EVERY_MS = 60 * 60_000;
+/** ~24 a day in normal use; this is the ceiling, not a target. */
 export const MAX_WRITES_PER_DAY = 300;
 /**
  * The counter-candidate log (inverter.ts, COUNTER_CANDIDATES) stops growing
@@ -42,15 +46,17 @@ type Db = Pick<FirestoreRest, 'setDoc'>;
 export function createEnergyStore(
   db: Db | undefined,
   statePath: string,
-  /** For the tests: their clock, and a cap small enough to reach. */
+  /** For the tests: their clock, a cap small enough to reach, and how often to write. */
   {
     clock = Date.now,
     maxWritesPerDay = MAX_WRITES_PER_DAY,
+    writeEveryMs = WRITE_EVERY_MS,
     counterLog = join(dirname(statePath), 'energy-registers.jsonl'),
     counters = lastCounterCandidates,
   }: {
     clock?: () => number;
     maxWritesPerDay?: number;
+    writeEveryMs?: number;
     counterLog?: string;
     counters?: typeof lastCounterCandidates;
   } = {},
@@ -60,6 +66,8 @@ export function createEnergyStore(
   let lastPending = rec.pendingCount();
   let failures = 0;
   let retryAt = 0;
+  /** The first slot after a start goes out straight away (with any backlog), then hourly. */
+  let nextWriteAt = 0;
   let flushing = false;
   let capDay = '';
   let writesToday = 0;
@@ -100,7 +108,7 @@ export function createEnergyStore(
   }
 
   async function flush() {
-    if (!db || flushing || clock() < retryAt) return;
+    if (!db || flushing || clock() < retryAt || clock() < nextWriteAt) return;
     const docs = rec.pendingWrites();
     if (docs.length === 0) return;
     const day = new Date(clock()).toISOString().slice(0, 10);
@@ -122,6 +130,7 @@ export function createEnergyStore(
         rec.written(id, fields);
       }
       failures = 0;
+      nextWriteAt = clock() + writeEveryMs;
     } catch (err) {
       failures++;
       const delay = Math.min(30 * 60_000, 30_000 * 2 ** (failures - 1));
