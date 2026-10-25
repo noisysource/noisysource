@@ -224,15 +224,12 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 7. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs in "Last completed", 2026-10-16). The bridge survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
 
 ## Open questions for Renato
-- **Energia: the tariff.** Until these are answered, the euros are estimates from a typical bi-horário contract (fora de vazio 0,20 €, vazio 0,105 €/kWh, 6,9 kVA at 0,36 €/day):
-  - Supplier and offer.
-  - €/kWh fora de vazio and vazio, without VAT.
-  - Potência contratada (kVA) and its €/day.
-  - Do you sell surplus to the grid? If so, at what €/kWh?
-  - Day the billing period starts: calendar month, or a meter-reading cycle?
-  - Vazio really 22:00–08:00 (daily cycle)?
-  - Does your bill have the 6 % VAT on the first kWh? It only applies up to 6.9 kVA.
-  - Is the RENAC battery set to charge from the grid at night? The page handles both; it changes what "bateria" saves.
+- **Energia: the tariff** — ✅ set 2026-10-25 22:57 from the EDP invoice of 10/08/2026 (period 24/06–05/08, `prodata/236002796526.pdf`, gitignored) into `domotics_config/tariff` on dev (`confirmed: true`). EDP Comercial, 6,9 kVA, bi-horário diário (vazio 22–08). Energy with the 15 % campaign discount already applied (until 23/06/2027): vazio 0,1119 → **0,095115**, fora de vazio 0,1935 → **0,164475** €/kWh; potência **0,7722 €/day** (23 %); IEC 0,001 €/kWh, DGEG 0,35 €/month (both 23 %); CAV 2,85 €/month (6 %); energy 6 % up to 200 kWh/30 days. Checked: `computeBill` reproduces the invoice's energy, potência and IEC lines to the cent; CAV/DGEG differ because EDP charged 2 whole months for 43 days and the page spreads them per day. **Still open:**
+  - Export price set to 0: the invoice shows no selling contract. Say if you sell surplus (UPAC) and at what price.
+  - Billing day set to 6, inferred from the readings window (2–4 Sep for a period ending ~5 Sep). Check it against the next invoice.
+  - When the 15 % discount ends (23/06/2027), the energy prices go up to 0,1119 / 0,1935.
+  - Is the RENAC battery set to charge from the grid at night?
+  - The invoice says the regulated tariff would have cost 15,45 € less for the same consumption (≈ 130 €/year at this rate), mostly the potência (0,7722 €/day here, of which 0,3436 is the network access part).
 - **Energia on the wall tablet / on the LAN**: it needs sign-in, like Relatórios, so it doesn't work on the house network. If you want it there, the bridge would serve the history over its HTTP API. That's a follow-up, say if you want it.
 - **Heating automation, before going live:**
   - ✅ Answered 2026-10-25: `roomMax` 25, water max 45, and the automation switches the pump back on whoever switched it off (all applied, see Last completed).
