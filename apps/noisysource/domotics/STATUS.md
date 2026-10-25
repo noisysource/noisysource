@@ -23,6 +23,17 @@ Plan, in order:
 4. **Wall tablet + lights without sign-in at home**: **found 2026-10-17 — lights/blinds cannot work on the LAN at all today.** Legrand goes through Cloud Functions that require sign-in, and Firebase Auth's authorized domains contain no LAN address (not even `localhost`), so a page served on the LAN can never sign in. Renato's "the light would not light up" at home was this (before the 3D branch the old screen showed it on anyway; now it rolls back and says why). Fix for the tablet: send Legrand commands through the Pi bridge (it already has its own Firebase identity) when on the LAN. Then serve the built app from the Pi, kiosk browser (Fully Kiosk on Android recommended), idle screen, slow capped Legrand refresh. The Pi is a 256 MB Pi 1: static files only.
 
 ## Last completed
+**2026-10-25 ~23:55: Energia, no selling + solar surplus** (PR #118, app and shared lib only; the bridge is untouched). Renato: "we don't sell to the grid … point out the surplus: when the batteries are full and the panels are producing."
+- What goes to the grid is now "enviado à rede (sem pagamento)" everywhere. The export price moved under "Taxas e IVA" in Tarifário (0 = oferecido).
+- New **"Excedente solar"** section for every period:
+  - kWh sent unpaid. A slot counts as surplus only from 100 W average; below that it's the inverter regulating.
+  - How much of it went out with the **battery full**: SoC ≥ 97 % at the end of the slot, or the battery charging < 100 W while solar goes out. The second catches a ceiling set below 97 % and a battery that has stopped taking charge.
+  - Its value if used instead of bought, at the price of its hour (+ IEC, 23 %), labelled as an opportunity, not income.
+  - When it happens: the main window ("sobretudo entre as 12:00–15:00"), an hour-of-day profile on week/month/year, and markers on the day chart.
+  - A note on the automation's solar boost, with its threshold read from `domotics_config/automation`.
+- **Live**: "Excedente solar agora: ~X W a ir para a rede" on the energy card, the 3D strip, the 2D footer and the Energia page, under the same rule. No new polling.
+- Tests: functions 394/394 (`surplusOf`, `surplusWindow`, and a check that the app's live thresholds match the lib). `build:staging` OK.
+
 **2026-10-25 21:52 UTC — #117 merged into `staging`, new bridge on the Pi (dry-run).**
 - #117 (all domotics: #106 + Reports/E13 guard + automation fixes/warm-by) merged into `staging` at Renato's OK ("merge when green"), after its dev deploy passed (functions incl. `domoticsWarmBy`, rules, indexes, terraform, domotics/FinHub/KidClub hosting). #118 (Energia) retargeted to `staging`.
 - Pi: `lib/` from #117 (backup `~/domotics-bridge/lib.bak-20261025-reports`; md5 of the copied files checked; deps unchanged, no npm install). Restarted 21:52:06; the #115 pin script **kept the 5 repeater pins** (.232–.236, PERMANENT); `[state] 7/7` at 21:52:24. Automation `dry-run`: all six thermostats were at 26 °C (set by hand), so it simulated setting them to 23.5 (evening) and simulated recovery (1.6° short of 26). Water 44 °C taken as hand-set. Guard resting the pump until 22:44.
@@ -225,7 +236,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 
 ## Open questions for Renato
 - **Energia: the tariff** — ✅ set 2026-10-25 22:57 from the EDP invoice of 10/08/2026 (period 24/06–05/08, `prodata/236002796526.pdf`, gitignored) into `domotics_config/tariff` on dev (`confirmed: true`). EDP Comercial, 6,9 kVA, bi-horário diário (vazio 22–08). Energy with the 15 % campaign discount already applied (until 23/06/2027): vazio 0,1119 → **0,095115**, fora de vazio 0,1935 → **0,164475** €/kWh; potência **0,7722 €/day** (23 %); IEC 0,001 €/kWh, DGEG 0,35 €/month (both 23 %); CAV 2,85 €/month (6 %); energy 6 % up to 200 kWh/30 days. Checked: `computeBill` reproduces the invoice's energy, potência and IEC lines to the cent; CAV/DGEG differ because EDP charged 2 whole months for 43 days and the page spreads them per day. **Still open:**
-  - Export price set to 0: the invoice shows no selling contract. Say if you sell surplus (UPAC) and at what price.
+  - ✅ Export price 0: Renato doesn't sell (2026-10-25). What goes to the grid keeps the system alive or is surplus, and is given away. The page now shows that surplus instead.
   - Billing day set to 6, inferred from the readings window (2–4 Sep for a period ending ~5 Sep). Check it against the next invoice.
   - When the 15 % discount ends (23/06/2027), the energy prices go up to 0,1119 / 0,1935.
   - Is the RENAC battery set to charge from the grid at night?
