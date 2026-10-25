@@ -8,8 +8,9 @@ import { startHttp } from './http';
 import { readInverter, type InverterReading } from './inverter';
 import {
   createAutomation, parseConfig,
-  type AutomationConfig, type AutomationStatus, type PumpReading, type ZoneReading,
+  type AutomationConfig, type AutomationMemory, type AutomationStatus, type PumpReading, type ZoneReading,
 } from './automation';
+import { parseWarmBy, type WarmByRequest } from './warmby';
 import { PUMP_FAULT_CODES, decodeFaults } from './faults';
 import {
   createRecorder, type Incident, type PumpSample, type RecorderSnapshot, type SwitchSource,
@@ -97,6 +98,11 @@ const STATE_DOC = 'domotics_state/tuya';
 const AUTOMATION_DOC = 'domotics_config/automation';
 /** Settings change rarely; re-reading every couple of minutes is plenty and costs ~700 reads a day. */
 const AUTOMATION_SETTINGS_EVERY_MS = 2 * 60_000;
+/**
+ * The one-off "warm by HH:MM" request (warmby.ts), written by the
+ * `domoticsWarmBy` callable. Read with the settings: another ~700 reads a day.
+ */
+const WARM_BY_DOC = 'domotics_config/warm_by';
 const COMMANDS = 'domotics_commands';
 /** E13 guard on/off, set in the app (see guard.ts). Read on the automation's cadence. */
 const GUARD_DOC = 'domotics_config/guard';
@@ -211,11 +217,32 @@ async function loadConfig(): Promise<DeviceConfig[]> {
   }
 }
 
+/** Dates go to disk as ISO strings; these files hold no other strings shaped like one. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+function readJson<T>(path: string): T | undefined {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'), (_k, v) =>
+      typeof v === 'string' && ISO_DATE.test(v) ? new Date(v) : v) as T;
+  } catch {
+    return undefined;
+  }
+}
+function writeJson(path: string, value: unknown) {
+  try {
+    writeFileSync(path, JSON.stringify(value));
+  } catch (err) {
+    console.warn(`[bridge] could not write ${path}:`, (err as Error).message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Heating automation
 // ---------------------------------------------------------------------------
 
 const AUTOMATION_CACHE = join(__dirname, '..', 'automation-config.json');
+const WARM_BY_CACHE = join(__dirname, '..', 'warm-by.json');
+/** The warm-up model it has learned and the last water setpoint it sent. */
+const AUTOMATION_MEMORY_FILE = join(__dirname, '..', 'automation-state.json');
 
 /**
  * The settings, like the device list, are Firestore-first and cached on disk:
@@ -230,10 +257,24 @@ let automationConfig: AutomationConfig = (() => {
   }
 })();
 let automationSettingsAt = 0;
+/** Cached like the settings, so a restart without network still knows the request. */
+let warmBy: WarmByRequest | null = parseWarmBy(readJson(WARM_BY_CACHE));
 
 async function refreshAutomationSettings() {
   if (!db || Date.now() - automationSettingsAt < AUTOMATION_SETTINGS_EVERY_MS) return;
   automationSettingsAt = Date.now();
+  try {
+    // A missing document means no request. Read on its own, so a refusal
+    // (rules not deployed yet) can't hold up the settings below.
+    const next = parseWarmBy(await db.getDoc(WARM_BY_DOC));
+    if (JSON.stringify(next) !== JSON.stringify(warmBy)) {
+      console.log(`[automation] warm by: ${next ? `${new Date(next.at).toISOString()}${next.target !== null ? ` at ${next.target}°C` : ''}` : 'none'}`);
+      warmBy = next;
+      writeJson(WARM_BY_CACHE, next);
+    }
+  } catch (err) {
+    console.warn('[automation] could not read the warm-by request, keeping the last one:', (err as Error).message);
+  }
   try {
     // A missing document means defaults — which is automation off.
     const next = parseConfig((await db.getDoc(AUTOMATION_DOC)) ?? {});
@@ -251,8 +292,9 @@ const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
 
 const automate = createAutomation(async (deviceId, commands) => {
   await runCommand(deviceId, commands, 'automation');
-});
+}, readJson<AutomationMemory>(AUTOMATION_MEMORY_FILE));
 let automating = false;
+let savedMemory = JSON.stringify(automate.memory());
 
 /** One automation step on the freshest state. Runs after every poll. */
 async function runAutomation() {
@@ -273,6 +315,10 @@ async function runAutomation() {
           // The pump's own outdoor sensor (`temp_top` — see README, "Heat pump").
           outdoor: tenths(s.get('temp_top')),
           flowSetpoint: typeof s.get('p02_heating') === 'number' ? (s.get('p02_heating') as number) : undefined,
+          // Same datapoints as the incident samples (watchPump).
+          hz: typeof s.get('temp_current') === 'number' ? (s.get('temp_current') as number) : undefined,
+          waterOut: tenths(s.get('venting_temp')),
+          waterIn: tenths(s.get('coiler_temp')),
         };
       } else if (s.has('temp_set')) {
         zones.push({
@@ -294,8 +340,15 @@ async function runAutomation() {
       energy: inv?.online
         ? { pvW: inv.pvPowerW, loadW: inv.consumptionW, gridW: inv.gridPowerW, soc: inv.soc }
         : undefined,
+      guard: state.guard,
+      warmBy,
     });
     state = { ...state, automation: status };
+    const memory = JSON.stringify(automate.memory());
+    if (memory !== savedMemory) {
+      writeJson(AUTOMATION_MEMORY_FILE, automate.memory());
+      savedMemory = memory;
+    }
   } catch (err) {
     console.error('[automation] step failed:', (err as Error).message);
   } finally {
@@ -311,24 +364,6 @@ const GUARD_CONFIG_CACHE = join(__dirname, '..', 'guard-config.json');
 const GUARD_STATE_FILE = join(__dirname, '..', 'guard-state.json');
 const INCIDENTS_STATE_FILE = join(__dirname, '..', 'incidents-state.json');
 const INCIDENTS_PENDING_FILE = join(__dirname, '..', 'incidents-pending.json');
-
-/** Dates go to disk as ISO strings; these files hold no other strings shaped like one. */
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
-function readJson<T>(path: string): T | undefined {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'), (_k, v) =>
-      typeof v === 'string' && ISO_DATE.test(v) ? new Date(v) : v) as T;
-  } catch {
-    return undefined;
-  }
-}
-function writeJson(path: string, value: unknown) {
-  try {
-    writeFileSync(path, JSON.stringify(value));
-  } catch (err) {
-    console.warn(`[bridge] could not write ${path}:`, (err as Error).message);
-  }
-}
 
 /** Like the automation settings: Firestore-first, cached, and a cloud outage keeps the last ones. */
 let guardConfig: GuardConfig = parseGuardConfig(readJson(GUARD_CONFIG_CACHE) ?? {});
@@ -437,7 +472,11 @@ async function watchPump(pumpFresh: boolean) {
 
   await refreshGuardSettings();
   const before = JSON.stringify(guard.state());
-  const d = guard.decide(guardConfig, { now, pump: sample });
+  // The automation's last step, if it is running live and recent: nothing wants heat, keep resting.
+  const a = state.automation;
+  const holdRest = automationConfig.enabled && !automationConfig.dryRun
+    && a?.holdRest === true && now - a.evaluatedAt < 5 * 60_000;
+  const d = guard.decide(guardConfig, { now, pump: sample, holdRest });
   let status = d.status;
   if (d.action) {
     const { on, reason, next } = d.action;

@@ -18,6 +18,11 @@
  * guard switches the pump back on — it never leaves the house with the pump
  * parked by us.
  *
+ * With the heating automation running live, a rest doesn't end on the clock
+ * alone: while no zone wants heat the automation asks (`holdRest`) for the
+ * pump to stay off, and the rest ends as soon as one does. The automation
+ * never switches on a pump the guard has parked.
+ *
  * Pure: it decides, index.ts sends, and the new state is only taken once the
  * command has gone through (a failed command is decided again next poll).
  */
@@ -37,7 +42,7 @@ export const IDLE_HZ = 45;
 /** Water out within this of the setpoint (a dip of 1.5 preceded the 20:30 trip on 22/10). */
 export const NEAR_SETPOINT = 1.5;
 /** The idle rule is ignored this long after the pump is switched on. */
-const GRACE_MS = 4 * MIN;
+export const GRACE_MS = 4 * MIN;
 export const REST_PREVENTIVE_MS = 60 * MIN;
 export const REST_AFTER_TRIP_MS = 120 * MIN;
 /** Still faulted this soon after switching on = locked out. */
@@ -76,6 +81,8 @@ export interface GuardInput {
     out?: number;
     faults: string[];
   };
+  /** From the heating automation (live only): no zone wants heat, so a rest that is due to end carries on. */
+  holdRest?: boolean;
 }
 
 export interface GuardDecision {
@@ -91,8 +98,9 @@ const hhmm = (ms: number) => new Date(ms).toLocaleTimeString('pt-PT', { hour: '2
 export function createGuard(initial: GuardState = INITIAL_GUARD) {
   let s: GuardState = { ...initial };
 
-  function status(cfg: GuardConfig, now: number, st: GuardState): GuardStatus {
+  function status(cfg: GuardConfig, now: number, st: GuardState, held = false): GuardStatus {
     const note = !cfg.enabled ? 'Desligada'
+      : st.mode === 'rest' && held ? `Bomba em descanso desde as ${hhmm(st.lastAction?.at ?? st.restUntil)} — nenhuma zona pede calor; liga quando uma pedir (automação)`
       : st.mode === 'rest' ? `Bomba em descanso até às ${hhmm(st.restUntil)}`
       : st.mode === 'lockout' ? 'Bomba bloqueada em avaria — precisa de rearme (painel, disjuntor ou técnicos)'
       : 'A vigiar — desliga a bomba quando fica parada no setpoint';
@@ -136,8 +144,12 @@ export function createGuard(initial: GuardState = INITIAL_GUARD) {
         if (pump.on) {
           // Someone switched it on during the rest: theirs now.
           s = { ...s, mode: 'watch', switchedOnAt: now };
+        } else if (now >= s.restUntil && input.holdRest) {
+          return { status: status(cfg, now, s, true) };
         } else if (now >= s.restUntil) {
-          return act(cfg, now, true, 'fim do descanso', { ...s, mode: 'watch', switchedOnAt: now });
+          // Past its end by more than a poll or two: the automation was holding it.
+          const reason = now - s.restUntil > 2 * MIN ? 'fim do descanso — uma zona voltou a pedir calor' : 'fim do descanso';
+          return act(cfg, now, true, reason, { ...s, mode: 'watch', switchedOnAt: now });
         }
         break;
       case 'lockout':

@@ -178,6 +178,26 @@ const p = (over = {}) => ({ on: true, hz: 50, sp: 44, out: 40, faults: [], ...ov
   assert.equal(g.decide(off, { now: T0 + MIN, pump: p() }).status.mode, 'off');
 }
 {
+  // The heating automation (live) holds a rest past its end while no zone
+  // wants heat; it ends as soon as one does, with that reason.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN, lastAction: { at: T0, what: 'off', reason: 'x' } });
+  let d = g.decide(on, { now: T0 + 61 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
+  assert.equal(d.action, undefined);
+  assert.equal(d.status.mode, 'rest');
+  assert.match(d.status.note, /nenhuma zona pede calor/);
+  d = g.decide(on, { now: T0 + 95 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
+  assert.equal(d.action, undefined, 'still nothing wants heat');
+  d = g.decide(on, { now: T0 + 100 * MIN, pump: p({ on: false, hz: 0 }), holdRest: false });
+  assert.equal(d.action.on, true);
+  assert.match(d.action.reason, /voltou a pedir calor/);
+  // A hold never shortens a rest, and never applies to anything but a rest.
+  const g2 = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN });
+  assert.equal(g2.decide(on, { now: T0 + 30 * MIN, pump: p({ on: false, hz: 0 }), holdRest: false }).action, undefined);
+  const g3 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g3.decide(on, { now: T0, pump: p() });
+  assert.equal(g3.decide(on, { now: T0 + 10 * MIN, pump: p({ hz: 44, out: 43 }), holdRest: true }).action.on, false, 'the idle rule still fires');
+}
+{
   // On the real logs, the guard would have switched the pump off before every
   // logged trip (the hand-run script's own replay said 4–25 min before).
   const leads = [];
