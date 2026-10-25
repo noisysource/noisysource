@@ -18,6 +18,7 @@ import {
 import {
   createGuard, parseGuardConfig, INITIAL_GUARD, type GuardConfig, type GuardState, type GuardStatus,
 } from './guard';
+import { createEnergyStore } from './energy-store';
 
 /**
  * Domotics bridge.
@@ -130,6 +131,9 @@ const db = process.env.FIREBASE_API_KEY && process.env.BRIDGE_EMAIL && process.e
       password: process.env.BRIDGE_PASSWORD,
     })
   : undefined;
+
+/** kWh history (energy.ts, energy-store.ts). Written only with the relay on, like everything else. */
+const energy = createEnergyStore(RELAY ? db : undefined, join(__dirname, '..', 'energy-state.json'));
 
 let devices: DeviceConfig[] = [];
 /** Last time a client asked for state — drives the polling rate. */
@@ -777,6 +781,8 @@ async function poll(force = false) {
     // The inverter is mains-powered, on ethernet, and answers in milliseconds —
     // so unlike the sleepy valve heads it can simply be read every cycle.
     const inverter = await readInverter();
+    // kWh history for the Energia page (energy.ts): one write per 15-min slot.
+    void energy.observe(inverter);
 
     const changed = JSON.stringify(next) !== JSON.stringify(state.devices);
     state = { ...state, devices: next, inverter, updatedAt: Date.now() };
