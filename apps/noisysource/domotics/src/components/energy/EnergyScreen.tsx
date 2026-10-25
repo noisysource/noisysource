@@ -327,7 +327,7 @@ function CoverageNote({ summary, last, isCurrent }: { summary: ReturnType<typeof
   const missing = summary.expectedSec - summary.coveredSec;
   return (
     <div className="flex flex-col gap-1 text-xs text-zinc-500 leading-relaxed">
-      {isCurrent && last && <span>Registado até às {fmtWhen(last).slice(6)} (de 15 em 15 minutos).</span>}
+      {isCurrent && last && <span>Registado até às {fmtWhen(last).slice(6)} (em períodos de 15 minutos, enviados de hora a hora).</span>}
       {cov < 0.98 && missing > 15 * 60 && (
         <span className="text-amber-300/90">
           Sem dados em {fmtDuration(missing)} deste período ({fmtPct(1 - cov)}) — ponte ou inversor sem ligação. Os totais ficam abaixo do real.
