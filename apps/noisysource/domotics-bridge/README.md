@@ -159,6 +159,36 @@ tables is in `src/faults.ts`, for the incidents).
 - **History**: `deploy/backfill-incidents.cjs` replays the hand-run logger's
   files through the same recorder (see its header). Tests: `pnpm test`.
 
+## Energy history (kWh)
+
+For the app's Energia page. The inverter (RENAC N1HL, `src/inverter.ts`, local
+Modbus TCP, read-only) is read every poll (~30 s) anyway; `src/energy.ts`
+integrates those power readings into **15-minute slots** and
+`src/energy-store.ts` writes them to `domotics_energy/{yyyy-mm-dd}` (Lisbon
+date), one field per slot: `q00`…`q95` (`q99` on the October clock change, `q91`
+in March). Each slot holds Wh for `pv`, `load`, `imp`, `exp`, `chg`, `dis`, plus
+which source fed the house (`pvLoad`, `batLoad`) and the battery (`gridBat`),
+`sec` = seconds of the slot covered by readings, and `soc` at its end.
+
+- **Integrated, not the inverter's counters.** Its kWh registers aren't
+  confirmed yet (below). Two readings more than 3 min apart aren't joined: that
+  time is a gap, and `sec` says so. House consumption is derived (pv − battery −
+  grid, like the vendor app), so it includes the inverter's own losses.
+- **Writes**: a slot is written once, when it ends: ~96 PATCHes a day, each with
+  only that slot's fields (so a lost state file can't overwrite a written slot).
+  Failures back off 30 s → 30 min; hard cap 300 writes a UTC day. The bridge never
+  reads these documents back. Rules: bridge create/update under date ids only.
+- **State**: `energy-state.json` (open slot, last reading, unconfirmed writes),
+  saved when a slot closes, every 5 min and on exit. A restart under 3 min is
+  bridged; a longer one is a gap.
+- **Counter candidates**: `energy-registers.jsonl` gets one line per closed slot
+  with the integrated Wh and 14 input registers that count up in 0.1 kWh steps
+  (`COUNTER_CANDIDATES` in `inverter.ts`). Compare a few sunny days of it with the
+  slots to tell which register is which flow; then the counters can fill gaps.
+  Capped at 5 MB. Log lines: `[energy]`.
+- Tests: `test/energy.test.cjs` (Lisbon days and the clock changes, the flow
+  split, gaps, slot boundaries, restarts, write backoff and cap).
+
 ## Moving to the Raspberry Pi
 
 Not done yet. When it happens: install Node, copy a service account key (ADC

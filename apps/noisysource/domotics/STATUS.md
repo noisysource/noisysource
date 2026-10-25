@@ -5,6 +5,8 @@
 **Last updated:** 2026-10-25
 
 ## Currently working on
+**Energia page: kWh history, cost, savings and bill projection** (Renato's request, 2026-10-25). Branch `agent/domotics-energy`, worktree `.claude/worktrees/domotics-energy`, **stacked on `agent/domotics-warm-by`** (PR base is that branch, so it deploys nothing). Code and tests done. **Not deployed anywhere**: the Pi bridge needs Renato's OK (Next step, "Energia"), and the rules and hosting reach dev with the stack. **The euros are estimates** until Renato answers the tariff questions (Open questions, "Energia") or fills in Energia → Tarifário himself.
+
 **Heating automation fixes + "warm by HH:MM"** (session C of `HANDOFF-reports-and-chat.md`, 2026-10-25). Branch `agent/domotics-warm-by` (PR #117, base `agent/domotics-reports`: retarget to `staging` once #106 and B merge), worktree `.claude/worktrees/domotics-warm-by`, **stacked on `agent/domotics-reports`** (itself on #106): neither is in `staging` yet, and C needs B's guard. Code and tests done, dev rules deployed. **Not deployed yet:** the `domoticsWarmBy` function and dev hosting (Firebase CLI login expired: needs `firebase login --reauth`), and the Pi bridge (needs Renato's OK, see Next step 0). The automation stays in dry-run. **Renato decides when it goes live.**
 
 **Reports page + incident recording + E13 guard inside the bridge** (session B of `HANDOFF-reports-and-chat.md`, 2026-10-24/25). Branch `agent/domotics-reports`, worktree `.claude/worktrees/domotics-reports`, **branched off `agent/domotics-3d` (PR #106), not `staging`**: #106 isn't merged and this builds on its 3D app, the guard script and the logs. App + rules on dev; **bridge on the Pi since 2026-10-25 09:42, guard handed over 09:46–09:49** (hand-run script stopped, bridge's guard on). Left: R5 (PR), and the repeater (below).
@@ -20,6 +22,32 @@ Plan, in order:
 4. **Wall tablet + lights without sign-in at home**: **found 2026-10-17 — lights/blinds cannot work on the LAN at all today.** Legrand goes through Cloud Functions that require sign-in, and Firebase Auth's authorized domains contain no LAN address (not even `localhost`), so a page served on the LAN can never sign in. Renato's "the light would not light up" at home was this (before the 3D branch the old screen showed it on anyway; now it rolls back and says why). Fix for the tablet: send Legrand commands through the Pi bridge (it already has its own Firebase identity) when on the LAN. Then serve the built app from the Pi, kiosk browser (Fully Kiosk on Android recommended), idle screen, slow capped Legrand refresh. The Pi is a 256 MB Pi 1: static files only.
 
 ## Last completed
+**2026-10-25 ~19:00 — Energia page + kWh recording in the bridge** (`agent/domotics-energy`):
+- **Bridge**: `src/energy.ts` (pure) integrates the inverter power readings it already takes every poll (~30 s) into 15-minute slots. `src/energy-store.ts` writes them to `domotics_energy/{yyyy-mm-dd}`, one field per slot (`q00`…). Each slot has Wh for pv / load / imp / exp / chg / dis, plus pvLoad / batLoad / gridBat (which source fed the house and the battery), `sec` covered and `soc`.
+  - Lisbon days: 100 slots on 25/10, 92 on the March change.
+  - Readings more than 3 min apart are a gap, not a straight line.
+  - One PATCH per closed slot (~96/day), with only that slot's fields. Backoff 30 s → 30 min, hard cap 300 writes a day.
+  - State in `energy-state.json`. `index.ts`: one import and two calls.
+- **Inverter kWh counters: not confirmed, not used.** Read-only Modbus (0x04) from the Mac, 17:46–18:56, ~450 requests. 14 input registers count up in 0.1 kWh steps:
+  - 28/51/90 and 30/52/82 rose with the house load / battery discharge (the dark house ran on the battery).
+  - 29/54/59/91 and 56/88/111/113 didn't move.
+  - Which flow each one is needs a day with sun, export and charging. So the bridge now reads registers 0–119 (still one request) and logs them per slot, beside the integrated Wh, to `energy-registers.jsonl` on the Pi (5 MB cap).
+- **Cost maths** (`packages/shared/lib/energyBill.ts`, byte-identical mirror in `functions/src/domotics/energyBill.ts` for the chat, checked like `vat.ts`). It bills by vazio / fora de vazio, plus potência, IEC, CAV, DGEG, IVA 6 % (first 200 kWh per 30 days) / 23 %, and the export credit.
+  - Three bills: actual, without panels or battery, and panels without battery. So saving = panels + battery, exactly.
+  - Billing-period projection = what's recorded so far + the last 7 days' average, corrected for gaps.
+- **App "Energia"**: chart-column button in the header (signed in, or `?demo`), and "Histórico e fatura" on the energy card.
+  - Periods: Dia / Semana / Mês / Ano / Período, with ‹ ›.
+  - Tiles: kWh (house, solar, from/to grid, battery in/out, autossuficiência, autoconsumo) and € (cost, without panels or battery, saving split panels · battery).
+  - Chart: two panels (house by source, solar by destination, one kWh scale). Vazio is shaded and battery % shown on the day view. Gaps are marked and named. Hover / keyboard tooltip.
+  - "Fatura em curso": so far + projection + line-by-line detail. "Tarifário" editor writes `domotics_config/tariff`.
+  - Lazy chunk 41 kB (14 kB gz). `?demo` simulates a year.
+- **Rules**: `domotics_energy` owner read, bridge create/update under date ids, no deletes. `domotics_config/tariff` owner only.
+- **Tests**:
+  - `pnpm --filter domotics-bridge test`: new `test/energy.test.cjs`.
+  - functions vitest 389/389 (22 new).
+  - `pnpm test:rules:domotics` 56/56 (20 new).
+  - `pnpm --filter domotics build:staging` OK. The chart is server-rendered for each period kind as a smoke test. No browser testing.
+
 **2026-10-25 ~16:40 — heating automation reworked, "warm by HH:MM" added** (`agent/domotics-warm-by`, design updated in `HANDOFF-heating-automation.md`):
 - **Recovery**: rooms > 0.5° below their targets on average → water at the top of the range (38) until ≤ 0.2°. The water is never lowered while the rooms are > 0.2° short, and then only 1° per 30 min. On the 20/10 cold morning that is 38 °C instead of 29–31 (test 14 replays it).
 - **Hand-set water respected** until the next period, like a zone: any setpoint the automation didn't send, including the one found at start-up. So the technicians' 44 °C is left alone until the next period. The last value it sent is kept in `automation-state.json`.
@@ -158,6 +186,10 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 2026-10-02 — Heat pump fault codes + corrected heat pump readings (PR #73, merged to `staging`). The unit is a **Zantia Vancouver 13 (single-phase, R32)**, manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. Datapoint table in `domotics-bridge/README.md` → "Heat pump"; fault bitmaps decoded in `src/data/heatpumpFaults.ts`; active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
 ## Next step
+- **Energia** (`agent/domotics-energy`, stacked on #117):
+  1. Tariff: Renato answers the questions under Open questions, or enters them himself in Energia → Tarifário. Saving the form is what removes the "estimativa" labels.
+  2. **Bridge on the Pi** (needs Renato's OK; the steps are in the PR). Afterwards check `journalctl -u domotics-bridge | grep energy`: there should be no `[energy] write failed`. Within 15 min, `domotics_energy/<today>` should appear in kidclub-dev. If the dev rules don't have `domotics_energy` yet, the writes back off (403) and land once the rules do; the slots wait on the Pi for up to 14 days.
+  3. After 3–4 sunny days: compare `~/domotics-bridge/energy-registers.jsonl` with the slots, settle which register is which, and use the counters to fill gaps. Then drop the log.
 - ✅ **R1. Dev Firestore rules** — deployed 2026-10-25 from this branch (rules only, Renato's OK; superset of `staging` + #106, checked: the live dev ruleset has `domotics_incidents`, `guard` and #110's event rules). Relatórios and the Proteção E13 switch work on dev now. A later #106 push redeploys #106's rules without these two (the page then says "sem acesso" again until this branch's rules go back) — merge #106, then open R5.
 - ✅ R2–R4 done 2026-10-25 (bridge on the Pi, guard handed over, backfill to the deploy) — see "Last completed".
 - **Repeater**: power-cycle it, then `journalctl -u domotics-bridge -f` on the Pi → `[tuya] … recovered` and `[state] 2/7` (2/7 is today's normal: only Kids Bathroom + pump; the 5-thermostat ECONNRESET is session A's open item). If the bridge restarted meanwhile (it exits after 5 all-failed full polls), the pins will be gone again: re-pin (command in "Anything risky").
@@ -181,6 +213,16 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 7. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs in "Last completed", 2026-10-16). The bridge survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
 
 ## Open questions for Renato
+- **Energia: the tariff.** Until these are answered, the euros are estimates from a typical bi-horário contract (fora de vazio 0,20 €, vazio 0,105 €/kWh, 6,9 kVA at 0,36 €/day):
+  - Supplier and offer.
+  - €/kWh fora de vazio and vazio, without VAT.
+  - Potência contratada (kVA) and its €/day.
+  - Do you sell surplus to the grid? If so, at what €/kWh?
+  - Day the billing period starts: calendar month, or a meter-reading cycle?
+  - Vazio really 22:00–08:00 (daily cycle)?
+  - Does your bill have the 6 % VAT on the first kWh? It only applies up to 6.9 kVA.
+  - Is the RENAC battery set to charge from the grid at night? The page handles both; it changes what "bateria" saves.
+- **Energia on the wall tablet / on the LAN**: it needs sign-in, like Relatórios, so it doesn't work on the house network. If you want it there, the bridge would serve the history over its HTTP API. That's a follow-up, say if you want it.
 - **Heating automation, before going live:**
   - **`limits.roomMax` is 24 in the saved settings** (you set it on 20/10). With comfort 24, that cuts pre-heat (24.5), the solar boost and any "quente às" target to 24. Raise it to 25 (the default) or keep it?
   - **Water max 38 °C.** On 21/10 the plan was to cap it at 35, but the later trips at 34–35 °C showed the cause is idling at the setpoint, not the temperature, and the technicians now run 44. Keep 38?
@@ -193,6 +235,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 - A fault only shows while the app is open. If you want to be told when one appears (push/email), that's a new feature — say so.
 
 ## Anything risky in flight
+- **Energia, when the bridge goes on the Pi**: adds ~96 Firestore writes a day to kidclub-dev (hard cap 300), and the inverter read grows from 90 to 120 registers (one request; read that way from the Mac for an hour on 25/10 without trouble). Before the dev rules have `domotics_energy`, the writes are refused and back off to every 30 min. Nothing else changes: no new external or metered API, Modbus stays read-only.
 - **Dev rules now include `domotics_config/warm_by`** (released 2026-10-25 16:35 from `agent/domotics-warm-by`). A later rules deploy from #106 or `agent/domotics-reports` drops that line. Then the new bridge logs `could not read the warm-by request` every 2 min and keeps its last one. Harmless; it goes away when this branch merges.
 - **The automation settings on dev now say comfort 24** (were 23). Still dry-run, so nothing is sent.
 - **Dev site https://kidclub-dev-domotics.web.app runs `agent/domotics-reports`** (#106 + Reports) since 2026-10-25. A later push to #106 redeploys #106's hosting over it (Relatórios disappears from dev until this branch is deployed again) — harmless.

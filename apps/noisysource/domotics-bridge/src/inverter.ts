@@ -124,7 +124,7 @@ function readInputRegisters(start: number, count: number): Promise<number[]> {
 /**
  * Registers that count up in 0.1 kWh steps — probably the inverter's own
  * energy counters (today's and lifetime), but which flow each one is has not
- * been confirmed. Watched on 25/10 18:00–19:00 (dark: the house on the battery,
+ * been confirmed. Watched on 25/10 17:45–19:00 (dark: the house on the battery,
  * nothing from or to the grid): 28, 51, 90 rose together by 0.1 kWh per
  * ~100 Wh, and so did 30, 52, 82; 29, 54, 59, 91 (today?) and 56, 88, 111, 113
  * (lifetime?) stood still. Telling them apart needs a day with sun, export and
