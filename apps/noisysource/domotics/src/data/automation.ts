@@ -32,7 +32,7 @@ export const DEFAULT_AUTOMATION: AutomationConfig = {
   preheat: { from: '05:00', to: '08:00', delta: 0.5 },
   evening: { from: '18:00', to: '22:00', delta: -0.5 },
   solarBoost: { enabled: true, delta: 0.5, exportW: 800 },
-  flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 38 },
+  flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 45 },
   recovery: { enabled: true },
   rest: { enabled: true, minutes: 60 },
   pumpFollowsZones: { enabled: true, idleMin: 20, minOnMin: 30, minOffMin: 15 },
