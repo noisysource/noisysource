@@ -16,3 +16,4 @@ warm-by.json
 automation-state.json
 # kWh history recorder state (see src/energy.ts, src/energy-store.ts).
 energy-state.json
+energy-registers.jsonl

@@ -195,11 +195,17 @@ const PENDING_DAYS = 14;
 
 export function createEnergyRecorder(initial?: EnergySnapshot) {
   const s: EnergySnapshot = structuredClone(initial ?? INITIAL_ENERGY);
+  /** The last slot closed with data, as queued. Not part of the snapshot. */
+  let lastClosed: { date: string; index: number; slot: Slot } | null = null;
 
   function closeOpen() {
     const o = s.open;
     if (!o) return;
-    if (o.slot.sec > 0) (s.pending[o.date] ??= {})[slotField(o.index)] = roundSlot(o.slot);
+    if (o.slot.sec > 0) {
+      const slot = roundSlot(o.slot);
+      (s.pending[o.date] ??= {})[slotField(o.index)] = slot;
+      lastClosed = { date: o.date, index: o.index, slot };
+    }
     s.closedUntil = Math.max(s.closedUntil, dayStart(o.date) + (o.index + 1) * SLOT_MS);
     s.open = null;
     const days = Object.keys(s.pending).sort();
@@ -282,6 +288,7 @@ export function createEnergyRecorder(initial?: EnergySnapshot) {
       for (const k of Object.keys(fields)) if (p[k] === fields[k]) delete p[k];
       if (Object.keys(p).length === 0) delete s.pending[id];
     },
+    lastClosed: () => lastClosed,
     snapshot: (): EnergySnapshot => s,
   };
 }

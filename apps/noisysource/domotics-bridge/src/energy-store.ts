@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { FirestoreRest } from './firestore-rest';
-import type { InverterReading } from './inverter';
-import { createEnergyRecorder, INITIAL_ENERGY, type EnergySnapshot } from './energy';
+import { lastCounterCandidates, type InverterReading } from './inverter';
+import { createEnergyRecorder, INITIAL_ENERGY, SLOT_MS, dayStart, slotField, type EnergySnapshot } from './energy';
 
 /**
  * The energy recorder (energy.ts) wired to the disk and to Firestore. Kept out
@@ -19,6 +20,12 @@ const COLLECTION = 'domotics_energy';
 const SAVE_EVERY_MS = 5 * 60_000;
 /** ~100 a day in normal use; this is the ceiling, not a target. */
 export const MAX_WRITES_PER_DAY = 300;
+/**
+ * The counter-candidate log (inverter.ts, COUNTER_CANDIDATES) stops growing
+ * past this: ~150 bytes a slot, so about a year. It is there to be compared
+ * once with the integrated slots, then removed.
+ */
+const COUNTER_LOG_MAX_BYTES = 5_000_000;
 
 function load(path: string): EnergySnapshot {
   try {
@@ -36,7 +43,17 @@ export function createEnergyStore(
   db: Db | undefined,
   statePath: string,
   /** For the tests: their clock, and a cap small enough to reach. */
-  { clock = Date.now, maxWritesPerDay = MAX_WRITES_PER_DAY }: { clock?: () => number; maxWritesPerDay?: number } = {},
+  {
+    clock = Date.now,
+    maxWritesPerDay = MAX_WRITES_PER_DAY,
+    counterLog = join(dirname(statePath), 'energy-registers.jsonl'),
+    counters = lastCounterCandidates,
+  }: {
+    clock?: () => number;
+    maxWritesPerDay?: number;
+    counterLog?: string;
+    counters?: typeof lastCounterCandidates;
+  } = {},
 ) {
   const rec = createEnergyRecorder(load(statePath));
   let savedAt = 0;
@@ -57,6 +74,30 @@ export function createEnergyStore(
   }
   // Synchronous, so it runs on process.exit() too (the wedge exit, an admin restart).
   process.on('exit', save);
+
+  /** One line per closed slot: what was integrated, and the counter candidates at that moment. */
+  let logged: unknown = null;
+  function logCounters() {
+    const closed = rec.lastClosed();
+    const c = counters();
+    if (!closed || closed === logged || !c) return;
+    logged = closed;
+    try {
+      let size = 0;
+      try { size = statSync(counterLog).size; } catch { /* not there yet */ }
+      if (size > COUNTER_LOG_MAX_BYTES) return;
+      const end = dayStart(closed.date) + (closed.index + 1) * SLOT_MS;
+      appendFileSync(counterLog, JSON.stringify({
+        slot: `${closed.date}/${slotField(closed.index)}`,
+        end: new Date(end).toISOString(),
+        wh: closed.slot,
+        regAt: new Date(c.t).toISOString(),
+        reg: c.values,
+      }) + '\n');
+    } catch (err) {
+      console.warn('[energy] could not log the counters:', (err as Error).message);
+    }
+  }
 
   async function flush() {
     if (!db || flushing || clock() < retryAt) return;
@@ -107,6 +148,7 @@ export function createEnergyStore(
       const pending = rec.pendingCount();
       if (pending !== lastPending || now - savedAt >= SAVE_EVERY_MS) save();
       lastPending = pending;
+      logCounters();
       return flush();
     },
   };

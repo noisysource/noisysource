@@ -121,12 +121,33 @@ function readInputRegisters(start: number, count: number): Promise<number[]> {
   });
 }
 
+/**
+ * Registers that count up in 0.1 kWh steps — probably the inverter's own
+ * energy counters (today's and lifetime), but which flow each one is has not
+ * been confirmed. Watched on 25/10 18:00–19:00 (dark: the house on the battery,
+ * nothing from or to the grid): 28, 51, 90 rose together by 0.1 kWh per
+ * ~100 Wh, and so did 30, 52, 82; 29, 54, 59, 91 (today?) and 56, 88, 111, 113
+ * (lifetime?) stood still. Telling them apart needs a day with sun, export and
+ * charging, so the energy recorder logs them on the Pi next to its own
+ * integrated slots (energy-store.ts) until someone compares the two. Not
+ * reported anywhere until then.
+ */
+export const COUNTER_CANDIDATES = [28, 29, 30, 51, 52, 54, 56, 59, 82, 88, 90, 91, 111, 113] as const;
+let lastCounters: { t: number; values: Record<number, number> } | undefined;
+/** The candidate counters as of the last successful read (see above). */
+export const lastCounterCandidates = () => lastCounters;
+
 export async function readInverter(): Promise<InverterReading> {
   try {
     // One block covering every register of interest — a single round trip is
-    // both faster and kinder to the datalogger than six.
-    const regs = await readInputRegisters(0, 90);
+    // both faster and kinder to the datalogger than six. To 119 for the
+    // counter candidates above; still one request (the limit is 125).
+    const regs = await readInputRegisters(0, 120);
     const at = (i: number) => regs[i];
+    lastCounters = {
+      t: Date.now(),
+      values: Object.fromEntries(COUNTER_CANDIDATES.map(r => [r, regs[r]])),
+    };
 
     const gridPowerW = signed16(at(REG.gridPower));
     const batteryPowerW = signed16(at(REG.batteryPower));

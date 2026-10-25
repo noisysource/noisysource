@@ -198,6 +198,19 @@ async function storeTests() {
     assert.ok(calls >= 2 && calls <= 4, `a few retries in 3 min, not one per poll (${calls})`);
   }
   {
+    // The counter candidates are logged on the Pi once per closed slot, beside what was integrated.
+    now = T0;
+    const log = join(dir, 'registers.jsonl');
+    const store = createEnergyStore(undefined, join(dir, 'e.json'), {
+      clock: () => now, counterLog: log, counters: () => ({ t: now, values: { 30: 10602, 52: 21622 } }),
+    });
+    for (; now <= T0 + 31 * MIN; now += 30_000) await store.observe(inv());
+    const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    assert.deepEqual(lines.map(l => l.slot), ['2026-11-10/q40', '2026-11-10/q41']);
+    assert.equal(lines[0].wh.load, 375);
+    assert.deepEqual(lines[0].reg, { 30: 10602, 52: 21622 });
+  }
+  {
     // A whole day of normal use is well inside the cap: one write per slot.
     let calls = 0;
     const db = { setDoc: async () => { calls++; } };
