@@ -108,6 +108,14 @@ input[type='range'].slider-blind::-moz-range-thumb {
      reads apart from the discharge's orange where slot 4's yellow did not. */
   --viz-hz: #9085e9;
   --viz-critical: #d03b3b;
+  /* Energia page (components/energy/EnergyChart.tsx): one colour per
+     counterpart, the same in both panels, so "battery" is green whether energy
+     went into it or came out of it. Amber matches the sun in the live strip;
+     the battery and grid reuse slots 3 and 1. */
+  --viz-solar: #e2a32b;
+  --viz-battery: #199e70;
+  --viz-net: #3987e5;
+  --viz-soc: #9085e9;
 }
 
 .viz-light {

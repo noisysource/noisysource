@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server, Thermometer, Box, ClipboardList,
+  Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server, Thermometer, Box, ClipboardList, ChartColumn,
 } from 'lucide-react';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
@@ -49,6 +49,8 @@ interface Props {
   onSignOut: () => Promise<void>;
   onOpenAdmin: () => void;
   onOpenReports: () => void;
+  /** kWh history and the bill; absent when it can't be read (signed out). */
+  onOpenEnergy?: () => void;
   /** Back to the 3D house — this 2D plan is the editor and the detailed view. */
   onShow3D: () => void;
   editMode: boolean;
@@ -73,7 +75,7 @@ interface Props {
 
 export default function PlanScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
-  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onShow3D,
+  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onOpenEnergy, onShow3D,
   editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
@@ -379,6 +381,16 @@ export default function PlanScreen({
               {/* Signed in only: every action behind it needs an identity the
                   rules will accept, so offering it signed out would only ever
                   produce a permission error. */}
+              {onOpenEnergy && (
+                <button
+                  onClick={onOpenEnergy}
+                  className="flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors mr-1"
+                  aria-label="Energia"
+                  title="Energia — consumo, solar, bateria e fatura"
+                >
+                  <ChartColumn size={15} strokeWidth={2} />
+                </button>
+              )}
               {user && (
                 <button
                   onClick={onOpenReports}
