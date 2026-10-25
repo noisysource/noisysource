@@ -5,7 +5,7 @@
 **Last updated:** 2026-10-25
 
 ## Currently working on
-**Energia page: kWh history, cost, savings and bill projection** (Renato's request, 2026-10-25). Branch `agent/domotics-energy`, worktree `.claude/worktrees/domotics-energy`, **stacked on `agent/domotics-warm-by`** (PR base is that branch, so it deploys nothing). Code and tests done. **Not deployed anywhere**: the Pi bridge needs Renato's OK (Next step, "Energia"), and the rules and hosting reach dev with the stack. **The euros are estimates** until Renato answers the tariff questions (Open questions, "Energia") or fills in Energia → Tarifário himself.
+**Energia page: kWh history, cost, savings and bill projection** (Renato's request, 2026-10-25). Branch `agent/domotics-energy` (**PR #118**), worktree `.claude/worktrees/domotics-energy`, **stacked on `agent/domotics-warm-by`** (#117; PR base is that branch, so it deploys nothing. If #117 merges and its branch is deleted, GitHub retargets #118 to `staging`, and its next push deploys to dev). Code and tests done. **Not deployed anywhere**: the Pi bridge needs Renato's OK (Next step, "Energia"), and the rules and hosting reach dev with the stack. **The euros are estimates** until Renato answers the tariff questions (Open questions, "Energia") or fills in Energia → Tarifário himself.
 
 **Heating automation fixes + "warm by HH:MM"** (session C of `HANDOFF-reports-and-chat.md`, 2026-10-25). Branch `agent/domotics-warm-by` (PR #117, base `agent/domotics-reports`: retarget to `staging` once #106 and B merge), worktree `.claude/worktrees/domotics-warm-by`, **stacked on `agent/domotics-reports`** (itself on #106): neither is in `staging` yet, and C needs B's guard. Code and tests done, dev rules deployed. **Not deployed yet:** the `domoticsWarmBy` function and dev hosting (Firebase CLI login expired: needs `firebase login --reauth`), and the Pi bridge (needs Renato's OK, see Next step 0). The automation stays in dry-run. **Renato decides when it goes live.**
 
@@ -186,7 +186,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 2026-10-02 — Heat pump fault codes + corrected heat pump readings (PR #73, merged to `staging`). The unit is a **Zantia Vancouver 13 (single-phase, R32)**, manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. Datapoint table in `domotics-bridge/README.md` → "Heat pump"; fault bitmaps decoded in `src/data/heatpumpFaults.ts`; active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
 ## Next step
-- **Energia** (`agent/domotics-energy`, stacked on #117):
+- **Energia** (PR #118, stacked on #117):
   1. Tariff: Renato answers the questions under Open questions, or enters them himself in Energia → Tarifário. Saving the form is what removes the "estimativa" labels.
   2. **Bridge on the Pi** (needs Renato's OK; the steps are in the PR). Afterwards check `journalctl -u domotics-bridge | grep energy`: there should be no `[energy] write failed`. Within 15 min, `domotics_energy/<today>` should appear in kidclub-dev. If the dev rules don't have `domotics_energy` yet, the writes back off (403) and land once the rules do; the slots wait on the Pi for up to 14 days.
   3. After 3–4 sunny days: compare `~/domotics-bridge/energy-registers.jsonl` with the slots, settle which register is which, and use the counters to fill gaps. Then drop the log.
