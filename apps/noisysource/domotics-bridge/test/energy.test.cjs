@@ -84,6 +84,18 @@ const evening = (t, over = {}) => ({ t, pvW: 0, batteryW: -1000, gridW: -500, so
   assert.equal(rec.pendingCount(), 0);
 }
 {
+  // The inverter's own AC figures are integrated alongside, when both readings have them.
+  const rec = createEnergyRecorder();
+  for (let t = T0; t <= T0 + 16 * MIN; t += 30_000) rec.observe(evening(t, { acLoadW: 1360, invOutW: 1350 }), t);
+  const q40 = rec.pendingWrites()[0].fields.q40;
+  assert.equal(q40.acLoad, 340);
+  assert.equal(q40.invOut, 338);
+  assert.equal(q40.load, 375, 'the derived load is unchanged');
+  const plain = createEnergyRecorder();
+  for (let t = T0; t <= T0 + 16 * MIN; t += 30_000) plain.observe(evening(t), t);
+  assert.equal('acLoad' in plain.pendingWrites()[0].fields.q40, false);
+}
+{
   // A 10-minute silence is a gap: not integrated across, and the slot says so.
   const rec = createEnergyRecorder();
   for (let t = T0; t <= T0 + 2 * MIN; t += 30_000) rec.observe(evening(t), t);

@@ -35,6 +35,13 @@ export interface PowerReading {
   /** + = charging, − = discharging. */
   batteryW: number;
   soc?: number;
+  /**
+   * The inverter's own AC figures, recorded beside the derived ones until one
+   * of them is confirmed as the house's consumption (inverter.ts, registers 3
+   * and 50). Not used for anything yet.
+   */
+  acLoadW?: number;
+  invOutW?: number;
 }
 
 /** Energy flows over one slot, in Wh. Every other flow is derived from these (see the app's energyBill). */
@@ -61,6 +68,13 @@ export interface Slot {
   sec: number;
   /** Battery % at the slot's last reading. */
   soc?: number;
+  /**
+   * Unconfirmed, see PowerReading: register 50 (on 25/10 at night exactly
+   * register 3 + grid import, ~10 % under `load`, which carries the inverter's
+   * losses) and register 3, integrated. Absent when a reading lacked them.
+   */
+  acLoad?: number;
+  invOut?: number;
 }
 
 const FLOWS = ['pv', 'load', 'imp', 'exp', 'chg', 'dis', 'pvLoad', 'batLoad', 'gridBat'] as const;
@@ -156,6 +170,8 @@ export function roundSlot(s: Slot): Slot {
   for (const f of FLOWS) out[f] = Math.round(s[f]);
   out.sec = Math.min(SLOT_MS / 1000, Math.round(s.sec));
   if (s.soc !== undefined) out.soc = Math.round(s.soc);
+  if (s.acLoad !== undefined) out.acLoad = Math.round(s.acLoad);
+  if (s.invOut !== undefined) out.invOut = Math.round(s.invOut);
   return out;
 }
 
@@ -233,6 +249,8 @@ export function createEnergyRecorder(initial?: EnergySnapshot) {
       // Trapezoid: the mean of the two readings over the stretch. Linear in the
       // readings, so the balance pv + dis + imp = load + chg + exp still holds.
       for (const f of FLOWS) slot[f] += ((fa[f] + fb[f]) / 2) * hours;
+      if (a.acLoadW !== undefined && b.acLoadW !== undefined) slot.acLoad = (slot.acLoad ?? 0) + ((a.acLoadW + b.acLoadW) / 2) * hours;
+      if (a.invOutW !== undefined && b.invOutW !== undefined) slot.invOut = (slot.invOut ?? 0) + ((a.invOutW + b.invOutW) / 2) * hours;
       slot.sec += (end - t) / 1000;
       t = end;
     }

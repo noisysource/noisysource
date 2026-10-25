@@ -448,8 +448,10 @@ function HowItWorks() {
             inversor ficam sem ligação mais de 3 minutos, esse tempo fica sem dados (é indicado acima) em vez de ser inventado.
           </li>
           <li>
-            O consumo da casa é calculado (solar − bateria − rede), como na app do inversor: inclui as perdas do próprio inversor. O
-            contador da E-REDES pode diferir uns pontos percentuais; a fatura vem desse contador.
+            O consumo da casa é calculado (solar − bateria − rede), como na app do inversor, e por isso inclui as perdas do próprio
+            inversor: medido à noite, cerca de 10 % acima do consumo que o inversor indica em AC. O custo real não é afetado (vem da
+            energia comprada à rede); o custo "sem painéis nem bateria" e a poupança ficam um pouco acima do real. A fatura vem do
+            contador da E-REDES, que pode diferir uns pontos percentuais.
           </li>
           <li>
             <b className="text-zinc-300">Sem painéis nem bateria</b>: toda a energia que a casa gastou comprada à rede, ao preço da hora em

@@ -144,6 +144,8 @@ export function createEnergyStore(
         gridW: inv.gridPowerW!,
         batteryW: inv.batteryPowerW!,
         soc: inv.soc,
+        acLoadW: inv.subLoadVA,
+        invOutW: inv.subLoadW,
       } : undefined, now);
       const pending = rec.pendingCount();
       if (pending !== lastPending || now - savedAt >= SAVE_EVERY_MS) save();

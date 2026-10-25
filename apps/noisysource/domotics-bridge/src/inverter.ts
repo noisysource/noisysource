@@ -38,7 +38,7 @@ const TIMEOUT_MS = 5000;
  */
 const REG = {
   acVoltage: 1,     // ×0.1 V — moves with the mains, unlike reg 42
-  subLoad: 3,       // W — a subset of house load, ~25% low. NOT the total.
+  subLoad: 3,       // W — a subset of house load, ~25% low. NOT the total. (25/10 night: integrates to counters 30/52/82.)
   pv1Voltage: 5,    // ×0.1 V
   pv2Voltage: 6,    // ×0.1 V
   pv1Current: 7,    // ×0.1 A — 0.1 A resolution, so V×I lands a few % low
@@ -46,7 +46,7 @@ const REG = {
   pv1Power: 11,     // W
   pv2Power: 12,     // W
   gridPower: 22,    // signed W — near zero off-grid
-  subLoadVa: 50,    // VA — tracks reg 3 closely; same subset, different unit
+  subLoadVa: 50,    // VA — tracks reg 3 closely; same subset, different unit. 25/10 at night it was exactly reg 3 + grid import (4317 = 2814 + 1503): maybe the house's AC load. Unconfirmed (energy.ts records it beside the derived load).
   batteryPower: 72, // signed W, negative = discharging
   soc: 80,          // %
 } as const;

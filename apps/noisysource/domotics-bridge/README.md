@@ -168,7 +168,11 @@ integrates those power readings into **15-minute slots** and
 date), one field per slot: `q00`…`q95` (`q99` on the October clock change, `q91`
 in March). Each slot holds Wh for `pv`, `load`, `imp`, `exp`, `chg`, `dis`, plus
 which source fed the house (`pvLoad`, `batLoad`) and the battery (`gridBat`),
-`sec` = seconds of the slot covered by readings, and `soc` at its end.
+`sec` = seconds of the slot covered by readings, and `soc` at its end. Also
+`acLoad` / `invOut`: registers 50 and 3 integrated, unconfirmed and unused (on
+25/10 at night reg 50 was exactly reg 3 + grid import, ~10 % below `load`,
+which carries the inverter's losses): recorded so the page can switch to an
+AC figure later with its history intact.
 
 - **Integrated, not the inverter's counters.** Its kWh registers aren't
   confirmed yet (below). Two readings more than 3 min apart aren't joined: that
