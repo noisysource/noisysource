@@ -69,14 +69,14 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  /** The heating automation's solar boost, to link the surplus to it. */
-  const [boost, setBoost] = useState<{ enabled: boolean; exportW: number; delta: number } | null>(null);
+  /** The heating automation's daytime solar heating, to link the surplus to it. */
+  const [boost, setBoost] = useState<{ enabled: boolean; socOn: number } | null>(null);
 
   useEffect(() => {
     if (!canRead) return;
     loadTariff().then(setTariff).catch(() => { /* defaults, labelled as estimates */ });
-    if (DEMO) setBoost(DEFAULT_AUTOMATION.solarBoost);
-    else loadAutomationConfig().then(c => setBoost(c.solarBoost)).catch(() => { /* the note just isn't shown */ });
+    if (DEMO) setBoost(DEFAULT_AUTOMATION.solar);
+    else loadAutomationConfig().then(c => setBoost(c.solar)).catch(() => { /* the note just isn't shown */ });
   }, [canRead]);
 
   useEffect(() => {
@@ -495,7 +495,7 @@ function SurplusSection({ s, grain, tariff, boost }: {
   s: SurplusSummary;
   grain: Grain;
   tariff: Tariff;
-  boost: { enabled: boolean; exportW: number; delta: number } | null;
+  boost: { enabled: boolean; socOn: number } | null;
 }) {
   const regulation = Math.max(0, s.exp - s.surplus);
   // The advice is about energy nothing else wanted: the battery-full hours when there are any.
@@ -539,9 +539,9 @@ function SurplusSection({ s, grain, tariff, boost }: {
       )}
       {boost?.enabled && (
         <p className="text-[11px] text-zinc-500 leading-relaxed">
-          A automação do aquecimento já aproveita parte disto: durante o dia, com {boost.exportW} W ou mais a ir para a rede, sobe{' '}
-          {String(boost.delta).replace('.', ',')}° o alvo das divisões para guardar calor no pavimento (bónus solar, nas definições da
-          automação; só atua com a automação ligada e fora de simulação).
+          A automação do aquecimento já aproveita parte disto: de dia, com a bateria a {Math.round(boost.socOn)} % ou mais e o sol a
+          cobrir a casa e a bomba, liga a bomba para aquecer o pavimento (nas definições da automação; só atua com a automação
+          ligada e fora de simulação).
         </p>
       )}
     </section>

@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { deleteField, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db, warmByFn } from '../lib/firebase';
 
 /**
@@ -9,15 +9,20 @@ import { db, warmByFn } from '../lib/firebase';
  * Mirrors `domotics-bridge/src/automation.ts`. Kept as its own copy rather than
  * imported, like EnergyReading: the bridge is a separate deployable, and the
  * bridge clamps whatever it reads to its own hard limits anyway.
+ *
+ * The plan since 2026-10-26: a warm floor in the warm window (19:00–09:00),
+ * by day only on spare sun (battery ≥ 90 %) or below the day minimum (21 °C).
  */
 
 export interface AutomationConfig {
   enabled: boolean;
   dryRun: boolean;
+  /** "Pausar": until then nothing switches the pump on by itself (ms; null = not paused). */
+  pauseUntil: number | null;
   comfort: number;
-  preheat: { from: string; to: string; delta: number };
-  evening: { from: string; to: string; delta: number };
-  solarBoost: { enabled: boolean; delta: number; exportW: number };
+  warm: { from: string; to: string };
+  dayMin: number;
+  solar: { enabled: boolean; socOn: number; pumpW: number; exportW: number };
   flow: { enabled: boolean; at15: number; slope: number; min: number; max: number };
   recovery: { enabled: boolean };
   rest: { enabled: boolean; minutes: number };
@@ -28,10 +33,11 @@ export interface AutomationConfig {
 export const DEFAULT_AUTOMATION: AutomationConfig = {
   enabled: false,
   dryRun: true,
+  pauseUntil: null,
   comfort: 24,
-  preheat: { from: '05:00', to: '08:00', delta: 0.5 },
-  evening: { from: '18:00', to: '22:00', delta: -0.5 },
-  solarBoost: { enabled: true, delta: 0.5, exportW: 800 },
+  warm: { from: '19:00', to: '09:00' },
+  dayMin: 21,
+  solar: { enabled: true, socOn: 90, pumpW: 3300, exportW: 500 },
   flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 45 },
   recovery: { enabled: true },
   rest: { enabled: true, minutes: 60 },
@@ -47,28 +53,56 @@ export interface AutomationAction {
   error?: string;
 }
 
+/** Mirrors the bridge's WarmPlan. */
+export interface WarmPlan {
+  from: string;
+  to: string;
+  inWindow: boolean;
+  nextStart: number;
+  end: number;
+  warmupAt: number | null;
+  warmupStarted: boolean;
+  leadMin: number;
+  capped: boolean;
+  need: number;
+  expectedAt: number | null;
+}
+
 export interface AutomationStatus {
   enabled: boolean;
   dryRun: boolean;
   state: 'off' | 'running' | 'dry-run';
-  period?: 'preheat' | 'day' | 'evening' | 'night';
-  periodLabel?: string;
-  boost?: boolean;
+  /** The pause in force, ms it ends; null = not paused. Absent on a bridge from before 2026-10-26. */
+  pausedUntil?: number | null;
+  /** The four settings shown on top. Absent on an older bridge. */
+  settings?: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number };
+  /** 'warm' = horário quente; 'warmup' = a aquecer para ele; 'day'. */
+  mode?: 'warm' | 'warmup' | 'day';
+  wantOn?: boolean;
+  /** What it is doing now and why, one sentence. */
+  doing?: string;
+  /** Today's plan in plain words. */
+  plan?: string;
+  warm?: WarmPlan;
+  solar?: { on: boolean; soc: number | null; spareW: number | null; note: string };
+  dayMinActive?: boolean;
+  meanRoom?: number;
   roomTarget?: number;
   outdoor?: number;
   flowTarget?: number;
   flowCorrection?: number;
-  /** The water setpoint was changed by hand: left alone until the next period. */
+  /** The water setpoint was changed by hand: left alone until the plan moves from day to warm or back. */
   flowManual?: boolean;
   /** Rooms well below target: water at the top of the range until they reach it. */
   recovery?: boolean;
   /** How far below their targets the rooms are, on average, °C. */
   shortfall?: number;
   pumpHold?: string;
-  /** Asking the E13 guard to keep its rest going (no zone wants heat). */
+  /** Asking the E13 guard to keep its rest going (the plan has the pump off). */
   holdRest?: boolean;
   /** The automation's own rest at the setpoint (guard off), until when. */
   restUntil?: number;
+  switchOns24h?: number;
   warmBy?: WarmByStatus | null;
   model?: WarmupModel;
   zones: Array<{ id: string; name: string; note: string }>;
@@ -103,16 +137,21 @@ export interface WarmupModel {
 
 const REF = () => doc(db, 'domotics_config', 'automation');
 
+type Stored = Partial<Omit<AutomationConfig, 'pauseUntil'>> & { pauseUntil?: unknown };
+
 /** Stored settings over the defaults, section by section, so a partial document still reads whole. */
-function merge(stored: Partial<AutomationConfig> | undefined): AutomationConfig {
+function merge(stored: Stored | undefined): AutomationConfig {
   const s = stored ?? {};
   const d = DEFAULT_AUTOMATION;
+  const pause = s.pauseUntil;
   return {
     ...d,
     ...s,
-    preheat: { ...d.preheat, ...s.preheat },
-    evening: { ...d.evening, ...s.evening },
-    solarBoost: { ...d.solarBoost, ...s.solarBoost },
+    pauseUntil: typeof pause === 'number' ? pause
+      : pause && typeof (pause as { toMillis?: unknown }).toMillis === 'function' ? (pause as { toMillis: () => number }).toMillis()
+      : null,
+    warm: { ...d.warm, ...s.warm },
+    solar: { ...d.solar, ...s.solar },
     flow: { ...d.flow, ...s.flow },
     recovery: { ...d.recovery, ...s.recovery },
     rest: { ...d.rest, ...s.rest },
@@ -124,11 +163,37 @@ function merge(stored: Partial<AutomationConfig> | undefined): AutomationConfig 
 /** Owner only (firestore.rules): anyone else, and anything signed out, gets permission-denied. */
 export async function loadAutomationConfig(): Promise<AutomationConfig> {
   const snap = await getDoc(REF());
-  return merge(snap.exists() ? (snap.data() as Partial<AutomationConfig>) : undefined);
+  return merge(snap.exists() ? (snap.data() as Stored) : undefined);
 }
 
+/**
+ * The settings form. A field-level merge that leaves the pause alone (it is set
+ * from the card's buttons, possibly after this form was loaded) and clears the
+ * periods the 2026-10-26 plan removed, which the bridge ignores anyway.
+ */
 export async function saveAutomationConfig(cfg: AutomationConfig) {
-  await setDoc(REF(), cfg);
+  const { pauseUntil: _pause, ...settings } = cfg;
+  await setDoc(REF(), {
+    ...settings,
+    preheat: deleteField(),
+    evening: deleteField(),
+    solarBoost: deleteField(),
+  }, { merge: true });
+}
+
+/** "Ligar": the automation runs live (switches the pump and sets the thermostats). One field-level write. */
+export async function goLive() {
+  await setDoc(REF(), { enabled: true, dryRun: false }, { merge: true });
+}
+
+/** Back to simulating: decides and shows, sends nothing. */
+export async function backToDryRun() {
+  await setDoc(REF(), { enabled: true, dryRun: true }, { merge: true });
+}
+
+/** "Pausar" until `until` (ms), or "Retomar" with null. */
+export async function setPause(until: number | null) {
+  await setDoc(REF(), { pauseUntil: until }, { merge: true });
 }
 
 /**

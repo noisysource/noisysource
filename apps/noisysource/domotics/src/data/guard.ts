@@ -16,6 +16,10 @@ export interface GuardStatus {
   lastAction: { at: number; what: 'on' | 'off'; reason: string } | null;
   /** Switched off from outside: when the guard switches it back on (null = not waiting; absent on an older bridge). */
   reonAt?: number | null;
+  /** A person's pause ("Pausar" on the automation): the guard switches nothing on until then. */
+  pausedUntil?: number | null;
+  /** The heating automation is running live: it, not the guard, undoes an off from outside. */
+  automationOwns?: boolean;
   evaluatedAt: number;
 }
 

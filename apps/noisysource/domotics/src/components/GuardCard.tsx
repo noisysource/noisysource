@@ -93,9 +93,13 @@ export default function GuardCard({ status, canEdit }: Props) {
 
       <p className="text-xs text-zinc-400 leading-relaxed">
         Desliga a bomba 60 min quando fica parada no setpoint (é aí que o E13 dispara) e 120 min logo a seguir a
-        um disparo, para não chegar ao bloqueio. Se a bomba for desligada de fora (painel, SmartLife, temporizador),
-        volta a ligá-la 5 min depois; se a voltarem a desligar na hora seguinte, deixa-a desligada. Desligar pela
-        app é respeitado.
+        um disparo, para não chegar ao bloqueio. Isto vem sempre primeiro: a automação não a liga durante um descanso.
+      </p>
+      <p className="text-xs text-zinc-400 leading-relaxed">
+        {status?.automationOwns
+          ? 'Desligada de fora (painel, SmartLife, temporizador): com a automação ligada, é ela que decide quando volta a ligar.'
+          : 'Desligada de fora (painel, SmartLife, temporizador): com a automação desligada ou só a simular, volta a ligá-la 5 min depois; se a voltarem a desligar na hora seguinte, deixa-a desligada. Desligar pela app é respeitado.'}
+        {' '}Em pausa (botão Pausar da automação), não liga a bomba de forma nenhuma até a pausa acabar.
       </p>
 
       {status && status.enabled && !stale && (
