@@ -686,11 +686,11 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
         if (solarSince !== null && t - solarSince >= SOLAR_STOP_MS) { solarOn = false; solarSince = null; }
       }
       const socTxt = soc !== undefined ? `bateria ${Math.round(soc)} %` : 'bateria sem leitura';
-      const spareTxt = spareW !== null ? `sobra ${kw(Math.max(0, spareW))} de sol` : 'sem leitura do inversor';
+      const spareTxt = spareW !== null ? `${kw(Math.max(0, spareW))} de sol a sobrar` : 'sem leitura do inversor';
       solarNote = solarOn
-        ? (solarSince !== null ? `sol a acabar (${socTxt}, ${spareTxt}) — desliga se durar 15 min` : `${socTxt}, ${spareTxt}`)
-        : solarSince !== null ? `sol a chegar (${socTxt}, ${spareTxt}) — liga se durar 10 min`
-        : `${socTxt}, ${spareTxt} (precisa de ${Math.round(cfg.solar.socOn)} % e ${kw(cfg.solar.pumpW)})`;
+        ? (solarSince !== null ? `sol a acabar: ${socTxt}, ${spareTxt}; desliga se durar 15 min` : `${socTxt}, ${spareTxt}`)
+        : solarSince !== null ? `sol a chegar: ${socTxt}, ${spareTxt}; liga se durar 10 min`
+        : `${socTxt} de ${Math.round(cfg.solar.socOn)} %, ${spareTxt} de ${kw(cfg.solar.pumpW)}`;
     }
     const solar: SolarView = { on: solarOn, soc: soc ?? null, spareW, note: solarNote };
     if (mode !== 'day' || meanRoom === undefined || !quorum) dayMinOn = false;
@@ -743,10 +743,10 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       why = `casa a ${deg(meanRoom!)} de média, abaixo do mínimo de dia (${deg(cfg.dayMin)})`;
     } else if (solarOn) {
       wantOn = zonesWant;
-      why = wantOn ? `sol a sobrar (${solarNote})` : 'há sol a sobrar, mas nenhuma zona pede calor';
+      why = wantOn ? `com o sol: ${solarNote}` : 'há sol a sobrar, mas nenhuma zona pede calor';
     } else {
       wantOn = false;
-      why = `de dia só com sol (${solarNote})`;
+      why = `de dia só com sol: ${solarNote}`;
     }
     reasons.unshift(`${mode === 'warm' ? 'Horário quente' : mode === 'warmup' ? 'Aquecimento para a noite' : 'Dia'}: bomba ${wantOn ? 'ligada' : 'desligada'} — ${why}.`);
 
@@ -929,7 +929,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       mode,
       wantOn,
       doing,
-      plan: planText(cfg, plan, mode, model, paused),
+      plan: planText(cfg, plan, mode, model, paused, meanRoom),
       warm: plan,
       solar,
       dayMinActive: dayMinOn,
@@ -957,7 +957,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
 }
 
 /** Today's plan in plain words, e.g. "Aquece a partir das 17:20 para estar quente às 19:00; de dia só com sol…". */
-export function planText(cfg: AutomationConfig, w: WarmPlan, mode: PlanMode, model: WarmupModel, paused: number | null) {
+export function planText(cfg: AutomationConfig, w: WarmPlan, mode: PlanMode, model: WarmupModel, paused: number | null, mean?: number) {
   const dayRule = cfg.solar.enabled
     ? `de dia só com sol e bateria ≥ ${Math.round(cfg.solar.socOn)} %, ou se a casa descer dos ${deg(cfg.dayMin)}`
     : `de dia só se a casa descer dos ${deg(cfg.dayMin)}`;
@@ -971,7 +971,7 @@ export function planText(cfg: AutomationConfig, w: WarmPlan, mode: PlanMode, mod
   } else if (w.warmupAt) {
     text = `Aquece a partir das ${lisbonClock(w.warmupAt)} para estar quente às ${lisbonClock(w.nextStart)} (${how}${w.capped ? `; no máximo ${MAX_WARMUP_LEAD_MIN / 60} h antes` : ''}); ${dayRule}.${late}`;
   } else {
-    text = `A casa já está a ${deg(cfg.comfort)}: o horário quente começa às ${lisbonClock(w.nextStart)}; ${dayRule}.`;
+    text = `A casa já está quente${mean !== undefined ? ` (${deg(Math.round(mean * 10) / 10)} de média)` : ''}: o horário quente começa às ${lisbonClock(w.nextStart)}; ${dayRule}.`;
   }
   if (paused) text = `Em pausa até às ${lisbonClock(paused)}: ninguém liga a bomba sozinho até lá. Depois: ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
   return text;

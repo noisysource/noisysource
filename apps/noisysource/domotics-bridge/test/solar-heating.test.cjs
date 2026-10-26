@@ -134,7 +134,7 @@ const hm = t => lisbonClock(t);
     const first = ons(r.log)[0];
     assert.ok(first, 'switched on for the sun');
     assert.ok(first.t >= t90 + 10 * MIN && first.t <= t90 + 12 * MIN, `on at ${hm(first.t)}, 10 min after 90 % at ${hm(t90)}`);
-    assert.match(first.reason, /sol a sobrar/);
+    assert.match(first.reason, /com o sol: bateria 9\d %/);
     // Its own draw doesn't make the surplus vanish: no off for at least 1.5 h.
     assert.equal(r.log.filter(x => !x.on && x.t < first.t + 90 * MIN).length, 0);
     assert.ok(r.statuses.filter(x => x.t > first.t && x.t < first.t + 90 * MIN).every(x => x.s.solar.on));
@@ -142,7 +142,7 @@ const hm = t => lisbonClock(t);
     assert.ok(r.at(first.t + 60 * MIN).soc > r.at(first.t).soc);
     assert.ok(ons(r.log).length <= 3, `${ons(r.log).length} switch-ons by 17:00`);
     // Before 90 %, the morning said why it was off.
-    assert.match(r.at(L(11)).s.doing, /de dia só com sol \(bateria \d+ %/);
+    assert.match(r.at(L(11)).s.doing, /^Bomba desligada — de dia só com sol: bateria \d+ % de 90 %, [\d,]+ kW de sol a sobrar de 3,3 kW\.$/);
   }
 
   // --- Cloudy day: never 90 % → no daytime heating; the warm-up starts in time for 19:00 ---
