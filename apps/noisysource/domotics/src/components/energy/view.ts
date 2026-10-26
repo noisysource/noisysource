@@ -179,6 +179,22 @@ export function lastRecorded(days: EnergyDay[]): number | undefined {
   return last;
 }
 
+/**
+ * The bridge keeps closed slots on the Pi and sends them once an hour
+ * (`WRITE_EVERY_MS` in domotics-bridge/src/energy-store.ts), so the newest
+ * slots can be up to ~75 min late: an hour between writes plus the slot that
+ * was still open at the last one.
+ */
+export const UPLOAD_LAG_MS = 80 * 60_000;
+
+/**
+ * Until when data can be expected by `now`: the newest slot that arrived, or
+ * `now` less the upload lag when that's later (the bridge has stopped sending).
+ * Measuring coverage to `now` would report the hour still on the Pi as a gap.
+ */
+export const expectedUntil = (now: number, last: number | undefined) =>
+  Math.min(now, Math.max(last ?? 0, now - UPLOAD_LAG_MS));
+
 /** The three stacks the chart draws, Wh. */
 export function stacks(f: EnergyFlows) {
   const d = derivedFlows(f);
