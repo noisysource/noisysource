@@ -14,6 +14,8 @@ export interface GuardStatus {
   /** What it's doing, in Portuguese, written by the bridge. */
   note: string;
   lastAction: { at: number; what: 'on' | 'off'; reason: string } | null;
+  /** Switched off from outside: when the guard switches it back on (null = not waiting; absent on an older bridge). */
+  reonAt?: number | null;
   evaluatedAt: number;
 }
 

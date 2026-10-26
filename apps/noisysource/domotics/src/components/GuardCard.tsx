@@ -78,6 +78,7 @@ export default function GuardCard({ status, canEdit }: Props) {
     : !status.enabled ? <Pill tone="idle">Desligada</Pill>
     : status.mode === 'rest' ? <Pill tone="info">Bomba em descanso</Pill>
     : status.mode === 'lockout' ? <Pill tone="bad">Bomba bloqueada</Pill>
+    : status.reonAt ? <Pill tone="info">Liga às {hhmm(status.reonAt)}</Pill>
     : <Pill tone="ok">A vigiar</Pill>;
   // What the app has saved can be ahead of what the bridge has picked up.
   const pending = enabled !== null && status && enabled !== status.enabled;
@@ -92,7 +93,9 @@ export default function GuardCard({ status, canEdit }: Props) {
 
       <p className="text-xs text-zinc-400 leading-relaxed">
         Desliga a bomba 60 min quando fica parada no setpoint (é aí que o E13 dispara) e 120 min logo a seguir a
-        um disparo, para não chegar ao bloqueio. Nunca liga uma bomba desligada por alguém.
+        um disparo, para não chegar ao bloqueio. Se a bomba for desligada de fora (painel, SmartLife, temporizador),
+        volta a ligá-la 5 min depois; se a voltarem a desligar na hora seguinte, deixa-a desligada. Desligar pela
+        app é respeitado.
       </p>
 
       {status && status.enabled && !stale && (

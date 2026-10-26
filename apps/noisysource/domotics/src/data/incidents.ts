@@ -65,9 +65,13 @@ export interface SwitchEvent {
   reason?: string;
   faults: string[];
   before: PumpSample[];
+  /** Every raw datapoint in the reading before the change and the one that showed it (bridge only, from 26/10). */
+  dps?: { before: PumpDps; at: PumpDps };
   note?: string;
   origin: IncidentOrigin;
 }
+
+export type PumpDps = Record<string, string | number | boolean>;
 
 /** Context written by hand: an intervention, when the guard started, what someone found. */
 export interface NoteEntry {
@@ -209,6 +213,146 @@ export const SOURCE_LABEL: Record<SwitchSource, string> = {
   outside: 'de fora (SmartLife, painel, técnicos ou temporizador)',
   unknown: 'origem desconhecida',
 };
+
+// ---------------------------------------------------------------------------
+// The log: everything that happened to the pump, in order
+// ---------------------------------------------------------------------------
+
+/**
+ * The pump's own clock. Tuya has its time zone as a fixed +01:00 (device
+ * details, 26/10), so its timers keep summer time: what it does at 00:54 by its
+ * clock happened at 00:54 in Lisbon until 25/10 and at 23:54 since.
+ */
+const PUMP_CLOCK_OFFSET = 60 * MIN;
+const DAY_MS = 24 * 60 * MIN;
+export const fmtPumpClock = (t: number) =>
+  new Date(t + PUMP_CLOCK_OFFSET).toLocaleTimeString('pt-PT', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+
+export type LogOrigin = SwitchSource | 'pump' | 'note';
+
+export const LOG_ORIGIN: Record<LogOrigin, string> = {
+  outside: 'De fora',
+  unknown: 'Desconhecida',
+  guard: 'Proteção E13',
+  automation: 'Automação',
+  app: 'App / ponte',
+  pump: 'Bomba (avaria)',
+  note: 'Nota',
+};
+
+export interface LogRow {
+  id: string;
+  at: number;
+  origin: LogOrigin;
+  /** One line: what happened. */
+  what: string;
+  /** Why, and what the pump was doing. */
+  details: string[];
+  /** For the "De fora" rows: the time by the pump's clock, where its timers live. */
+  pumpClock?: string;
+}
+
+/** Datapoints that move every reading (temperatures, Hz) or are the switch itself: not "something else changed". */
+const MOVING_DPS = new Set(['switch', 'temp_current', 'power_consumption', 'compressor_strength', 'temp_top', 'temp_bottom', 'coiler_temp', 'venting_temp', 'effluent_temp']);
+/** The Tuya codes are reused and misleading (domotics-bridge/README.md → Heat pump). */
+const DP_LABEL: Record<string, string> = {
+  mode: 'modo',
+  fault: 'avarias E01–E16',
+  smart_system: 'avarias E17–E32',
+  power_system: 'avarias E36–E59',
+  ithium_battery_system: 'avaria E50',
+  electronic_system: 'avarias IPM',
+  bcu_com_state: 'avarias IPM',
+  p02_heating: 'setpoint de aquecimento',
+  p03_cooling: 'setpoint de arrefecimento',
+  p04_dhw: 'setpoint AQS',
+};
+
+/** What changed in the pump's datapoints with the switch, besides it and the temperatures. */
+export function otherChanges(e: SwitchEvent): string | undefined {
+  if (!e.dps) return undefined;
+  const { before, at } = e.dps;
+  const codes = [...new Set([...Object.keys(before), ...Object.keys(at)])].filter(c => !MOVING_DPS.has(c));
+  const changed = codes.filter(c => before[c] !== at[c]);
+  if (changed.length === 0) return 'Nada mais mudou nos dados da bomba (modo, setpoints e avarias iguais).';
+  return `Mudou também: ${changed.map(c => `${DP_LABEL[c] ?? c} ${String(before[c] ?? '—')} → ${String(at[c] ?? '—')}`).join(', ')}.`;
+}
+
+function pumpDoing(e: SwitchEvent): string | undefined {
+  // For an off, the last reading still running; for an on, the last one still off.
+  const s = [...e.before].reverse().find(x => x.on !== e.on) ?? e.before.at(-1);
+  if (!s) return undefined;
+  const parts = [
+    s.on ? `compressor a ${s.hz} Hz` : 'parada',
+    s.out !== undefined ? `água ${num(s.out)} °C${s.sp !== undefined ? ` (setpoint ${s.sp} °C)` : ''}` : '',
+    s.outdoor !== undefined ? `exterior ${num(s.outdoor)} °C` : '',
+  ].filter(Boolean);
+  return `Antes: ${parts.join(', ')}.`;
+}
+
+/** Newest first, like the incidents. Faults are one row each, with how they ended. */
+export function logRows(incidents: Incident[]): LogRow[] {
+  return incidents.map((i): LogRow => {
+    if (i.kind === 'switch') {
+      const details = [
+        i.reason ? `Porquê: ${i.reason}.` : '',
+        i.faults.length ? `Em avaria: ${i.faults.join(', ')}.` : '',
+        pumpDoing(i) ?? '',
+        otherChanges(i) ?? '',
+        i.note ?? '',
+      ].filter(Boolean);
+      return {
+        id: i.id, at: i.at, origin: i.source, what: i.on ? 'Ligada' : 'Desligada', details,
+        ...(i.source === 'outside' || i.source === 'unknown' ? { pumpClock: fmtPumpClock(i.at) } : {}),
+      };
+    }
+    if (i.kind === 'fault') {
+      const details = [
+        endPhrase(i),
+        i.lockoutWhy ? `Bloqueio: ${i.lockoutWhy}.` : '',
+        ...i.actions.map(a => `${fmtTime(a.at)} ${a.what === 'on' ? 'ligada' : 'desligada'} ${SOURCE_LABEL[a.by]}${a.reason ? ` — ${a.reason}` : ''}`),
+        i.note ?? '',
+      ].filter(Boolean);
+      return { id: i.id, at: i.at, origin: 'pump', what: `Avaria ${i.codes.join(', ')}${i.lockout ? ' — bloqueou' : ''}`, details };
+    }
+    return { id: i.id, at: i.at, origin: 'note', what: i.note, details: [] };
+  });
+}
+
+export interface Repeat {
+  on: boolean;
+  /** By the pump's clock. */
+  from: string;
+  to: string;
+  times: number[];
+}
+
+/**
+ * Switches from outside that come back at the same time of day, by the pump's
+ * clock, on two days or more: a timer's signature. Within 5 min counts as the same.
+ */
+export function repeatedOutside(incidents: Incident[]): Repeat[] {
+  const out: Repeat[] = [];
+  for (const on of [false, true]) {
+    const list = incidents
+      .filter((i): i is SwitchEvent => i.kind === 'switch' && i.on === on && i.origin !== 'notes' && (i.source === 'outside' || i.source === 'unknown'))
+      .map(i => ({ t: i.at, m: ((i.at + PUMP_CLOCK_OFFSET) % DAY_MS) / MIN }))
+      .sort((a, b) => a.m - b.m);
+    let group: typeof list = [];
+    const flush = () => {
+      const days = new Set(group.map(g => Math.floor((g.t + PUMP_CLOCK_OFFSET) / DAY_MS)));
+      if (days.size >= 2) {
+        out.push({ on, from: fmtPumpClock(group[0].t), to: fmtPumpClock(group[group.length - 1].t), times: group.map(g => g.t).sort((a, b) => a - b) });
+      }
+    };
+    for (const x of list) {
+      if (group.length && x.m - group[0].m > 5) { flush(); group = []; }
+      group.push(x);
+    }
+    if (group.length) flush();
+  }
+  return out.sort((a, b) => b.times.length - a.times.length);
+}
 
 export const ENDED_LABEL: Record<NonNullable<FaultIncident['endedHow']>, string> = {
   self: 'limpou sozinho',
