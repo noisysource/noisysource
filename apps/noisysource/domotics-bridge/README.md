@@ -150,21 +150,35 @@ tables is in `src/faults.ts`, for the incidents).
   clears. **Switched off from outside** (not through this bridge: the panel,
   SmartLife, a timer — the nightly 23:54 UTC off since 21/10 comes from the pump
   itself, Tuya `event_from` 1, no cloud timer/scene), it switches the pump back on
-  after 5 min (`REON_AFTER_MS`); offs through the app or the automation are
+  after 5 min (`REON_AFTER_MS`) **only while the heating automation is off or in
+  dry-run**: running live, the automation owns on/off and undoes the off itself
+  (`automationOwns`, from index.ts). Offs through the app or the automation are
   respected, and so is a pump found off at start-up. Off from outside again within
   60 min of that switch-on, or after 6 switch-ons in 24 h, it leaves the pump off
-  until someone switches it on (someone means it; no fighting a timer). While the
-  automation (live) says nothing wants heat, it waits for a zone to want it.
-  Switched off in the app while resting, it switches the pump back on. State in `guard-state.json`,
-  so a rest survives a restart. Log lines: `[guard]`, `[incident]`. With the
-  heating automation running live, a rest that is due to end carries on while no
-  zone wants heat (`holdRest`, sent by the automation) and ends as soon as one does.
-- **Heating automation** (`src/automation.ts`, `src/warmby.ts`; design in
-  `apps/noisysource/domotics/HANDOFF-heating-automation.md`): settings in
-  `domotics_config/automation`, the one-off "warm by HH:MM" in
+  until someone switches it on (someone means it; no fighting a timer).
+  **Paused** (the automation card's "Pausar", `domotics_config/automation`
+  `pauseUntil`), it switches nothing on: no re-on after an outside off (not even
+  after the pause), and a rest that ends meanwhile carries on until the pause does;
+  the protective offs still happen. Switched off in the app while resting, it
+  switches the pump back on (unless paused). State in `guard-state.json`, so a rest
+  survives a restart. Log lines: `[guard]`, `[incident]`. With the heating
+  automation running live, a rest that is due to end carries on while the
+  automation's plan has the pump off (`holdRest`) and ends as soon as it wants heat.
+- **Heating automation** (`src/automation.ts`, `src/warmby.ts`; design and
+  Renato's decisions in `apps/noisysource/domotics/HANDOFF-heating-automation.md`,
+  reworked 2026-10-26): a warm floor in the warm window (19:00–09:00 Lisbon), with
+  a warm-up that starts early enough from the learned model (at most 6 h before);
+  by day the pump is off unless the battery is ≥ 90 % and the sun covers the house
+  plus the pump's ~3.3 kW (its own draw is taken out of the house load while it
+  runs, so it doesn't switch itself off), or the rooms' mean is below 21 °C. Live,
+  it owns on/off whoever switched the pump (minimum on 30 / off 15 min, at most 12
+  of its own switch-ons a day); `pauseUntil` stops it. The guard comes first.
+  Settings in `domotics_config/automation`, the one-off "warm by HH:MM" in
   `domotics_config/warm_by` (both read every 2 min, cached in
-  `automation-config.json` / `warm-by.json`). The warm-up model it learns and the
-  last water setpoint it sent are in `automation-state.json`. Log lines: `[automation]`.
+  `automation-config.json` / `warm-by.json`). The warm-up model it learns, the last
+  water setpoint it sent, the warm-up in progress and its switch-ons are in
+  `automation-state.json`. Its status (`mode`, `doing`, `plan`, `solar`, …) goes
+  out with the bridge state. Log lines: `[automation]`.
 - **History**: `deploy/backfill-incidents.cjs` replays the hand-run logger's
   files through the same recorder (see its header). Tests: `pnpm test`.
 
