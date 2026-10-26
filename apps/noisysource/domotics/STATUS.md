@@ -2,9 +2,11 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-26 (~08:35)
+**Last updated:** 2026-10-26 (~16:50)
 
 ## Currently working on
+**Solar-aware heating: warm floor 19:00–09:00, daytime only on sun with the battery first** (Renato, 2026-10-26 ~16:45). Handed to a `domotics-feature` agent: branch `agent/domotics-solar-heating` off `agent/domotics-pump-log` (stacked on #119), with a simpler automation screen in the app. Renato's decisions are in that branch's STATUS / `HANDOFF-heating-automation.md`. Going live stays one tap for Renato.
+
 **The nightly 23:54 pump off: guard switches it back on, Registo on Relatórios** (Renato, 2026-10-26: "we need to get to the bottom of this"). Branch `agent/domotics-pump-log` (**PR #119 → `staging`, stacked on #118: merge #118 first**), worktree `.claude/worktrees/domotics-pump-log`. **The Pi runs this branch since 08:23 UTC** (it includes #118, so the energy recording carries on). The real fix is physical: clearing the controller's timer table (Next step).
 
 **Energia page: kWh history, cost, savings and bill projection** (Renato's request, 2026-10-25). Branch `agent/domotics-energy` (**PR #118**), worktree `.claude/worktrees/domotics-energy`, PR into `staging` since #117 merged (2026-10-25), so its pushes deploy the Energia page, rules and functions to dev. Code and tests done. **The Pi bridge isn't deployed from here**: it runs #117's build, and the Energia recording needs Renato's OK (Next step, "Energia"). **The euros are estimates** until Renato answers the tariff questions (Open questions, "Energia") or fills in Energia → Tarifário himself.
@@ -25,6 +27,18 @@ Plan, in order:
 4. **Wall tablet + lights without sign-in at home**: **found 2026-10-17 — lights/blinds cannot work on the LAN at all today.** Legrand goes through Cloud Functions that require sign-in, and Firebase Auth's authorized domains contain no LAN address (not even `localhost`), so a page served on the LAN can never sign in. Renato's "the light would not light up" at home was this (before the 3D branch the old screen showed it on anyway; now it rolls back and says why). Fix for the tablet: send Legrand commands through the Pi bridge (it already has its own Firebase identity) when on the LAN. Then serve the built app from the Pi, kiosk browser (Fully Kiosk on Android recommended), idle screen, slow capped Legrand refresh. The Pi is a 256 MB Pi 1: static files only.
 
 ## Last completed
+**2026-10-26 afternoon: guard cycling explained, and the re-on rule overrode Renato.**
+- **Energy to 15:30:** 28.3 kWh used, 32.7 kWh PV, 7.2 kWh from the grid (4.0 of it in the 08:00–10:45 recovery after the night off), battery 13 → 54 %. The house averages 4.24 kW with the pump on vs 0.96 kW off, so the pump draws ~3.3 kW while running.
+- **Loads of 2–4 kW with the pump off** (12:30, 14:00–14:45, 15:15, 04:30–05:45 +0.5 kW) are another appliance (or the separate DHW heat pump). The inverter only sees the house total.
+- **"Off" really is off:** at the guard's 16:05:41 switch-on the compressor went 0 → 70 Hz, water out 34.0 → 38.3 °C, house 1.2–3.4 → 5.8 kW. The floor stays hot because of the 44 °C water and the slab's inertia.
+- **Inverter signs (checked against the power balance):** `gridPowerW` < 0 = import, > 0 = export; `batteryPowerW` > 0 = charging, < 0 = discharging.
+- **Who switched today:**
+  - 08:03 on from outside
+  - guard rests 10:39–11:39, 12:26–13:26, 13:44–14:44, 15:05–16:05
+  - **12:02 off from outside** (cause unknown, not the 23:54 timer); the guard undid it at 12:07
+  - **16:15 off by Renato at the panel**
+- **The guard was about to undo Renato's off at 16:20.** I cancelled it by hand: bridge stopped, `guard-state.json` patched (`offOutsideAt: 0`, `leftOffWhy` set; backup `guard-state.json.bak-1616`), started 16:17. The pump then stayed off. The flaw: the bridge can't tell a person at the panel from the controller's timer. The solar-heating rework (above) replaces this with the automation owning on/off plus a "Pausar" button.
+
 **2026-10-26 ~08:30: the 23:54 off narrowed to the pump's controller; the guard now undoes outside offs** (PR #119).
 - **What happened:** the house was cold on 26/10 because the pump was off from 23:54:13 to 08:03 (the guard respected the off, and the automation's "ligar (recuperação)" at 00:21 was only simulated). Rooms were 23.0–24.0 °C with 26 °C targets, outdoor 9 °C.
 - **Same off every night:** 21/10 23:55, 22/10 23:54:34, 23/10 23:54:36, 25/10 23:54:13 UTC. On 24/10 the pump was already off for a guard rest. That's the "00:54 cluster": the pump's Tuya time zone is a fixed **+01:00**, so it's 00:54 on its own clock, before and after the clock change.
@@ -281,6 +295,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 - A fault only shows while the app is open. If you want to be told when one appears (push/email), that's a new feature — say so.
 
 ## Anything risky in flight
+- **One-off timer on the Pi: `pump-on-1730.timer`, 2026-10-26 17:30 WET**, runs `~/pump-on-once.sh` (POSTs `switch: true` to the bridge, 3 tries, logs `pump-on-once` to the journal), for a warm floor by 19:00. It runs once, then the unit is gone. Cancel: `sudo systemctl stop pump-on-1730.timer`. Check: `journalctl -t pump-on-once`.
 - **Since 2026-10-26 08:23 the guard switches the pump back on 5 min after an off from outside** (PR #119, on the Pi). If technicians switch it off at the panel to work on it, it comes back on once. Before any maintenance, switch "Proteção E13" off in the app; if they switch it off again within the hour, it stays off. The Pi runs `agent/domotics-pump-log` (= #118 + #119), ahead of `staging`.
 - **gcloud login on the Mac has expired** (2026-10-26 ~08:20): `gcloud auth login` before the next session that reads dev Firestore or the Tuya credentials.
 - **Energia, when the bridge goes on the Pi**: adds ~24 Firestore writes a day to kidclub-dev (hourly; hard cap 300), and the inverter read grows from 90 to 120 registers (one request; read that way from the Mac for an hour on 25/10 without trouble). Before the dev rules have `domotics_energy`, the writes are refused and back off to every 30 min. Nothing else changes: no new external or metered API, Modbus stays read-only.
