@@ -7,7 +7,7 @@ import { dpForCode } from './dpmap';
 import { startHttp } from './http';
 import { readInverter, type InverterReading } from './inverter';
 import {
-  createAutomation, parseConfig,
+  createAutomation, parseConfig, pausedUntil,
   type AutomationConfig, type AutomationMemory, type AutomationStatus, type PumpReading, type ZoneReading,
 } from './automation';
 import { parseWarmBy, type WarmByRequest } from './warmby';
@@ -283,7 +283,9 @@ async function refreshAutomationSettings() {
     // A missing document means defaults — which is automation off.
     const next = parseConfig((await db.getDoc(AUTOMATION_DOC)) ?? {});
     if (JSON.stringify(next) !== JSON.stringify(automationConfig)) {
-      console.log(`[automation] settings changed: ${next.enabled ? (next.dryRun ? 'dry-run' : 'ON') : 'off'}`);
+      const pause = pausedUntil(next, Date.now());
+      console.log(`[automation] settings changed: ${next.enabled ? (next.dryRun ? 'dry-run' : 'ON') : 'off'}` +
+        `${pause ? `, paused until ${new Date(pause).toISOString()}` : ''}`);
       automationConfig = next;
       writeFileSync(AUTOMATION_CACHE, JSON.stringify(next, null, 2));
     }
@@ -294,8 +296,8 @@ async function refreshAutomationSettings() {
 
 const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
 
-const automate = createAutomation(async (deviceId, commands) => {
-  await runCommand(deviceId, commands, 'automation');
+const automate = createAutomation(async (deviceId, commands, reason) => {
+  await runCommand(deviceId, commands, 'automation', reason ?? null);
 }, readJson<AutomationMemory>(AUTOMATION_MEMORY_FILE));
 let automating = false;
 let savedMemory = JSON.stringify(automate.memory());
@@ -341,8 +343,11 @@ async function runAutomation() {
       now: new Date(),
       zones,
       pump,
+      // Signs as the inverter gives them (inverter.ts, checked against the power
+      // balance on 26/10): grid > 0 export / < 0 import, battery > 0 charging,
+      // consumption = the whole house, the heat pump included.
       energy: inv?.online
-        ? { pvW: inv.pvPowerW, loadW: inv.consumptionW, gridW: inv.gridPowerW, soc: inv.soc }
+        ? { pvW: inv.pvPowerW, loadW: inv.consumptionW, gridW: inv.gridPowerW, batteryW: inv.batteryPowerW, soc: inv.soc }
         : undefined,
       guard: state.guard,
       warmBy,
@@ -481,11 +486,17 @@ async function watchPump(pumpFresh: boolean) {
 
   await refreshGuardSettings();
   const before = JSON.stringify(guard.state());
-  // The automation's last step, if it is running live and recent: nothing wants heat, keep resting.
+  // The automation's last step, if it is running live and recent: it decides
+  // on/off (so the guard doesn't undo an outside off), and while its plan has
+  // the pump off a rest carries on. A stale step (failing) hands both back to the guard.
   const a = state.automation;
-  const holdRest = automationConfig.enabled && !automationConfig.dryRun
-    && a?.holdRest === true && now - a.evaluatedAt < 5 * 60_000;
-  const d = guard.decide(guardConfig, { now, pump: sample, holdRest, switchedBy });
+  const automationOwns = automationConfig.enabled && !automationConfig.dryRun
+    && a?.state === 'running' && now - a.evaluatedAt < 5 * 60_000;
+  const holdRest = automationOwns && a?.holdRest === true;
+  // A person's pause ("Pausar"): read straight from the settings, so it holds
+  // whatever the automation is set to.
+  const paused = pausedUntil(automationConfig, now);
+  const d = guard.decide(guardConfig, { now, pump: sample, holdRest, switchedBy, pausedUntil: paused, automationOwns });
   let status = d.status;
   if (d.action) {
     const { on, reason, next } = d.action;

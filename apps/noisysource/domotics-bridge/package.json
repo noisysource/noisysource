@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node lib/index.js",
     "dev": "tsc -p tsconfig.json && node lib/index.js",
-    "test": "tsc -p tsconfig.json && node test/automation.test.cjs && node test/warmby.test.cjs && node test/incidents.test.cjs && node test/energy.test.cjs"
+    "test": "tsc -p tsconfig.json && node test/automation.test.cjs && node test/solar-heating.test.cjs && TZ=Pacific/Auckland node test/solar-heating.test.cjs && node test/warmby.test.cjs && node test/incidents.test.cjs && node test/energy.test.cjs"
   },
   "dependencies": {
     "tuyapi": "^7.7.1"

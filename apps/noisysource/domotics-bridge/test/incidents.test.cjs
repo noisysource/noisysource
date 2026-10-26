@@ -192,13 +192,13 @@ const p = (over = {}) => ({ on: true, hz: 50, sp: 44, out: 40, faults: [], ...ov
   assert.equal(g.decide(off, { now: T0 + MIN, pump: p() }).status.mode, 'off');
 }
 {
-  // The heating automation (live) holds a rest past its end while no zone
-  // wants heat; it ends as soon as one does, with that reason.
+  // The heating automation (live) holds a rest past its end while its plan has
+  // the pump off; it ends as soon as the plan wants heat, with that reason.
   const g = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN, lastAction: { at: T0, what: 'off', reason: 'x' } });
   let d = g.decide(on, { now: T0 + 61 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
   assert.equal(d.action, undefined);
   assert.equal(d.status.mode, 'rest');
-  assert.match(d.status.note, /nenhuma zona pede calor/);
+  assert.match(d.status.note, /a automação não quer calor agora/);
   d = g.decide(on, { now: T0 + 95 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
   assert.equal(d.action, undefined, 'still nothing wants heat');
   d = g.decide(on, { now: T0 + 100 * MIN, pump: p({ on: false, hz: 0 }), holdRest: false });
@@ -320,6 +320,67 @@ const p = (over = {}) => ({ on: true, hz: 50, sp: 44, out: 40, faults: [], ...ov
   assert.equal(leads.length, 7);
   assert.ok(leads.every(m => m !== null && m >= 1), `fires before every trip (minutes ahead: ${leads})`);
   console.log(`  guard on the logs: fires ${leads.join(', ')} min before each trip`);
+}
+
+{
+  // 2026-10-26 rework: with the heating automation live, an off from outside is
+  // the automation's to undo, not the guard's (it nearly overrode Renato's own
+  // panel off at 16:15 that day).
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p(), automationOwns: true });
+  let d = g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside', automationOwns: true });
+  assert.equal(d.status.reonAt, null);
+  assert.match(d.status.note, /ligar e desligar é com a automação/);
+  assert.equal(d.status.automationOwns, true);
+  assert.equal(g.decide(on, { now: T0 + 30 * MIN, pump: p({ on: false, hz: 0 }), automationOwns: true }).action, undefined, 'no re-on while the automation decides');
+  // Its rests are still its own: the idle rule fires with the automation live.
+  const g2 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g2.decide(on, { now: T0, pump: p(), automationOwns: true });
+  assert.equal(g2.decide(on, { now: T0 + 10 * MIN, pump: p({ hz: 44, out: 43 }), automationOwns: true }).action.on, false);
+  // An outside off pending when the automation goes live is dropped; the automation (stale or off) hands it back.
+  const g3 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g3.decide(on, { now: T0, pump: p() });
+  g3.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g3.decide(on, { now: T0 + 3 * MIN, pump: p({ on: false, hz: 0 }), automationOwns: true }).action, undefined);
+  assert.equal(g3.decide(on, { now: T0 + 10 * MIN, pump: p({ on: false, hz: 0 }) }).action, undefined, 'dropped, not deferred');
+  g3.decide(on, { now: T0 + 20 * MIN, pump: p() });
+  g3.decide(on, { now: T0 + 30 * MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g3.decide(on, { now: T0 + 36 * MIN, pump: p({ on: false, hz: 0 }) }).action.on, true, 'automation off or in dry-run: the guard re-ons again');
+}
+{
+  // A person's pause ("Pausar"): the guard switches nothing on until it ends.
+  const until = T0 + 120 * MIN;
+  // An outside off during the pause is not undone — not during it, not after.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p(), pausedUntil: until });
+  let d = g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside', pausedUntil: until });
+  assert.match(d.status.note, /em pausa até às/);
+  assert.equal(d.status.pausedUntil, until);
+  assert.equal(g.decide(on, { now: T0 + 10 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until }).action, undefined);
+  assert.equal(g.decide(on, { now: until + 10 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until }).action, undefined, 'after the pause either');
+  // An off waiting to be undone when the pause starts is dropped.
+  const g1 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g1.decide(on, { now: T0, pump: p() });
+  g1.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g1.decide(on, { now: T0 + 6 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until }).action, undefined);
+  // A rest that ends during the pause carries on, and ends when the pause does.
+  const g2 = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN, lastAction: { at: T0, what: 'off', reason: 'x' } });
+  d = g2.decide(on, { now: T0 + 61 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until });
+  assert.equal(d.action, undefined);
+  assert.match(d.status.note, /em pausa até às .*não volta a ligar/);
+  d = g2.decide(on, { now: until + MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until });
+  assert.equal(d.action.on, true, 'pause over: the rest ends');
+  // The protective offs still happen while paused.
+  const g3 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g3.decide(on, { now: T0, pump: p(), pausedUntil: until });
+  assert.equal(g3.decide(on, { now: T0 + 10 * MIN, pump: p({ hz: 44, out: 43 }), pausedUntil: until }).action.on, false);
+  assert.equal(createGuard({ ...INITIAL_GUARD, mode: 'watch' }).decide(on, { now: T0, pump: p({ hz: 0, faults: ['E13'] }), pausedUntil: until }).action.on, false);
+  // Guard switched off in the app while resting and paused: the rest is dropped, the pump stays off.
+  const g4 = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN });
+  d = g4.decide(off, { now: T0, pump: p({ on: false, hz: 0 }), pausedUntil: until });
+  assert.equal(d.action, undefined);
+  assert.equal(g4.state().mode, 'off');
+  assert.equal(g4.decide(off, { now: until + MIN, pump: p({ on: false, hz: 0 }) }).action, undefined);
 }
 
 console.log('all incident and guard scenarios pass');
