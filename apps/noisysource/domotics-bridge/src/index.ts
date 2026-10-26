@@ -13,7 +13,7 @@ import {
 import { parseWarmBy, type WarmByRequest } from './warmby';
 import { PUMP_FAULT_CODES, decodeFaults } from './faults';
 import {
-  createRecorder, type Incident, type PumpSample, type RecorderSnapshot, type SwitchSource,
+  createRecorder, type Incident, type PumpDps, type PumpSample, type RecorderSnapshot, type SwitchSource,
 } from './incidents';
 import {
   createGuard, parseGuardConfig, INITIAL_GUARD, type GuardConfig, type GuardState, type GuardStatus,
@@ -448,6 +448,7 @@ async function watchPump(pumpFresh: boolean) {
   if (!pump) return;
   const now = Date.now();
   let sample: PumpSample | undefined;
+  let switchedBy: SwitchSource | undefined;
   if (pumpFresh && pump.online) {
     const s = new Map(pump.status.map(x => [x.code, x.value]));
     const whole = (code: string) => (typeof s.get(code) === 'number' ? (s.get(code) as number) : undefined);
@@ -468,7 +469,11 @@ async function watchPump(pumpFresh: boolean) {
       zones: zones.length,
     };
     recorded = false;
-    recorder.observe({ id: pump.id, name: pump.name }, sample);
+    const dps: PumpDps = {};
+    for (const { code, value } of pump.status) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') dps[code] = value;
+    }
+    switchedBy = recorder.observe({ id: pump.id, name: pump.name }, sample, dps);
     if (recorded) writeJson(INCIDENTS_STATE_FILE, recorder.snapshot());
   } else {
     recorder.gap();
@@ -480,7 +485,7 @@ async function watchPump(pumpFresh: boolean) {
   const a = state.automation;
   const holdRest = automationConfig.enabled && !automationConfig.dryRun
     && a?.holdRest === true && now - a.evaluatedAt < 5 * 60_000;
-  const d = guard.decide(guardConfig, { now, pump: sample, holdRest });
+  const d = guard.decide(guardConfig, { now, pump: sample, holdRest, switchedBy });
   let status = d.status;
   if (d.action) {
     const { on, reason, next } = d.action;

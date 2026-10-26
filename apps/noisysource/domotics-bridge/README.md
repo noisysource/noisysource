@@ -137,7 +137,9 @@ tables is in `src/faults.ts`, for the incidents).
   Reports page: a fault with 30 min of readings before it and 5 min after, how it
   ended (`self` / `reset`, lockout = second trip within 20 min or still faulted
   after 10 min), the restart time; and every on/off with who caused it (`app`,
-  `automation`, `guard`, `outside` = not through this bridge). Writes are queued
+  `automation`, `guard`, `outside` = not through this bridge) and, since 26/10, every
+  raw datapoint in the reading before and the one that showed it (`dps.before` /
+  `dps.at`), so anything else an outside off changes is on record. Writes are queued
   in `incidents-pending.json` and retried with backoff, so a network gap or a
   missing rule loses nothing. Ids are stable (`fault-<UTC start>-<code>`).
 - **E13 guard** (`src/guard.ts`, was `deploy/e13-guard.py`): with
@@ -145,8 +147,15 @@ tables is in `src/faults.ts`, for the incidents).
   E13"), switches the pump off for 60 min when it idles at the setpoint (≤ 45 Hz,
   water ≥ setpoint − 1.5) and for 120 min straight after a trip; still faulted
   within 3 min of a switch-on = lockout, and it stops acting until the fault
-  clears. Never switches on a pump someone else switched off. Switched off in the
-  app while resting, it switches the pump back on. State in `guard-state.json`,
+  clears. **Switched off from outside** (not through this bridge: the panel,
+  SmartLife, a timer — the nightly 23:54 UTC off since 21/10 comes from the pump
+  itself, Tuya `event_from` 1, no cloud timer/scene), it switches the pump back on
+  after 5 min (`REON_AFTER_MS`); offs through the app or the automation are
+  respected, and so is a pump found off at start-up. Off from outside again within
+  60 min of that switch-on, or after 6 switch-ons in 24 h, it leaves the pump off
+  until someone switches it on (someone means it; no fighting a timer). While the
+  automation (live) says nothing wants heat, it waits for a zone to want it.
+  Switched off in the app while resting, it switches the pump back on. State in `guard-state.json`,
   so a rest survives a restart. Log lines: `[guard]`, `[incident]`. With the
   heating automation running live, a rest that is due to end carries on while no
   zone wants heat (`holdRest`, sent by the automation) and ends as soon as one does.
