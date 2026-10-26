@@ -58,6 +58,12 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'another signed-in user changes them', () => setDoc(settings(stranger), { enabled: true, dryRun: false }));
   await expect('denied', 'signed-out read', () => getDoc(settings(anon)));
   await expect('denied', 'signed-out write', () => setDoc(settings(anon), { enabled: true }));
+  // "Pausar" / "Ligar" in the app: field-level merges into the same document (2026-10-26).
+  await expect('allowed', 'owner pauses (pauseUntil, merged)', () => setDoc(settings(owner), { pauseUntil: Date.now() + 7_200_000 }, { merge: true }));
+  await expect('allowed', 'owner resumes (pauseUntil null, merged)', () => setDoc(settings(owner), { pauseUntil: null }, { merge: true }));
+  await expect('allowed', 'owner goes live (merged)', () => setDoc(settings(owner), { enabled: true, dryRun: false }, { merge: true }));
+  await expect('denied', 'bridge can\'t pause', () => setDoc(settings(bridge), { pauseUntil: Date.now() }, { merge: true }));
+  await expect('denied', 'another signed-in user can\'t pause', () => setDoc(settings(stranger), { pauseUntil: Date.now() }, { merge: true }));
   const warmBy = db => doc(db, 'domotics_config', 'warm_by');
   await expect('allowed', 'owner reads the warm-by request', () => getDoc(warmBy(owner)));
   await expect('denied', 'owner can\'t write it from the app (only through the callable)', () => setDoc(warmBy(owner), { at: new Date() }));
