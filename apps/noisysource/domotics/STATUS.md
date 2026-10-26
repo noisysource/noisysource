@@ -2,10 +2,10 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-26 (~16:50)
+**Last updated:** 2026-10-26 (~17:45)
 
 ## Currently working on
-**Solar-aware heating: warm floor 19:00–09:00, daytime only on sun with the battery first** (Renato, 2026-10-26 ~16:45). Handed to a `domotics-feature` agent: branch `agent/domotics-solar-heating` off `agent/domotics-pump-log` (stacked on #119), with a simpler automation screen in the app. Renato's decisions are in that branch's STATUS / `HANDOFF-heating-automation.md`. Going live stays one tap for Renato.
+**Solar-aware heating: warm floor 19:00–09:00, daytime only on sun with the battery first, a simpler automation screen** (Renato, 2026-10-26). **Built: PR #120 → `staging`, stacked on #119 (merge #118, then #119, then #120).** Branch `agent/domotics-solar-heating`, worktree `.claude/worktrees/domotics-solar-heating`. **The Pi runs this branch in dry-run** (deploy details in "Last completed"). **Next: Renato reviews the screen on dev and switches it live** (one tap, Next step). Design and every decision: `HANDOFF-heating-automation.md`.
 
 **The nightly 23:54 pump off: guard switches it back on, Registo on Relatórios** (Renato, 2026-10-26: "we need to get to the bottom of this"). Branch `agent/domotics-pump-log` (**PR #119 → `staging`, stacked on #118: merge #118 first**), worktree `.claude/worktrees/domotics-pump-log`. **The Pi runs this branch since 08:23 UTC** (it includes #118, so the energy recording carries on). The real fix is physical: clearing the controller's timer table (Next step).
 
@@ -27,6 +27,17 @@ Plan, in order:
 4. **Wall tablet + lights without sign-in at home**: **found 2026-10-17 — lights/blinds cannot work on the LAN at all today.** Legrand goes through Cloud Functions that require sign-in, and Firebase Auth's authorized domains contain no LAN address (not even `localhost`), so a page served on the LAN can never sign in. Renato's "the light would not light up" at home was this (before the 3D branch the old screen showed it on anyway; now it rolls back and says why). Fix for the tablet: send Legrand commands through the Pi bridge (it already has its own Firebase identity) when on the LAN. Then serve the built app from the Pi, kiosk browser (Fully Kiosk on Android recommended), idle screen, slow capped Legrand refresh. The Pi is a 256 MB Pi 1: static files only.
 
 ## Last completed
+**2026-10-26 ~17:45: solar-aware heating built (PR #120), on the Pi in dry-run.** What it does now (live; in dry-run it only simulates):
+- **Warm window 19:00–09:00**: the pump runs whenever a zone wants heat, and the thermostats get 24 °C. The **warm-up** starts early enough to be warm at 19:00, from the learned model (floor ~90 min + rooms 0.3 °C/h + 30 min), at most 6 h before.
+- **By day the pump is off**, unless the battery is ≥ 90 % and the sun covers the house plus the pump (≥ 500 W going to the grid also counts), or the rooms' **mean** drops below 21 °C. The pump's own 3.3 kW is taken out of the house load while it runs (otherwise switching it on would make the surplus vanish). Start after 10 min of sun, stop after 15 min without (or battery < 85 %).
+- **Live, the automation owns on/off**: the 23:54 off (or anyone's off) in the warm window is undone 15 min later; an on outside the plan by day is undone after 30 min. At most 12 of its own switch-ons per 24 h. **Pausar** (2 h / até às 19:00 / até amanhã às 09:00) is how a person stops it: `domotics_config/automation.pauseUntil`.
+- **E13 guard first**: its rests and lockout are never overridden. Its 5-min re-on after an outside off now only runs while the automation is off or in dry-run, and a pause blocks every guard switch-on.
+- **Removed**: pre-heat 05–08, evening setback 18–22, solar boost. Water handling kept.
+- **App**: one state with one action on top (Ligada [Pausar] / Só a simular [Ligar] / Em pausa [Retomar] / Desligada [Ligar]), "Hoje" (plan + what it's doing now), 4 settings (horário quente, temperatura, mínimo de dia, bateria para aquecer com sol), the rest under "Avançado". The Proteção E13 and Energia texts are updated.
+- **Tests**: bridge suite all pass (new `test/solar-heating.test.cjs`, also under a foreign TZ; old automation scenarios moved into the warm window where needed), `build:staging` OK, rules 61/61 (`firestore.rules` untouched). No browser testing.
+- **Pi**: deployed 17:37 UTC, after the 17:30 one-off switch-on had run (`pump-on-once`: "pump switched on (attempt 1)" at 17:30:05). Backup `~/domotics-bridge/lib.bak-20261026-solar` (= #119's build, md5 checked). Deps unchanged, no npm install. Restart 17:37:12; pins kept (.232–.236 PERMANENT); `[state] 7/7` at 17:37:30; no errors. `/state` shows the new status: dry-run, day mode, "A casa já está quente (24,5° de média): o horário quente começa às 19:00…", guard "watch" with `automationOwns: false` (dry-run, so the guard still undoes outside offs tonight, as with #119). `dryRun` left true; `guard-state.json` and the `domotics_config` docs untouched.
+- **CI**: "Deploy to Dev" for #120 green on all 7 jobs (17:14–17:20); https://kidclub-dev-domotics.web.app serves the new card.
+
 **2026-10-26 afternoon: guard cycling explained, and the re-on rule overrode Renato.**
 - **Energy to 15:30:** 28.3 kWh used, 32.7 kWh PV, 7.2 kWh from the grid (4.0 of it in the 08:00–10:45 recovery after the night off), battery 13 → 54 %. The house averages 4.24 kW with the pump on vs 0.96 kW off, so the pump draws ~3.3 kW while running.
 - **Loads of 2–4 kW with the pump off** (12:30, 14:00–14:45, 15:15, 04:30–05:45 +0.5 kW) are another appliance (or the separate DHW heat pump). The inverter only sees the house total.
@@ -246,6 +257,12 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 2026-10-02 — Heat pump fault codes + corrected heat pump readings (PR #73, merged to `staging`). The unit is a **Zantia Vancouver 13 (single-phase, R32)**, manual "Vancouver 13DC-32": https://zantia.com/storage/products/vzau85qrqt.pdf. Datapoint table in `domotics-bridge/README.md` → "Heat pump"; fault bitmaps decoded in `src/data/heatpumpFaults.ts`; active faults show as a red badge on the plan tile and at the top of the heat pump popover.
 
 ## Next step
+- **Solar-aware heating (PR #120): Renato reviews the screen on dev and switches it live.**
+  1. Open https://kidclub-dev-domotics.web.app (signed in) → Clima → "Automação do aquecimento". It should say **"Só a simular"**, with "Hoje" showing tonight's plan, "Agora (simulação)" what it would do, and under Detalhes → Últimas ações the simulated switches.
+  2. Optional: watch it simulate through a night and a day first (the 23:54 off: the guard still undoes it at ~23:59 in dry-run, as since #119).
+  3. **Go live: tap "Ligar"** (one tap). The thermostats go from 26 to 24 °C within ~2 min, and from then on the bridge switches the pump by the plan. The guard stops re-onning outside offs; the automation does it 15 min after the off.
+  4. To stop it: **Pausar**. To go back: "Voltar a só simular" under the state.
+  5. Merge order: #118 → #119 → #120 (each into `staging`).
 - **The 23:54 off (PR #119):**
   1. **Clear the controller's timers** (Renato or the technicians): every row of the timer screen, or the timer function off. Since the memory looks corrupted, have the technicians check the other parameters too.
   2. Tonight after 23:54 on the Pi: `journalctl -u domotics-bridge --since "23:50" | grep -E "guard|incident"`. Expect `[incident] switch-…-off`, then about 5 min later `[guard] pump ON: desligada de fora às 23:54 — volta a ligar`. Then Relatórios → Registo: does the off row say "Nada mais mudou…" or "Mudou também…"?
@@ -278,6 +295,12 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 7. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs in "Last completed", 2026-10-16). The bridge survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
 
 ## Open questions for Renato
+- **Solar-aware heating (PR #120), my calls, all easy to change (HANDOFF "Decisions made while building"):**
+  - Day minimum on the rooms' **mean**, not the coldest room (so one open window doesn't run 3.3 kW on grid all day). Want "any room" instead?
+  - Warm-up at most **6 h before 19:00** (no earlier than 13:00). On a cloudy day with the house at ~23.4 °C by 14:00, it starts ~14:40 on battery/grid.
+  - At most **12 automation switch-ons per 24 h**.
+  - Going live sets the thermostats from your 26 °C to **24 °C**. With 26 the valves stay open (more flow, which E13 likes); with 24 they close when the rooms get there, and the pump then rests or switches off. If you'd rather keep 26 on the thermostats, say so.
+  - No tariff window: nothing in the new plan needs vazio. The battery's night behaviour is the RENAC app's (Modbus is read-only).
 - **Energia: the tariff** — ✅ set 2026-10-25 22:57 from the EDP invoice of 10/08/2026 (period 24/06–05/08, `prodata/236002796526.pdf`, gitignored) into `domotics_config/tariff` on dev (`confirmed: true`). EDP Comercial, 6,9 kVA, bi-horário diário (vazio 22–08). Energy with the 15 % campaign discount already applied (until 23/06/2027): vazio 0,1119 → **0,095115**, fora de vazio 0,1935 → **0,164475** €/kWh; potência **0,7722 €/day** (23 %); IEC 0,001 €/kWh, DGEG 0,35 €/month (both 23 %); CAV 2,85 €/month (6 %); energy 6 % up to 200 kWh/30 days. Checked: `computeBill` reproduces the invoice's energy, potência and IEC lines to the cent; CAV/DGEG differ because EDP charged 2 whole months for 43 days and the page spreads them per day. **Still open:**
   - ✅ Export price 0: Renato doesn't sell (2026-10-25). What goes to the grid keeps the system alive or is surplus, and is given away. The page now shows that surplus instead.
   - Billing day set to 6, inferred from the readings window (2–4 Sep for a period ending ~5 Sep). Check it against the next invoice.
@@ -295,8 +318,11 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 - A fault only shows while the app is open. If you want to be told when one appears (push/email), that's a new feature — say so.
 
 ## Anything risky in flight
+- **The Pi runs `agent/domotics-solar-heating` (PR #120, unmerged) in dry-run** since 2026-10-26 17:37 UTC. Roll back: `cd ~/domotics-bridge && cp -a lib.bak-20261026-solar/. lib/ && sudo systemctl restart domotics-bridge` (back to #119's build). In dry-run the guard behaves exactly as with #119 (re-on 5 min after an outside off), except that a pause now stops it.
+- **Going live (one tap) changes three things at once:** the thermostats go 26 → 24 °C; the bridge switches the pump off by day when there's no sun (the house will be a bit colder in the afternoon, by design); and the guard no longer undoes outside offs, the automation does after 15 min. If the house is cold the first evening, check the card's "Agora" and Detalhes → Últimas ações first.
+- **`domotics_config/automation` on dev still holds the old fields** (preheat, evening, solarBoost; ignored by the new bridge). The first "Guardar" in the settings deletes them; "Ligar"/"Pausar" only touch their own fields.
 - **One-off timer on the Pi: `pump-on-1730.timer`, 2026-10-26 17:30 WET**, runs `~/pump-on-once.sh` (POSTs `switch: true` to the bridge, 3 tries, logs `pump-on-once` to the journal), for a warm floor by 19:00. It runs once, then the unit is gone. Cancel: `sudo systemctl stop pump-on-1730.timer`. Check: `journalctl -t pump-on-once`.
-- **Since 2026-10-26 08:23 the guard switches the pump back on 5 min after an off from outside** (PR #119, on the Pi). If technicians switch it off at the panel to work on it, it comes back on once. Before any maintenance, switch "Proteção E13" off in the app; if they switch it off again within the hour, it stays off. The Pi runs `agent/domotics-pump-log` (= #118 + #119), ahead of `staging`.
+- **Since 2026-10-26 08:23 the guard switches the pump back on 5 min after an off from outside** (PR #119, on the Pi). If technicians switch it off at the panel to work on it, it comes back on once. Before any maintenance, switch "Proteção E13" off in the app; if they switch it off again within the hour, it stays off. Since 17:37 the Pi runs `agent/domotics-solar-heating` (= #118 + #119 + #120), ahead of `staging`; in dry-run this re-on works as before, live it's the automation's (15 min after the off).
 - **gcloud login on the Mac has expired** (2026-10-26 ~08:20): `gcloud auth login` before the next session that reads dev Firestore or the Tuya credentials.
 - **Energia, when the bridge goes on the Pi**: adds ~24 Firestore writes a day to kidclub-dev (hourly; hard cap 300), and the inverter read grows from 90 to 120 registers (one request; read that way from the Mac for an hour on 25/10 without trouble). Before the dev rules have `domotics_energy`, the writes are refused and back off to every 30 min. Nothing else changes: no new external or metered API, Modbus stays read-only.
 - **Dev rules include `domotics_config/warm_by`** (released 2026-10-25 16:35 by hand, then by CI from #117). #106 is closed, so nothing older should redeploy them. If one does, the new bridge logs `could not read the warm-by request` every 2 min and keeps its last request. Harmless.
