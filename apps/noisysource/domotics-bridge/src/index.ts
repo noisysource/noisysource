@@ -105,7 +105,7 @@ const AUTOMATION_SETTINGS_EVERY_MS = 2 * 60_000;
  */
 const WARM_BY_DOC = 'domotics_config/warm_by';
 const COMMANDS = 'domotics_commands';
-/** E13 guard on/off, set in the app (see guard.ts). Read on the automation's cadence. */
+/** E13 guard on/off and its early warning (`preempt`), set in the app (see guard.ts). Read on the automation's cadence. */
 const GUARD_DOC = 'domotics_config/guard';
 /** Heat pump faults and on/off transitions (see incidents.ts), for the Reports page. */
 const INCIDENTS = 'domotics_incidents';
@@ -382,10 +382,11 @@ async function refreshGuardSettings() {
   if (!db || Date.now() - guardSettingsAt < AUTOMATION_SETTINGS_EVERY_MS) return;
   guardSettingsAt = Date.now();
   try {
-    // A missing document means off.
+    // A missing document means off (and the early warning, once on, defaults to on).
     const next = parseGuardConfig((await db.getDoc(GUARD_DOC)) ?? {});
-    if (next.enabled !== guardConfig.enabled) {
-      console.log(`[guard] switched ${next.enabled ? 'on' : 'off'} in the app`);
+    if (next.enabled !== guardConfig.enabled || next.preempt !== guardConfig.preempt) {
+      if (next.enabled !== guardConfig.enabled) console.log(`[guard] switched ${next.enabled ? 'on' : 'off'} in the app`);
+      if (next.preempt !== guardConfig.preempt) console.log(`[guard] E13 early warning switched ${next.preempt ? 'on' : 'off'} in the app`);
       guardConfig = next;
       writeJson(GUARD_CONFIG_CACHE, next);
     }
@@ -486,6 +487,7 @@ async function watchPump(pumpFresh: boolean) {
 
   await refreshGuardSettings();
   const before = JSON.stringify(guard.state());
+  const offUntilBefore = guard.state().preemptOffUntil;
   // The automation's last step, if it is running live and recent: it decides
   // on/off (so the guard doesn't undo an outside off), and while its plan has
   // the pump off a rest carries on. A stale step (failing) hands both back to the guard.
@@ -508,6 +510,9 @@ async function watchPump(pumpFresh: boolean) {
       console.warn(`[guard] could not switch the pump ${on ? 'on' : 'off'}, trying again next poll:`, (err as Error).message);
       status = { ...status, mode: guard.state().mode, restUntil: null, note: 'O comando à bomba falhou — volta a tentar na próxima leitura' };
     }
+  }
+  if (guard.state().preemptOffUntil && !offUntilBefore) {
+    console.log(`[guard] two E13 trips with the early warning on: early warning off until ${new Date(guard.state().preemptOffUntil).toISOString()}`);
   }
   if (JSON.stringify(guard.state()) !== before) writeJson(GUARD_STATE_FILE, guard.state());
   state = { ...state, guard: status };
