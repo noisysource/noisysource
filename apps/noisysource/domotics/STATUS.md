@@ -2,7 +2,12 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-26 (~17:45)
+**Last updated:** 2026-10-27 (~08:10)
+
+## ⚠️ The heat pump can't heat right now (2026-10-27)
+**Since 26/10 19:10, every start ends in E13 9–11 min later** (8 in a row, as of 07:55 on 27/10), with the water at 31–35 °C, far below the 44 °C setpoint, and all 6 zones open. That doesn't fit the earlier "idle at the setpoint / zones closing" cause. Before each trip, the discharge temperature jumps 41–44 → 71–78 °C, the coil (C00) falls to 0–4 °C and the water out falls. Rest length doesn't matter: it trips the same after 3 min or 4.8 h stopped. **Locked out twice:** 00:35 (Renato reset the breaker ~05:23, 4.8 h without heat) and **07:55, still locked out at 08:02**. The bridge sent the pump nothing but on/off since 26/10 12:00 (checked in the journal), so it isn't a settings change. The last trip before this series was on 22/10 23:25; it ran normally 23–26/10. **This is for the technician, not software.** Renato was asked: who switched it on from outside at 00:01 and 00:26? Those two starts caused the 00:35 lockout. If it wasn't someone at home, it was the controller's own timer table.
+- The technicians' printout (Relatórios → technician report) now opens with a "Situação atual" box for this (branch `agent/domotics-tech-report`, stacked on #120, PR → `staging`). It adds the minutes run before each trip to the trip table, and computes "min depois do disparo anterior" for bridge-recorded faults, which the bridge leaves null.
+- Worth building in a fresh session: an alert to Renato's phone when the pump locks out. Nothing told him on the night of 26–27/10; he found out by being cold at 5 am.
 
 ## Currently working on
 **Solar-aware heating: warm floor 19:00–09:00, daytime only on sun with the battery first, a simpler automation screen** (Renato, 2026-10-26). **Built: PR #120 → `staging`, stacked on #119 (merge #118, then #119, then #120).** Branch `agent/domotics-solar-heating`, worktree `.claude/worktrees/domotics-solar-heating`. **The Pi runs this branch in dry-run** (deploy details in "Last completed"). **Next: Renato reviews the screen on dev and switches it live** (one tap, Next step). Design and every decision: `HANDOFF-heating-automation.md`.
