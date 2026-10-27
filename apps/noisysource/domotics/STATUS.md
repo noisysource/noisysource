@@ -2,14 +2,42 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-27 (~08:10)
+**Last updated:** 2026-10-27 (~20:50)
 
 ## ⚠️ The heat pump can't heat right now (2026-10-27)
 **Since 26/10 19:10, every start ends in E13 9–11 min later** (8 in a row, as of 07:55 on 27/10), with the water at 31–35 °C, far below the 44 °C setpoint, and all 6 zones open. That doesn't fit the earlier "idle at the setpoint / zones closing" cause. Before each trip, the discharge temperature jumps 41–44 → 71–78 °C, the coil (C00) falls to 0–4 °C and the water out falls. Rest length doesn't matter: it trips the same after 3 min or 4.8 h stopped. **Locked out twice:** 00:35 (Renato reset the breaker ~05:23, 4.8 h without heat) and 07:55 (reset ~17:14, 9.3 h). **After that reset it restarted at 17:15 and had not tripped by 19:35** (water at the 44 °C setpoint, 57 Hz, 17.5 °C outside). Still unknown: who reset it at 17:14, the technician or Renato, and whether anything was repaired. The bridge sent the pump nothing but on/off since 26/10 12:00 (checked in the journal), so it isn't a settings change. The last trip before this series was on 22/10 23:25; it ran normally 23–26/10. **This is for the technician, not software.** Renato was asked: who switched it on from outside at 00:01 and 00:26? Those two starts caused the 00:35 lockout. If it wasn't someone at home, it was the controller's own timer table.
 - The technicians' printout (Relatórios → technician report) now opens with a "Situação atual" box for this (branch `agent/domotics-tech-report`, stacked on #120, PR → `staging`). It adds the minutes run before each trip to the trip table, and computes "min depois do disparo anterior" for bridge-recorded faults, which the bridge leaves null.
 - Worth building in a fresh session: an alert to Renato's phone when the pump locks out. Nothing told him on the night of 26–27/10; he found out by being cold at 5 am.
+- **27/10 evening:** it ran 17:15–20:03 without tripping (54–57 Hz, water at the 44 °C setpoint, discharge ~75 °C). At 20:03 the guard rested it 60 min for idling at the setpoint (28 Hz, water 45 °C), the old rule, as designed.
+- **Built tonight, NOT deployed: the guard switches the pump off just before an E13 and back on after 5 min (PR #123 → `staging`, stacked on #122; branch `agent/domotics-guard-preempt`, worktree `.claude/worktrees/domotics-guard-preempt`).** Renato asked for it after the cold night.
+  - **What it watches** (`domotics-bridge/src/preempt.ts`): before every trip since 26/10 the discharge sat at 42–46 °C, then jumped ≥ 3 °C between two 30 s readings while the coil dropped, 1–2 min before the E13. A warning needs all of:
+    - the run is ≥ 5 min old;
+    - a discharge rise ≥ 3 °C per 30 s;
+    - the discharge before it was ≤ 50 °C;
+    - the coil dropped ≥ 0.8 °C over the same readings.
+  - **Why the two extra conditions:** the 3 °C rule alone fired 281 times in healthy runs (discharge 60–100 °C swings like that every ~10 min). With them it fires on all 13 recorded trips that have a coil reading, 31–121 s ahead (61–121 s on the 8 since 26/10), and never in the logs' healthy runs or in the end of tonight's healthy run (tables in the PR).
+  - **What the guard does:** pump off, 5-min rest, back on ("fim do descanso"). With the automation live, its plan decides through `holdRest`; a pause holds it.
+  - **Caps:**
+    - after 5 stops in an hour, rests of 30 min;
+    - a trip anyway: 120 min, as before;
+    - two trips in 6 h with it on: it switches itself off for 24 h ("Antecipação desligada até …: dois E13 mesmo assim").
+  - **App:** Proteção E13 card has the line "Antecipa o E13 — desligou N vezes hoje antes do disparo" and the switch **"Antecipar o E13"** (`domotics_config/guard.preempt`, absent = on). The technicians' report no longer calls the spell over while the guard is cutting each run short.
+  - **Tests:** bridge tests all pass, rules 65/65, app typecheck clean (bar the old `main.tsx` error). Poll interval unchanged.
+  - **Unknown until it runs:** whether switching off 1–2 min early actually avoids the high-pressure trip.
+  - **Deploy (on the house network, from the worktree; nothing else on the Pi changes):**
+    1. **Build and test:** `cd ~/dev/noisysource/.claude/worktrees/domotics-guard-preempt/apps/noisysource/domotics-bridge && pnpm test` (builds `lib/` and runs the tests).
+    2. **Back up the Pi's build** (= #120's): `ssh pi@192.168.1.125 'cd ~/domotics-bridge && cp -a lib lib.bak-20261027-preempt'`
+    3. **Copy the new build:** `rsync -a lib pi@192.168.1.125:~/domotics-bridge/`. Dependencies are unchanged (only the `test` script in `package.json`), so no `package.json` copy and no `npm install`.
+    4. **Restart:** `ssh pi@192.168.1.125 'sudo systemctl restart domotics-bridge'`
+    5. **Check:** `ssh pi@192.168.1.125 'journalctl -u domotics-bridge --since "-3 min" --no-pager | tail -40'`. Expect `[state] 7/7`, no errors, `[guard]` quiet unless it acts. If not 7/7, re-pin: `for ip in 232 233 234 235 236; do sudo ip neigh replace 192.168.1.$ip lladdr d6:35:38:f6:ea:21 dev eth0 nud permanent; done`. Then the app → Proteção E13: "Antecipa o E13 — hoje ainda não foi preciso desligá-la".
+    6. **Watch the first stops:** `journalctl -u domotics-bridge -f | grep -E "guard|incident"` → `[guard] pump OFF: descarga a subir … — desligada antes do E13…`, ~5 min later `[guard] pump ON: fim do descanso`. A `fault-…-E13` incident right after an OFF means it tripped anyway.
+    7. **Roll back:** `ssh pi@192.168.1.125 'cd ~/domotics-bridge && cp -a lib.bak-20261027-preempt/. lib/ && sudo systemctl restart domotics-bridge'`. Or just switch "Antecipar o E13" off in the app (the Pi picks it up within 2 min).
+  - **It's on as soon as the new bridge starts** (no `preempt` field = on). To deploy it off, switch "Antecipar o E13" off in the app first; the card shows it once this PR's dev deploy is up.
+  - The pump's state survives the restart (`guard-state.json`). A rest in progress carries on, and the old file loads with defaults (tested).
 
 ## Currently working on
+**E13 early warning in the guard (PR #123, stacked on #122): built, tested, NOT deployed.** Next: Renato (or the coordinator) deploys it with the steps in the ⚠️ section above, then watches the first stops.
+
 **Solar-aware heating: warm floor 19:00–09:00, daytime only on sun with the battery first, a simpler automation screen** (Renato, 2026-10-26). **Built: PR #120 → `staging`, stacked on #119 (merge #118, then #119, then #120).** Branch `agent/domotics-solar-heating`, worktree `.claude/worktrees/domotics-solar-heating`. **The Pi runs this branch in dry-run** (deploy details in "Last completed"). **Next: Renato reviews the screen on dev and switches it live** (one tap, Next step). Design and every decision: `HANDOFF-heating-automation.md`.
 
 **The nightly 23:54 pump off: guard switches it back on, Registo on Relatórios** (Renato, 2026-10-26: "we need to get to the bottom of this"). Branch `agent/domotics-pump-log` (**PR #119 → `staging`, stacked on #118: merge #118 first**), worktree `.claude/worktrees/domotics-pump-log`. **The Pi runs this branch since 08:23 UTC** (it includes #118, so the energy recording carries on). The real fix is physical: clearing the controller's timer table (Next step).
@@ -300,6 +328,14 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 7. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs in "Last completed", 2026-10-16). The bridge survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
 
 ## Open questions for Renato
+- **E13 early warning (PR #123), my calls, all easy to change:**
+  - **The detector needs two conditions beyond the 3 °C rise:** discharge ≤ 50 °C before it, and the coil dropping ≥ 0.8 °C. Without them it would cut healthy runs every ~10 min.
+  - **No coil reading, no warning.**
+  - **Switching the guard off in the app during a 5-min rest gives the pump back at once** (as for every rest).
+  - **Switching "Antecipar o E13" off during a rest lets the 5 min run out.**
+  - **Switching "Antecipar o E13" off and on clears the 24-h "dois E13 mesmo assim" stop.**
+  - **Right after a bridge restart it needs 5 min of readings** before it can warn.
+  - **Your decision after the first night:** if it trips anyway, would you rather it rest longer than 5 min after a warning? The data says rest length didn't matter (3 min ran like 4.8 h).
 - **Solar-aware heating (PR #120), my calls, all easy to change (HANDOFF "Decisions made while building"):**
   - Day minimum on the rooms' **mean**, not the coldest room (so one open window doesn't run 3.3 kW on grid all day). Want "any room" instead?
   - Warm-up at most **6 h before 19:00** (no earlier than 13:00). On a cloudy day with the house at ~23.4 °C by 14:00, it starts ~14:40 on battery/grid.
@@ -323,6 +359,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 - A fault only shows while the app is open. If you want to be told when one appears (push/email), that's a new feature — say so.
 
 ## Anything risky in flight
+- **PR #123 (E13 early warning) is unmerged and not on the Pi.** Once deployed it's **on by default**: the bridge will switch the pump off and on by itself, roughly every 15 min while the fault lasts (8–9 min runs + 5 min rest + the pump's 2-min restart delay). If technicians come, switch "Proteção E13" off in the app first, as before. Deploy steps and roll back: ⚠️ section at the top.
 - **The Pi runs `agent/domotics-solar-heating` (PR #120, unmerged) in dry-run** since 2026-10-26 17:37 UTC. Roll back: `cd ~/domotics-bridge && cp -a lib.bak-20261026-solar/. lib/ && sudo systemctl restart domotics-bridge` (back to #119's build). In dry-run the guard behaves exactly as with #119 (re-on 5 min after an outside off), except that a pause now stops it.
 - **Going live (one tap) changes three things at once:** the thermostats go 26 → 24 °C; the bridge switches the pump off by day when there's no sun (the house will be a bit colder in the afternoon, by design); and the guard no longer undoes outside offs, the automation does after 15 min. If the house is cold the first evening, check the card's "Agora" and Detalhes → Últimas ações first.
 - **`domotics_config/automation` on dev still holds the old fields** (preheat, evening, solarBoost; ignored by the new bridge). The first "Guardar" in the settings deletes them; "Ligar"/"Pausar" only touch their own fields.
