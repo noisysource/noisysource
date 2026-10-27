@@ -144,6 +144,14 @@ export interface TripContext {
   idleMin: number;
   /** Seconds between readings — 20 s, 30 s or a minute, depending on who recorded it. */
   step: number;
+  /** When the compressor started the run that tripped, and for how long it ran; unset when the run started before the readings. */
+  runFrom?: number;
+  runMin?: number;
+  /** The run started before the readings: it lasted longer than this. */
+  runOver?: number;
+  /** Lowest coil (C00) in the ~3 min before, and the warmest water out during the run. */
+  coilMin?: number;
+  outPeak?: number;
 }
 
 export function tripContext(f: FaultIncident): TripContext | undefined {
@@ -163,7 +171,18 @@ export function tripContext(f: FaultIncident): TripContext | undefined {
     }
   }
   const steps = f.before.slice(1).map((s, i) => s.t - f.before[i].t).sort((a, b) => a - b);
+  let start = f.before.length;
+  while (start > 0 && f.before[start - 1].on && f.before[start - 1].hz > 0) start--;
+  const run = f.before.slice(start);
+  const runFrom = start > 0 && run.length ? run[0].t : undefined;
+  const coil = window.map(s => s.coil).filter((v): v is number => v !== undefined);
+  const outs = run.map(s => s.out).filter((v): v is number => v !== undefined);
   return {
+    runFrom,
+    runMin: runFrom !== undefined ? Math.round((f.at - runFrom) / MIN) : undefined,
+    runOver: start === 0 && run.length ? Math.floor((f.at - run[0].t) / MIN) : undefined,
+    coilMin: coil.length ? Math.min(...coil) : undefined,
+    outPeak: outs.length ? Math.max(...outs) : undefined,
     last,
     trip,
     hzBefore: first.hz,
@@ -386,6 +405,85 @@ const median = (v: number[]) => {
   const s = [...v].sort((a, b) => a - b);
   return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 };
+
+/**
+ * Fills `minutesSincePrevious` where the record lacks it — the bridge doesn't
+ * link one fault to the last — from the fault before it. Expects time order.
+ */
+export function linkPrevious(faults: FaultIncident[]): FaultIncident[] {
+  return faults.map((f, i) => i === 0 || f.minutesSincePrevious !== undefined ? f
+    : { ...f, minutesSincePrevious: Math.round((f.at - faults[i - 1].at) / MIN) });
+}
+
+/** A trip this soon after the compressor started: the pump never got going. */
+const SHORT_RUN_MIN = 20;
+/** A run that starts this long after the trip before — after its reset, if it locked out — opens a new episode. */
+const SPELL_GAP = 6 * 60 * MIN;
+
+/**
+ * The trips at the end of the record that each came minutes after a start —
+ * the pump can't run at all, rather than trips now and then. Empty unless
+ * there are at least three and the last is from the past day.
+ */
+export function shortRunSpell(faults: FaultIncident[], now: number): FaultIncident[] {
+  const byTime = [...faults].sort((a, b) => a.at - b.at);
+  const spell: FaultIncident[] = [];
+  for (let i = byTime.length - 1; i >= 0; i--) {
+    const f = byTime[i];
+    const run = tripContext(f)?.runMin;
+    if (run === undefined || run > SHORT_RUN_MIN) break;
+    if (spell.length && tripContext(spell[0])!.runFrom! - (f.endedAt ?? f.at) > SPELL_GAP) break;
+    spell.unshift(f);
+  }
+  return spell.length >= 3 && now - spell[spell.length - 1].at <= 24 * 60 * MIN ? spell : [];
+}
+
+const hoursOrMin = (min: number) =>
+  min < 90 ? `${Math.round(min)} min` : `${(min / 60).toLocaleString('pt-PT', { maximumFractionDigits: 1 })} h`;
+
+/** A short-run spell (shortRunSpell) in sentences: the top of the technicians' report. `previous` = the fault before it. */
+export function spellSummary(spell: FaultIncident[], previous?: FaultIncident): string[] {
+  if (spell.length === 0) return [];
+  const ctx = spell.map(f => tripContext(f)!);
+  const codes = [...new Set(spell.map(f => f.code))].join(', ');
+  const runs = ctx.map(c => c.runMin);
+  const out: string[] = [];
+  out.push(
+    `Desde ${fmtDateTime(ctx[0].runFrom!)}, ${spell.length} arranques seguidos acabaram em ${codes}: ` +
+    `disparou sempre ${range(runs)} min depois de o compressor arrancar.`,
+  );
+  const peaks = ctx.map(c => c.outPeak).filter((v): v is number => v !== undefined);
+  const sps = ctx.map(c => c.last.sp).filter((v): v is number => v !== undefined);
+  const valves = range(ctx.map(c => c.last.valves));
+  if (peaks.length) {
+    const far = sps.length > 0 && Math.max(...peaks) <= Math.min(...sps) - 5;
+    out.push(
+      `A água à saída não passou dos ${num(Math.max(...peaks), 1)} °C` +
+      (sps.length ? `, com o setpoint a ${range(sps)} °C` : '') +
+      (valves ? ` e ${valves} zonas abertas` : '') +
+      (far ? ': disparou longe do setpoint.' : '.'),
+    );
+  }
+  const rests = ctx.slice(1).map((c, i) => (c.runFrom! - spell[i].at) / MIN);
+  if (rests.length) {
+    out.push(
+      `Antes de cada arranque esteve parada entre ${hoursOrMin(Math.min(...rests))} e ${hoursOrMin(Math.max(...rests))} ` +
+      'desde o disparo anterior, e voltou a disparar da mesma forma.',
+    );
+  }
+  out.push(
+    `Nos ~3 min antes de cada disparo, a descarga passou de ${range(ctx.map(c => c.disBefore))} para ${range(ctx.map(c => c.disAt))} °C, ` +
+    `a serpentina (C00) chegou a ${range(ctx.map(c => c.coilMin), 1)} °C e a água à saída passou de ` +
+    `${range(ctx.map(c => c.outPeak), 1)} para ${range(ctx.map(c => c.last.out), 1)} °C.`,
+  );
+  const locks = spell.filter(f => f.lockout);
+  if (locks.length) {
+    out.push(`Bloqueou ${locks.length === 1 ? 'uma vez' : `${locks.length} vezes`}: ${locks.map(f => `${fmtDateTime(f.at)}, ${endPhrase(f)}`).join('; ')}.`);
+  }
+  if (previous) out.push(`Antes desta série, o disparo anterior tinha sido a ${fmtDateTime(previous.at)}.`);
+  out.push(`Cada arranque dá cerca de ${num(median(runs.filter((v): v is number => v !== undefined))!, 0)} min de aquecimento: assim, a máquina não consegue aquecer a casa.`);
+  return out;
+}
 
 /** What the record says about one code, in sentences, from the trips themselves. */
 export function codeSummary(faults: FaultIncident[]): string[] {

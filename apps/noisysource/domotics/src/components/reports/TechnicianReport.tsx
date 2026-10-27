@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { ArrowLeft, Printer } from 'lucide-react';
 import {
-  codeSummary, endPhrase, fmtDate, fmtDateTime, fmtLongDate, fmtTime, hourOfDay, num, SOURCE_LABEL, tripContext,
-  type FaultIncident, type Incident, type SwitchEvent,
+  codeSummary, endPhrase, fmtDate, fmtDateTime, fmtLongDate, fmtTime, hourOfDay, linkPrevious, num, shortRunSpell,
+  SOURCE_LABEL, spellSummary, tripContext, type FaultIncident, type Incident, type SwitchEvent,
 } from '../../data/incidents';
 import { faultGuide } from '../../data/heatpumpFaults';
 import PumpChart from './PumpChart';
@@ -31,7 +31,8 @@ const cell = 'px-2 py-1.5 text-left align-top';
 export default function TechnicianReport({ incidents, onClose }: Props) {
   const now = Date.now();
   const all = useMemo(() => [...incidents].sort((a, b) => a.at - b.at), [incidents]);
-  const faults = all.filter((i): i is FaultIncident => i.kind === 'fault');
+  const faults = linkPrevious(all.filter((i): i is FaultIncident => i.kind === 'fault'));
+  const spell = shortRunSpell(faults, now);
   const codes = [...new Set(faults.map(f => f.code))];
   const detailed = faults.filter(f => tripContext(f));
   const outsideOffs = all.filter((i): i is SwitchEvent => i.kind === 'switch' && !i.on && i.source === 'outside');
@@ -81,6 +82,15 @@ export default function TechnicianReport({ incidents, onClose }: Props) {
             })}
           </dl>
         </header>
+
+        {spell.length > 0 && (
+          <section className="flex flex-col gap-2 rounded-lg border-2 border-red-300 px-4 py-3 print-avoid-break">
+            <h2 className="text-base font-semibold text-red-800">Situação atual: dispara em todos os arranques</h2>
+            <ul className="list-disc pl-5 flex flex-col gap-1">
+              {spellSummary(spell, faults[faults.indexOf(spell[0]) - 1]).map((s, i) => <li key={i}>{s}</li>)}
+            </ul>
+          </section>
+        )}
 
         <section className="flex flex-col gap-2">
           <h2 className={h2}>Resumo</h2>
@@ -140,6 +150,7 @@ export default function TechnicianReport({ incidents, onClose }: Props) {
                   <p className="text-xs text-zinc-600">
                     exterior {num(c.last.outdoor)} °C · leituras a cada {c.step >= 55 ? 'minuto' : `${Math.round(c.step / 10) * 10} s`}
                     {c.last.valves !== undefined ? ` · ${c.last.valves} ${c.last.valves === 1 ? 'zona aberta' : 'zonas abertas'}${c.last.zones !== undefined ? ` (de ${c.last.zones} legíveis)` : ''}` : ''}
+                    {c.runMin !== undefined ? ` · ${c.runMin} min depois de arrancar` : c.runOver !== undefined ? ` · a trabalhar há mais de ${c.runOver} min` : ''}
                     {f.minutesSincePrevious !== undefined ? ` · ${f.minutesSincePrevious} min depois do disparo anterior` : ''}
                     {' · '}{f.lockout ? 'bloqueou — ' : ''}{endPhrase(f)}
                   </p>
