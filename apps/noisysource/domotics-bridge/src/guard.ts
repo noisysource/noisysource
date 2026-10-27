@@ -232,8 +232,9 @@ function preemptReason(w: Precursor, until: number, now: number, lastHour: numbe
 interface Ctx { pausedUntil: number | null; automationOwns: boolean }
 const NO_CTX: Ctx = { pausedUntil: null, automationOwns: false };
 
-export function createGuard(initial: GuardState = INITIAL_GUARD) {
-  let s: GuardState = { ...initial };
+export function createGuard(initial: Partial<GuardState> = INITIAL_GUARD) {
+  // Over the defaults, so a state saved by an older bridge has every field.
+  let s: GuardState = { ...INITIAL_GUARD, ...initial };
 
   function status(cfg: GuardConfig, now: number, st: GuardState, held = false, ctx: Ctx = NO_CTX): GuardStatus {
     const { pausedUntil, automationOwns } = ctx;
