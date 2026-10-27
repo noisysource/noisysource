@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { ArrowLeft, Printer } from 'lucide-react';
 import {
   codeSummary, endPhrase, fmtDate, fmtDateTime, fmtLongDate, fmtTime, hourOfDay, linkPrevious, num, shortRunSpell,
-  SOURCE_LABEL, spellSummary, tripContext, type FaultIncident, type Incident, type SwitchEvent,
+  SOURCE_LABEL, spellOverSince, spellSummary, tripContext, type FaultIncident, type Incident, type SwitchEvent,
 } from '../../data/incidents';
 import { faultGuide } from '../../data/heatpumpFaults';
 import PumpChart from './PumpChart';
@@ -33,6 +33,7 @@ export default function TechnicianReport({ incidents, onClose }: Props) {
   const all = useMemo(() => [...incidents].sort((a, b) => a.at - b.at), [incidents]);
   const faults = linkPrevious(all.filter((i): i is FaultIncident => i.kind === 'fault'));
   const spell = shortRunSpell(faults, now);
+  const spellOver = spellOverSince(spell, now) !== undefined;
   const codes = [...new Set(faults.map(f => f.code))];
   const detailed = faults.filter(f => tripContext(f));
   const outsideOffs = all.filter((i): i is SwitchEvent => i.kind === 'switch' && !i.on && i.source === 'outside');
@@ -84,10 +85,12 @@ export default function TechnicianReport({ incidents, onClose }: Props) {
         </header>
 
         {spell.length > 0 && (
-          <section className="flex flex-col gap-2 rounded-lg border-2 border-red-300 px-4 py-3 print-avoid-break">
-            <h2 className="text-base font-semibold text-red-800">Situação atual: dispara em todos os arranques</h2>
+          <section className={`flex flex-col gap-2 rounded-lg border-2 px-4 py-3 print-avoid-break ${spellOver ? 'border-amber-300' : 'border-red-300'}`}>
+            <h2 className={`text-base font-semibold ${spellOver ? 'text-amber-800' : 'text-red-800'}`}>
+              {spellOver ? `Disparos em todos os arranques até ${fmtDateTime(spell[spell.length - 1].at)}` : 'Situação atual: dispara em todos os arranques'}
+            </h2>
             <ul className="list-disc pl-5 flex flex-col gap-1">
-              {spellSummary(spell, faults[faults.indexOf(spell[0]) - 1]).map((s, i) => <li key={i}>{s}</li>)}
+              {spellSummary(spell, now, faults[faults.indexOf(spell[0]) - 1]).map((s, i) => <li key={i}>{s}</li>)}
             </ul>
           </section>
         )}

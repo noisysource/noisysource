@@ -441,16 +441,26 @@ export function shortRunSpell(faults: FaultIncident[], now: number): FaultIncide
 const hoursOrMin = (min: number) =>
   min < 90 ? `${Math.round(min)} min` : `${(min / 60).toLocaleString('pt-PT', { maximumFractionDigits: 1 })} h`;
 
+/**
+ * When the pump restarted after the spell's last trip, if it has run longer
+ * than any trip in the spell took since: the spell is over, for now.
+ */
+export function spellOverSince(spell: FaultIncident[], now: number): number | undefined {
+  const since = spell[spell.length - 1]?.restartedAt;
+  return since !== undefined && now - since > SHORT_RUN_MIN * MIN ? since : undefined;
+}
+
 /** A short-run spell (shortRunSpell) in sentences: the top of the technicians' report. `previous` = the fault before it. */
-export function spellSummary(spell: FaultIncident[], previous?: FaultIncident): string[] {
+export function spellSummary(spell: FaultIncident[], now: number, previous?: FaultIncident): string[] {
   if (spell.length === 0) return [];
   const ctx = spell.map(f => tripContext(f)!);
   const codes = [...new Set(spell.map(f => f.code))].join(', ');
   const runs = ctx.map(c => c.runMin);
+  const over = spellOverSince(spell, now);
   const out: string[] = [];
   out.push(
-    `Desde ${fmtDateTime(ctx[0].runFrom!)}, ${spell.length} arranques seguidos acabaram em ${codes}: ` +
-    `disparou sempre ${range(runs)} min depois de o compressor arrancar.`,
+    `${over !== undefined ? `De ${fmtDateTime(ctx[0].runFrom!)} a ${fmtDateTime(spell[spell.length - 1].at)}` : `Desde ${fmtDateTime(ctx[0].runFrom!)}`}, ` +
+    `${spell.length} arranques seguidos acabaram em ${codes}: disparou sempre ${range(runs)} min depois de o compressor arrancar.`,
   );
   const peaks = ctx.map(c => c.outPeak).filter((v): v is number => v !== undefined);
   const sps = ctx.map(c => c.last.sp).filter((v): v is number => v !== undefined);
@@ -481,7 +491,10 @@ export function spellSummary(spell: FaultIncident[], previous?: FaultIncident): 
     out.push(`Bloqueou ${locks.length === 1 ? 'uma vez' : `${locks.length} vezes`}: ${locks.map(f => `${fmtDateTime(f.at)}, ${endPhrase(f)}`).join('; ')}.`);
   }
   if (previous) out.push(`Antes desta série, o disparo anterior tinha sido a ${fmtDateTime(previous.at)}.`);
-  out.push(`Cada arranque dá cerca de ${num(median(runs.filter((v): v is number => v !== undefined))!, 0)} min de aquecimento: assim, a máquina não consegue aquecer a casa.`);
+  const perStart = num(median(runs.filter((v): v is number => v !== undefined))!, 0);
+  out.push(over !== undefined
+    ? `Nessa série, cada arranque deu cerca de ${perStart} min de aquecimento. Voltou a arrancar a ${fmtDateTime(over)} e não disparou desde então (há ${hoursOrMin((now - over) / MIN)}).`
+    : `Cada arranque dá cerca de ${perStart} min de aquecimento: assim, a máquina não consegue aquecer a casa.`);
   return out;
 }
 
