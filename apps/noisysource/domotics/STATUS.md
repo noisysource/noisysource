@@ -36,7 +36,13 @@
   - The pump's state survives the restart (`guard-state.json`). A rest in progress carries on, and the old file loads with defaults (tested).
 
 ## Currently working on
-**E13 early warning in the guard (PR #123, stacked on #122): built, tested, NOT deployed.** Next: Renato (or the coordinator) deploys it with the steps in the ⚠️ section above, then watches the first stops.
+**E13 early warning in the guard (PR #123, stacked on #122): deployed to the Pi 2026-10-27 20:54** (backup `lib.bak-20261027-preempt` and `guard-state.json.bak-20261027-preempt`; only `guard.js`, `index.js` and the new `preempt.js` differ from #120's build, checked with rsync --checksum). Next: watch the first stops (step 6 in the ⚠️ section) and see whether stopping 1–2 min early avoids the trip.
+- **What's common to every trip (analysis 27/10, 26 runs from the 22–24/10 logger + 8 bridge-recorded):**
+  - Each trip came 9–14 min into a run, with the water ≤ 35 °C.
+  - **Compressor speed:** 12 of the 15 runs at ≤ 50 Hz (5 min in) tripped; 1 of the 12 runs at 68–70 Hz did. All 8 on 26–27/10 sat at exactly 50 Hz.
+  - **Outdoor temperature:** no trip below 9.3 °C outside; the 5 runs at 4–7 °C all reached 70 Hz.
+  - **Suction sensor:** it reads the same as the coil in every run, healthy or not (zero apparent superheat).
+  - Questions for the technician: is a frequency limit or a silent/night mode set (the flat 50 Hz)? The refrigerant charge and the expansion valve. Gauges on the high and low side during minutes 7–10 of a run.
 
 **Solar-aware heating: warm floor 19:00–09:00, daytime only on sun with the battery first, a simpler automation screen** (Renato, 2026-10-26). **Built: PR #120 → `staging`, stacked on #119 (merge #118, then #119, then #120).** Branch `agent/domotics-solar-heating`, worktree `.claude/worktrees/domotics-solar-heating`. **The Pi runs this branch in dry-run** (deploy details in "Last completed"). **Next: Renato reviews the screen on dev and switches it live** (one tap, Next step). Design and every decision: `HANDOFF-heating-automation.md`.
 
