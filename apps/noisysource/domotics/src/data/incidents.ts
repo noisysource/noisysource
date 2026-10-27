@@ -421,11 +421,27 @@ const SHORT_RUN_MIN = 20;
 const SPELL_GAP = 6 * 60 * MIN;
 
 /**
+ * The guard's early-warning stops (domotics-bridge/src/preempt.ts, from
+ * 27/10): switched off 1–2 min before an E13 it saw coming. Not a trip, but the
+ * same run cut short. Told apart by the reason the bridge writes.
+ */
+export function isPreemptStop(i: Incident): i is SwitchEvent {
+  return i.kind === 'switch' && !i.on && i.source === 'guard' && /desligada antes do E13/.test(i.reason ?? '');
+}
+
+/** Early-warning stops after the spell's last trip, in time order. */
+function stopsAfter(spell: FaultIncident[], switches: SwitchEvent[]): SwitchEvent[] {
+  const last = spell[spell.length - 1];
+  return last ? switches.filter(e => isPreemptStop(e) && e.at > last.at).sort((a, b) => a.at - b.at) : [];
+}
+
+/**
  * The trips at the end of the record that each came minutes after a start —
  * the pump can't run at all, rather than trips now and then. Empty unless
- * there are at least three and the last is from the past day.
+ * there are at least three and the last is from the past day — or the guard
+ * has been switching it off before the trip (`switches`) in the past day.
  */
-export function shortRunSpell(faults: FaultIncident[], now: number): FaultIncident[] {
+export function shortRunSpell(faults: FaultIncident[], now: number, switches: SwitchEvent[] = []): FaultIncident[] {
   const byTime = [...faults].sort((a, b) => a.at - b.at);
   const spell: FaultIncident[] = [];
   for (let i = byTime.length - 1; i >= 0; i--) {
@@ -435,7 +451,8 @@ export function shortRunSpell(faults: FaultIncident[], now: number): FaultIncide
     if (spell.length && tripContext(spell[0])!.runFrom! - (f.endedAt ?? f.at) > SPELL_GAP) break;
     spell.unshift(f);
   }
-  return spell.length >= 3 && now - spell[spell.length - 1].at <= 24 * 60 * MIN ? spell : [];
+  const latest = Math.max(spell[spell.length - 1]?.at ?? 0, ...stopsAfter(spell, switches).map(e => e.at));
+  return spell.length >= 3 && now - latest <= 24 * 60 * MIN ? spell : [];
 }
 
 const hoursOrMin = (min: number) =>
@@ -443,20 +460,31 @@ const hoursOrMin = (min: number) =>
 
 /**
  * When the pump restarted after the spell's last trip, if it has run longer
- * than any trip in the spell took since: the spell is over, for now.
+ * than any trip in the spell took since: the spell is over, for now. A run the
+ * guard cut short before the trip (`switches`, early-warning stops) doesn't
+ * count: then it's the switch-on after the last such stop.
  */
-export function spellOverSince(spell: FaultIncident[], now: number): number | undefined {
-  const since = spell[spell.length - 1]?.restartedAt;
+export function spellOverSince(spell: FaultIncident[], now: number, switches: SwitchEvent[] = []): number | undefined {
+  const stops = stopsAfter(spell, switches);
+  const lastStop = stops[stops.length - 1];
+  const since = lastStop
+    ? switches.filter(e => e.on && e.at > lastStop.at).sort((a, b) => a.at - b.at)[0]?.at
+    : spell[spell.length - 1]?.restartedAt;
   return since !== undefined && now - since > SHORT_RUN_MIN * MIN ? since : undefined;
 }
 
-/** A short-run spell (shortRunSpell) in sentences: the top of the technicians' report. `previous` = the fault before it. */
-export function spellSummary(spell: FaultIncident[], now: number, previous?: FaultIncident): string[] {
+/**
+ * A short-run spell (shortRunSpell) in sentences: the top of the technicians'
+ * report. `previous` = the fault before it; `switches` = the switch events, for
+ * the guard's early-warning stops after it.
+ */
+export function spellSummary(spell: FaultIncident[], now: number, previous?: FaultIncident, switches: SwitchEvent[] = []): string[] {
   if (spell.length === 0) return [];
   const ctx = spell.map(f => tripContext(f)!);
   const codes = [...new Set(spell.map(f => f.code))].join(', ');
   const runs = ctx.map(c => c.runMin);
-  const over = spellOverSince(spell, now);
+  const over = spellOverSince(spell, now, switches);
+  const stops = stopsAfter(spell, switches);
   const out: string[] = [];
   out.push(
     `${over !== undefined ? `De ${fmtDateTime(ctx[0].runFrom!)} a ${fmtDateTime(spell[spell.length - 1].at)}` : `Desde ${fmtDateTime(ctx[0].runFrom!)}`}, ` +
@@ -490,10 +518,19 @@ export function spellSummary(spell: FaultIncident[], now: number, previous?: Fau
   if (locks.length) {
     out.push(`Bloqueou ${locks.length === 1 ? 'uma vez' : `${locks.length} vezes`}: ${locks.map(f => `${fmtDateTime(f.at)}, ${endPhrase(f)}`).join('; ')}.`);
   }
+  if (stops.length) {
+    // "aos N min" in the reason: how far into the run the warning came.
+    const at = stops.map(e => Number(/aos (\d+) min/.exec(e.reason ?? '')?.[1])).filter(v => Number.isFinite(v));
+    out.push(
+      `Depois do último disparo, a ponte desligou-a ${stops.length === 1 ? 'uma vez' : `${stops.length} vezes`} 1–2 min antes do disparo, ` +
+      `quando a descarga voltou a subir de repente${at.length ? ` (aos ${range(at)} min do arranque)` : ''}, como antes de cada ${codes}; ` +
+      `a última a ${fmtDateTime(stops[stops.length - 1].at)}. Não são disparos, mas mostram que o problema continua.`,
+    );
+  }
   if (previous) out.push(`Antes desta série, o disparo anterior tinha sido a ${fmtDateTime(previous.at)}.`);
   const perStart = num(median(runs.filter((v): v is number => v !== undefined))!, 0);
   out.push(over !== undefined
-    ? `Nessa série, cada arranque deu cerca de ${perStart} min de aquecimento. Voltou a arrancar a ${fmtDateTime(over)} e não disparou desde então (há ${hoursOrMin((now - over) / MIN)}).`
+    ? `Nessa série, cada arranque deu cerca de ${perStart} min de aquecimento. Voltou a arrancar a ${fmtDateTime(over)} e não disparou desde então${stops.length ? ', nem foi preciso desligá-la antes' : ''} (há ${hoursOrMin((now - over) / MIN)}).`
     : `Cada arranque dá cerca de ${perStart} min de aquecimento: assim, a máquina não consegue aquecer a casa.`);
   return out;
 }

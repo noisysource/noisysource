@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { ArrowLeft, Printer } from 'lucide-react';
 import {
-  codeSummary, endPhrase, fmtDate, fmtDateTime, fmtLongDate, fmtTime, hourOfDay, linkPrevious, num, shortRunSpell,
+  codeSummary, endPhrase, fmtDate, fmtDateTime, fmtLongDate, fmtTime, hourOfDay, isPreemptStop, linkPrevious, num, shortRunSpell,
   SOURCE_LABEL, spellOverSince, spellSummary, tripContext, type FaultIncident, type Incident, type SwitchEvent,
 } from '../../data/incidents';
 import { faultGuide } from '../../data/heatpumpFaults';
@@ -32,8 +32,11 @@ export default function TechnicianReport({ incidents, onClose }: Props) {
   const now = Date.now();
   const all = useMemo(() => [...incidents].sort((a, b) => a.at - b.at), [incidents]);
   const faults = linkPrevious(all.filter((i): i is FaultIncident => i.kind === 'fault'));
-  const spell = shortRunSpell(faults, now);
-  const spellOver = spellOverSince(spell, now) !== undefined;
+  const switches = all.filter((i): i is SwitchEvent => i.kind === 'switch');
+  const spell = shortRunSpell(faults, now, switches);
+  const spellOver = spellOverSince(spell, now, switches) !== undefined;
+  // The guard has been switching it off just before the trip since the last one.
+  const preempted = spell.length > 0 && switches.some(e => isPreemptStop(e) && e.at > spell[spell.length - 1].at);
   const codes = [...new Set(faults.map(f => f.code))];
   const detailed = faults.filter(f => tripContext(f));
   const outsideOffs = all.filter((i): i is SwitchEvent => i.kind === 'switch' && !i.on && i.source === 'outside');
@@ -87,10 +90,12 @@ export default function TechnicianReport({ incidents, onClose }: Props) {
         {spell.length > 0 && (
           <section className={`flex flex-col gap-2 rounded-lg border-2 px-4 py-3 print-avoid-break ${spellOver ? 'border-amber-300' : 'border-red-300'}`}>
             <h2 className={`text-base font-semibold ${spellOver ? 'text-amber-800' : 'text-red-800'}`}>
-              {spellOver ? `Disparos em todos os arranques até ${fmtDateTime(spell[spell.length - 1].at)}` : 'Situação atual: dispara em todos os arranques'}
+              {spellOver ? `Disparos em todos os arranques até ${fmtDateTime(spell[spell.length - 1].at)}`
+                : preempted ? 'Situação atual: o E13 vem em todos os arranques (a ponte desliga-a antes do disparo)'
+                : 'Situação atual: dispara em todos os arranques'}
             </h2>
             <ul className="list-disc pl-5 flex flex-col gap-1">
-              {spellSummary(spell, now, faults[faults.indexOf(spell[0]) - 1]).map((s, i) => <li key={i}>{s}</li>)}
+              {spellSummary(spell, now, faults[faults.indexOf(spell[0]) - 1], switches).map((s, i) => <li key={i}>{s}</li>)}
             </ul>
           </section>
         )}
