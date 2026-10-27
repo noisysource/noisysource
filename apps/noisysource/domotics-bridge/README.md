@@ -164,6 +164,25 @@ tables is in `src/faults.ts`, for the incidents).
   survives a restart. Log lines: `[guard]`, `[incident]`. With the heating
   automation running live, a rest that is due to end carries on while the
   automation's plan has the pump off (`holdRest`) and ends as soon as it wants heat.
+  **E13 early warning** (`src/preempt.ts`, since 2026-10-27; on unless
+  `domotics_config/guard` has `preempt: false`, app: "Antecipar o E13"): since 26/10
+  every run trips 9–11 min in, far below the setpoint, and each time the discharge
+  first sat low (42–46 °C), then jumped ≥ 3 °C between two 30 s readings while the
+  coil (C00) dropped, 1–2 min before the trip. So, with the run ≥ 5 min old, a
+  discharge rise ≥ 3 °C per 30 s **from ≤ 50 °C with the coil down ≥ 0.8 °C** switches
+  the pump off for 5 min (`REST_PREEMPT_MS`); the rest then ends like any other (back
+  on; held by the live automation's `holdRest`; not during a pause). A rise alone is
+  normal in a healthy run (60–100 °C, 281 such rises in the 21–24/10 logs). Fires on
+  all 13 recorded trips with a coil reading, 31–121 s ahead, and never in the logs'
+  healthy runs (`test/preempt.test.cjs`, fixtures in `test/fixtures/`). Caps: after 5
+  stops in an hour, the next rests 30 min; a trip anyway (also during the 5-min rest)
+  gets the 120-min rest; two trips within 6 h with it on switch it off for 24 h
+  ("Antecipação desligada até …: dois E13 mesmo assim" in the guard's note).
+  Switching it (or the guard) off in the app forgets that. The idle rule comes first
+  when both apply. Its status is `guard.preempt` in `domotics_state/tuya`
+  (`stopsToday`, `lastStop`, `offUntil`, `note`); the stops are switch incidents
+  with source `guard` and a reason like "descarga a subir 44 → 50,5 °C em 30 s aos
+  9 min — desligada antes do E13, volta a ligar às 20:43".
 - **Heating automation** (`src/automation.ts`, `src/warmby.ts`; design and
   Renato's decisions in `apps/noisysource/domotics/HANDOFF-heating-automation.md`,
   reworked 2026-10-26): a warm floor in the warm window (19:00–09:00 Lisbon), with
