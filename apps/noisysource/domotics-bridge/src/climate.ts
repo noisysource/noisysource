@@ -11,7 +11,11 @@
  *   Hz, water out/in, setpoint and outdoor sensor; the battery; what the
  *   automation and the E13 guard were doing.
  * - `x_HHMMSS_…`: a person's intervention, with the rooms at that moment. The
- *   pump switched on by hand says the house felt cold; off, warm enough. A
+ *   pump switched on by hand says the house felt cold; off, warm enough. An on
+ *   soon after the controller's timer or the automation switched it off is
+ *   something else: keep it running (Renato, 28/10: "at 23:54 I'll turn it on
+ *   not because it's cold but because I want the house warm during the
+ *   night"), so it is `undo-off`, with who switched it off and when. A
  *   thermostat target changed from the app or at the thermostat says which way
  *   and by how much. The automation's and the guard's own switches are already
  *   in `domotics_incidents` and say nothing about comfort, so they are not
@@ -28,6 +32,8 @@ import type { SwitchSource } from './incidents';
 const MIN = 60_000;
 /** A thermostat target this long after our command, at that value, is taken to be that command. */
 const COMMAND_MATCH_MS = 15 * MIN;
+/** A person's on this soon after an off by the timer or the automation is undoing that off, not "cold". */
+const UNDO_OFF_MS = 60 * MIN;
 
 /**
  * The heat pump controller's own timer table switches it off at 23:54 UTC every
@@ -90,9 +96,16 @@ export interface ClimateEvent {
   time: string;
   kind: 'pump' | 'target';
   by: 'app' | 'outside' | 'timer';
-  /** What it says about comfort: on → 'cold', off → 'warm-enough', a target up/down → 'warmer'/'cooler'; the timer → 'none'. */
-  meaning: 'cold' | 'warm-enough' | 'warmer' | 'cooler' | 'none';
+  /**
+   * What it says about comfort: on → 'cold', off → 'warm-enough', a target
+   * up/down → 'warmer'/'cooler'; the timer → 'none'; an on within an hour of
+   * the timer's or the automation's off → 'undo-off' (keep it running).
+   */
+  meaning: 'cold' | 'warm-enough' | 'warmer' | 'cooler' | 'none' | 'undo-off';
   on?: boolean;
+  /** For a pump on: the last off before it, who did it and how many minutes before. */
+  offBy?: 'app' | 'outside' | 'timer' | 'automation' | 'guard' | 'unknown';
+  offMin?: number;
   zone?: string;
   zoneName?: string;
   from?: number;
@@ -136,6 +149,8 @@ export interface ClimateSnapshot {
   targets: Record<string, number>;
   /** Thermostat names, written with each day so a document reads on its own. */
   names: Record<string, string>;
+  /** The pump's last switch-off seen, and by whom. */
+  lastOff?: { at: number; by: NonNullable<ClimateEvent['offBy']> } | null;
 }
 
 export const INITIAL_CLIMATE: ClimateSnapshot = { open: null, pending: {}, targets: {}, names: {} };
@@ -246,15 +261,20 @@ export function createClimateRecorder(initial?: ClimateSnapshot) {
 
       const out: ClimateEvent[] = [];
       // --- The pump, switched by a person (or the controller's timer) -------
+      const timer = r.switchedBy === 'outside' && !!p && !p.on && isControllerTimer(r.t);
       if (p?.online && (r.switchedBy === 'app' || r.switchedBy === 'outside')) {
-        const timer = r.switchedBy === 'outside' && !p.on && isControllerTimer(r.t);
+        const off = s.lastOff;
+        const ago = p.on && off ? Math.round((r.t - off.at) / MIN) : null;
+        const undo = ago !== null && ago * MIN <= UNDO_OFF_MS && (off!.by === 'timer' || off!.by === 'automation');
         out.push(event(r, {
           kind: 'pump',
           by: timer ? 'timer' : r.switchedBy,
-          meaning: timer ? 'none' : p.on ? 'cold' : 'warm-enough',
+          meaning: timer ? 'none' : !p.on ? 'warm-enough' : undo ? 'undo-off' : 'cold',
           on: p.on,
+          ...(ago !== null ? { offBy: off!.by, offMin: ago } : {}),
         }));
       }
+      if (p?.online && r.switchedBy && !p.on) s.lastOff = { at: r.t, by: timer ? 'timer' : r.switchedBy };
       // --- A thermostat target that changed, not by the automation ---------
       for (const z of r.zones) {
         if (!z.online || z.target === undefined) continue;

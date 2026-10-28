@@ -78,6 +78,17 @@ assert.equal(isControllerTimer(Date.UTC(2026, 9, 28, 0, 9, 0)), false);
   assert.equal(ev[0].by, 'timer');
   assert.equal(ev[0].meaning, 'none');
 
+  // Switched on by hand 4 min after the timer's off: keep it running, not "cold".
+  ev = rec.observe({ t: L(23, 58, 40), zones: zones(), pump: pump(true), switchedBy: 'outside' });
+  assert.deepEqual({ meaning: ev[0].meaning, offBy: ev[0].offBy, offMin: ev[0].offMin }, { meaning: 'undo-off', offBy: 'timer', offMin: 4 });
+  // Likewise after the automation's off at the end of a window…
+  rec.observe({ t: L(23, 58, 50), zones: zones(), pump: pump(false), switchedBy: 'automation' });
+  ev = rec.observe({ t: L(23, 58, 55), zones: zones(), pump: pump(true), switchedBy: 'app' });
+  assert.equal(ev[0].meaning, 'undo-off');
+  // …but not after a person's own off, nor more than an hour later.
+  rec.observe({ t: L(23, 59, 0), zones: zones(), pump: pump(false), switchedBy: 'app' });
+  assert.equal(rec.observe({ t: L(23, 59, 5), zones: zones(), pump: pump(true), switchedBy: 'outside' })[0].meaning, 'cold');
+
   // Targets: the automation's own change is not an intervention…
   rec.noteTarget('a', 24, 'automation', L(23, 58));
   assert.equal(rec.observe({ t: L(23, 59), zones: zones(24, 23), pump: pump(false) }).length, 0);
@@ -96,7 +107,7 @@ assert.equal(isControllerTimer(Date.UTC(2026, 9, 28, 0, 9, 0)), false);
   // Each event is its own field, plain-identifier named (the REST update mask).
   const fields = rec.pendingWrites().find(d => d.id === '2026-11-10').fields;
   const xs = Object.keys(fields).filter(k => k.startsWith('x_')).sort();
-  assert.deepEqual(xs, ['x_140030_pump', 'x_200000_pump', 'x_235432_pump', 'x_235940_b', 'x_235950_a', 'x_235955_a']);
+  assert.deepEqual(xs, ['x_140030_pump', 'x_200000_pump', 'x_235432_pump', 'x_235840_pump', 'x_235855_pump', 'x_235900_pump', 'x_235905_pump', 'x_235940_b', 'x_235950_a', 'x_235955_a']);
   for (const k of Object.keys(fields)) assert.match(k, /^[A-Za-z_][A-Za-z0-9_]*$/);
   // The snapshot round-trips through JSON (the state file).
   const again = createClimateRecorder(JSON.parse(JSON.stringify(rec.snapshot())));
