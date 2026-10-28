@@ -2,7 +2,24 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-28
+
+## Direction change (2026-10-28): FinHub v2 — read this first
+Renato decided to rebuild FinHub as **three modules, one per company** (NoisySource, NoisyPhocus,
+Casa) in the same app, with an **append-only event log** as the record. **NoisySource first**,
+rebuilt for 2026 and checked against the bank statements (bank balances are the truth). Design,
+decisions, open questions: **`HANDOFF-finhub-v2.md`** (same folder), on branch
+`agent/finhub-v2-design` (worktree `.claude/worktrees/finhub-v2-design`), committed locally, not
+pushed, no PR yet.
+
+**Paused (Renato, 2026-10-28), everything below this section:** #94 `agent/finhub-real-data`
+(open, not merged; its latest state is in *that branch's* STATUS.md, 2026-10-18, newer than this
+file; its real data stays on dev), KidClub reconciliation step 2, emails → expenses, the FinHub
+release. The old FinHub keeps running as it is until v2's NoisySource module passes.
+
+**Next step:** Renato answers the 5 open questions in `HANDOFF-finhub-v2.md`, then step 1 (domain
+only: events, days engine, expected movements, tests) in a fresh session on a new `agent/` branch
+off `staging`.
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
