@@ -232,20 +232,41 @@ plan predicts the bank.** For each month January–September 2026:
 
 Then Renato compares Tesouraria with the old FinHub's Previsão for the coming months.
 
-## Steps
+## Steps: one night run each (Renato, 2026-10-28)
 
-Each a branch off `staging` and a PR into `staging`, as usual.
+Agents build overnight; Renato checks on dev in the morning. So every night ends with screens he
+can click on dev, not only tests. Each night: a branch off `staging`, a PR into `staging`.
 
-1. **Domain only** (no UI, no Firestore): envelope, NoisySource events + zod, both holiday
-   calendars, days engine, payslip estimate with meal days and per diems, expected movements, state
-   rebuild. Tests with made-up values. Also: propose NoisySource's payment days from the 2026
-   statements for Renato to confirm.
-2. **Storage**: rules, event store (read, append, reverse), dev-only importer and wipe script,
-   Diário. Import 2026 on dev.
-3. **Tesouraria + Contratos EC.**
-4. **Mês + matching + forms** (Folha de horas, Recibo, Calendário, Importar extrato).
-5. **Acceptance run with Renato**, then remove the old NoisySource pages. Then choose the next
-   company (NoisyPhocus or Casa).
+| Night | Builds | Morning check on dev |
+|---|---|---|
+| 1 | Domain (envelope, events + zod, both calendars, days engine, payslip estimate, expected movements, state rebuild, tests) · storage (rules, event store, dev-only importer + wipe script) · 2026 imported on dev · **Tesouraria** · **Contratos EC** | Tesouraria: the next 90 days, and for past months the planned vs real month-end balance; the EC contracts, last days and 3-month warning; the proposed payment days |
+| 2 | **Mês** + matching (suggested, confirmed by a click) · the acceptance report per month (§ Acceptance 1–5) · **Diário** | the report: which months pass, what's unexplained |
+| 3 | Forms (Folha de horas, Recibo, Calendário, Importar extrato) · **Equipa** · fixes from Renato's notes | enter one month by hand, end to end |
+| 4 | Acceptance with Renato, then remove the old NoisySource pages | |
+
+Then choose the next company (NoisyPhocus or Casa).
+
+**Before night 1 (Renato):** the 2026 EC contracts with their numbers (number, rate, days, start
+for each) in `prodata/` (local only). Without them the agent uses `EC-1`, `EC-2` marked "a
+confirmar". 2026 trip days: the agent derives the count per month from the per diem lines (amount ÷
+daily value) and marks the dates "a confirmar"; the count is enough for meal days and per diems.
+
+### Night run rules
+
+- **Runs on Renato's Mac**, not in the cloud: the 2026 inputs are in `prodata/` (local only). The
+  Mac stays awake (`caffeinate -dims` in a terminal), the Claude Code session stays open, auto mode
+  on (a permission prompt would stop the run until morning).
+- **One FinHub agent at a time, one branch per night.** Every PR into `staging` redeploys FinHub on
+  dev, so two FinHub PRs overwrite each other's screens. Agents on other apps can run alongside.
+- **Commit as it goes**; push and open or update the PR only once the night's screens build and the
+  tests pass, so dev never shows a broken build.
+- **Stop, and write why in STATUS.md**, if: any Firebase project other than `kidclub-dev` comes up;
+  the same test still fails after 3 tries; a step needs a decision only Renato can make and no
+  placeholder works.
+- **Questions don't block otherwise**: use a placeholder marked "a confirmar" in the UI and list it
+  in STATUS.md.
+- **Morning report** at the top of STATUS.md: what was built, the dev URL, what to click, what's "a
+  confirmar", what failed.
 
 ## Answers (Renato, 2026-10-28)
 

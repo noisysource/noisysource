@@ -17,10 +17,11 @@ pushed, no PR yet.
 file; its real data stays on dev), KidClub reconciliation step 2, emails → expenses, the FinHub
 release. The old FinHub keeps running as it is until v2's NoisySource module passes.
 
-**Next step:** step 1 of `HANDOFF-finhub-v2.md` (domain only: events, holiday calendars, days
-engine, expected movements, tests; the agent also proposes NoisySource's payment days from the
-2026 statements) in a fresh session on a new `agent/` branch off `staging`. Renato's answers to
-the design's questions are in the handoff (§ Answers, 2026-10-28).
+**Next step:** night 1 of `HANDOFF-finhub-v2.md` (§ Steps: domain + storage + 2026 import on dev +
+Tesouraria + Contratos EC), run overnight on Renato's Mac per § Night run rules, in a fresh
+session on a new `agent/` branch off `staging`. Before it: Renato puts the 2026 EC contract numbers
+in `prodata/` (or the agent uses placeholders). Renato's answers to the design's questions are in
+the handoff (§ Answers, 2026-10-28).
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
