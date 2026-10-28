@@ -55,6 +55,9 @@ function whenLabel(ms: number, now: number) {
   return `${hhmm(ms)}${dayOf(ms) === dayOf(now) ? ' hoje' : dayOf(ms) === dayOf(now + 86_400_000) ? ' amanhã' : ''}`;
 }
 const deg = (v: number) => `${String(Math.round(v * 10) / 10).replace('.', ',')}°`;
+/** "19:00–23:00 e 06:00–10:00" */
+const windowsText = (ws: Array<{ from: string; to: string }>) =>
+  ws.map(w => `${w.from}–${w.to}`).join(ws.length === 2 ? ' e ' : ', ');
 const kw = (w: number) => `${(Math.max(0, w) / 1000).toFixed(1).replace('.', ',')} kW`;
 
 const primaryBtn = 'shrink-0 text-sm px-4 py-2 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 font-semibold disabled:opacity-40';
@@ -533,8 +536,9 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
   }
 
   const s = summary;
+  const several = s?.windows && s.windows.length > 1 ? windowsText(s.windows) : null;
   const line = s
-    ? `Quente ${s.warmFrom}–${s.warmTo} · ${deg(s.comfort)} · mínimo de dia ${deg(s.dayMin)} · sol com bateria ≥ ${Math.round(s.socOn)} %`
+    ? `Quente ${several ?? `${s.warmFrom}–${s.warmTo}`} · ${deg(s.comfort)} · mínimo de dia ${deg(s.dayMin)} · sol com bateria ≥ ${Math.round(s.socOn)} %`
     : 'Horário quente, temperatura, mínimo de dia e bateria para aquecer com sol.';
 
   return (
@@ -558,8 +562,16 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
 
       {open && cfg && (
         <div className="flex flex-col gap-3 pt-1">
-          <Times label="Horário quente" hint="Chão quente neste horário; começa a aquecer antes, para estar quente à hora de início."
-            from={cfg.warm.from} to={cfg.warm.to} onChange={(from, to) => patch('warm', { from, to })} />
+          {cfg.windows && cfg.windows.length > 1 ? (
+            <div className="flex flex-col gap-0.5">
+              <span className={label}>Horários quentes</span>
+              <span className="text-xs text-zinc-300 tabular-nums">{windowsText(cfg.windows)}</span>
+              <span className="text-xs text-zinc-500 leading-relaxed">Vários horários, definidos para medir quanto tempo a casa guarda o calor. Ainda não se alteram aqui.</span>
+            </div>
+          ) : (
+            <Times label="Horário quente" hint="Chão quente neste horário; começa a aquecer antes, para estar quente à hora de início."
+              from={cfg.warm.from} to={cfg.warm.to} onChange={(from, to) => patch('warm', { from, to })} />
+          )}
           <Stepper label="Temperatura" hint="Das divisões, nos termóstatos." value={cfg.comfort} step={0.5}
             min={cfg.limits.roomMin} max={cfg.limits.roomMax} unit="°" onChange={v => patch('comfort', v)} />
           <Stepper label="Mínimo de dia" hint="Se a média das divisões descer daqui, aquece mesmo sem sol." value={cfg.dayMin}

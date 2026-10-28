@@ -21,6 +21,12 @@ export interface AutomationConfig {
   pauseUntil: number | null;
   comfort: number;
   warm: { from: string; to: string };
+  /**
+   * Several warm windows (from 2026-10-28: 19–23 and 06–10, to measure how the
+   * house cools between them). Stored only when there is more than one; the
+   * bridge then ignores `warm`. Not editable here yet: shown read-only.
+   */
+  windows?: Array<{ from: string; to: string }>;
   dayMin: number;
   solar: { enabled: boolean; socOn: number; pumpW: number; exportW: number };
   flow: { enabled: boolean; at15: number; slope: number; min: number; max: number };
@@ -75,7 +81,7 @@ export interface AutomationStatus {
   /** The pause in force, ms it ends; null = not paused. Absent on a bridge from before 2026-10-26. */
   pausedUntil?: number | null;
   /** The four settings shown on top. Absent on an older bridge. */
-  settings?: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number };
+  settings?: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number; windows?: Array<{ from: string; to: string }> };
   /** 'warm' = horário quente; 'warmup' = a aquecer para ele; 'day'. */
   mode?: 'warm' | 'warmup' | 'day';
   wantOn?: boolean;
