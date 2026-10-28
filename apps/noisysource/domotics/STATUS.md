@@ -16,6 +16,8 @@ Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00
   - **Rule and app:** #124's Deploy to Dev, all green.
   - **Check:** the first slot (q91) landed in `domotics_climate/2026-10-28` at 23:00:12 with 6 rooms. The bridge picked up the settings ("Horário quente (19:00–23:00 e 06:00–10:00)…", still simulation).
 - **Night of 28–29/10 (Renato):** he leaves the pump alone. This tests whether the controller's 23:54 UTC timer is still there; the technicians may have cleared it. If it fires, the pump stays off and the night is a cooling measurement. Any switch-on during the night means he was cold (recorded as `cold`). The automation stays in simulation until he taps Ligar.
+  - **Result: the 23:54 timer did NOT fire on 28/10.** No switch incident since 23:40. The pump was still on at 23:58:40 (compressor at 0 Hz at the setpoint, water 41.5 °C). It had fired every night since 24/10 (23:54:32 on 27/10), so the technicians most likely cleared the timer table on 28/10. Confirm on a second night. If it's gone, nothing needs to undo it any more: drop it from the guard and automation notes, and from Renato's "clear the timer" to-do.
+  - So the pump runs all night (guard off, automation in simulation): no night cooling data tonight, and no cold start until something switches it off.
 - **Next:** in ~2 days, a fresh session runs the analysis in the handoff (export: `domotics-bridge/deploy/climate-export.mjs`), then the cost plan.
 
 ## ⚠️ The heat pump can't heat right now (2026-10-27)
