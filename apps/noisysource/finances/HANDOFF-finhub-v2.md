@@ -35,12 +35,14 @@
 ## How NoisySource works (Renato, 2026-10-28)
 
 - **One income: EC contracts**, billed per day worked. Each contract has a **number, a daily rate
-  and a number of days**. An extension and a new contract each get a new number; a rate change
-  almost always means a new contract.
-- The days budget gives the **last working day**, so the next contract can be prepared in time.
+  and a number of days**. Every contract, extension or not, gets a new number, so it is always a
+  new contract. Some start right after the previous one, some don't.
+- The days budget gives the **last working day**. FinHub warns **3 months** before it, so the next
+  contract can be prepared in time.
 - **Days worked vary per month**, so income varies.
-- **Three workers. Payslips vary month to month**: travel allowances, and the meal allowance
-  depends on the working days of the month.
+- **Three workers. Payslips vary month to month**: the meal allowance follows the month's possible
+  working days minus vacation, sick and trip days; trips are paid as per diems (a fixed value per
+  trip day).
 - **What matters most: seeing ahead which money leaves, and when.** E.g. on the 25th salaries and
   voucher top-ups; on the 20th taxes. All of it follows from the days in the month and the
   contracts.
@@ -83,11 +85,11 @@ interface FinEvent<T extends string, P> {
 | Type | Main payload fields | Id |
 |---|---|---|
 | **Plans** | | |
-| `ec.contract.signed` | number, client, personId, dailyRateCents, totalDays, startDate, `follows` (previous number), kind `new`/`extension`, holiday calendar id, daysToPayment, vatCode (`isento`) | `ec-<number>` |
+| `ec.contract.signed` | number, client, personId, dailyRateCents, totalDays, startDate, holiday calendar id, daysToPayment, vatCode (`isento`) | `ec-<number>` |
 | `ec.contract.ended` | number, lastDay, reason (early end only; the normal end is computed) | `ec-<number>-end` |
-| `employment.terms.set` | personId, from, contractType, grossMonthlyCents, irsRatePct, ssEmpPct, ssErPct, benefits (per day or per month, IRS/SS flags, card or account), payDay | `emp-<person>-<from>` |
+| `employment.terms.set` | personId, from, contractType, grossMonthlyCents, irsRatePct, ssEmpPct, ssErPct, meal value per day, per diem per trip day, other benefits (per day or per month, IRS/SS flags, card or account), payDay | `emp-<person>-<from>` |
 | `employment.ended` | personId, lastDay | `emp-<person>-end` |
-| `absence.set` | personId, dates, halfDays, kind (férias, doença, outro) | generated |
+| `calendar.entry.set` | personId, dates, halfDays, kind (`ferias`, `doenca`, `viagem`, `outro`) | generated |
 | `holidays.set` | calendar id (`pt`, `client-…`), year, dates | `hol-<calendar>-<year>` |
 | `payment.rule.set` | what (net salaries, meal vouchers, SS, IRS withheld, EC invoice…), day, month offset, if not a business day: before/after | `rule-<what>-<from>` |
 | `cost.plan.set` | key, description, amountCents (VAT-inclusive), vatCode, frequency, day, from, to, account | `cost-<key>-<from>` |
@@ -109,14 +111,25 @@ invoice or a tax obligation. The bank is the record of money; documents are the 
 
 - `workingDays(month, { calendar, absences, from?, to? })` → weekdays − holidays − absences, half
   days count 0.5, with the list of dates.
-- **EC days** per contract: the contract's calendar (the client's holidays; #94's seed already
-  lists them for 2026) minus the worker's absences. Before a timesheet is submitted these are the
-  planned days; afterwards the timesheet replaces them.
-- **Meal days** per worker: the working days of the month minus absences (calendar: open question 2).
+- **Two holiday calendars.** `pt-coimbra`: Portuguese national holidays (Easter-based ones
+  computed) plus Coimbra's municipal holiday (4 July). `client-…`: the client's holidays (#94's
+  seed lists them for 2026). They rarely differ, but they can.
+- **Calendar entries** per worker change the days like this:
+
+  | Kind | EC days | Meal days | Per diem |
+  |---|---|---|---|
+  | `ferias`, `doenca`, `outro` | − | − | no |
+  | `viagem` | counted as worked (check against the 2026 timesheets) | − | days × daily value |
+
+- **EC days** per contract: working days on the client's calendar, minus the entries above. Before
+  a timesheet is submitted these are the planned days; afterwards the timesheet replaces them.
+- **Meal days** per worker: the month's possible working days on `pt-coimbra`, minus vacation,
+  sick and trip days. Driven by the calendar, never by the EC timesheet.
+- **Per diem** per worker: trip days in the month × the fixed daily value in their terms.
 - **EC runway**: days used (submitted timesheets) + days planned ahead → projected last working
-  day and "prepare the next one from" date. Built on `computeEcProjection`
+  day, with the warning date 3 months before it. Built on `computeEcProjection`
   (`packages/shared/lib/ecProjection.ts`), which already reproduces the client's end date (#94).
-- **Payslip estimate**: `computeMonthlyPayroll` changed to take meal days and travel lines as
+- **Payslip estimate**: `computeMonthlyPayroll` changed to take meal days and per diem days as
   inputs instead of a fixed `daysPerMonth` / 22. A recorded payslip replaces the estimate.
 
 ## Expected movements (what Tesouraria shows ahead)
@@ -125,20 +138,25 @@ Each item carries its inputs so the screen can explain the number ("21 dias × t
 
 - **EC invoice** for month M: days(M) × rate; days from the timesheet if submitted, else planned.
   Issue date per rule; cash in at issue + `daysToPayment`.
-- **Net salary** per worker for M on the pay day (25).
+- **Net salary** per worker for M on the pay day (25), per diems included. Check on the 2026
+  payslips whether a trip after the 25th is paid in M or M+1.
 - **Meal voucher top-up** per worker: meal days × daily value, on the voucher rule's day.
 - **SS** (employee + employer) and **IRS withheld** for M: day 20 of M+1.
 - **Fixed costs**: from the cost plans.
 - Days that fall on a weekend or holiday move per the rule (before or after).
+- **No EC income after a contract's last day** until the next contract is signed: the gap shows
+  in Tesouraria as it is.
+- **Other payment days** (meal voucher top-up, IRC, accountant, insurance…): the agent proposes
+  the list from the 2026 statements in step 1; Renato confirms (Renato, 2026-10-28).
 
 ## Screens (NoisySource module, labels in Portuguese)
 
 1. **Tesouraria** (home): the next 90 days by default (up to 12 months), day by day, every expected
    movement with the projected balance from the last real balance (latest imported statement).
    Past days: planned vs real side by side, missing items flagged.
-2. **Contratos EC**: the chain of contracts (each extension follows the previous one): number,
-   client, rate, days total / used / planned / left, projected last day, warning when it's time to
-   prepare the next contract.
+2. **Contratos EC**: every contract by client in date order, gaps between them shown: number,
+   rate, days total / used / planned / left, projected last day, and the warning 3 months before
+   it.
 3. **Mês**: a monthly checklist (folha de horas submetida, fatura emitida, recibos registados, SS
    e IRS pagos, every bank line matched) and planned vs actual totals.
 4. **Equipa**: per worker, terms history and payslips (estimate vs recorded).
@@ -146,8 +164,8 @@ Each item carries its inputs so the screen can explain the number ("21 dias × t
    audit screen.
 
 Forms: Folha de horas (pre-filled with the planned days), Recibo de vencimento (pre-filled from the
-estimate; Renato adds travel), Novo contrato EC, Ausências, Importar extrato (reuses
-`src/lib/parsers/bpiPdf.ts` and its balance check).
+estimate, per diems included), Novo contrato EC, Calendário (férias, doença, viagens), Importar
+extrato (reuses `src/lib/parsers/bpiPdf.ts` and its balance check).
 
 ## Storage and rules
 
@@ -194,7 +212,8 @@ estimate; Renato adds travel), Novo contrato EC, Ausências, Importar extrato (r
 contract versions, January–September payslips, the EC contract with the client's holidays,
 recurring costs) and NoisySource's BPI statements January–September (October once available). The
 seed holds the EC contract as two versions; v2 needs them as numbered contracts (Renato has the
-numbers).
+numbers). 2026 calendar entries: vacation is in the seed's EC days off; trip days can be read back
+from the payslips' per diem lines (amount ÷ daily value), with the dates confirmed by Renato.
 
 **Importer** (dev only, refuses any project other than `kidclub-dev`): seed → plan and payslip
 events; statements → movement events through `bpiPdf.ts`.
@@ -206,8 +225,8 @@ plan predicts the bank.** For each month January–September 2026:
 2. Every planned item in the month has its bank line, or a written reason.
 3. Planned month-end balance (previous real balance + planned items) − real month-end balance =
    the sum of the ad hoc lines. Nothing unexplained.
-4. Each payslip equals the plan's estimate except lines entered by hand (travel), shown as the
-   difference.
+4. Each payslip equals the plan's estimate (meal days and per diems from the calendar); any
+   difference is shown and explained.
 5. EC: the contract chain's projected last days match the client's; each invoice = timesheet days
    × rate.
 
@@ -217,33 +236,35 @@ Then Renato compares Tesouraria with the old FinHub's Previsão for the coming m
 
 Each a branch off `staging` and a PR into `staging`, as usual.
 
-1. **Domain only** (no UI, no Firestore): envelope, NoisySource events + zod, days engine, payslip
-   estimate with meal days and travel, expected movements, state rebuild. Tests with made-up values.
+1. **Domain only** (no UI, no Firestore): envelope, NoisySource events + zod, both holiday
+   calendars, days engine, payslip estimate with meal days and per diems, expected movements, state
+   rebuild. Tests with made-up values. Also: propose NoisySource's payment days from the 2026
+   statements for Renato to confirm.
 2. **Storage**: rules, event store (read, append, reverse), dev-only importer and wipe script,
    Diário. Import 2026 on dev.
 3. **Tesouraria + Contratos EC.**
-4. **Mês + matching + forms** (Folha de horas, Recibo, Ausências, Importar extrato).
+4. **Mês + matching + forms** (Folha de horas, Recibo, Calendário, Importar extrato).
 5. **Acceptance run with Renato**, then remove the old NoisySource pages. Then choose the next
    company (NoisyPhocus or Casa).
 
-## Open questions for Renato
+## Answers (Renato, 2026-10-28)
 
-1. **Meal allowance**: paid for the working days of the month being paid, or the previous month's
-   actual days? Do vacation and sick days reduce it?
-2. **Holidays for the workers' meal days**: Portuguese national holidays plus the municipal one?
-   (EC days use the client's list, already in the seed.)
-3. **Travel allowances**: known before the month (planned trips) or only when the payslip is done?
-   If before, Tesouraria can show them ahead.
-4. **EC contracts**: does an extension keep the rate and continue straight after the previous
-   contract? How long before the last day should FinHub warn about the next one?
-5. **Payment days** besides salaries (25) and SS + IRS withheld (20 of the next month): when are
-   meal vouchers topped up, and which other NoisySource payments have fixed days (IRC, accountant,
-   insurance)? The agent can propose a list from the 2026 statements first.
+1. **Meal allowance** follows the month's possible working days, minus vacation, sick and trip days
+   (trips get per diems instead). It can differ from the EC days worked; rarely, but it happens.
+2. **Holidays for meal days**: Portuguese national holidays plus Coimbra's municipal holiday.
+3. **Travel**: a fixed per diem per day. A trip on the calendar × its days gives the amount, so
+   Tesouraria shows it ahead.
+4. **EC contracts**: an extension sometimes follows straight on, sometimes not. It always has a new
+   number, so it is always a new contract. Warn 3 months before the last working day.
+5. **Payment days** besides 25 and 20: the agent proposes them from the 2026 statements.
 
 ## Traps
 
 - **Real values only in `prodata/`.** Fixtures and examples use made-up values.
 - **Writes go to `kidclub-dev` only** until a release is decided. Prod isn't touched.
+- **Carnaval isn't a legal holiday**, so it's not in `pt-coimbra`. If a 2026 payslip shows one meal
+  day fewer in February or March, ask Renato whether NoisySource gives it off and add it as a
+  company day off.
 - **Don't put v2 under `finances_entities`**: its wildcard rule allows writes.
 - **Casa still depends on `contractSync`**: the old app writes Casa's salary income from NoisySource
   contracts. Keep it until Casa moves to v2; then Casa reads NoisySource's payslip events.
