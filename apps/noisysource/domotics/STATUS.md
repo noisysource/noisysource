@@ -36,6 +36,8 @@
   - The pump's state survives the restart (`guard-state.json`). A rest in progress carries on, and the old file loads with defaults (tested).
 
 ## Currently working on
+**⚠️ Guard switched OFF 2026-10-28 11:19 for the technicians' visit** (Renato: "they are changing some parameters and want to see how it behaves; keep the monitoring"). `domotics_config/guard.enabled = false`. The automation is still in dry-run, so the bridge sends the pump nothing; incidents and readings are still recorded every 30 s. The handover sent one "on" (11:20:14). **Switch it back on after the visit** (app → Clima → Proteção E13, or set `enabled: true`), especially before a night: without it, nothing rests the pump after an E13 or undoes the 23:54 timer off. Ask Renato what the technicians changed and note it here.
+
 **E13 early warning in the guard (PR #123, stacked on #122): deployed to the Pi 2026-10-27 20:54** (backup `lib.bak-20261027-preempt` and `guard-state.json.bak-20261027-preempt`; only `guard.js`, `index.js` and the new `preempt.js` differ from #120's build, checked with rsync --checksum). Next: watch the first stops (step 6 in the ⚠️ section) and see whether stopping 1–2 min early avoids the trip.
 - **What's common to every trip (analysis 27/10, 26 runs from the 22–24/10 logger + 8 bridge-recorded):**
   - Each trip came 9–14 min into a run, with the water ≤ 35 °C.
