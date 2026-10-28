@@ -11,6 +11,10 @@ Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00
   - several warm windows, `warmupMaxMin`, and a person's on/off respected until the plan moves on (`automation.ts`);
   - the windows shown in the app's Definições, read-only.
 - **The experiment settings are in `domotics_config/automation` in dry-run:** windows 19–23 and 06–10, 23 °C, a 19 °C floor, warm-up ≤ 3 h, no solar, the water left alone, no rest at the setpoint. **It goes live when Renato taps Ligar** (Clima → Automação). The guard stays off (technicians).
+- **Deployed 28/10:**
+  - **Pi:** 22:49 UTC. Only `automation.js` and `index.js` differ from #123's build, plus the new `climate.js` and `climate-store.js`; md5 checked; deps unchanged. Backup `~/domotics-bridge/lib.bak-20261028-climate`. Roll back: `cp -a lib.bak-20261028-climate/. lib/ && sudo systemctl restart domotics-bridge`.
+  - **Rule and app:** #124's Deploy to Dev, all green.
+  - **Check:** the first slot (q91) landed in `domotics_climate/2026-10-28` at 23:00:12 with 6 rooms. The bridge picked up the settings ("Horário quente (19:00–23:00 e 06:00–10:00)…", still simulation).
 - **Next:** in ~2 days, a fresh session runs the analysis in the handoff (export: `domotics-bridge/deploy/climate-export.mjs`), then the cost plan.
 
 ## ⚠️ The heat pump can't heat right now (2026-10-27)
