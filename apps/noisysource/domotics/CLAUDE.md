@@ -39,13 +39,14 @@ A Raspberry Pi on the house LAN (`192.168.1.125`) runs a bridge service that tal
 ## Firestore Collections
 Prefixed `domotics_`:
 - `domotics_config/netatmo`, `domotics_config/tuya` — OAuth credentials for each cloud API (sensitive — see Notes)
-- `domotics_config/automation` — heating automation settings, incl. the app's "Pausar" (`pauseUntil`, ms) (owner read/write, bridge read). Plan since 2026-10-26: warm floor 19:00–09:00, by day only on spare sun; see `HANDOFF-heating-automation.md`
+- `domotics_config/automation` — heating automation settings, incl. the app's "Pausar" (`pauseUntil`, ms) (owner read/write, bridge read). Plan since 2026-10-26: warm floor 19:00–09:00, by day only on spare sun; see `HANDOFF-heating-automation.md`. Several windows possible (`windows`; 29–31/10 experiment: 19–23 and 06–10, `HANDOFF-comfort-experiment.md`)
 - `domotics_config/guard` — E13 guard on/off (owner read/write, bridge read)
 - `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. automation and guard status)
 - `domotics_commands` — command queue the bridge drains when off-LAN
 - `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page (owner read, bridge create/update, no deletes)
 - `domotics_energy/{yyyy-mm-dd}` — kWh per 15-minute slot (`q00`…), written by the bridge, read by the Energia page (owner read, bridge create/update under date ids, no deletes)
 - `domotics_config/tariff` — electricity prices for the Energia page (owner read/write; the bridge never reads it)
+- `domotics_climate/{yyyy-mm-dd}` — room/pump temperatures per 15-minute slot (`q00`…, same slots as `domotics_energy`) and people's interventions (`x_…`), written by the bridge (`climate.ts`), for working out how the house cools and warms up (owner read, bridge create/update under date ids, no deletes). See `HANDOFF-comfort-experiment.md`
 
 ---
 

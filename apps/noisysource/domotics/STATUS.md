@@ -2,7 +2,16 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-27 (~20:50)
+**Last updated:** 2026-10-28 (~23:00)
+
+## 🧪 Comfort experiment, 29–31/10: analysis due ~31/10 (`HANDOFF-comfort-experiment.md`)
+Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00 to 10:00, with the pump off in between, to measure how long the floor holds its heat and how long it takes to warm up, night and day. His own on/off and thermostat changes are recorded as comfort feedback: on means cold, off means warm enough.
+- **Built:** branch `agent/domotics-comfort-log` (stacked on #123, PR → `staging`), worktree `.claude/worktrees/domotics-comfort-log`. It adds:
+  - the climate history `domotics_climate/{date}`: rooms, pump and plan per 15-min slot, plus interventions (`climate.ts`, a new rule);
+  - several warm windows, `warmupMaxMin`, and a person's on/off respected until the plan moves on (`automation.ts`);
+  - the windows shown in the app's Definições, read-only.
+- **The experiment settings are in `domotics_config/automation` in dry-run:** windows 19–23 and 06–10, 23 °C, a 19 °C floor, warm-up ≤ 3 h, no solar, the water left alone, no rest at the setpoint. **It goes live when Renato taps Ligar** (Clima → Automação). The guard stays off (technicians).
+- **Next:** in ~2 days, a fresh session runs the analysis in the handoff (export: `domotics-bridge/deploy/climate-export.mjs`), then the cost plan.
 
 ## ⚠️ The heat pump can't heat right now (2026-10-27)
 **Since 26/10 19:10, every start ends in E13 9–11 min later** (8 in a row, as of 07:55 on 27/10), with the water at 31–35 °C, far below the 44 °C setpoint, and all 6 zones open. That doesn't fit the earlier "idle at the setpoint / zones closing" cause. Before each trip, the discharge temperature jumps 41–44 → 71–78 °C, the coil (C00) falls to 0–4 °C and the water out falls. Rest length doesn't matter: it trips the same after 3 min or 4.8 h stopped. **Locked out twice:** 00:35 (Renato reset the breaker ~05:23, 4.8 h without heat) and 07:55 (reset ~17:14, 9.3 h). **After that reset it restarted at 17:15 and had not tripped by 19:35** (water at the 44 °C setpoint, 57 Hz, 17.5 °C outside). Still unknown: who reset it at 17:14, the technician or Renato, and whether anything was repaired. The bridge sent the pump nothing but on/off since 26/10 12:00 (checked in the journal), so it isn't a settings change. The last trip before this series was on 22/10 23:25; it ran normally 23–26/10. **This is for the technician, not software.** Renato was asked: who switched it on from outside at 00:01 and 00:26? Those two starts caused the 00:35 lockout. If it wasn't someone at home, it was the controller's own timer table.
