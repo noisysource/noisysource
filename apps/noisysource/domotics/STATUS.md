@@ -15,6 +15,7 @@ Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00
   - **Pi:** 22:49 UTC. Only `automation.js` and `index.js` differ from #123's build, plus the new `climate.js` and `climate-store.js`; md5 checked; deps unchanged. Backup `~/domotics-bridge/lib.bak-20261028-climate`. Roll back: `cp -a lib.bak-20261028-climate/. lib/ && sudo systemctl restart domotics-bridge`.
   - **Rule and app:** #124's Deploy to Dev, all green.
   - **Check:** the first slot (q91) landed in `domotics_climate/2026-10-28` at 23:00:12 with 6 rooms. The bridge picked up the settings ("Horário quente (19:00–23:00 e 06:00–10:00)…", still simulation).
+- **Night of 28–29/10 (Renato):** he leaves the pump alone. This tests whether the controller's 23:54 UTC timer is still there; the technicians may have cleared it. If it fires, the pump stays off and the night is a cooling measurement. Any switch-on during the night means he was cold (recorded as `cold`). The automation stays in simulation until he taps Ligar.
 - **Next:** in ~2 days, a fresh session runs the analysis in the handoff (export: `domotics-bridge/deploy/climate-export.mjs`), then the cost plan.
 
 ## ⚠️ The heat pump can't heat right now (2026-10-27)

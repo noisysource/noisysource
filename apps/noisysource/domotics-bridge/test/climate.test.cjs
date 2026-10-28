@@ -78,16 +78,14 @@ assert.equal(isControllerTimer(Date.UTC(2026, 9, 28, 0, 9, 0)), false);
   assert.equal(ev[0].by, 'timer');
   assert.equal(ev[0].meaning, 'none');
 
-  // Switched on by hand 4 min after the timer's off: keep it running, not "cold".
+  // Switched on by hand after the timer's off: cold, with what came before it.
   ev = rec.observe({ t: L(23, 58, 40), zones: zones(), pump: pump(true), switchedBy: 'outside' });
-  assert.deepEqual({ meaning: ev[0].meaning, offBy: ev[0].offBy, offMin: ev[0].offMin }, { meaning: 'undo-off', offBy: 'timer', offMin: 4 });
-  // Likewise after the automation's off at the end of a window…
+  assert.deepEqual({ meaning: ev[0].meaning, offBy: ev[0].offBy, offMin: ev[0].offMin }, { meaning: 'cold', offBy: 'timer', offMin: 4 });
   rec.observe({ t: L(23, 58, 50), zones: zones(), pump: pump(false), switchedBy: 'automation' });
   ev = rec.observe({ t: L(23, 58, 55), zones: zones(), pump: pump(true), switchedBy: 'app' });
-  assert.equal(ev[0].meaning, 'undo-off');
-  // …but not after a person's own off, nor more than an hour later.
+  assert.deepEqual({ meaning: ev[0].meaning, offBy: ev[0].offBy, offMin: ev[0].offMin }, { meaning: 'cold', offBy: 'automation', offMin: 0 });
   rec.observe({ t: L(23, 59, 0), zones: zones(), pump: pump(false), switchedBy: 'app' });
-  assert.equal(rec.observe({ t: L(23, 59, 5), zones: zones(), pump: pump(true), switchedBy: 'outside' })[0].meaning, 'cold');
+  assert.equal(rec.observe({ t: L(23, 59, 5), zones: zones(), pump: pump(true), switchedBy: 'outside' })[0].offBy, 'app');
 
   // Targets: the automation's own change is not an intervention…
   rec.noteTarget('a', 24, 'automation', L(23, 58));

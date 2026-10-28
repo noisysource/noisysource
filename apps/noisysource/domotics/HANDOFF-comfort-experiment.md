@@ -45,7 +45,7 @@ To stop it: **Pausar** in the app (2 h / until 19:00 / until 09:00). To end the 
   - `kind`: `pump` or `target`.
   - `by`: `app`, `outside` (panel, SmartLife, at the thermostat, the technicians) or `timer` (the 23:54 UTC controller timer).
   - `meaning`: `cold` (pump on), `warm-enough` (pump off), `warmer` / `cooler` (target), `none` (the timer).
-  - `undo-off` is a pump on within an hour of an off by the timer or the automation. It means "keep it running", not "cold". Renato, 28/10: "at 23:54 I'll turn it on not because it's cold but because I want the house warm during the night." A pump on also carries `offBy` and `offMin` (the last off before it).
+  - A pump on by a person means cold. Renato, 28/10: "if I switch it on during the night then it's because it's cold." It also carries `offBy` and `offMin` (the last off before it: `timer`, `automation`, `guard`, `app`, `outside`).
   - `from` / `to`: for a target change.
   - `rooms` (thermostatId → °C at that moment), `mean`, `ext`, `plan`, `pumpOn`.
   - The automation's and the guard's own switches and target changes aren't interventions. The switches are in `domotics_incidents`.
