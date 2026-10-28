@@ -75,3 +75,46 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge/src/automation.ts
 - Recovery from an 8 h off: 2.6 h and 10.7 kWh (4.0 from the grid, battery empty at 13 %, weak sun). Guard cycles: ~20–40 min running, 60 min rest.
 - PV 32.7 kWh to 15:30; battery 13 → 54 %. Other appliances add 2–4 kW spikes at times.
 - Inverter signs: grid < 0 import, > 0 export; battery > 0 charging; consumption = whole house, pump included.
+
+## Cost plan (proposal 2026-10-28, not built, waiting for Renato's decisions)
+
+Asked by Renato: "given the data we have, can we optimize costs and propose a plan?" Based on 26–28/10, the only days with 15-min energy slots, all disturbed by E13. The figures size the levers; they are not a forecast.
+
+**What the data shows**
+- The house uses 29–39 kWh a day, and the pump is about two thirds of it or more. PV gives 18–36 kWh. Export is 0.05–0.8 kWh and is paid €0 (`domotics_config/tariff.exportPrice`).
+- Grid import is 7–21.5 kWh a day, 55 % of it at fora-vazio prices. Incl. 23 % VAT (above the first 200 kWh a month), vazio is ≈ €0.118 and fora ≈ €0.204. Fora imports cluster at 08–10 and 21–22.
+- The battery is ≈ 25 kWh: about 28 kWh charged per 100 % of SOC, and 27 kWh discharged. It never went above 56 %, and on 27 and 28/10 it was at its 15 % floor by the evening.
+- On 28/10 the guard was off and the pump ran all day at 44 °C water, with the thermostats at 26 by hand and the rooms at 25–26 °C. Bought energy came to ≈ €3.60 by 22:10.
+- The pump has no power reading: `power_consumption` and `compressor_strength` are the coil and discharge temperatures (`dpmap.ts`). Pump power is inferred from the inverter (≈ 3.3 kW while running).
+- **No room-temperature history is kept** (only the live state). So how fast the slab coasts with the pump off is unknown, and that is what decides how much heating can move to vazio and sun.
+
+**Findings against the current automation (#120)**
+- The solar rule needs a battery ≥ 90 %. It never got above 56 % this season, so the rule would never fire in winter.
+- The 19:00–09:00 window heats at fora prices 19–22 and 08–09, when the battery is usually empty, so that heat is bought from the grid at ≈ €0.20.
+
+**Levers, by value**
+1. **Rooms at 24 °C** (Renato's own target; the thermostats are at 26 by hand). About 10–15 % less heat. Any time after the visit.
+2. **Water following the outdoor temperature** (curve already in `automation.ts`: 44 → ≈ 32 °C at 12 °C outside). About 15–25 % less electricity for the same heat. **Only after the E13 repair:** at ≤ 35 °C water every start sits in the trip pattern.
+3. **Timing, with the slab as the store:**
+   - Main heating 22–08 at vazio.
+   - By day, heat on the sun once the battery holds enough for the evening's non-heating load (≈ 40 % SOC, to be checked) instead of ≥ 90 %. A solar kWh into the slab in warm afternoon air beats one stored and spent at night.
+   - Pump off 08–11 and 16–22 unless the rooms fall below a floor (≈ 22 °C, Renato to decide).
+   - Moving 28/10's 12.3 kWh of fora import to vazio alone is ≈ €1/day.
+4. **Minor:** if the RENAC app allows it, don't let the battery discharge in vazio, so its solar energy covers 08–10 instead (≈ €0.08/kWh, a few kWh on sunny days).
+5. **Not worth it:**
+   - Charging the battery from the grid at night: ≈ €0.07/kWh before wear, and wear takes most of it.
+   - A lower contracted power: the pump's 3.3 kW plus spikes of 2–4 kW need 6.9 kVA.
+   - Selling surplus: it's paid €0 and is tiny.
+
+Rough total for a day like 28/10: ≈ €3.60 → ≈ €1.50–2.00. Measure it rather than trust it.
+
+**Order**
+1. **Now, repair pending:** record room temperatures, outdoor, water and compressor Hz in the 15-min energy slots. It's read-only, LAN only, with no cloud or metered API call, and gives the coasting rate and kWh per degree outside.
+2. **After the repair is confirmed** (≈ a week of cold starts without E13): rooms to 24 °C, the water curve on, and the new timing rules, then the automation live.
+3. **Two weeks later:** review against the data and tune the battery threshold and the room floor.
+
+**Open questions for Renato**
+- Is 19:00–09:00 comfort fixed, or may the rooms dip to ≈ 22–23 °C between 16 and 22 if the slab coasts?
+- Rework the solar rule to "battery enough for tonight" (≈ 40 %) instead of 90 %?
+- Build step 1 now, in a fresh session?
+- Does the separate hot-water heat pump have a timer? It could run on sun (12–16) or in vazio.
