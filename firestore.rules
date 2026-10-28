@@ -414,6 +414,14 @@ service cloud.firestore {
       allow create, update: if isBridge() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
     }
 
+    // Room and pump temperatures per 15-minute slot, and people's interventions
+    // (domotics-bridge/src/climate.ts): how the house cools and warms up. Same
+    // shape and same access as the energy history.
+    match /domotics_climate/{docId} {
+      allow read: if isDomoticsOwner();
+      allow create, update: if isBridge() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
     match /domotics_commands/{docId} {
       allow read, create: if isDomoticsOwner();
       // The bridge lists the queue, deletes each command once executed, and
