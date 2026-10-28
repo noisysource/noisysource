@@ -15,12 +15,17 @@
  *   (battery ≥ 90 % and the panels covering the house plus the pump, or power
  *   going out to the grid) or the rooms' mean falls below the day minimum
  *   (21). The battery comes first: a house a little colder by day is fine.
- * - Live, the automation OWNS on/off, whoever switched the pump: an off in the
- *   warm window (the controller's nightly 23:54 UTC timer, the panel,
- *   SmartLife, a person) is undone after the minimum off time, and an on
- *   outside the plan by day is undone after the minimum on time. A person
- *   stops it with the app's "Pausar" (`pauseUntil`): until then nothing
- *   switches the pump on by itself, and a live automation switches it off.
+ * - Live, the automation OWNS on/off: an off in the warm window (the
+ *   controller's nightly 23:54 UTC timer) is undone after the minimum off time,
+ *   and an on outside the plan by day is undone after the minimum on time. A
+ *   PERSON's on or off (the app, the panel, SmartLife) is respected until the
+ *   plan next moves between heating and not (Renato, 2026-10-28: switching it
+ *   on means the house felt cold, off that it is warm enough; climate.ts
+ *   records both). A person stops it for longer with the app's "Pausar"
+ *   (`pauseUntil`): until then nothing switches the pump on by itself, and a
+ *   live automation switches it off.
+ * - Several warm windows (`windows`; from 2026-10-28 19–23 and 06–10 at 23 °C,
+ *   to measure how the house cools between them and warms up for them).
  * - The E13 guard (guard.ts) comes first: its rests and a lockout are never
  *   overridden; while it rests, the automation asks it (`holdRest`) to carry
  *   on whenever the plan has the pump off.
@@ -66,8 +71,16 @@ export interface AutomationConfig {
   pauseUntil: number | null;
   /** The room temperature, written to the thermostats, °C. */
   comfort: number;
-  /** The warm window, Lisbon time: warm floor from `from` to `to` (may cross midnight). */
+  /** The warm window, Lisbon time: warm floor from `from` to `to` (may cross midnight). The first of `windows`. */
   warm: { from: string; to: string };
+  /**
+   * Every warm window, Lisbon time (1–4, may cross midnight). Stored only when
+   * there is more than one (from 2026-10-28: 19–23 and 06–10, Renato); otherwise
+   * it is `[warm]`. Outside them the day rules hold, the night included.
+   */
+  windows: Array<{ from: string; to: string }>;
+  /** The warm-up never starts earlier than this before a window, min. */
+  warmupMaxMin: number;
   /** By day, the rooms' mean below this → heat whatever the sun, °C. */
   dayMin: number;
   /** By day, heat on spare sun only. */
@@ -102,6 +115,8 @@ export const DEFAULT_CONFIG: AutomationConfig = {
   pauseUntil: null,
   comfort: 24,
   warm: { from: '19:00', to: '09:00' },
+  windows: [{ from: '19:00', to: '09:00' }],
+  warmupMaxMin: 6 * 60, // MAX_WARMUP_LEAD_MIN
   dayMin: 21,
   solar: { enabled: true, socOn: 90, pumpW: 3300, exportW: 500 },
   flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 45 },
@@ -144,16 +159,24 @@ export function parseConfig(raw: unknown): AutomationConfig {
   let to = hhmm(wm.to, d.warm.to);
   // An empty window would mean never warm: not something to take from a typo.
   if (from === to) { from = d.warm.from; to = d.warm.to; }
+  // Several windows: only when every one of them reads right; otherwise the single one.
+  const listed = Array.isArray(r.windows) ? r.windows.slice(0, 4).map(obj) : [];
+  const windows = listed.length > 0 && listed.every(w => hhmm(w.from, '') && hhmm(w.to, '') && w.from !== w.to)
+    ? listed.map(w => ({ from: w.from as string, to: w.to as string }))
+    : [{ from, to }];
   return {
     enabled: bool(r.enabled, d.enabled),
     dryRun: bool(r.dryRun, d.dryRun),
     pauseUntil: instant(r.pauseUntil),
     comfort,
-    warm: { from, to },
+    warm: windows[0],
+    windows,
+    warmupMaxMin: num(r.warmupMaxMin, d.warmupMaxMin, 30, 12 * 60),
     dayMin: num(r.dayMin, d.dayMin, 16, comfort),
     solar: {
       enabled: bool(so.enabled, d.solar.enabled),
-      socOn: num(so.socOn, d.solar.socOn, 50, 100),
+      // From 20: "enough for tonight" (≈ 40 %) is the plan once E13 is fixed (HANDOFF, cost plan).
+      socOn: num(so.socOn, d.solar.socOn, 20, 100),
       pumpW: num(so.pumpW, d.solar.pumpW, 500, 10_000),
       exportW: num(so.exportW, d.solar.exportW, 100, 10_000),
     },
@@ -222,8 +245,32 @@ function within(m: number, from: string, to: string) {
   return a <= b ? m >= a && m < b : m >= a || m < b;
 }
 export function inWarmWindow(cfg: AutomationConfig, t: number) {
-  return within(lisbonMinute(t), cfg.warm.from, cfg.warm.to);
+  const m = lisbonMinute(t);
+  return cfg.windows.some(w => within(m, w.from, w.to));
 }
+
+/**
+ * The next window start after `t` and when that window ends; and, inside a
+ * window, when the one `t` is in ends (the latest, if two overlap).
+ */
+export function windowTimes(cfg: AutomationConfig, t: number) {
+  const m = lisbonMinute(t);
+  const starts = cfg.windows.map(w => ({ at: nextLisbon(t, w.from), w })).sort((a, b) => a.at - b.at);
+  const next = starts[0];
+  const inside = cfg.windows.filter(w => within(m, w.from, w.to))
+    .map(w => ({ at: nextLisbon(t, w.to), w })).sort((a, b) => b.at - a.at);
+  return {
+    nextStart: next.at,
+    nextFrom: next.w.from,
+    end: inside.length ? inside[0].at : nextLisbon(next.at, next.w.to),
+    /** The window `t` is in, or the next one. */
+    window: inside.length ? inside[0].w : next.w,
+  };
+}
+
+/** "19:00–23:00 e 06:00–10:00" */
+export const windowsText = (cfg: AutomationConfig) =>
+  cfg.windows.map(w => `${w.from}–${w.to}`).join(cfg.windows.length === 2 ? ' e ' : ', ');
 
 /** Room targets go in half degrees: the thermostats step in 0.5. */
 const half = (v: number) => Math.round(v * 2) / 2;
@@ -373,7 +420,7 @@ export interface AutomationStatus {
   /** The person's pause in force, ms it ends; null = not paused. */
   pausedUntil: number | null;
   /** The four settings the app shows on top. */
-  settings: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number };
+  settings: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number; windows: Array<{ from: string; to: string }> };
   mode?: PlanMode;
   /** The plan wants the pump on now. */
   wantOn?: boolean;
@@ -450,9 +497,9 @@ const SHORT = 0.2;
 /** Back this far above the day minimum before heating for it stops. */
 const DAY_MIN_HYST = 0.5;
 /**
- * The warm-up never starts earlier than this before the warm window: a bad
- * model or a broken sensor must not run the pump on grid power all day. The
- * day minimum covers a really cold house.
+ * The default for `warmupMaxMin`: the warm-up never starts earlier than this
+ * before a warm window, so a bad model or a broken sensor can't run the pump on
+ * grid power all day. The day minimum covers a really cold house.
  */
 export const MAX_WARMUP_LEAD_MIN = 6 * 60;
 /**
@@ -494,6 +541,8 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
   let dayMinOn = false;
   /** What the plan wanted of the pump at the previous tick. */
   let lastWantOn: boolean | null = null;
+  /** A person's on/off, and the stretch of the plan it holds for (not kept across restarts). */
+  let manualPump: { on: boolean; at: number; period: string } | null = null;
   /** Counts the plan's moves between day and warm: zones and water changed by hand are kept until the next one. */
   let segment = 0;
   let lastSegment: 'warm' | 'day' | null = null;
@@ -538,6 +587,12 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       energy?: EnergyReading;
       guard?: GuardView;
       warmBy?: WarmByRequest | null;
+      /**
+       * The pump switched on or off this poll by a person (the app, the panel,
+       * SmartLife; not the controller's own nightly timer). Respected until the
+       * plan next moves between heating and not.
+       */
+      manualSwitch?: { on: boolean; at: number } | null;
     },
   ): Promise<AutomationStatus> {
     const t = input.now.getTime();
@@ -592,7 +647,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       if (warmBy.phase === 'heating') warm.started = true;
     }
 
-    const settings = { warmFrom: cfg.warm.from, warmTo: cfg.warm.to, comfort: cfg.comfort, dayMin: cfg.dayMin, socOn: cfg.solar.socOn };
+    const settings = { warmFrom: cfg.warm.from, warmTo: cfg.warm.to, comfort: cfg.comfort, dayMin: cfg.dayMin, socOn: cfg.solar.socOn, windows: cfg.windows };
     const save = () => { memo = { model, flow: ownFlow, warmup, ons }; };
     const base = { enabled: cfg.enabled, dryRun: cfg.dryRun, pausedUntil: paused, settings, actions, evaluatedAt: t, model, warmBy };
     if (!cfg.enabled) {
@@ -610,19 +665,18 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
 
     // --- The plan: warm window, the warm-up before it, or day ---------------
     const inWindow = inWarmWindow(cfg, t);
-    const nextStart = nextLisbon(t, cfg.warm.from);
-    const end = nextLisbon(t, cfg.warm.to);
+    const { nextStart, nextFrom, end, window: win } = windowTimes(cfg, t);
     // How far below the comfort temperature the rooms are (rooms above it count as 0).
     const need = known.length ? known.reduce((a, z) => a + Math.max(0, comfort - z.current), 0) / known.length : 1;
     let plan: WarmPlan;
     const needR = Math.round(need * 10) / 10;
     if (inWindow) {
       warmup = null;
-      plan = { from: cfg.warm.from, to: cfg.warm.to, inWindow, nextStart, end, warmupAt: null, warmupStarted: false, leadMin: 0, capped: false, need: needR, expectedAt: null };
+      plan = { from: win.from, to: win.to, inWindow, nextStart, end, warmupAt: null, warmupStarted: false, leadMin: 0, capped: false, need: needR, expectedAt: null };
     } else {
       if (warmup?.at !== nextStart) warmup = { at: nextStart, started: false };
       const full = leadMinutes(need, learner.floorWarmIn(t), model);
-      const lead = Math.min(MAX_WARMUP_LEAD_MIN, full);
+      const lead = Math.min(cfg.warmupMaxMin, full);
       let startAt = nextStart - lead * MIN;
       if (lead > 0 && t >= startAt && !warmup.started) warmup = { ...warmup, started: true, startedAt: t };
       // Once started, the start is when it started (the plan itself moves later as the rooms warm).
@@ -632,7 +686,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
         ? Math.max(t, startAt) + Math.max(0, full - WARM_MARGIN_MIN) * MIN
         : startAt + Math.max(0, full - WARM_MARGIN_MIN) * MIN;
       plan = {
-        from: cfg.warm.from, to: cfg.warm.to, inWindow, nextStart, end,
+        from: win.from, to: win.to, inWindow, nextStart, end,
         warmupAt: lead > 0 || warmup.started ? startAt : null, warmupStarted: warmup.started, leadMin: lead, capped: full > lead,
         need: needR, expectedAt: lead > 0 && expected > nextStart ? expected : null,
       };
@@ -644,6 +698,9 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
     const seg = heating ? 'warm' : 'day';
     if (seg !== lastSegment) { segment++; lastSegment = seg; }
     const periodKey = `seg${segment}`;
+    const ms = input.manualSwitch;
+    if (ms && ms.at !== manualPump?.at) manualPump = { on: ms.on, at: ms.at, period: periodKey };
+    if (manualPump && manualPump.period !== periodKey) manualPump = null;
 
     const warmTarget = warmByActive ? warmBy!.target : undefined;
     const target = warmTarget !== undefined && warmTarget > comfort ? warmTarget : comfort;
@@ -732,10 +789,14 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
     if (paused) {
       wantOn = false;
       why = `em pausa até às ${clock(paused)}`;
+    } else if (manualPump) {
+      // A person said so (cold, or warm enough): not undone until the plan moves on.
+      wantOn = manualPump.on;
+      why = `${manualPump.on ? 'ligada' : 'desligada'} à mão às ${clock(manualPump.at)} — respeitado até ${heating ? 'acabar o horário quente' : 'começar o próximo aquecimento'}`;
     } else if (heating) {
       wantOn = zonesWant || waterDrive;
       why = warmByActive ? `pedido para as ${clock(warmBy!.at)}`
-        : mode === 'warmup' ? `a aquecer para as ${cfg.warm.from}`
+        : mode === 'warmup' ? `a aquecer para as ${nextFrom}`
         : 'horário quente';
       if (!wantOn) why = `${why}, mas nenhuma zona pede calor`;
     } else if (dayMinOn) {
@@ -811,7 +872,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
           reasons.push(`Água a ${fmt(sp)}: alterada à mão (ou antes de a automação arrancar) — respeitada até mudar de dia para noite (ou o contrário).`);
         } else {
           reasons.push(waterDrive
-            ? `Água no máximo (${fmt(want)}): ${recovery ? 'recuperação' : warmByDrive ? `a aquecer para as ${clock(warmBy!.at)}` : `a aquecer para as ${cfg.warm.from}`}.`
+            ? `Água no máximo (${fmt(want)}): ${recovery ? 'recuperação' : warmByDrive ? `a aquecer para as ${clock(warmBy!.at)}` : `a aquecer para as ${nextFrom}`}.`
             : `Água a ${fmt(want)}: exterior ${fmt(p.outdoor)} (sensor da bomba)${correction ? `, +${correction}°C porque as divisões estão abaixo do alvo` : ''}.`);
           if (sp !== undefined && Math.abs(want - sp) < 1) {
             // At target already.
@@ -964,14 +1025,15 @@ export function planText(cfg: AutomationConfig, w: WarmPlan, mode: PlanMode, mod
   const how = `faltam ${deg(w.need)}: chão ~${model.floorMin} min + divisões a ${model.roomRatePerH.toFixed(2).replace('.', ',')}°/h + ${WARM_MARGIN_MIN} min de margem`;
   const late = w.expectedAt ? ` Previsto quente às ${lisbonClock(w.expectedAt)}.` : '';
   let text: string;
+  const several = cfg.windows.length > 1 ? ` (${windowsText(cfg)})` : '';
   if (mode === 'warm') {
-    text = `Horário quente até às ${lisbonClock(w.end)}: mantém ${deg(cfg.comfort)}. Depois, ${dayRule}.`;
+    text = `Horário quente${several} até às ${lisbonClock(w.end)}: mantém ${deg(cfg.comfort)}. Depois, ${dayRule}.`;
   } else if (mode === 'warmup') {
-    text = `A aquecer${w.warmupAt ? ` desde as ${lisbonClock(w.warmupAt)}` : ''} para estar quente às ${lisbonClock(w.nextStart)} (horário quente até às ${lisbonClock(w.end)}).${late}`;
+    text = `A aquecer${w.warmupAt ? ` desde as ${lisbonClock(w.warmupAt)}` : ''} para estar quente às ${lisbonClock(w.nextStart)} (horário quente${several} até às ${lisbonClock(w.end)}).${late}`;
   } else if (w.warmupAt) {
-    text = `Aquece a partir das ${lisbonClock(w.warmupAt)} para estar quente às ${lisbonClock(w.nextStart)} (${how}${w.capped ? `; no máximo ${MAX_WARMUP_LEAD_MIN / 60} h antes` : ''}); ${dayRule}.${late}`;
+    text = `Aquece a partir das ${lisbonClock(w.warmupAt)} para estar quente às ${lisbonClock(w.nextStart)}${several ? `, horário quente${several}` : ''} (${how}${w.capped ? `; no máximo ${Math.round(cfg.warmupMaxMin / 6) / 10} h antes`.replace('.', ',') : ''}); ${dayRule}.${late}`;
   } else {
-    text = `A casa já está quente${mean !== undefined ? ` (${deg(Math.round(mean * 10) / 10)} de média)` : ''}: o horário quente começa às ${lisbonClock(w.nextStart)}; ${dayRule}.`;
+    text = `A casa já está quente${mean !== undefined ? ` (${deg(Math.round(mean * 10) / 10)} de média)` : ''}: o horário quente${several} começa às ${lisbonClock(w.nextStart)}; ${dayRule}.`;
   }
   if (paused) text = `Em pausa até às ${lisbonClock(paused)}: ninguém liga a bomba sozinho até lá. Depois: ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
   return text;

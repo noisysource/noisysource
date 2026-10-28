@@ -309,7 +309,7 @@ const hm = t => lisbonClock(t);
   // --- The status carries what the app shows on top ---
   {
     const s = await createAutomation(async () => {})(live, { now: new Date(L(15)), zones: [], pump: undefined });
-    assert.deepEqual(s.settings, { warmFrom: '19:00', warmTo: '09:00', comfort: 24, dayMin: 21, socOn: 90 });
+    assert.deepEqual(s.settings, { warmFrom: '19:00', warmTo: '09:00', comfort: 24, dayMin: 21, socOn: 90, windows: [{ from: '19:00', to: '09:00' }] });
     assert.equal(s.pausedUntil, null);
     const off = await createAutomation(async () => {})(parseConfig({ pauseUntil: L(18) }), { now: new Date(L(15)), zones: [], pump: undefined });
     assert.equal(off.state, 'off');

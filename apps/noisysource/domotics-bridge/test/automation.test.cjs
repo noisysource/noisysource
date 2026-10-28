@@ -177,7 +177,7 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     assert.deepEqual(bad.warm, { from: '19:00', to: '07:00' });
     assert.equal(bad.rest.minutes, 15); assert.equal(bad.recovery.enabled, true);
     assert.equal(bad.dayMin, 25, 'day minimum never above the comfort temperature');
-    assert.equal(bad.solar.socOn, 50); assert.equal(bad.solar.pumpW, 10000);
+    assert.equal(bad.solar.socOn, 20); assert.equal(bad.solar.pumpW, 10000);
     assert.equal(bad.pauseUntil, null);
     assert.deepEqual(parseConfig({ warm: { from: '10:00', to: '10:00' } }).warm, { from: '19:00', to: '09:00' }, 'an empty window is a typo');
     assert.equal(parseConfig({ pauseUntil: new Date(1793030000000) }).pauseUntil, 1793030000000, 'a Firestore timestamp');
