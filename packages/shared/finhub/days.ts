@@ -7,8 +7,11 @@
 // How an entry changes the days:
 //   kind                         EC days            meal days   per diem   salary
 //   ferias, doenca, outro         −                  −           no         —
-//   licenca (unpaid by company)   −                  −           no         − base/30 per day
+//   licenca (unpaid by company)   unchanged          −           no         − base/30 per day
 //   viagem                        counted as worked  −           per day    —
+// `licenca` is a payroll fact (the company stops paying the salary for those days); EC days follow
+// the timesheet. In 2026 they diverged: the payslips show a month of parental leave while the
+// client paid every working day of it. Days not worked for the client are ferias/outro entries.
 // Half days (`halfDays`) take 0.5 off EC days and leave meal days alone (the person still works
 // part of the day).
 
@@ -60,13 +63,13 @@ export interface CalendarEntryLike {
 
 /** A person's calendar as sets of dates. */
 export interface PersonDays {
-  /** Full days off work (ferias, doenca, outro, licenca). */
+  /** Full days off work for the client (ferias, doenca, outro). */
   off: Set<IsoDate>;
   /** Half days off work. */
   offHalf: Set<IsoDate>;
   /** Trip days (worked, away). */
   trip: Set<IsoDate>;
-  /** Leave the company doesn't pay (subset of `off`). */
+  /** Leave the company doesn't pay (licenca): no salary, no meal days; EC days unchanged. */
   leave: Set<IsoDate>;
   /** Kind of each full day off or trip day, for explanations. */
   kindOf: Map<IsoDate, EntryKind>;
@@ -78,10 +81,10 @@ export function personDays(entries: readonly CalendarEntryLike[]): PersonDays {
     for (const d of e.dates) {
       p.kindOf.set(d, e.kind);
       if (e.kind === 'viagem') p.trip.add(d);
+      else if (e.kind === 'licenca') p.leave.add(d);
       else p.off.add(d);
-      if (e.kind === 'licenca') p.leave.add(d);
     }
-    if (e.kind !== 'viagem') for (const d of e.halfDays ?? []) p.offHalf.add(d);
+    if (e.kind !== 'viagem' && e.kind !== 'licenca') for (const d of e.halfDays ?? []) p.offHalf.add(d);
   }
   return p;
 }
@@ -115,7 +118,8 @@ export function mealDays(month: YearMonth, opts: { holidays: Set<IsoDate>; perso
   const removed: MealDays['removed'] = {};
   let days = 0;
   for (const d of possible.dates) {
-    const kind = opts.person.off.has(d) || opts.person.trip.has(d) ? opts.person.kindOf.get(d) : undefined;
+    const away = opts.person.off.has(d) || opts.person.leave.has(d) || opts.person.trip.has(d);
+    const kind = away ? opts.person.kindOf.get(d) : undefined;
     if (kind) removed[kind] = (removed[kind] ?? 0) + 1;
     else days += 1;
   }

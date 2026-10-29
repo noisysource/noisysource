@@ -6,7 +6,8 @@
 //
 // Additions to the handoff's table (night 1, marked in STATUS.md):
 // - calendar kind 'licenca' (parental or other leave the company doesn't pay: base salary is
-//   deducted per day, like the 2026 paternity leave on the payslips);
+//   deducted per day, like the 2026 paternity leave on the payslips; EC days unchanged, see
+//   days.ts);
 // - `ec.contract.signed.opening`: days already used before FinHub's history starts;
 // - `employment.terms.set`: subsidy months, holiday calendars, per diem value;
 // - `cost.plan.set.loan`: an instalment computed from the outstanding capital;

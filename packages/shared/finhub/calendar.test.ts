@@ -99,5 +99,7 @@ describe('days engine', () => {
     const part = personDays([{ kind: 'licenca', dates: eachDay('2030-02-01', '2030-02-08') }]);
     expect(leaveDaysInMonth('2030-02', part)).toBe(8);
     expect(mealDays('2030-02', { holidays: pt, person: part }).days).toBe(20 - 6);
+    // Leave is a payroll fact: EC days still follow the client calendar (and the timesheet).
+    expect(plannedEcDays('2030-02', { clientHolidays: new Set(), person: part }).days).toBe(20);
   });
 });
