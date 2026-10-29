@@ -95,15 +95,16 @@ interface FinEvent<T extends string, P> {
 | `employment.ended` | personId, lastDay | `emp-<person>-end` |
 | `calendar.entry.set` | personId, dates, halfDays, kind (`ferias`, `doenca`, `viagem`, `outro`) | generated |
 | `holidays.set` | calendar id (`pt`, `client-…`), year, dates | `hol-<calendar>-<year>` |
-| `payment.rule.set` | what (net salaries, meal vouchers, SS, IRS withheld, EC invoice…), day, month offset, if not a business day: before/after | `rule-<what>-<from>` |
+| `payment.rule.set` | what (net salaries, meal vouchers, SS, IRS withheld, EC invoice…), day, month offset, if not a business day: before/after; a provider's fee (pct + VAT on the fee) when the payment carries one | `rule-<what>-<from>` |
 | `cost.plan.set` | key, description, amountCents (VAT-inclusive), vatCode, frequency, day, from, to, account | `cost-<key>-<from>` |
 | **Facts** | | |
 | `ec.timesheet.submitted` | contract number, month, days, halfDays | `ts-<number>-<yyyy-mm>` |
 | `ec.invoice.issued` | invoice number, contract number, month, amountCents, vatCode, issue date, due date | `inv-<number>` |
 | `payroll.payslip.recorded` | personId, month, lines (code, amountCents, days, IRS/SS flags), irsCents, ssEmpCents, ssErCents, netCents, payDate | `ps-<person>-<yyyy-mm>` |
 | `bank.movement.imported` | accountId, date, valueDate, amountCents, description, balanceAfterCents, importId | `bpiPdfTxId` (existing) |
-| `bank.movement.matched` | movementId, matched to: invoice / payslip / tax / voucher / cost + its ref and month | `m-<movementId>` |
+| `bank.movement.matched` | movementId, items (one or more planned items: what, ref, month; one payment can cover several), basis | `m-<movementId>` |
 | `bank.movement.classified` | movementId, category, vatCode, description (ad hoc) | `c-<movementId>` |
+| `plan.item.explained` | itemId, month, reason: why a planned item has no bank line (§ Acceptance 2) | `x-<itemId>` |
 | `reversal` | (uses `reverses`) | generated |
 
 "Payment received" and "tax paid" are not separate events: they are bank movements matched to an
@@ -236,6 +237,14 @@ plan predicts the bank.** For each month January–September 2026:
 
 Then Renato compares Tesouraria with the old FinHub's Previsão for the coming months.
 
+**How it's computed (night 2).** `reconcile.ts` suggests a planned item (or an ad hoc category) for
+every bank line; suggestions are views, a click stores them as `bank.movement.matched` /
+`.classified`. `acceptance.ts` evaluates 1–5 per month with two levels: passes on what's confirmed,
+or passes once the suggestions are confirmed. For 3, real − planned is split into named buckets
+(ad hoc lines, amount differences inside a match, items paid in another month, items without a line
+with/without a reason, lines not explained); it passes when the last two are empty. A re-import
+never overwrites: a changed input becomes a `reversal` + `-rN` (`packages/shared/finhub/importSync.ts`).
+
 ## Steps: one night run each (Renato, 2026-10-28)
 
 Agents build overnight; Renato checks on dev in the morning. So every night ends with screens he
@@ -244,8 +253,8 @@ can click on dev, not only tests. Branch `agent/finhub-v2-noisysource` (worktree
 
 | Night | Builds | Morning check on dev |
 |---|---|---|
-| 1 | Domain (envelope, events + zod, both calendars, days engine, payslip estimate, expected movements, state rebuild, tests) · storage (rules, event store, dev-only importer + wipe script) · 2026 imported on dev · **Tesouraria** · **Contratos EC** | Tesouraria: the next 90 days, and for past months the planned vs real month-end balance; the EC contracts, last days and 3-month warning; the proposed payment days |
-| 2 | **Mês** + matching (suggested, confirmed by a click) · the acceptance report per month (§ Acceptance 1–5) · **Diário** | the report: which months pass, what's unexplained |
+| 1 ✅ | Domain (envelope, events + zod, both calendars, days engine, payslip estimate, expected movements, state rebuild, tests) · storage (rules, event store, dev-only importer + wipe script) · 2026 imported on dev · **Tesouraria** · **Contratos EC** | Tesouraria: the next 90 days, and for past months the planned vs real month-end balance; the EC contracts, last days and 3-month warning; the proposed payment days |
+| 2 ✅ | **Mês** + matching (suggested, confirmed by a click) · the acceptance report per month (§ Acceptance 1–5) · **Diário** | the report: which months pass, what's unexplained |
 | 3 | Forms (Folha de horas, Recibo, Calendário, Importar extrato) · **Equipa** · fixes from Renato's notes | enter one month by hand, end to end |
 | 4 | Acceptance with Renato, then remove the old NoisySource pages | |
 
