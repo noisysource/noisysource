@@ -7,6 +7,7 @@ import {
 import { faultGuide } from '../../data/heatpumpFaults';
 import type { GuardStatus } from '../../data/guard';
 import GuardCard from '../GuardCard';
+import EventLog from './EventLog';
 import PumpChart from './PumpChart';
 import { TimeStrip, TripTable } from './parts';
 import TechnicianReport from './TechnicianReport';
@@ -14,7 +15,8 @@ import TechnicianReport from './TechnicianReport';
 /**
  * "Relatórios": what the heat pump has been through, from `domotics_incidents`
  * — faults grouped by code with the readings around each trip and the pattern
- * across them, and every on/off with who did it. One tap opens the printable
+ * across them, every on/off with who did it, and the log of all of it in order
+ * (EventLog). One tap opens the printable
  * pt-PT version for the technicians (TechnicianReport), which replaced the
  * hand-written report of 23/10.
  *
@@ -144,6 +146,8 @@ export default function ReportsScreen({ onBack, guard, canRead }: Props) {
                   ))}
                 </div>
               </div>
+
+              <EventLog incidents={shown} />
 
               {byCode.length === 0 && (
                 <p className="text-sm text-zinc-400">Sem avarias neste período.</p>

@@ -60,44 +60,52 @@ export function demoClimate(): Device[] {
   return [...thermostats, pump];
 }
 
-/** A sunny afternoon: panels producing, battery charging, a little exported. */
+/** A sunny afternoon with the battery full: the spare solar goes to the grid, unpaid (shows the surplus hint). */
 export function demoEnergy(): EnergyReading {
   return {
     online: true,
     pvPowerW: 3720,
     consumptionW: 719,
-    batteryPowerW: 2850,
-    gridPowerW: 150,
-    soc: 86,
+    batteryPowerW: 40,
+    gridPowerW: 2961,
+    soc: 99,
     readAt: Date.now(),
   };
 }
 
-/** The automation in simulation, mid-afternoon with a solar surplus. */
+/** The automation in simulation, mid-afternoon with the battery full and spare sun. */
 export function demoAutomation(): AutomationStatus {
   const now = Date.now();
+  const at = (h: number, m = 0) => { const d = new Date(now); d.setHours(h, m, 0, 0); return d.getTime(); };
   return {
     enabled: true,
     dryRun: true,
     state: 'dry-run',
-    period: 'day',
-    periodLabel: 'dia',
-    boost: true,
-    roomTarget: 24.5,
+    pausedUntil: null,
+    settings: { warmFrom: '19:00', warmTo: '09:00', comfort: 24, dayMin: 21, socOn: 90 },
+    mode: 'day',
+    wantOn: true,
+    doing: 'Ligaria a bomba — com o sol: bateria 93 %, 3,1 kW de sol a sobrar.',
+    plan: 'Aquece a partir das 17:20 para estar quente às 19:00 (faltam 0,4°: chão ~90 min + divisões a 0,30°/h + 30 min de margem); de dia só com sol e bateria ≥ 90 %, ou se a casa descer dos 21°.',
+    warm: { from: '19:00', to: '09:00', inWindow: false, nextStart: at(19), end: at(9) + 86_400_000, warmupAt: at(17, 20), warmupStarted: false, leadMin: 100, capped: false, need: 0.4, expectedAt: null },
+    solar: { on: true, soc: 93, spareW: 3100, note: 'bateria 93 %, 3,1 kW de sol a sobrar' },
+    dayMinActive: false,
+    meanRoom: 23.6,
+    roomTarget: 24,
     outdoor: 14.5,
     flowTarget: 30,
     flowCorrection: 0,
     zones: [
-      { id: 'a', name: 'Sala therm', note: 'definiria 24.5°C' },
+      { id: 'a', name: 'Sala therm', note: 'definiria 24°C' },
       { id: 'b', name: 'Master bedroom', note: 'no alvo' },
     ],
     reasons: [
-      'Período: dia — alvo das divisões 24.5°C (inclui bónus solar).',
-      'Há excedente solar: a guardar calor no pavimento.',
+      'Dia: bomba ligada — com o sol: bateria 93 %, 3,1 kW de sol a sobrar.',
       'Água a 30°C: exterior 14.5°C (sensor da bomba).',
+      'Ligaria a bomba — com o sol: bateria 93 %, 3,1 kW de sol a sobrar.',
     ],
     actions: [
-      { at: now - 4 * 60_000, device: 'Sala therm', what: 'alvo 24°C → 24.5°C', sent: false },
+      { at: now - 4 * 60_000, device: 'Bomba de calor', what: 'ligar (com o sol: bateria 93 %, 3,1 kW de sol a sobrar)', sent: false },
       { at: now - 9 * 60_000, device: 'Bomba de calor', what: 'água 42°C → 41°C (desce 1° de cada vez até 30°C)', sent: false },
     ],
     warmBy: {

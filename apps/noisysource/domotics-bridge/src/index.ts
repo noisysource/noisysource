@@ -7,17 +7,20 @@ import { dpForCode } from './dpmap';
 import { startHttp } from './http';
 import { readInverter, type InverterReading } from './inverter';
 import {
-  createAutomation, parseConfig,
+  createAutomation, parseConfig, pausedUntil,
   type AutomationConfig, type AutomationMemory, type AutomationStatus, type PumpReading, type ZoneReading,
 } from './automation';
 import { parseWarmBy, type WarmByRequest } from './warmby';
 import { PUMP_FAULT_CODES, decodeFaults } from './faults';
 import {
-  createRecorder, type Incident, type PumpSample, type RecorderSnapshot, type SwitchSource,
+  createRecorder, type Incident, type PumpDps, type PumpSample, type RecorderSnapshot, type SwitchSource,
 } from './incidents';
 import {
   createGuard, parseGuardConfig, INITIAL_GUARD, type GuardConfig, type GuardState, type GuardStatus,
 } from './guard';
+import { createEnergyStore } from './energy-store';
+import { createClimateStore } from './climate-store';
+import { isControllerTimer } from './climate';
 
 /**
  * Domotics bridge.
@@ -104,7 +107,7 @@ const AUTOMATION_SETTINGS_EVERY_MS = 2 * 60_000;
  */
 const WARM_BY_DOC = 'domotics_config/warm_by';
 const COMMANDS = 'domotics_commands';
-/** E13 guard on/off, set in the app (see guard.ts). Read on the automation's cadence. */
+/** E13 guard on/off and its early warning (`preempt`), set in the app (see guard.ts). Read on the automation's cadence. */
 const GUARD_DOC = 'domotics_config/guard';
 /** Heat pump faults and on/off transitions (see incidents.ts), for the Reports page. */
 const INCIDENTS = 'domotics_incidents';
@@ -130,6 +133,11 @@ const db = process.env.FIREBASE_API_KEY && process.env.BRIDGE_EMAIL && process.e
       password: process.env.BRIDGE_PASSWORD,
     })
   : undefined;
+
+/** kWh history (energy.ts, energy-store.ts). Written only with the relay on, like everything else. */
+const energy = createEnergyStore(RELAY ? db : undefined, join(__dirname, '..', 'energy-state.json'));
+/** Room and pump temperatures per 15-min slot, and people's interventions (climate.ts). Like the energy history. */
+const climate = createClimateStore(RELAY ? db : undefined, join(__dirname, '..', 'climate-state.json'));
 
 let devices: DeviceConfig[] = [];
 /** Last time a client asked for state — drives the polling rate. */
@@ -279,7 +287,9 @@ async function refreshAutomationSettings() {
     // A missing document means defaults — which is automation off.
     const next = parseConfig((await db.getDoc(AUTOMATION_DOC)) ?? {});
     if (JSON.stringify(next) !== JSON.stringify(automationConfig)) {
-      console.log(`[automation] settings changed: ${next.enabled ? (next.dryRun ? 'dry-run' : 'ON') : 'off'}`);
+      const pause = pausedUntil(next, Date.now());
+      console.log(`[automation] settings changed: ${next.enabled ? (next.dryRun ? 'dry-run' : 'ON') : 'off'}` +
+        `${pause ? `, paused until ${new Date(pause).toISOString()}` : ''}`);
       automationConfig = next;
       writeFileSync(AUTOMATION_CACHE, JSON.stringify(next, null, 2));
     }
@@ -290,55 +300,73 @@ async function refreshAutomationSettings() {
 
 const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
 
-const automate = createAutomation(async (deviceId, commands) => {
-  await runCommand(deviceId, commands, 'automation');
+const automate = createAutomation(async (deviceId, commands, reason) => {
+  await runCommand(deviceId, commands, 'automation', reason ?? null);
 }, readJson<AutomationMemory>(AUTOMATION_MEMORY_FILE));
 let automating = false;
 let savedMemory = JSON.stringify(automate.memory());
 
-/** One automation step on the freshest state. Runs after every poll. */
-async function runAutomation() {
+/** The thermostats and the pump, as the automation and the climate history read them. */
+function heatingReadings() {
+  const zones: ZoneReading[] = [];
+  let pump: PumpReading | undefined;
+  for (const d of state.devices) {
+    const s = new Map(d.status.map(x => [x.code, x.value]));
+    if (s.has('p02_heating')) {
+      pump = {
+        id: d.id,
+        online: d.online,
+        on: s.get('switch') === true,
+        fault: PUMP_FAULT_CODES.some(c => Number(s.get(c) ?? 0) !== 0),
+        // The pump's own outdoor sensor (`temp_top` — see README, "Heat pump").
+        outdoor: tenths(s.get('temp_top')),
+        flowSetpoint: typeof s.get('p02_heating') === 'number' ? (s.get('p02_heating') as number) : undefined,
+        // Same datapoints as the incident samples (watchPump).
+        hz: typeof s.get('temp_current') === 'number' ? (s.get('temp_current') as number) : undefined,
+        waterOut: tenths(s.get('venting_temp')),
+        waterIn: tenths(s.get('coiler_temp')),
+      };
+    } else if (s.has('temp_set')) {
+      zones.push({
+        id: d.id,
+        name: d.name,
+        online: d.online,
+        current: tenths(s.get('temp_current')),
+        target: tenths(s.get('temp_set')),
+        mode: typeof s.get('mode') === 'string' ? (s.get('mode') as string) : undefined,
+        valveOpen: s.get('valve_state') === 'open',
+      });
+    }
+  }
+  return { zones, pump };
+}
+
+/**
+ * One automation step on the freshest state. Runs after every poll.
+ * `switchedBy`: who switched the pump, if this poll saw it switch.
+ */
+async function runAutomation(switchedBy?: SwitchSource) {
   if (automating) return;
   automating = true;
   try {
     await refreshAutomationSettings();
-    const zones: ZoneReading[] = [];
-    let pump: PumpReading | undefined;
-    for (const d of state.devices) {
-      const s = new Map(d.status.map(x => [x.code, x.value]));
-      if (s.has('p02_heating')) {
-        pump = {
-          id: d.id,
-          online: d.online,
-          on: s.get('switch') === true,
-          fault: PUMP_FAULT_CODES.some(c => Number(s.get(c) ?? 0) !== 0),
-          // The pump's own outdoor sensor (`temp_top` — see README, "Heat pump").
-          outdoor: tenths(s.get('temp_top')),
-          flowSetpoint: typeof s.get('p02_heating') === 'number' ? (s.get('p02_heating') as number) : undefined,
-          // Same datapoints as the incident samples (watchPump).
-          hz: typeof s.get('temp_current') === 'number' ? (s.get('temp_current') as number) : undefined,
-          waterOut: tenths(s.get('venting_temp')),
-          waterIn: tenths(s.get('coiler_temp')),
-        };
-      } else if (s.has('temp_set')) {
-        zones.push({
-          id: d.id,
-          name: d.name,
-          online: d.online,
-          current: tenths(s.get('temp_current')),
-          target: tenths(s.get('temp_set')),
-          mode: typeof s.get('mode') === 'string' ? (s.get('mode') as string) : undefined,
-          valveOpen: s.get('valve_state') === 'open',
-        });
-      }
-    }
+    const { zones, pump } = heatingReadings();
+    const now = Date.now();
+    // A person's on or off is respected for a while (automation.ts); the
+    // controller's nightly timer is not a person.
+    const person = (switchedBy === 'app' || switchedBy === 'outside') && pump?.online
+      && !(switchedBy === 'outside' && !pump.on && isControllerTimer(now));
     const inv = state.inverter;
     const status = await automate(automationConfig, {
-      now: new Date(),
+      now: new Date(now),
       zones,
       pump,
+      manualSwitch: person ? { on: pump!.on, at: now } : null,
+      // Signs as the inverter gives them (inverter.ts, checked against the power
+      // balance on 26/10): grid > 0 export / < 0 import, battery > 0 charging,
+      // consumption = the whole house, the heat pump included.
       energy: inv?.online
-        ? { pvW: inv.pvPowerW, loadW: inv.consumptionW, gridW: inv.gridPowerW, soc: inv.soc }
+        ? { pvW: inv.pvPowerW, loadW: inv.consumptionW, gridW: inv.gridPowerW, batteryW: inv.batteryPowerW, soc: inv.soc }
         : undefined,
       guard: state.guard,
       warmBy,
@@ -373,10 +401,11 @@ async function refreshGuardSettings() {
   if (!db || Date.now() - guardSettingsAt < AUTOMATION_SETTINGS_EVERY_MS) return;
   guardSettingsAt = Date.now();
   try {
-    // A missing document means off.
+    // A missing document means off (and the early warning, once on, defaults to on).
     const next = parseGuardConfig((await db.getDoc(GUARD_DOC)) ?? {});
-    if (next.enabled !== guardConfig.enabled) {
-      console.log(`[guard] switched ${next.enabled ? 'on' : 'off'} in the app`);
+    if (next.enabled !== guardConfig.enabled || next.preempt !== guardConfig.preempt) {
+      if (next.enabled !== guardConfig.enabled) console.log(`[guard] switched ${next.enabled ? 'on' : 'off'} in the app`);
+      if (next.preempt !== guardConfig.preempt) console.log(`[guard] E13 early warning switched ${next.preempt ? 'on' : 'off'} in the app`);
       guardConfig = next;
       writeJson(GUARD_CONFIG_CACHE, next);
     }
@@ -438,12 +467,13 @@ async function flushIncidents() {
   }
 }
 
-/** After every poll: record the pump's reading, then let the guard act on it. */
-async function watchPump(pumpFresh: boolean) {
+/** After every poll: record the pump's reading, then let the guard act on it. Returns who switched the pump, if this reading shows it switched. */
+async function watchPump(pumpFresh: boolean): Promise<SwitchSource | undefined> {
   const pump = state.devices.find(d => d.category === PUMP_CATEGORY);
-  if (!pump) return;
+  if (!pump) return undefined;
   const now = Date.now();
   let sample: PumpSample | undefined;
+  let switchedBy: SwitchSource | undefined;
   if (pumpFresh && pump.online) {
     const s = new Map(pump.status.map(x => [x.code, x.value]));
     const whole = (code: string) => (typeof s.get(code) === 'number' ? (s.get(code) as number) : undefined);
@@ -464,7 +494,11 @@ async function watchPump(pumpFresh: boolean) {
       zones: zones.length,
     };
     recorded = false;
-    recorder.observe({ id: pump.id, name: pump.name }, sample);
+    const dps: PumpDps = {};
+    for (const { code, value } of pump.status) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') dps[code] = value;
+    }
+    switchedBy = recorder.observe({ id: pump.id, name: pump.name }, sample, dps);
     if (recorded) writeJson(INCIDENTS_STATE_FILE, recorder.snapshot());
   } else {
     recorder.gap();
@@ -472,11 +506,18 @@ async function watchPump(pumpFresh: boolean) {
 
   await refreshGuardSettings();
   const before = JSON.stringify(guard.state());
-  // The automation's last step, if it is running live and recent: nothing wants heat, keep resting.
+  const offUntilBefore = guard.state().preemptOffUntil;
+  // The automation's last step, if it is running live and recent: it decides
+  // on/off (so the guard doesn't undo an outside off), and while its plan has
+  // the pump off a rest carries on. A stale step (failing) hands both back to the guard.
   const a = state.automation;
-  const holdRest = automationConfig.enabled && !automationConfig.dryRun
-    && a?.holdRest === true && now - a.evaluatedAt < 5 * 60_000;
-  const d = guard.decide(guardConfig, { now, pump: sample, holdRest });
+  const automationOwns = automationConfig.enabled && !automationConfig.dryRun
+    && a?.state === 'running' && now - a.evaluatedAt < 5 * 60_000;
+  const holdRest = automationOwns && a?.holdRest === true;
+  // A person's pause ("Pausar"): read straight from the settings, so it holds
+  // whatever the automation is set to.
+  const paused = pausedUntil(automationConfig, now);
+  const d = guard.decide(guardConfig, { now, pump: sample, holdRest, switchedBy, pausedUntil: paused, automationOwns });
   let status = d.status;
   if (d.action) {
     const { on, reason, next } = d.action;
@@ -489,8 +530,12 @@ async function watchPump(pumpFresh: boolean) {
       status = { ...status, mode: guard.state().mode, restUntil: null, note: 'O comando à bomba falhou — volta a tentar na próxima leitura' };
     }
   }
+  if (guard.state().preemptOffUntil && !offUntilBefore) {
+    console.log(`[guard] two E13 trips with the early warning on: early warning off until ${new Date(guard.state().preemptOffUntil).toISOString()}`);
+  }
   if (JSON.stringify(guard.state()) !== before) writeJson(GUARD_STATE_FILE, guard.state());
   state = { ...state, guard: status };
+  return switchedBy;
 }
 
 /** What makes a publish worth sending straight away, even when nobody is watching. */
@@ -777,6 +822,8 @@ async function poll(force = false) {
     // The inverter is mains-powered, on ethernet, and answers in milliseconds —
     // so unlike the sleepy valve heads it can simply be read every cycle.
     const inverter = await readInverter();
+    // kWh history for the Energia page (energy.ts): one write per 15-min slot.
+    void energy.observe(inverter);
 
     const changed = JSON.stringify(next) !== JSON.stringify(state.devices);
     state = { ...state, devices: next, inverter, updatedAt: Date.now() };
@@ -785,8 +832,20 @@ async function poll(force = false) {
       console.log(`[state] ${online}/${next.length} online (changed)`);
     }
     // Record and guard the pump, decide on what was just read, then publish it all together.
-    await watchPump(results.some(r => r.category === PUMP_CATEGORY && r.online));
-    await runAutomation();
+    const switchedBy = await watchPump(results.some(r => r.category === PUMP_CATEGORY && r.online));
+    await runAutomation(switchedBy);
+    const { zones, pump } = heatingReadings();
+    const a = state.automation;
+    void climate.observe({
+      t: Date.now(),
+      zones,
+      pump,
+      soc: inverter.online ? inverter.soc : undefined,
+      plan: !a ? undefined : a.state === 'off' ? 'off' : `${a.mode ?? '?'}${a.state === 'dry-run' ? ' (sim)' : ''}`,
+      wantOn: a?.wantOn,
+      guard: state.guard?.mode,
+      switchedBy,
+    });
     if (RELAY) {
       void publish();
       void flushIncidents();
@@ -831,6 +890,9 @@ async function runCommand(
   if (config.category === PUMP_CATEGORY && typeof sw === 'boolean') {
     recorder.noteCommand(sw, source, reason, Date.now());
   }
+  // A thermostat target, so the climate history can tell the bridge's own changes from a person's.
+  const target = dps[dpForCode(config.category, 'temp_set') ?? ''];
+  if (typeof target === 'number') climate.noteTarget(deviceId, target / 10, source);
 }
 
 function isWatched() {

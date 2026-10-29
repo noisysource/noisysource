@@ -93,10 +93,18 @@ export interface SwitchEvent {
   faults: string[];
   /** The last few minutes, ending with the reading that showed the change. */
   before: PumpSample[];
+  /**
+   * Every raw datapoint (Tuya codes, values as read) in the reading before the
+   * change and the one that showed it — so whatever else an off from outside
+   * changes (mode, a setpoint, a fault bit) is on record. Bridge only.
+   */
+  dps?: { before: PumpDps; at: PumpDps };
   note: string | null;
   origin: IncidentOrigin;
   updatedAt: Date;
 }
+
+export type PumpDps = Record<string, string | number | boolean>;
 
 export type Incident = FaultIncident | SwitchEvent;
 
@@ -143,6 +151,7 @@ export function createRecorder(
   const lockoutAfterMs = opts.lockoutAfterMs ?? 10 * MIN;
   const repeatMs = opts.repeatMs ?? 20 * MIN;
   const buffer: PumpSample[] = [];
+  let lastDps: PumpDps | undefined;
   const commands: Array<{ on: boolean; by: SwitchSource; reason: string | null; t: number }> = [];
   let s: RecorderSnapshot = initial ?? { open: null, closing: null, lastTrip: null, lastOn: null };
 
@@ -158,9 +167,11 @@ export function createRecorder(
     return undefined;
   }
 
-  function observe(device: { id: string; name: string }, sample: PumpSample) {
+  /** Returns who caused the on/off this reading shows, if it shows one. */
+  function observe(device: { id: string; name: string }, sample: PumpSample, dps?: PumpDps): SwitchSource | undefined {
     const t = sample.t;
     let dirty = false;
+    let switchedBy: SwitchSource | undefined;
 
     // --- On/off ------------------------------------------------------------
     if (s.lastOn !== null && sample.on !== s.lastOn) {
@@ -176,11 +187,13 @@ export function createRecorder(
         reason: cmd?.reason ?? null,
         faults: sample.faults,
         before: [...buffer.filter(x => x.t >= t - SWITCH_BEFORE_MS), sample],
+        ...(dps && lastDps ? { dps: { before: lastDps, at: dps } } : {}),
         note: null,
         origin: opts.origin,
         updatedAt: new Date(),
       };
       write(incidentId('switch', t, sample.on ? 'on' : 'off'), ev);
+      switchedBy = by;
       if (s.open) {
         s.open.doc.actions.push({ at: t, by, what: sample.on ? 'on' : 'off', reason: cmd?.reason ?? null });
         dirty = true;
@@ -268,6 +281,8 @@ export function createRecorder(
 
     buffer.push(sample);
     while (buffer.length > 0 && buffer[0].t < t - beforeMs) buffer.shift();
+    if (dps) lastDps = dps;
+    return switchedBy;
   }
 
   return {
