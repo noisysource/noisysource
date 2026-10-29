@@ -2,7 +2,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ShieldCheck, User, Building2,
   ExternalLink, LogOut, FolderTree,
-  Wrench, LayoutDashboard, KeyRound,
+  Wrench, LayoutDashboard, KeyRound, Sparkles,
 } from 'lucide-react';
 import { auth } from '@shared/firebase';
 import { useEffect, useState } from 'react';
@@ -123,6 +123,8 @@ export default function DashboardLayout() {
           <nav className="space-y-1">
             {/* Pages that show every entity together */}
             <div className="mb-3 space-y-0.5">
+              {/* FinHub v2 (HANDOFF-finhub-v2.md), being built next to this app */}
+              <NavLink to="/v2/noisysource" icon={<Sparkles size={16} />} label="FinHub v2 · NoisySource" active={false} />
               <NavLink to="/" icon={<LayoutDashboard size={16} />} label="Visão geral" active={location.pathname === '/'} />
               {GLOBAL_NAV.map(({ feature, label, icon: Icon }) => (
                 <NavLink key={feature} to={`/${entity}/${feature}`} icon={<Icon size={16} />} label={label}
