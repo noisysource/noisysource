@@ -16,7 +16,7 @@ import SurplusNow from '../SurplusNow';
 import EnergyChart from './EnergyChart';
 import TariffEditor from './TariffEditor';
 import {
-  bucketize, coverageOf, fmtDuration, fmtEur, fmtHours, fmtKwh, fmtPct, fmtWhen, grainOf, lastRecorded,
+  bucketize, coverageOf, expectedUntil, fmtDuration, fmtEur, fmtHours, fmtKwh, fmtPct, fmtWhen, grainOf, lastRecorded,
   periodContaining, periodLabel, shiftPeriod, socSeries, type Grain, type Period, type PeriodKind,
 } from './view';
 
@@ -119,7 +119,10 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
     if (!data) return null;
     const { period, days } = data;
     const now = Date.now();
-    const range = { from: dayStart(period.from), to: dayStart(addDays(period.to, 1)), now };
+    const last = lastRecorded(days);
+    // Energy and coverage stop where the data can be by now; fixed charges run to now.
+    const dataNow = expectedUntil(now, last);
+    const range = { from: dayStart(period.from), to: dayStart(addDays(period.to, 1)), now: dataNow };
     const summary = summarize(days, tariff, range);
     const billedDays = Math.max(0, Math.min(range.to, now) - range.from) / DAY;
     return {
@@ -127,9 +130,9 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
       billedDays,
       scenarios: computeScenarios(summary, billedDays, tariff),
       surplus: surplusOf(days, tariff, range),
-      buckets: bucketize(period, days, tariff, now),
+      buckets: bucketize(period, days, tariff, dataNow),
       soc: grainOf(period) === 'hour' ? socSeries(days, range.from, range.to) : undefined,
-      last: lastRecorded(days),
+      last,
     };
   }, [data, tariff]);
   const projection = useMemo(
