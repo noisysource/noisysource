@@ -33,7 +33,7 @@
  "paymentRules": [
   { "what": "salarios", "label": "Salários líquidos", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": false, "evidence": "where the day comes from" },
   { "what": "refeicao", "label": "Cartão refeição", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true },
-  { "what": "vales", "label": "Vales", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true },
+  { "what": "vales", "label": "Vales", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true, "fee": { "label": "comissão do fornecedor", "pct": 5, "vatPct": 20 } },
   { "what": "ss", "label": "Segurança Social", "day": 20, "monthOffset": 1, "nonBusinessDay": "after", "toConfirm": false },
   { "what": "irs", "label": "IRS retido", "day": 20, "monthOffset": 1, "nonBusinessDay": "after", "toConfirm": false },
   { "what": "ec-fatura", "label": "Fatura EC", "day": 31, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true }

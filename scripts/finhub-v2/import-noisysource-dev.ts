@@ -6,13 +6,17 @@
  *   finhub-seed.json, finhub-v2-noisysource.json, Recibs/<company NIF>_RC_2026_M<mm>P1_F.pdf,
  *   extratos noisySource/Extrato_Conta_2026-*.pdf
  * builds NoisySource's events (scripts/finhub-v2/lib/buildNoisySource.ts), validates every one,
- * runs the night-1 self-check, and writes the events that don't exist yet to
- * kidclub-dev: finhub/noisysource/events/{id}.
+ * compares them with what dev holds (packages/shared/finhub/importSync.ts), runs the self-check on
+ * the result, and writes to kidclub-dev: finhub/noisysource/events/{id}
+ *   - events that don't exist yet;
+ *   - corrections: when an imported event's source changed (e.g. a value in
+ *     finhub-v2-noisysource.json), a `reversal` of the version in force plus a `-rN` replacement.
+ *     Nothing is overwritten, and a version a person recorded in the app is never replaced.
  *
  * - Refuses any project but kidclub-dev (`--project` other than kidclub-dev exits; every URL and
  *   document path is checked in lib/firestoreDev.ts). Never touches finances_entities.
  * - Dry run by default: prints counts and the self-check, writes nothing.
- * - Idempotent: deterministic ids; existing ids are skipped, and each create carries the
+ * - Idempotent: deterministic ids; an unchanged event is skipped, and each create carries the
  *   precondition exists=false, so nothing is ever overwritten.
  *
  *   node scripts/finhub-v2/run.mjs scripts/finhub-v2/import-noisysource-dev.ts            # dry run
@@ -28,8 +32,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { extractPdfTextItems, groupTextLines, parseBpiPdfLines } from '../../apps/noisysource/finances/src/lib/parsers/bpiPdf';
 import { todayInLisbon } from '../../packages/shared/finhub/dates';
-import { buildNoisySourceEvents, type SourcePayslip, type SourceStatement } from './lib/buildNoisySource';
-import { createEvents, DEV_PROJECT, listEventIds, requireDevProject } from './lib/firestoreDev';
+import { planImport } from '../../packages/shared/finhub/importSync';
+import { buildNsEvent, parseNsEvent, type NsEvent } from '../../packages/shared/finhub/noisysource/events';
+import { buildNoisySourceEvents, IMPORTER, type SourcePayslip, type SourceStatement } from './lib/buildNoisySource';
+import { createEvents, DEV_PROJECT, listEvents, requireDevProject } from './lib/firestoreDev';
 import { parsePayslipLines } from './lib/payslipPdf';
 import { monthsOf2026, selfCheck } from './lib/selfCheck';
 
@@ -93,19 +99,35 @@ async function main() {
   for (const [t, n] of [...byType.entries()].sort()) console.log(`  ${t.padEnd(26)} ${n}`);
 
   const lastStatementMonth = statements.map(s => s.statement.dateTo).sort().pop()!.slice(0, 7);
-  const check = selfCheck(events, {
-    today: todayInLisbon(), accountId: inputs.accountId, amounts: AMOUNTS,
-    payMonths: monthsOf2026(lastStatementMonth), ecMonths: monthsOf2026('2026-08'), balanceMonths: monthsOf2026(lastStatementMonth),
-  });
-  console.log(`\nSelf-check (${check.ok ? 'contracts and EC days pass' : 'FAILURES above'}):\n${check.lines.join('\n')}`);
 
-  if (OFFLINE) { console.log('\nOffline dry run: dev not read, nothing written.'); return; }
-  const existing = new Set(await listEventIds());
-  const toWrite = events.filter(e => !existing.has(e.id));
-  console.log(`\n${DEV_PROJECT} finhub/noisysource/events: ${existing.size} already there; ${events.length - toWrite.length} of ours exist, ${toWrite.length} new.`);
-  if (!WRITE) { console.log('Dry run: nothing written. Add --write to create the new ones.'); return; }
+  // What dev holds now (offline: nothing).
+  const stored: NsEvent[] = [];
+  if (!OFFLINE) {
+    for (const raw of await listEvents()) {
+      const r = parseNsEvent(raw);
+      if (!r.ok) { console.error(`${DEV_PROJECT} holds an invalid event ${r.id}: ${r.error}. Nothing written.`); process.exit(1); }
+      stored.push(r.event);
+    }
+  }
+  const plan = planImport(events, stored, {
+    isImporter: e => e.recordedBy.startsWith('importer:'),
+    reversal: o => buildNsEvent('reversal', {}, { id: o.id, reverses: o.reverses, note: o.note, source: 'import:seed', recordedBy: IMPORTER, recordedAt: now }) as unknown as NsEvent,
+  });
+  const replacements = plan.corrections.map(c => c.replacement);
+  const after = [...stored, ...plan.create, ...plan.reversals, ...replacements];
+
+  const check = selfCheck(after, { today: todayInLisbon(), accountId: inputs.accountId, amounts: AMOUNTS, months: monthsOf2026(lastStatementMonth) });
+  console.log(`\nSelf-check (${check.ok ? 'contract chain and EC days pass' : 'FAILURES above'}):\n${check.lines.join('\n')}`);
+
+  console.log(`\n${OFFLINE ? 'offline (dev not read)' : `${DEV_PROJECT} finhub/noisysource/events: ${stored.length} there`}; `
+    + `${plan.create.length} new, ${plan.corrections.length} corrections, ${plan.unchanged} unchanged.`);
+  for (const c of plan.corrections) console.log(`  correct ${c.liveId} → ${c.replacement.id} (reversal ${c.reversalId}): ${c.changed.join(', ')}`);
+  if (plan.keptManual.length) console.log(`  kept, recorded in the app: ${plan.keptManual.join(', ')}`);
+  if (plan.cancelled.length) console.log(`  kept, every version reversed: ${plan.cancelled.join(', ')}`);
+  if (OFFLINE) { console.log('Offline dry run: nothing written.'); return; }
+  if (!WRITE) { console.log('Dry run: nothing written. Add --write to write them.'); return; }
   if (!check.ok) { console.error('Self-check failed: not writing.'); process.exit(1); }
-  const written = await createEvents(toWrite as never);
+  const written = await createEvents([...plan.create, ...plan.reversals, ...replacements] as never);
   console.log(`Wrote ${written} events to ${DEV_PROJECT}.`);
 }
 

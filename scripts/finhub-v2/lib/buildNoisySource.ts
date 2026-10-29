@@ -35,7 +35,7 @@ export interface BuildResult {
   notes: string[];
 }
 
-const IMPORTER = 'importer:finhub-v2-noisysource-dev';
+export const IMPORTER = 'importer:finhub-v2-noisysource-dev';
 
 export function buildNoisySourceEvents(seed: Seed, inputs: Inputs, statements: SourceStatement[], payslips: SourcePayslip[], now: string): BuildResult {
   const events: NsEvent[] = [];
@@ -182,7 +182,7 @@ export function buildNoisySourceEvents(seed: Seed, inputs: Inputs, statements: S
 
   // ── Payment rules ──
   for (const r of inputs.paymentRules) {
-    add('payment.rule.set', { what: r.what as PaymentRuleWhat, label: r.label, from: '2026-01-01', day: r.day, monthOffset: r.monthOffset, nonBusinessDay: r.nonBusinessDay, toConfirm: !!r.toConfirm, evidence: r.evidence },
+    add('payment.rule.set', { what: r.what as PaymentRuleWhat, label: r.label, from: '2026-01-01', day: r.day, monthOffset: r.monthOffset, nonBusinessDay: r.nonBusinessDay, toConfirm: !!r.toConfirm, evidence: r.evidence, ...(r.fee ? { fee: r.fee } : {}) },
       nsIds.rule(r.what, '2026-01-01'));
   }
 
