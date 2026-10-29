@@ -41,6 +41,9 @@ import V2Layout from './v2/shell/V2Layout';
 import NoisySourceModule from './v2/noisysource/NoisySourceModule';
 import TesourariaPage from './v2/noisysource/TesourariaPage';
 import ContratosEcPage from './v2/noisysource/ContratosEcPage';
+import MesPage from './v2/noisysource/MesPage';
+import AceitacaoPage from './v2/noisysource/AceitacaoPage';
+import DiarioPage from './v2/noisysource/DiarioPage';
 
 
 export default function App() {
@@ -71,6 +74,10 @@ export default function App() {
             <Route path="noisysource" element={<NoisySourceModule />}>
               <Route index element={<TesourariaPage />} />
               <Route path="contratos" element={<ContratosEcPage />} />
+              <Route path="mes" element={<MesPage />} />
+              <Route path="mes/:month" element={<MesPage />} />
+              <Route path="aceitacao" element={<AceitacaoPage />} />
+              <Route path="diario" element={<DiarioPage />} />
             </Route>
           </Route>
 

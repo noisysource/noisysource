@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { ArrowLeft, FileSignature, Wallet } from 'lucide-react';
+import { ArrowLeft, CalendarCheck, ClipboardCheck, FileSignature, ScrollText, Wallet } from 'lucide-react';
 
 const COMPANIES = [
   { id: 'noisysource', label: 'NoisySource', ready: true },
@@ -10,6 +10,9 @@ const COMPANIES = [
 const NS_NAV = [
   { to: '/v2/noisysource', label: 'Tesouraria', icon: Wallet, end: true },
   { to: '/v2/noisysource/contratos', label: 'Contratos EC', icon: FileSignature, end: false },
+  { to: '/v2/noisysource/mes', label: 'Mês', icon: CalendarCheck, end: false },
+  { to: '/v2/noisysource/aceitacao', label: 'Aceitação 2026', icon: ClipboardCheck, end: false },
+  { to: '/v2/noisysource/diario', label: 'Diário', icon: ScrollText, end: false },
 ];
 
 /** FinHub v2 shell: one module per company (HANDOFF-finhub-v2.md). Only NoisySource exists yet. */

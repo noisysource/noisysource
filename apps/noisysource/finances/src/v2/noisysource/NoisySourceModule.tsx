@@ -28,7 +28,7 @@ export default function NoisySourceModule() {
           </ul>
         </details>
       )}
-      {data.loading ? <p className="text-zinc-400">A carregar eventos…</p>
+      {data.loading && !data.state ? <p className="text-zinc-400">A carregar eventos…</p>
         : !data.state ? <p className="text-zinc-400">Ainda não há eventos da NoisySource.</p>
         : <Outlet />}
     </NsDataContext.Provider>

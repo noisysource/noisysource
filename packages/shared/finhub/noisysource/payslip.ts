@@ -189,7 +189,7 @@ export function comparePayslip(est: PayslipEstimate, rec: Payslip): PayslipCompa
   if (est.perDiemCents !== r.perDiemCents) {
     const recDays = est.terms.perDiemCents > 0 ? r.perDiemCents / est.terms.perDiemCents : NaN;
     const detail = Number.isFinite(recDays)
-      ? `estimativa ${est.tripDays} dias, recibo ${Number.isInteger(recDays) ? recDays : recDays.toFixed(2)} dias ao valor diário dos termos`
+      ? `estimativa ${est.tripDays} dias, recibo ${Number.isInteger(recDays) ? recDays : recDays.toFixed(2).replace('.', ',')} dias ao valor diário dos termos`
       : undefined;
     diffs.push({ cause: 'ajudas de custo', detail });
   }

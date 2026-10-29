@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { todayInLisbon } from '@shared/finhub/dates';
+import { reconcile, type Reconciliation } from '@shared/finhub/noisysource/reconcile';
 import { rebuildNsState, type NsState } from '@shared/finhub/noisysource/state';
 import type { NsEvent } from '@shared/finhub/noisysource/events';
 import { readNsEvents, type InvalidEvent } from './eventStore';
@@ -13,6 +14,12 @@ export interface NsData {
   today: string;
   /** Bank accounts with imported lines, the busiest first. */
   accounts: string[];
+  /** The company's main account (the busiest): what Tesouraria and Mês show. */
+  accountId: string | null;
+  /** Bank lines vs plan for the main account: confirmed + suggestions (never stored). */
+  rec: Reconciliation | null;
+  /** Every id in the log, reversed ones included (new ids must avoid them). */
+  eventIds: Set<string>;
   reload: () => void;
 }
 
@@ -41,7 +48,10 @@ export function useNsData(): NsData {
     for (const m of state?.movements ?? []) count.set(m.accountId, (count.get(m.accountId) ?? 0) + 1);
     return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
   }, [state]);
+  const accountId = accounts[0] ?? null;
+  const rec = useMemo(() => (state && accountId ? reconcile(state, { accountId }) : null), [state, accountId]);
+  const eventIds = useMemo(() => new Set([...events.map(e => e.id), ...invalid.map(i => i.id)]), [events, invalid]);
   const reload = useCallback(() => setTick(t => t + 1), []);
 
-  return { loading, error, events, invalid, state, today: todayInLisbon(), accounts, reload };
+  return { loading, error, events, invalid, state, today: todayInLisbon(), accounts, accountId, rec, eventIds, reload };
 }

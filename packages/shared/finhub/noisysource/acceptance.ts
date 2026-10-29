@@ -88,8 +88,11 @@ export function contractChain(state: NsState, today: IsoDate): ChainCheck[] {
   return out;
 }
 
-export function acceptanceReport(state: NsState, opts: { accountId: string; today: IsoDate; months: YearMonth[] }): AcceptanceReport {
-  const rec = reconcile(state, { accountId: opts.accountId });
+export function acceptanceReport(
+  state: NsState,
+  opts: { accountId: string; today: IsoDate; months: YearMonth[]; rec?: Reconciliation },
+): AcceptanceReport {
+  const rec = opts.rec ?? reconcile(state, { accountId: opts.accountId });
   const chain = contractChain(state, opts.today);
   const runways = state.contracts.map(c => ecRunway(state, c, opts.today));
   const names = new Map(state.people.map(p => [p.id, p.name]));

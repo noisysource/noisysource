@@ -74,6 +74,34 @@ export async function appendNsEvent<T extends NsEventType>(
   });
 }
 
+export interface NewEvent<T extends NsEventType = NsEventType> {
+  type: T;
+  payload: NsPayload<T>;
+  id: string;
+  note?: string;
+  effectiveDate?: string;
+}
+
+/**
+ * Appends several events in one transaction (a month's confirmations): all or none. Fails if any
+ * id exists. Firestore allows 500 writes per transaction; callers send fewer.
+ */
+export async function appendNsEvents(list: NewEvent[]): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Sessão terminada: entre outra vez.');
+  if (list.length > 400) throw new Error('Demasiados eventos de uma vez (máx. 400).');
+  const now = new Date().toISOString();
+  const events = list.map(e => buildNsEvent(e.type, e.payload as never, {
+    id: e.id, source: 'manual', recordedBy: uid, recordedAt: now, effectiveDate: e.effectiveDate, note: e.note,
+  }));
+  await runTransaction(db, async tx => {
+    const refs = events.map(e => doc(eventsCol(), e.id));
+    const snaps = await Promise.all(refs.map(r => tx.get(r)));
+    snaps.forEach((s, k) => { if (s.exists()) throw new EventExistsError(events[k].id); });
+    events.forEach((e, k) => tx.set(refs[k], { ...plain(e), recordedAt: serverTimestamp() }));
+  });
+}
+
 /** Cancels an event with a `reversal` (the first free rev-<id>[-n] id). */
 export async function reverseNsEvent(targetId: string, existingIds: ReadonlySet<string>, note?: string): Promise<string> {
   let n = 1;

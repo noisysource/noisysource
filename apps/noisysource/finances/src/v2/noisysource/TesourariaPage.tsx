@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { addDays, monthOf, monthsBetween } from '@shared/finhub/dates';
 import { PLAN_KIND_LABEL, type PlannedItem } from '@shared/finhub/noisysource/plan';
 import { costPlanVersions, type NsState } from '@shared/finhub/noisysource/state';
@@ -139,9 +140,9 @@ export default function TesourariaPage() {
       <section>
         <h2 className="mb-1 text-lg font-semibold">Meses passados: saldo previsto vs real</h2>
         <p className="mb-2 text-sm text-zinc-400">
-          Previsto = saldo real do fim do mês anterior + movimentos do plano no mês. A diferença são as linhas do banco que o plano
-          não tem (ocasionais) e as que tem com outro valor ou dia; a explicação linha a linha chega com o ecrã Mês.
-          ✓ = há uma linha do banco com o mesmo valor a ±10 dias (só uma pista, ainda não é correspondência).
+          Previsto = saldo real do fim do mês anterior + movimentos do plano no mês. A diferença explica-se linha a linha no ecrã
+          Mês (abrir); o resumo de todos os meses está em Aceitação 2026.
+          ✓ = há uma linha do banco com o mesmo valor a ±10 dias (só uma pista; a correspondência faz-se no Mês).
         </p>
         <div className="overflow-x-auto rounded-lg border border-zinc-800">
           <table className="w-full text-sm">
@@ -155,6 +156,7 @@ export default function TesourariaPage() {
                 <th className="px-3 py-2 text-right">Final real</th>
                 <th className="px-3 py-2 text-right">Real − previsto</th>
                 <th className="px-3 py-2 text-right">Pistas</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -171,8 +173,11 @@ export default function TesourariaPage() {
                     <td className="px-3 py-1.5 text-right text-xs text-zinc-400">
                       {c.hints.filter(h => h.movementId).length}/{c.items.length} plano · {c.movements.length - c.unhintedMovementIds.length}/{c.movements.length} banco
                     </td>
+                    <td className="px-3 py-1.5">
+                      <Link to={`/v2/noisysource/mes/${c.month}`} onClick={e => e.stopPropagation()} className="text-sky-300 hover:underline">abrir</Link>
+                    </td>
                   </tr>
-                  {openMonth === c.month && <tr><td colSpan={8} className="bg-zinc-900/40 p-3"><MonthDetail check={c} /></td></tr>}
+                  {openMonth === c.month && <tr><td colSpan={9} className="bg-zinc-900/40 p-3"><MonthDetail check={c} /></td></tr>}
                 </Fragment>
               ))}
             </tbody>
