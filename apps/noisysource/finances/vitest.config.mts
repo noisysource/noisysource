@@ -7,6 +7,8 @@ export default defineConfig({
     alias: { '@shared': fileURLToPath(new URL('../../../packages/shared', import.meta.url)) },
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    // FinHub v2's domain lives in packages/shared/finhub (pure, no runner of its own): its tests
+    // run here, with the app's.
+    include: ['src/**/*.test.ts', '../../../packages/shared/finhub/**/*.test.ts'],
   },
 });
