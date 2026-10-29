@@ -3,7 +3,7 @@
  * Flagged for human review: it writes real 2026 values to kidclub-dev, and nowhere else.
  *
  * Reads the local documents in the main checkout's gitignored prodata/ (never copies them):
- *   finhub-seed.json, finhub-v2-noisysource.json, Recibs/517010585_RC_2026_M*.pdf,
+ *   finhub-seed.json, finhub-v2-noisysource.json, Recibs/<company NIF>_RC_2026_M<mm>P1_F.pdf,
  *   extratos noisySource/Extrato_Conta_2026-*.pdf
  * builds NoisySource's events (scripts/finhub-v2/lib/buildNoisySource.ts), validates every one,
  * runs the night-1 self-check, and writes the events that don't exist yet to
@@ -66,7 +66,7 @@ async function main() {
   const hashes = new Map<string, string>();
   const payslips: SourcePayslip[] = [];
   let duplicates = 0;
-  for (const f of readdirSync(payDir).filter(f => /^517010585_RC_2026_M\d\dP1_F.*\.pdf$/.test(f)).sort()) {
+  for (const f of readdirSync(payDir).filter(f => /^\d{9}_RC_2026_M\d\dP1_F.*\.pdf$/.test(f)).sort()) {
     const buf = readFileSync(join(payDir, f));
     const h = createHash('sha256').update(buf).digest('hex');
     if (hashes.has(h)) { duplicates++; continue; }
