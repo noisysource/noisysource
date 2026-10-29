@@ -39,6 +39,10 @@
   new contract. Some start right after the previous one, some don't.
 - The days budget gives the **last working day**. FinHub warns **3 months** before it, so the next
   contract can be prepared in time.
+- The contracts come **through Malt** (the company invoiced) for an end client at the European
+  Commission. Malt pays **days × rate with no fee deducted**, 5–10 days into the next month, and
+  EC days follow the **Commission's holidays**. Checked against every 2026 payment so far
+  (`prodata/finhub-seed-sources.md`, "Malt").
 - **Days worked vary per month**, so income varies.
 - **Three workers. Payslips vary month to month**: the meal allowance follows the month's possible
   working days minus vacation, sick and trip days; trips are paid as per diems (a fixed value per
@@ -235,7 +239,8 @@ Then Renato compares Tesouraria with the old FinHub's Previsão for the coming m
 ## Steps: one night run each (Renato, 2026-10-28)
 
 Agents build overnight; Renato checks on dev in the morning. So every night ends with screens he
-can click on dev, not only tests. Each night: a branch off `staging`, a PR into `staging`.
+can click on dev, not only tests. Branch `agent/finhub-v2-noisysource` (worktree
+`.claude/worktrees/finhub-v2-noisysource`), one PR into `staging` that each night updates.
 
 | Night | Builds | Morning check on dev |
 |---|---|---|
@@ -246,18 +251,23 @@ can click on dev, not only tests. Each night: a branch off `staging`, a PR into 
 
 Then choose the next company (NoisyPhocus or Casa).
 
-**Before night 1 (Renato):** the 2026 EC contracts with their numbers (number, rate, days, start
-for each) in `prodata/` (local only). Without them the agent uses `EC-1`, `EC-2` marked "a
-confirmar". 2026 trip days: the agent derives the count per month from the per diem lines (amount ÷
-daily value) and marks the dates "a confirmar"; the count is enough for meal days and per diems.
+**Inputs for night 1 (Renato, 2026-10-29):** the Malt contracts are in `prodata/Malt contract*.png`
+(number, start, days, rate). Two cover 2026; the older one started in 2025, so its days used before
+2026-01-01 go in as an opening position (it must run out exactly when the newer one starts).
+Timesheets will follow; until then the EC days per month come from the Malt payments, already
+checked month by month in `prodata/finhub-seed-sources.md`. 2026 trip days: the agent derives the
+count per month from the per diem lines (amount ÷ daily value) and marks the dates "a confirmar";
+the count is enough for meal days and per diems.
 
 ### Night run rules
 
 - **Runs on Renato's Mac**, not in the cloud: the 2026 inputs are in `prodata/` (local only). The
   Mac stays awake (`caffeinate -dims` in a terminal), the Claude Code session stays open, auto mode
   on (a permission prompt would stop the run until morning).
-- **One FinHub agent at a time, one branch per night.** Every PR into `staging` redeploys FinHub on
-  dev, so two FinHub PRs overwrite each other's screens. Agents on other apps can run alongside.
+- **One FinHub agent at a time, one branch for the module.** Each night adds commits and updates the
+  same PR; once it's merged, the next night starts a new branch off `staging`. Every push to a PR
+  into `staging` redeploys FinHub on dev, so two FinHub PRs overwrite each other's screens. Agents
+  on other apps can run alongside.
 - **Commit as it goes**; push and open or update the PR only once the night's screens build and the
   tests pass, so dev never shows a broken build.
 - **Stop, and write why in STATUS.md**, if: any Firebase project other than `kidclub-dev` comes up;
@@ -283,6 +293,9 @@ daily value) and marks the dates "a confirmar"; the count is enough for meal day
 
 - **Real values only in `prodata/`.** Fixtures and examples use made-up values.
 - **Writes go to `kidclub-dev` only** until a release is decided. Prod isn't touched.
+- **Employer SS was exempt in some 2026 months** (one-off; which months and what's still open:
+  `prodata/finhub-seed-sources.md`, "SS exemption"). Model it as employment terms versions, or the
+  payslip check fails for those months.
 - **Carnaval isn't a legal holiday**, so it's not in `pt-coimbra`. If a 2026 payslip shows one meal
   day fewer in February or March, ask Renato whether NoisySource gives it off and add it as a
   company day off.

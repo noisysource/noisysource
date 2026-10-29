@@ -8,9 +8,9 @@
 Renato decided to rebuild FinHub as **three modules, one per company** (NoisySource, NoisyPhocus,
 Casa) in the same app, with an **append-only event log** as the record. **NoisySource first**,
 rebuilt for 2026 and checked against the bank statements (bank balances are the truth). Design,
-decisions, open questions: **`HANDOFF-finhub-v2.md`** (same folder), on branch
-`agent/finhub-v2-design` (worktree `.claude/worktrees/finhub-v2-design`), committed locally, not
-pushed, no PR yet.
+decisions, Renato's answers: **`HANDOFF-finhub-v2.md`** (same folder), on branch
+`agent/finhub-v2-noisysource` (worktree `.claude/worktrees/finhub-v2-noisysource`). **Night 1
+started 2026-10-29** (background agent; its morning report replaces this paragraph).
 
 **Paused (Renato, 2026-10-28), everything below this section:** #94 `agent/finhub-real-data`
 (open, not merged; its latest state is in *that branch's* STATUS.md, 2026-10-18, newer than this
@@ -19,9 +19,8 @@ release. The old FinHub keeps running as it is until v2's NoisySource module pas
 
 **Next step:** night 1 of `HANDOFF-finhub-v2.md` (§ Steps: domain + storage + 2026 import on dev +
 Tesouraria + Contratos EC), run overnight on Renato's Mac per § Night run rules, in a fresh
-session on a new `agent/` branch off `staging`. Before it: Renato puts the 2026 EC contract numbers
-in `prodata/` (or the agent uses placeholders). Renato's answers to the design's questions are in
-the handoff (§ Answers, 2026-10-28).
+branch above. Inputs: the Malt contracts in `prodata/Malt contract*.png` (2026-10-29); timesheets
+to follow. Renato's answers to the design's questions are in the handoff (§ Answers, 2026-10-28).
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).
