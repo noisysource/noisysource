@@ -227,7 +227,8 @@ describe('expected movements', () => {
     expect(byId('salario:ana:2030-08').date).toBe('2030-08-23'); // 25 Aug 2030 is a Sunday
     expect(byId('salario:ana:2030-07').date).toBe('2030-07-25');
     expect(byId('refeicao:ana:2030-07').toConfirm).toBe(true);
-    expect(byId('vales:ana:2030-07').amountCents).toBe(-15000);
+    expect(byId('vales:ana.creche:2030-07').amountCents).toBe(-10000);
+    expect(byId('vales:ana.educacao:2030-07').amountCents).toBe(-5000);
   });
 
   it('pays SS and IRS for M on the 20th of M+1', () => {

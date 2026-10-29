@@ -18,6 +18,8 @@ import { calendarOf, termsAt, type NsState, type WithId } from './state';
 
 export interface EstimateLine {
   kind: PayslipLineKind;
+  /** Benefit code from the terms (benefit lines only). */
+  code?: string;
   label: string;
   amountCents: number;
   quantity?: number;
@@ -96,7 +98,7 @@ export function estimatePayslip(state: NsState, personId: string, month: YearMon
   for (const b of terms.benefits) {
     const amount = (wholeMonthOff ? 0 : b.perMonthCents ?? 0) + (b.perDayCents ?? 0) * meal.days;
     if (amount <= 0) continue;
-    lines.push({ kind: 'beneficio', label: b.label, amountCents: amount, paidAs: b.paidAs });
+    lines.push({ kind: 'beneficio', code: b.code, label: b.label, amountCents: amount, paidAs: b.paidAs });
     if (b.subjectToIRS) irsExtra += amount;
     if (b.subjectToSS) ssExtra += amount;
     if (b.paidAs === 'cartao') cardVales += amount; else cashBenefits += amount;

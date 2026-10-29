@@ -6,10 +6,13 @@
 // The real balance is the running balance printed after each imported bank line. Before an
 // account's first imported line it is that line's balance minus its amount (the statement's
 // opening balance).
+//
+// Planned items a confirmed match already paid (a lump payment ahead of the planned day) aren't
+// projected again.
 
 import { addDays, firstDay, lastDay, monthOf, type IsoDate, type YearMonth } from '../dates';
 import { plannedItems, type PlannedItem } from './plan';
-import type { MovementState, NsState } from './state';
+import { matchedItemIds, type MovementState, type NsState } from './state';
 
 export interface RealBalance {
   accountId: string;
@@ -67,8 +70,9 @@ export function projectTreasury(
   const start = lastRealBalance(state, opts.accountId);
   if (!start) return null;
   const end = addDays(opts.today, opts.horizonDays);
+  const paid = matchedItemIds(state);
   const items = plannedItems(state, { from: addDays(start.date, 1), to: end, mainAccount: opts.accountId })
-    .filter(i => !i.account || i.account === opts.accountId);
+    .filter(i => (!i.account || i.account === opts.accountId) && !paid.has(i.id));
 
   const byDay = new Map<IsoDate, PlannedItem[]>();
   for (const i of items) byDay.set(i.date, [...(byDay.get(i.date) ?? []), i]);

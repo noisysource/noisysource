@@ -5,7 +5,7 @@ import type { EmploymentTerms } from './events';
 
 let seq = 0;
 
-export function ev<T extends NsEventType>(type: T, payload: NsPayload<T>, id?: string, extra: { reverses?: string; recordedAt?: string } = {}): NsEvent {
+export function ev<T extends NsEventType>(type: T, payload: NsPayload<T>, id?: string, extra: { reverses?: string; recordedAt?: string; effectiveDate?: string } = {}): NsEvent {
   seq += 1;
   return buildNsEvent<T>(type, payload, {
     id: id ?? `t-${seq}`,
@@ -13,6 +13,7 @@ export function ev<T extends NsEventType>(type: T, payload: NsPayload<T>, id?: s
     recordedBy: 'test-uid',
     recordedAt: extra.recordedAt ?? `2030-01-01T00:00:${String(seq % 60).padStart(2, '0')}.000Z`,
     reverses: extra.reverses,
+    effectiveDate: extra.effectiveDate,
   }) as unknown as NsEvent;
 }
 

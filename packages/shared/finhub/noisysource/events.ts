@@ -12,6 +12,11 @@
 // - `employment.terms.set`: subsidy months, holiday calendars, per diem value;
 // - `cost.plan.set.loan`: an instalment computed from the outstanding capital;
 // - `bank.movement.imported.seq`: the line's position in its statement (orders same-day lines).
+// Night 2:
+// - `bank.movement.matched.items`: one bank line can pay several planned items (a voucher top-up
+//   for three workers, the accountant's lump payment), and `basis` says how the match was found;
+// - `plan.item.explained`: the written reason a planned item has no bank line (§ Acceptance 2);
+// - `payment.rule.set.fee`: a provider's fee on the payment (the voucher top-ups), plus VAT.
 
 import { z } from 'zod';
 import { isVatCode, type VatCode } from '../../lib/vat';
@@ -128,6 +133,13 @@ export const holidaysSetSchema = z.object({
   note: z.string().optional(),
 });
 
+/** A provider's fee charged on each payment: pct of the amount, plus VAT on the fee. */
+export const paymentFeeSchema = z.object({
+  label: text,
+  pct: pct,
+  vatPct: pct,
+});
+
 export const paymentRuleSetSchema = z.object({
   what: z.enum(PAYMENT_RULE_WHATS),
   label: text,
@@ -140,6 +152,7 @@ export const paymentRuleSetSchema = z.object({
   toConfirm: z.boolean().optional(),
   /** What the day was read from, e.g. "extratos 2026: 24–30". No amounts. */
   evidence: z.string().optional(),
+  fee: paymentFeeSchema.optional(),
 });
 
 export const loanSchema = z.object({
@@ -232,13 +245,21 @@ export const bankMovementImportedSchema = z.object({
   seq: z.number().int().min(0),
 });
 
-export const MATCH_TARGETS = ['ec-fatura', 'salario', 'refeicao', 'vales', 'ss', 'irs', 'custo', 'outro'] as const;
+export const MATCH_TARGETS = ['ec-fatura', 'salario', 'refeicao', 'vales', 'ss', 'irs', 'custo'] as const;
+export type MatchTarget = (typeof MATCH_TARGETS)[number];
 
-export const bankMovementMatchedSchema = z.object({
-  movementId: text,
+/** A planned item, by what it is, its ref (contract, worker, cost key…) and the month it belongs to. */
+export const matchItemSchema = z.object({
   to: z.enum(MATCH_TARGETS),
   ref: text,
   month: yearMonthSchema,
+});
+
+export const bankMovementMatchedSchema = z.object({
+  movementId: text,
+  items: z.array(matchItemSchema).min(1),
+  /** How the match was found ("nome e valor", "TSU 2026-02", "escolhido à mão"…). */
+  basis: z.string().optional(),
 });
 
 export const bankMovementClassifiedSchema = z.object({
@@ -246,6 +267,13 @@ export const bankMovementClassifiedSchema = z.object({
   category: text,
   vatCode,
   description: text,
+});
+
+export const planItemExplainedSchema = z.object({
+  /** The planned item's id (`kind:ref:month`, see plan.ts). */
+  itemId: text,
+  month: yearMonthSchema,
+  reason: text,
 });
 
 export const reversalPayloadSchema = z.object({});
@@ -265,6 +293,7 @@ export const NS_PAYLOAD_SCHEMAS = {
   'bank.movement.imported': bankMovementImportedSchema,
   'bank.movement.matched': bankMovementMatchedSchema,
   'bank.movement.classified': bankMovementClassifiedSchema,
+  'plan.item.explained': planItemExplainedSchema,
   [REVERSAL]: reversalPayloadSchema,
 } as const;
 
@@ -282,6 +311,8 @@ export type CostPlan = NsPayload<'cost.plan.set'>;
 export type Payslip = NsPayload<'payroll.payslip.recorded'>;
 export type PayslipLine = z.output<typeof payslipLineSchema>;
 export type BankMovement = NsPayload<'bank.movement.imported'>;
+export type PaymentFee = z.output<typeof paymentFeeSchema>;
+export type MatchItem = z.output<typeof matchItemSchema>;
 
 export const NS_EVENT_TYPES = Object.keys(NS_PAYLOAD_SCHEMAS) as NsEventType[];
 
@@ -324,7 +355,19 @@ export const nsIds = {
   payslip: (personId: string, month: string) => `ps-${slug(personId)}-${month}`,
   match: (movementId: string) => `m-${movementId}`,
   classified: (movementId: string) => `c-${movementId}`,
+  explained: (itemId: string) => `x-${itemId.replace(/[^A-Za-z0-9._-]+/g, '.')}`,
 };
+
+/**
+ * The first id not taken in the log: `base`, then `base-r2`, `base-r3`… (a reversed event keeps
+ * its id, so a new match for the same line after an undo needs the next one).
+ */
+export function nextFreeId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}-r${n}`)) n++;
+  return `${base}-r${n}`;
+}
 
 /** The effective date an event of this type gets when nothing else is said. */
 export function defaultEffectiveDate<T extends NsEventType>(type: T, payload: NsPayload<T>): string {
@@ -342,6 +385,7 @@ export function defaultEffectiveDate<T extends NsEventType>(type: T, payload: Ns
     case 'ec.invoice.issued': return p.issueDate as string;
     case 'payroll.payslip.recorded': return (p.payDate as string | undefined) ?? lastDay(p.month as string);
     case 'bank.movement.imported': return p.date as string;
+    case 'plan.item.explained': return lastDay(p.month as string);
     default: throw new Error(`no default effective date for ${type}`);
   }
 }

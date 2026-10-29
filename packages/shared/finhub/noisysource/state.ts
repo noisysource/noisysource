@@ -9,8 +9,8 @@
 import { liveEvents, sortEvents } from '../envelope';
 import type { ExtraHolidays } from '../holidays';
 import type {
-  BankMovement, CalendarEntry, CostPlan, EcContractSigned, EmploymentTerms, NsEvent, NsEventOf,
-  NsEventType, NsPayload, PaymentRule, PaymentRuleWhat, Payslip,
+  BankMovement, CalendarEntry, CostPlan, EcContractSigned, EmploymentTerms, MatchItem, MatchTarget, NsEvent,
+  NsEventOf, NsEventType, NsPayload, PaymentRule, PaymentRuleWhat, Payslip,
 } from './events';
 
 export type WithId<T> = T & { eventId: string };
@@ -52,6 +52,8 @@ export interface NsState {
   movements: MovementState[];
   matches: Record<string, WithId<NsPayload<'bank.movement.matched'>>>;
   classifications: Record<string, WithId<NsPayload<'bank.movement.classified'>>>;
+  /** Planned item id → the written reason it has no bank line. */
+  explained: Record<string, WithId<NsPayload<'plan.item.explained'>>>;
   eventCount: number;
 }
 
@@ -115,6 +117,8 @@ export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
   for (const e of of(events, 'bank.movement.matched')) matches[e.payload.movementId] = { ...e.payload, eventId: e.id };
   const classifications: NsState['classifications'] = {};
   for (const e of of(events, 'bank.movement.classified')) classifications[e.payload.movementId] = { ...e.payload, eventId: e.id };
+  const explained: NsState['explained'] = {};
+  for (const e of of(events, 'plan.item.explained')) explained[e.payload.itemId] = { ...e.payload, eventId: e.id };
 
   return {
     contracts,
@@ -132,6 +136,7 @@ export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
     movements,
     matches,
     classifications,
+    explained,
     eventCount: allEvents.length,
   };
 }
@@ -167,4 +172,21 @@ export function costPlanVersions(state: NsState): Record<string, WithId<CostPlan
 /** The person's calendar entries (all kinds). */
 export function calendarOf(state: NsState, personId: string): WithId<CalendarEntry>[] {
   return state.calendar.filter(c => c.personId === personId);
+}
+
+/** Planned item kind (plan.ts) for each match target, and back. */
+export const TARGET_KIND: Record<MatchTarget, string> = {
+  'ec-fatura': 'ec', salario: 'salario', refeicao: 'refeicao', vales: 'vales', ss: 'ss', irs: 'irs', custo: 'custo',
+};
+
+/** The planned item id a match points at (`kind:ref:month`, as plan.ts builds them). */
+export function matchItemId(m: MatchItem): string {
+  return `${TARGET_KIND[m.to]}:${m.ref}:${m.month}`;
+}
+
+/** Ids of the planned items a confirmed match already pays (Tesouraria doesn't project them again). */
+export function matchedItemIds(state: NsState): Set<string> {
+  const out = new Set<string>();
+  for (const m of Object.values(state.matches)) for (const i of m.items) out.add(matchItemId(i));
+  return out;
 }
