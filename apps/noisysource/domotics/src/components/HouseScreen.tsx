@@ -1,7 +1,7 @@
 import { Component, Suspense, lazy, useCallback, useState, type ReactNode } from 'react';
 import {
-  Battery, BatteryCharging, ClipboardList, Flame, Home, Lightbulb, Map as MapIcon, Maximize2, Pencil, Server,
-  Sun, Thermometer, Zap,
+  Battery, BatteryCharging, ChartColumn, ChevronRight, ClipboardList, Flame, Home, Lightbulb, Map as MapIcon, Maximize2,
+  Pencil, Server, Sun, Thermometer, Zap,
 } from 'lucide-react';
 import type {
   BlindCommand, Device, DevicePlacement, HeatPumpCommand, LightCommand, LightDevice,
@@ -11,10 +11,11 @@ import type { FloorPlan } from '@shared/models/Room';
 import type { User } from 'firebase/auth';
 import type { DeviceStatus } from '../App';
 import type { EnergyReading } from '../data/energy';
-import { batteryFlow, formatWatts, gridFlow, solarShare } from '../data/energy';
+import { batteryFlow, formatWatts, gridFlow, liveSurplus, solarShare } from '../data/energy';
 import { roomStats } from '../data/placement';
 import type { HouseMode } from './house3d/House3D';
 import ClimatePanel from './ClimatePanel';
+import SurplusNow from './SurplusNow';
 import Clock from './Clock';
 import HealthChips, { FaultBanner } from './HealthChips';
 import RoomPanel from './RoomPanel';
@@ -43,6 +44,8 @@ interface Props {
   onSignOut: () => Promise<void>;
   onOpenAdmin: () => void;
   onOpenReports: () => void;
+  /** kWh history and the bill; absent when it can't be read (signed out). */
+  onOpenEnergy?: () => void;
   onShow2D: () => void;
   onStartEdit: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
@@ -98,7 +101,7 @@ const sectionTitle = 'text-[11px] font-semibold uppercase tracking-widest text-z
  */
 export default function HouseScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
-  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onShow2D, onStartEdit,
+  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onOpenEnergy, onShow2D, onStartEdit,
   onLightCommand, onLightsSet, onBlindCommand, onBlindsSet, onThermostatCommand, onHeatPumpCommand,
   automation, guard, canEditAutomation,
 }: Props) {
@@ -187,6 +190,11 @@ export default function HouseScreen({
           <button onClick={onStartEdit} className={iconBtn} aria-label="Editar planta" title="Editar planta">
             <Pencil size={15} />
           </button>
+          {onOpenEnergy && (
+            <button onClick={onOpenEnergy} className={iconBtn} aria-label="Energia" title="Energia — consumo, solar, bateria e fatura">
+              <ChartColumn size={15} />
+            </button>
+          )}
           {/* Signed in only, like the bridge screen: both read owner-only data. */}
           {user && (
             <button onClick={onOpenReports} className={iconBtn} aria-label="Relatórios" title="Relatórios — avarias da bomba">
@@ -312,6 +320,7 @@ export default function HouseScreen({
               plan={plan}
               devices={devices}
               energy={energy}
+              onOpenEnergy={onOpenEnergy}
               onSelectRoom={selectRoom}
               onLightsSet={onLightsSet}
               onThermostatCommand={onThermostatCommand}
@@ -346,6 +355,7 @@ function TempLegend({ outdoor }: { outdoor?: number }) {
 function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => void }) {
   const battery = batteryFlow(energy);
   const grid = gridFlow(energy);
+  const surplus = liveSurplus(energy);
   const abs = (w?: number) => (w === undefined ? undefined : Math.abs(w));
   const item = 'flex items-center gap-1 whitespace-nowrap';
   return (
@@ -367,13 +377,19 @@ function EnergyStrip({ energy, onOpen }: { energy: EnergyReading; onOpen: () => 
         <Zap size={13} />
         {grid === 'out' ? '↑' : grid === 'in' ? '↓' : ''}{formatWatts(abs(energy.gridPowerW))}
       </span>
+      {surplus && (
+        <span className={`${item} rounded-md bg-amber-400/15 px-1.5 text-amber-200`} title="Excedente solar a ir para a rede, sem pagamento">
+          excedente ~{formatWatts(surplus.exportW)}
+        </span>
+      )}
     </button>
   );
 }
 
 /** The panel when no room is selected: what's on, every room, climate, energy. */
 function Overview({
-  automation, guard, canEditAutomation, mode, plan, devices, energy, onSelectRoom, onLightsSet, onThermostatCommand, onHeatPumpCommand,
+  automation, guard, canEditAutomation, mode, plan, devices, energy, onOpenEnergy, onSelectRoom, onLightsSet,
+  onThermostatCommand, onHeatPumpCommand,
 }: {
   automation?: AutomationStatus;
   guard?: GuardStatus;
@@ -382,6 +398,7 @@ function Overview({
   plan: FloorPlan;
   devices: Device[];
   energy: EnergyReading | null;
+  onOpenEnergy?: () => void;
   onSelectRoom: (id: string) => void;
   onLightsSet: Props['onLightsSet'];
   onThermostatCommand: Props['onThermostatCommand'];
@@ -457,7 +474,7 @@ function Overview({
         </div>
       </section>
     ),
-    energy: energy?.online ? <EnergyCard energy={energy} /> : (
+    energy: energy?.online ? <EnergyCard energy={energy} onOpen={onOpenEnergy} /> : (
       <p id="energia" className="text-sm text-zinc-500">Inversor sem ligação — sem dados de energia.</p>
     ),
     automation: <AutomationCard status={automation} canEdit={canEditAutomation} />,
@@ -487,14 +504,22 @@ function Overview({
   );
 }
 
-function EnergyCard({ energy }: { energy: EnergyReading }) {
+function EnergyCard({ energy, onOpen }: { energy: EnergyReading; onOpen?: () => void }) {
   const battery = batteryFlow(energy);
   const grid = gridFlow(energy);
   const share = solarShare(energy);
+  const surplus = liveSurplus(energy);
   const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
   return (
     <section id="energia" className="flex flex-col gap-2 scroll-mt-4">
-      <h2 className={sectionTitle}>Energia</h2>
+      <div className="flex items-center justify-between">
+        <h2 className={sectionTitle}>Energia</h2>
+        {onOpen && (
+          <button onClick={onOpen} className="flex items-center gap-0.5 text-xs text-zinc-400 hover:text-zinc-200">
+            Histórico e fatura <ChevronRight size={13} />
+          </button>
+        )}
+      </div>
       <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 flex flex-col gap-3">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
           <div className="flex flex-col">
@@ -518,7 +543,7 @@ function EnergyCard({ energy }: { energy: EnergyReading }) {
           </div>
           <div className="flex flex-col">
             <span className={label}>
-              Rede{grid === 'out' ? ' · a exportar' : grid === 'in' ? ' · a importar' : ''}
+              Rede{grid === 'out' ? ' · a enviar' : grid === 'in' ? ' · a comprar' : ''}
             </span>
             <span className={`text-base tabular-nums ${
               grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'
@@ -535,6 +560,7 @@ function EnergyCard({ energy }: { energy: EnergyReading }) {
             </div>
           </div>
         )}
+        {surplus && <SurplusNow surplus={surplus} />}
       </div>
     </section>
   );

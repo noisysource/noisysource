@@ -65,9 +65,13 @@ export interface SwitchEvent {
   reason?: string;
   faults: string[];
   before: PumpSample[];
+  /** Every raw datapoint in the reading before the change and the one that showed it (bridge only, from 26/10). */
+  dps?: { before: PumpDps; at: PumpDps };
   note?: string;
   origin: IncidentOrigin;
 }
+
+export type PumpDps = Record<string, string | number | boolean>;
 
 /** Context written by hand: an intervention, when the guard started, what someone found. */
 export interface NoteEntry {
@@ -140,6 +144,14 @@ export interface TripContext {
   idleMin: number;
   /** Seconds between readings — 20 s, 30 s or a minute, depending on who recorded it. */
   step: number;
+  /** When the compressor started the run that tripped, and for how long it ran; unset when the run started before the readings. */
+  runFrom?: number;
+  runMin?: number;
+  /** The run started before the readings: it lasted longer than this. */
+  runOver?: number;
+  /** Lowest coil (C00) in the ~3 min before, and the warmest water out during the run. */
+  coilMin?: number;
+  outPeak?: number;
 }
 
 export function tripContext(f: FaultIncident): TripContext | undefined {
@@ -159,7 +171,18 @@ export function tripContext(f: FaultIncident): TripContext | undefined {
     }
   }
   const steps = f.before.slice(1).map((s, i) => s.t - f.before[i].t).sort((a, b) => a - b);
+  let start = f.before.length;
+  while (start > 0 && f.before[start - 1].on && f.before[start - 1].hz > 0) start--;
+  const run = f.before.slice(start);
+  const runFrom = start > 0 && run.length ? run[0].t : undefined;
+  const coil = window.map(s => s.coil).filter((v): v is number => v !== undefined);
+  const outs = run.map(s => s.out).filter((v): v is number => v !== undefined);
   return {
+    runFrom,
+    runMin: runFrom !== undefined ? Math.round((f.at - runFrom) / MIN) : undefined,
+    runOver: start === 0 && run.length ? Math.floor((f.at - run[0].t) / MIN) : undefined,
+    coilMin: coil.length ? Math.min(...coil) : undefined,
+    outPeak: outs.length ? Math.max(...outs) : undefined,
     last,
     trip,
     hzBefore: first.hz,
@@ -210,6 +233,146 @@ export const SOURCE_LABEL: Record<SwitchSource, string> = {
   unknown: 'origem desconhecida',
 };
 
+// ---------------------------------------------------------------------------
+// The log: everything that happened to the pump, in order
+// ---------------------------------------------------------------------------
+
+/**
+ * The pump's own clock. Tuya has its time zone as a fixed +01:00 (device
+ * details, 26/10), so its timers keep summer time: what it does at 00:54 by its
+ * clock happened at 00:54 in Lisbon until 25/10 and at 23:54 since.
+ */
+const PUMP_CLOCK_OFFSET = 60 * MIN;
+const DAY_MS = 24 * 60 * MIN;
+export const fmtPumpClock = (t: number) =>
+  new Date(t + PUMP_CLOCK_OFFSET).toLocaleTimeString('pt-PT', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+
+export type LogOrigin = SwitchSource | 'pump' | 'note';
+
+export const LOG_ORIGIN: Record<LogOrigin, string> = {
+  outside: 'De fora',
+  unknown: 'Desconhecida',
+  guard: 'Proteção E13',
+  automation: 'Automação',
+  app: 'App / ponte',
+  pump: 'Bomba (avaria)',
+  note: 'Nota',
+};
+
+export interface LogRow {
+  id: string;
+  at: number;
+  origin: LogOrigin;
+  /** One line: what happened. */
+  what: string;
+  /** Why, and what the pump was doing. */
+  details: string[];
+  /** For the "De fora" rows: the time by the pump's clock, where its timers live. */
+  pumpClock?: string;
+}
+
+/** Datapoints that move every reading (temperatures, Hz) or are the switch itself: not "something else changed". */
+const MOVING_DPS = new Set(['switch', 'temp_current', 'power_consumption', 'compressor_strength', 'temp_top', 'temp_bottom', 'coiler_temp', 'venting_temp', 'effluent_temp']);
+/** The Tuya codes are reused and misleading (domotics-bridge/README.md → Heat pump). */
+const DP_LABEL: Record<string, string> = {
+  mode: 'modo',
+  fault: 'avarias E01–E16',
+  smart_system: 'avarias E17–E32',
+  power_system: 'avarias E36–E59',
+  ithium_battery_system: 'avaria E50',
+  electronic_system: 'avarias IPM',
+  bcu_com_state: 'avarias IPM',
+  p02_heating: 'setpoint de aquecimento',
+  p03_cooling: 'setpoint de arrefecimento',
+  p04_dhw: 'setpoint AQS',
+};
+
+/** What changed in the pump's datapoints with the switch, besides it and the temperatures. */
+export function otherChanges(e: SwitchEvent): string | undefined {
+  if (!e.dps) return undefined;
+  const { before, at } = e.dps;
+  const codes = [...new Set([...Object.keys(before), ...Object.keys(at)])].filter(c => !MOVING_DPS.has(c));
+  const changed = codes.filter(c => before[c] !== at[c]);
+  if (changed.length === 0) return 'Nada mais mudou nos dados da bomba (modo, setpoints e avarias iguais).';
+  return `Mudou também: ${changed.map(c => `${DP_LABEL[c] ?? c} ${String(before[c] ?? '—')} → ${String(at[c] ?? '—')}`).join(', ')}.`;
+}
+
+function pumpDoing(e: SwitchEvent): string | undefined {
+  // For an off, the last reading still running; for an on, the last one still off.
+  const s = [...e.before].reverse().find(x => x.on !== e.on) ?? e.before.at(-1);
+  if (!s) return undefined;
+  const parts = [
+    s.on ? `compressor a ${s.hz} Hz` : 'parada',
+    s.out !== undefined ? `água ${num(s.out)} °C${s.sp !== undefined ? ` (setpoint ${s.sp} °C)` : ''}` : '',
+    s.outdoor !== undefined ? `exterior ${num(s.outdoor)} °C` : '',
+  ].filter(Boolean);
+  return `Antes: ${parts.join(', ')}.`;
+}
+
+/** Newest first, like the incidents. Faults are one row each, with how they ended. */
+export function logRows(incidents: Incident[]): LogRow[] {
+  return incidents.map((i): LogRow => {
+    if (i.kind === 'switch') {
+      const details = [
+        i.reason ? `Porquê: ${i.reason}.` : '',
+        i.faults.length ? `Em avaria: ${i.faults.join(', ')}.` : '',
+        pumpDoing(i) ?? '',
+        otherChanges(i) ?? '',
+        i.note ?? '',
+      ].filter(Boolean);
+      return {
+        id: i.id, at: i.at, origin: i.source, what: i.on ? 'Ligada' : 'Desligada', details,
+        ...(i.source === 'outside' || i.source === 'unknown' ? { pumpClock: fmtPumpClock(i.at) } : {}),
+      };
+    }
+    if (i.kind === 'fault') {
+      const details = [
+        endPhrase(i),
+        i.lockoutWhy ? `Bloqueio: ${i.lockoutWhy}.` : '',
+        ...i.actions.map(a => `${fmtTime(a.at)} ${a.what === 'on' ? 'ligada' : 'desligada'} ${SOURCE_LABEL[a.by]}${a.reason ? ` — ${a.reason}` : ''}`),
+        i.note ?? '',
+      ].filter(Boolean);
+      return { id: i.id, at: i.at, origin: 'pump', what: `Avaria ${i.codes.join(', ')}${i.lockout ? ' — bloqueou' : ''}`, details };
+    }
+    return { id: i.id, at: i.at, origin: 'note', what: i.note, details: [] };
+  });
+}
+
+export interface Repeat {
+  on: boolean;
+  /** By the pump's clock. */
+  from: string;
+  to: string;
+  times: number[];
+}
+
+/**
+ * Switches from outside that come back at the same time of day, by the pump's
+ * clock, on two days or more: a timer's signature. Within 5 min counts as the same.
+ */
+export function repeatedOutside(incidents: Incident[]): Repeat[] {
+  const out: Repeat[] = [];
+  for (const on of [false, true]) {
+    const list = incidents
+      .filter((i): i is SwitchEvent => i.kind === 'switch' && i.on === on && i.origin !== 'notes' && (i.source === 'outside' || i.source === 'unknown'))
+      .map(i => ({ t: i.at, m: ((i.at + PUMP_CLOCK_OFFSET) % DAY_MS) / MIN }))
+      .sort((a, b) => a.m - b.m);
+    let group: typeof list = [];
+    const flush = () => {
+      const days = new Set(group.map(g => Math.floor((g.t + PUMP_CLOCK_OFFSET) / DAY_MS)));
+      if (days.size >= 2) {
+        out.push({ on, from: fmtPumpClock(group[0].t), to: fmtPumpClock(group[group.length - 1].t), times: group.map(g => g.t).sort((a, b) => a - b) });
+      }
+    };
+    for (const x of list) {
+      if (group.length && x.m - group[0].m > 5) { flush(); group = []; }
+      group.push(x);
+    }
+    if (group.length) flush();
+  }
+  return out.sort((a, b) => b.times.length - a.times.length);
+}
+
 export const ENDED_LABEL: Record<NonNullable<FaultIncident['endedHow']>, string> = {
   self: 'limpou sozinho',
   reset: 'rearmada',
@@ -242,6 +405,135 @@ const median = (v: number[]) => {
   const s = [...v].sort((a, b) => a - b);
   return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 };
+
+/**
+ * Fills `minutesSincePrevious` where the record lacks it — the bridge doesn't
+ * link one fault to the last — from the fault before it. Expects time order.
+ */
+export function linkPrevious(faults: FaultIncident[]): FaultIncident[] {
+  return faults.map((f, i) => i === 0 || f.minutesSincePrevious !== undefined ? f
+    : { ...f, minutesSincePrevious: Math.round((f.at - faults[i - 1].at) / MIN) });
+}
+
+/** A trip this soon after the compressor started: the pump never got going. */
+const SHORT_RUN_MIN = 20;
+/** A run that starts this long after the trip before — after its reset, if it locked out — opens a new episode. */
+const SPELL_GAP = 6 * 60 * MIN;
+
+/**
+ * The guard's early-warning stops (domotics-bridge/src/preempt.ts, from
+ * 27/10): switched off 1–2 min before an E13 it saw coming. Not a trip, but the
+ * same run cut short. Told apart by the reason the bridge writes.
+ */
+export function isPreemptStop(i: Incident): i is SwitchEvent {
+  return i.kind === 'switch' && !i.on && i.source === 'guard' && /desligada antes do E13/.test(i.reason ?? '');
+}
+
+/** Early-warning stops after the spell's last trip, in time order. */
+function stopsAfter(spell: FaultIncident[], switches: SwitchEvent[]): SwitchEvent[] {
+  const last = spell[spell.length - 1];
+  return last ? switches.filter(e => isPreemptStop(e) && e.at > last.at).sort((a, b) => a.at - b.at) : [];
+}
+
+/**
+ * The trips at the end of the record that each came minutes after a start —
+ * the pump can't run at all, rather than trips now and then. Empty unless
+ * there are at least three and the last is from the past day — or the guard
+ * has been switching it off before the trip (`switches`) in the past day.
+ */
+export function shortRunSpell(faults: FaultIncident[], now: number, switches: SwitchEvent[] = []): FaultIncident[] {
+  const byTime = [...faults].sort((a, b) => a.at - b.at);
+  const spell: FaultIncident[] = [];
+  for (let i = byTime.length - 1; i >= 0; i--) {
+    const f = byTime[i];
+    const run = tripContext(f)?.runMin;
+    if (run === undefined || run > SHORT_RUN_MIN) break;
+    if (spell.length && tripContext(spell[0])!.runFrom! - (f.endedAt ?? f.at) > SPELL_GAP) break;
+    spell.unshift(f);
+  }
+  const latest = Math.max(spell[spell.length - 1]?.at ?? 0, ...stopsAfter(spell, switches).map(e => e.at));
+  return spell.length >= 3 && now - latest <= 24 * 60 * MIN ? spell : [];
+}
+
+const hoursOrMin = (min: number) =>
+  min < 90 ? `${Math.round(min)} min` : `${(min / 60).toLocaleString('pt-PT', { maximumFractionDigits: 1 })} h`;
+
+/**
+ * When the pump restarted after the spell's last trip, if it has run longer
+ * than any trip in the spell took since: the spell is over, for now. A run the
+ * guard cut short before the trip (`switches`, early-warning stops) doesn't
+ * count: then it's the switch-on after the last such stop.
+ */
+export function spellOverSince(spell: FaultIncident[], now: number, switches: SwitchEvent[] = []): number | undefined {
+  const stops = stopsAfter(spell, switches);
+  const lastStop = stops[stops.length - 1];
+  const since = lastStop
+    ? switches.filter(e => e.on && e.at > lastStop.at).sort((a, b) => a.at - b.at)[0]?.at
+    : spell[spell.length - 1]?.restartedAt;
+  return since !== undefined && now - since > SHORT_RUN_MIN * MIN ? since : undefined;
+}
+
+/**
+ * A short-run spell (shortRunSpell) in sentences: the top of the technicians'
+ * report. `previous` = the fault before it; `switches` = the switch events, for
+ * the guard's early-warning stops after it.
+ */
+export function spellSummary(spell: FaultIncident[], now: number, previous?: FaultIncident, switches: SwitchEvent[] = []): string[] {
+  if (spell.length === 0) return [];
+  const ctx = spell.map(f => tripContext(f)!);
+  const codes = [...new Set(spell.map(f => f.code))].join(', ');
+  const runs = ctx.map(c => c.runMin);
+  const over = spellOverSince(spell, now, switches);
+  const stops = stopsAfter(spell, switches);
+  const out: string[] = [];
+  out.push(
+    `${over !== undefined ? `De ${fmtDateTime(ctx[0].runFrom!)} a ${fmtDateTime(spell[spell.length - 1].at)}` : `Desde ${fmtDateTime(ctx[0].runFrom!)}`}, ` +
+    `${spell.length} arranques seguidos acabaram em ${codes}: disparou sempre ${range(runs)} min depois de o compressor arrancar.`,
+  );
+  const peaks = ctx.map(c => c.outPeak).filter((v): v is number => v !== undefined);
+  const sps = ctx.map(c => c.last.sp).filter((v): v is number => v !== undefined);
+  const valves = range(ctx.map(c => c.last.valves));
+  if (peaks.length) {
+    const far = sps.length > 0 && Math.max(...peaks) <= Math.min(...sps) - 5;
+    out.push(
+      `A água à saída não passou dos ${num(Math.max(...peaks), 1)} °C` +
+      (sps.length ? `, com o setpoint a ${range(sps)} °C` : '') +
+      (valves ? ` e ${valves} zonas abertas` : '') +
+      (far ? ': disparou longe do setpoint.' : '.'),
+    );
+  }
+  const rests = ctx.slice(1).map((c, i) => (c.runFrom! - spell[i].at) / MIN);
+  if (rests.length) {
+    out.push(
+      `Antes de cada arranque esteve parada entre ${hoursOrMin(Math.min(...rests))} e ${hoursOrMin(Math.max(...rests))} ` +
+      'desde o disparo anterior, e voltou a disparar da mesma forma.',
+    );
+  }
+  out.push(
+    `Nos ~3 min antes de cada disparo, a descarga passou de ${range(ctx.map(c => c.disBefore))} para ${range(ctx.map(c => c.disAt))} °C, ` +
+    `a serpentina (C00) chegou a ${range(ctx.map(c => c.coilMin), 1)} °C e a água à saída passou de ` +
+    `${range(ctx.map(c => c.outPeak), 1)} para ${range(ctx.map(c => c.last.out), 1)} °C.`,
+  );
+  const locks = spell.filter(f => f.lockout);
+  if (locks.length) {
+    out.push(`Bloqueou ${locks.length === 1 ? 'uma vez' : `${locks.length} vezes`}: ${locks.map(f => `${fmtDateTime(f.at)}, ${endPhrase(f)}`).join('; ')}.`);
+  }
+  if (stops.length) {
+    // "aos N min" in the reason: how far into the run the warning came.
+    const at = stops.map(e => Number(/aos (\d+) min/.exec(e.reason ?? '')?.[1])).filter(v => Number.isFinite(v));
+    out.push(
+      `Depois do último disparo, a ponte desligou-a ${stops.length === 1 ? 'uma vez' : `${stops.length} vezes`} 1–2 min antes do disparo, ` +
+      `quando a descarga voltou a subir de repente${at.length ? ` (aos ${range(at)} min do arranque)` : ''}, como antes de cada ${codes}; ` +
+      `a última a ${fmtDateTime(stops[stops.length - 1].at)}. Não são disparos, mas mostram que o problema continua.`,
+    );
+  }
+  if (previous) out.push(`Antes desta série, o disparo anterior tinha sido a ${fmtDateTime(previous.at)}.`);
+  const perStart = num(median(runs.filter((v): v is number => v !== undefined))!, 0);
+  out.push(over !== undefined
+    ? `Nessa série, cada arranque deu cerca de ${perStart} min de aquecimento. Voltou a arrancar a ${fmtDateTime(over)} e não disparou desde então${stops.length ? ', nem foi preciso desligá-la antes' : ''} (há ${hoursOrMin((now - over) / MIN)}).`
+    : `Cada arranque dá cerca de ${perStart} min de aquecimento: assim, a máquina não consegue aquecer a casa.`);
+  return out;
+}
 
 /** What the record says about one code, in sentences, from the trips themselves. */
 export function codeSummary(faults: FaultIncident[]): string[] {

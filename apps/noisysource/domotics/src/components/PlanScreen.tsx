@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server, Thermometer, Box, ClipboardList,
+  Pencil, Check, X, Plus, Trash2, GripVertical, Ruler, Server, Thermometer, Box, ClipboardList, ChartColumn,
 } from 'lucide-react';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
@@ -11,7 +11,7 @@ import { DEFAULT_LAYER } from '@shared/models/Room';
 import { wallsFromRooms, wallLength } from '../data/walls';
 import type { DeviceStatus } from '../App';
 import type { EnergyReading } from '../data/energy';
-import { batteryFlow, gridFlow, solarShare, formatWatts } from '../data/energy';
+import { batteryFlow, gridFlow, liveSurplus, solarShare, formatWatts } from '../data/energy';
 import type { User } from 'firebase/auth';
 import Clock from './Clock';
 import ClimatePanel from './ClimatePanel';
@@ -49,6 +49,8 @@ interface Props {
   onSignOut: () => Promise<void>;
   onOpenAdmin: () => void;
   onOpenReports: () => void;
+  /** kWh history and the bill; absent when it can't be read (signed out). */
+  onOpenEnergy?: () => void;
   /** Back to the 3D house — this 2D plan is the editor and the detailed view. */
   onShow3D: () => void;
   editMode: boolean;
@@ -73,7 +75,7 @@ interface Props {
 
 export default function PlanScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
-  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onShow3D,
+  onSignIn, onSignOut, onOpenAdmin, onOpenReports, onOpenEnergy, onShow3D,
   editMode, editTarget, selectedId,
   onEditTargetChange, onSelect, onOpenRoom, onChangeRooms, onChangeInfra, onChangeWalls, onPlaceDevice,
   onDeviceNameChange, onLightCommand, onBlindCommand,
@@ -379,6 +381,16 @@ export default function PlanScreen({
               {/* Signed in only: every action behind it needs an identity the
                   rules will accept, so offering it signed out would only ever
                   produce a permission error. */}
+              {onOpenEnergy && (
+                <button
+                  onClick={onOpenEnergy}
+                  className="flex items-center justify-center w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors mr-1"
+                  aria-label="Energia"
+                  title="Energia — consumo, solar, bateria e fatura"
+                >
+                  <ChartColumn size={15} strokeWidth={2} />
+                </button>
+              )}
               {user && (
                 <button
                   onClick={onOpenReports}
@@ -513,6 +525,7 @@ export default function PlanScreen({
         const battery = batteryFlow(energy);
         const grid = gridFlow(energy);
         const share = solarShare(energy);
+        const surplus = liveSurplus(energy);
         const cell = 'flex flex-col gap-0.5 min-w-[104px]';
         const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
         return (
@@ -545,7 +558,7 @@ export default function PlanScreen({
 
             <div className={cell}>
               <span className={label}>
-                Rede {grid === 'out' ? '· a exportar' : grid === 'in' ? '· a importar' : ''}
+                Rede {grid === 'out' ? '· a enviar' : grid === 'in' ? '· a comprar' : ''}
               </span>
               <span className={`text-lg tabular-nums ${
                 grid === 'out' ? 'text-sky-300' : grid === 'in' ? 'text-red-300' : 'text-zinc-400'
@@ -553,6 +566,13 @@ export default function PlanScreen({
                 {formatWatts(energy.gridPowerW === undefined ? undefined : Math.abs(energy.gridPowerW))}
               </span>
             </div>
+
+            {surplus && (
+              <div className={cell} title="Excedente solar a ir para a rede, sem pagamento: a bateria não o aceita">
+                <span className={label}>Excedente solar</span>
+                <span className="text-lg text-amber-200 tabular-nums">~{formatWatts(surplus.exportW)}</span>
+              </div>
+            )}
 
             {share !== undefined && (
               <div className="flex-1 min-w-[160px] flex flex-col gap-1.5">

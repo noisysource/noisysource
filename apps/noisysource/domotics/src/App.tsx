@@ -30,6 +30,8 @@ import RoomDetail from './components/RoomDetail';
 
 /** Opened rarely, and its charts and printout shouldn't weigh on the everyday screen. */
 const ReportsScreen = lazy(() => import('./components/reports/ReportsScreen'));
+/** Same for the kWh history and the bill. */
+const EnergyScreen = lazy(() => import('./components/energy/EnergyScreen'));
 
 /**
  * Per-device overrides. Room names used to live here too; they now belong to
@@ -106,6 +108,7 @@ export default function App() {
   const [bridgeUpdatedAt, setBridgeUpdatedAt] = useState<number | undefined>();
   const [showAdmin, setShowAdmin] = useState(false);
   const [showReports, setShowReports] = useState(false);
+  const [showEnergy, setShowEnergy] = useState(false);
   const [energy, setEnergy] = useState<EnergyReading | null>(null);
   /** The heating automation's latest decision, reported by the bridge with its state. */
   const [automation, setAutomation] = useState<AutomationStatus | undefined>();
@@ -654,6 +657,19 @@ export default function App() {
       );
     }
 
+    if (showEnergy) {
+      return (
+        <Suspense fallback={<div className="h-screen bg-zinc-950" />}>
+          <EnergyScreen
+            onBack={() => setShowEnergy(false)}
+            // Owner-only data, like the reports; demo mode makes its own.
+            canRead={DEMO || (!!user && !isLanOrigin())}
+            live={energy}
+          />
+        </Suspense>
+      );
+    }
+
     if (openRoom) {
       return (
         <RoomDetail
@@ -689,6 +705,7 @@ export default function App() {
           onSignOut={signOutUser}
           onOpenAdmin={() => setShowAdmin(true)}
           onOpenReports={() => setShowReports(true)}
+          onOpenEnergy={user || DEMO ? () => setShowEnergy(true) : undefined}
           onShow2D={() => showView('2d')}
           onStartEdit={startEdit}
           onLightCommand={handleLightCommand}
@@ -719,6 +736,7 @@ export default function App() {
         onSignOut={signOutUser}
         onOpenAdmin={() => setShowAdmin(true)}
         onOpenReports={() => setShowReports(true)}
+        onOpenEnergy={user || DEMO ? () => setShowEnergy(true) : undefined}
         onShow3D={() => showView('3d')}
         editMode={editMode}
         editTarget={editTarget}

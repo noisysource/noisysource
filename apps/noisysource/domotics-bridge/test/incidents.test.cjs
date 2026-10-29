@@ -79,6 +79,20 @@ function recorder(origin = 'bridge') {
   assert.equal(docs.get('switch-2026-10-22T10-10-00Z-off').source, 'outside');
 }
 {
+  // observe() says who caused the switch it saw; the raw datapoints either side go on the record.
+  const { rec, docs } = recorder();
+  assert.equal(rec.observe(pump, reading(0), { 1: true, mode: 'Heating' }), undefined);
+  assert.equal(rec.observe(pump, reading(1), { switch: true, mode: 'Heating', p02_heating: 44 }), undefined, 'no switch, nothing to say');
+  assert.equal(rec.observe(pump, reading(2, { on: false }), { switch: false, mode: 'Heating', p02_heating: 44 }), 'outside');
+  const d = docs.get('switch-2026-10-22T10-02-00Z-off');
+  assert.deepEqual(d.dps, { before: { switch: true, mode: 'Heating', p02_heating: 44 }, at: { switch: false, mode: 'Heating', p02_heating: 44 } });
+  // Without datapoints (the backfill), no dps field at all.
+  const r2 = recorder('log');
+  r2.rec.observe(pump, reading(0));
+  r2.rec.observe(pump, reading(1, { on: false }));
+  assert.equal('dps' in [...r2.docs.values()][0], false);
+}
+{
   // Switches during a fault are listed on it; from a log, an unexplained one is "unknown".
   const { rec, docs } = recorder('log');
   rec.observe(pump, reading(0));
@@ -178,13 +192,13 @@ const p = (over = {}) => ({ on: true, hz: 50, sp: 44, out: 40, faults: [], ...ov
   assert.equal(g.decide(off, { now: T0 + MIN, pump: p() }).status.mode, 'off');
 }
 {
-  // The heating automation (live) holds a rest past its end while no zone
-  // wants heat; it ends as soon as one does, with that reason.
+  // The heating automation (live) holds a rest past its end while its plan has
+  // the pump off; it ends as soon as the plan wants heat, with that reason.
   const g = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN, lastAction: { at: T0, what: 'off', reason: 'x' } });
   let d = g.decide(on, { now: T0 + 61 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
   assert.equal(d.action, undefined);
   assert.equal(d.status.mode, 'rest');
-  assert.match(d.status.note, /nenhuma zona pede calor/);
+  assert.match(d.status.note, /a automação não quer calor agora/);
   d = g.decide(on, { now: T0 + 95 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
   assert.equal(d.action, undefined, 'still nothing wants heat');
   d = g.decide(on, { now: T0 + 100 * MIN, pump: p({ on: false, hz: 0 }), holdRest: false });
@@ -196,6 +210,92 @@ const p = (over = {}) => ({ on: true, hz: 50, sp: 44, out: 40, faults: [], ...ov
   const g3 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
   g3.decide(on, { now: T0, pump: p() });
   assert.equal(g3.decide(on, { now: T0 + 10 * MIN, pump: p({ hz: 44, out: 43 }), holdRest: true }).action.on, false, 'the idle rule still fires');
+}
+{
+  // Switched off from outside (the 23:54 every night): back on after 5 min, with the grace after it.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p({ hz: 70, out: 42.5 }) });
+  let d = g.decide(on, { now: T0 + 0.5 * MIN, pump: p({ on: false, hz: 57, out: 42.5 }), switchedBy: 'outside' });
+  assert.equal(d.action, undefined, 'not straight away');
+  assert.match(d.status.note, /desligada de fora às .* volta a ligar às/);
+  assert.equal(d.status.reonAt, T0 + 5.5 * MIN);
+  assert.equal(g.decide(on, { now: T0 + 4 * MIN, pump: p({ on: false, hz: 0 }) }).action, undefined);
+  d = g.decide(on, { now: T0 + 5.5 * MIN, pump: p({ on: false, hz: 0 }) });
+  assert.equal(d.action.on, true);
+  assert.match(d.action.reason, /desligada de fora às/);
+  g.commit(d.action.next);
+  d = g.decide(on, { now: T0 + 6 * MIN, pump: p({ hz: 40, out: 43 }), switchedBy: 'guard' });
+  assert.equal(d.action, undefined, 'grace after our switch-on');
+  assert.equal(d.status.reonAt, null);
+  assert.match(d.status.note, /^A vigiar/);
+
+  // Off from outside again 40 min after that: someone means it, left off.
+  g.decide(on, { now: T0 + 45 * MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  d = g.decide(on, { now: T0 + 80 * MIN, pump: p({ on: false, hz: 0 }) });
+  assert.equal(d.action, undefined);
+  assert.match(d.status.note, /fica desligada até alguém a ligar/);
+  // Someone switches it on: watching as usual, and a later off is undone again.
+  d = g.decide(on, { now: T0 + 120 * MIN, pump: p(), switchedBy: 'outside' });
+  assert.match(d.status.note, /^A vigiar/);
+  g.decide(on, { now: T0 + 200 * MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g.decide(on, { now: T0 + 206 * MIN, pump: p({ on: false, hz: 0 }) }).action.on, true);
+}
+{
+  // An off through the app or the automation is respected; so is one found at start-up.
+  for (const by of ['app', 'automation', undefined]) {
+    const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+    g.decide(on, { now: T0, pump: p() });
+    g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), ...(by ? { switchedBy: by } : {}) });
+    assert.equal(g.decide(on, { now: T0 + 30 * MIN, pump: p({ on: false, hz: 0 }) }).action, undefined, `off by ${by}`);
+  }
+  // An unexplained off from the log ("unknown") counts as outside.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p() });
+  g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'unknown' });
+  assert.equal(g.decide(on, { now: T0 + 6 * MIN, pump: p({ on: false, hz: 0 }) }).action.on, true);
+}
+{
+  // Waits while the automation (live) says nothing wants heat, and while a fault is on.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p() });
+  g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  let d = g.decide(on, { now: T0 + 10 * MIN, pump: p({ on: false, hz: 0 }), holdRest: true });
+  assert.equal(d.action, undefined);
+  assert.match(d.status.note, /liga quando uma zona pedir calor/);
+  assert.equal(d.status.reonAt, null);
+  assert.equal(g.decide(on, { now: T0 + 12 * MIN, pump: p({ on: false, hz: 0, faults: ['E13'] }) }).action, undefined, 'faulted');
+  d = g.decide(on, { now: T0 + 15 * MIN, pump: p({ on: false, hz: 0 }) });
+  assert.equal(d.action.on, true);
+}
+{
+  // At most 6 switch-ons a day, however the offs are spaced.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  let t = T0;
+  g.decide(on, { now: t, pump: p() });
+  let ons = 0;
+  for (let i = 0; i < 8; i++) {
+    t += 2 * 60 * MIN;
+    g.decide(on, { now: t, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+    const d = g.decide(on, { now: t + 6 * MIN, pump: p({ on: false, hz: 0 }) });
+    if (d.action) { ons++; g.commit(d.action.next); }
+    g.decide(on, { now: t + 7 * MIN, pump: p(), switchedBy: 'guard' });
+  }
+  assert.equal(ons, 6);
+  assert.match(g.decide(on, { now: t + 8 * MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' }).status.note, /6 vezes nas últimas 24 h/);
+}
+{
+  // Switched off in the app while waiting: the pending switch-on is dropped, even once back on.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p() });
+  g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g.decide(off, { now: T0 + 2 * MIN, pump: p({ on: false, hz: 0 }) }).action, undefined);
+  assert.equal(g.decide(on, { now: T0 + 10 * MIN, pump: p({ on: false, hz: 0 }) }).action, undefined);
+}
+{
+  // A guard state saved by the previous bridge (no new fields) still loads.
+  const g = createGuard({ ...INITIAL_GUARD, ...{ mode: 'watch', restUntil: 0, switchedOnAt: 0, lastSeenOn: true, lastAction: null } });
+  g.decide(on, { now: T0, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g.decide(on, { now: T0 + 5 * MIN, pump: p({ on: false, hz: 0 }) }).action.on, true);
 }
 {
   // On the real logs, the guard would have switched the pump off before every
@@ -220,6 +320,67 @@ const p = (over = {}) => ({ on: true, hz: 50, sp: 44, out: 40, faults: [], ...ov
   assert.equal(leads.length, 7);
   assert.ok(leads.every(m => m !== null && m >= 1), `fires before every trip (minutes ahead: ${leads})`);
   console.log(`  guard on the logs: fires ${leads.join(', ')} min before each trip`);
+}
+
+{
+  // 2026-10-26 rework: with the heating automation live, an off from outside is
+  // the automation's to undo, not the guard's (it nearly overrode Renato's own
+  // panel off at 16:15 that day).
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p(), automationOwns: true });
+  let d = g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside', automationOwns: true });
+  assert.equal(d.status.reonAt, null);
+  assert.match(d.status.note, /ligar e desligar é com a automação/);
+  assert.equal(d.status.automationOwns, true);
+  assert.equal(g.decide(on, { now: T0 + 30 * MIN, pump: p({ on: false, hz: 0 }), automationOwns: true }).action, undefined, 'no re-on while the automation decides');
+  // Its rests are still its own: the idle rule fires with the automation live.
+  const g2 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g2.decide(on, { now: T0, pump: p(), automationOwns: true });
+  assert.equal(g2.decide(on, { now: T0 + 10 * MIN, pump: p({ hz: 44, out: 43 }), automationOwns: true }).action.on, false);
+  // An outside off pending when the automation goes live is dropped; the automation (stale or off) hands it back.
+  const g3 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g3.decide(on, { now: T0, pump: p() });
+  g3.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g3.decide(on, { now: T0 + 3 * MIN, pump: p({ on: false, hz: 0 }), automationOwns: true }).action, undefined);
+  assert.equal(g3.decide(on, { now: T0 + 10 * MIN, pump: p({ on: false, hz: 0 }) }).action, undefined, 'dropped, not deferred');
+  g3.decide(on, { now: T0 + 20 * MIN, pump: p() });
+  g3.decide(on, { now: T0 + 30 * MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g3.decide(on, { now: T0 + 36 * MIN, pump: p({ on: false, hz: 0 }) }).action.on, true, 'automation off or in dry-run: the guard re-ons again');
+}
+{
+  // A person's pause ("Pausar"): the guard switches nothing on until it ends.
+  const until = T0 + 120 * MIN;
+  // An outside off during the pause is not undone — not during it, not after.
+  const g = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g.decide(on, { now: T0, pump: p(), pausedUntil: until });
+  let d = g.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside', pausedUntil: until });
+  assert.match(d.status.note, /em pausa até às/);
+  assert.equal(d.status.pausedUntil, until);
+  assert.equal(g.decide(on, { now: T0 + 10 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until }).action, undefined);
+  assert.equal(g.decide(on, { now: until + 10 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until }).action, undefined, 'after the pause either');
+  // An off waiting to be undone when the pause starts is dropped.
+  const g1 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g1.decide(on, { now: T0, pump: p() });
+  g1.decide(on, { now: T0 + MIN, pump: p({ on: false, hz: 0 }), switchedBy: 'outside' });
+  assert.equal(g1.decide(on, { now: T0 + 6 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until }).action, undefined);
+  // A rest that ends during the pause carries on, and ends when the pause does.
+  const g2 = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN, lastAction: { at: T0, what: 'off', reason: 'x' } });
+  d = g2.decide(on, { now: T0 + 61 * MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until });
+  assert.equal(d.action, undefined);
+  assert.match(d.status.note, /em pausa até às .*não volta a ligar/);
+  d = g2.decide(on, { now: until + MIN, pump: p({ on: false, hz: 0 }), pausedUntil: until });
+  assert.equal(d.action.on, true, 'pause over: the rest ends');
+  // The protective offs still happen while paused.
+  const g3 = createGuard({ ...INITIAL_GUARD, mode: 'watch' });
+  g3.decide(on, { now: T0, pump: p(), pausedUntil: until });
+  assert.equal(g3.decide(on, { now: T0 + 10 * MIN, pump: p({ hz: 44, out: 43 }), pausedUntil: until }).action.on, false);
+  assert.equal(createGuard({ ...INITIAL_GUARD, mode: 'watch' }).decide(on, { now: T0, pump: p({ hz: 0, faults: ['E13'] }), pausedUntil: until }).action.on, false);
+  // Guard switched off in the app while resting and paused: the rest is dropped, the pump stays off.
+  const g4 = createGuard({ ...INITIAL_GUARD, mode: 'rest', restUntil: T0 + 60 * MIN });
+  d = g4.decide(off, { now: T0, pump: p({ on: false, hz: 0 }), pausedUntil: until });
+  assert.equal(d.action, undefined);
+  assert.equal(g4.state().mode, 'off');
+  assert.equal(g4.decide(off, { now: until + MIN, pump: p({ on: false, hz: 0 }) }).action, undefined);
 }
 
 console.log('all incident and guard scenarios pass');

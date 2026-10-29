@@ -1,6 +1,7 @@
 // Firestore rules test for the Reports page's data: `domotics_incidents` (heat
 // pump faults and on/off transitions, domotics-bridge/src/incidents.ts) and the
-// E13 guard's on/off, `domotics_config/guard` (domotics-bridge/src/guard.ts).
+// E13 guard's settings, `domotics_config/guard` (domotics-bridge/src/guard.ts):
+// on/off and its early warning (`preempt`).
 // Incidents: the owner reads, only the bridge writes, nobody deletes. Guard:
 // like the automation settings — owner reads and writes, the bridge reads.
 // Run: pnpm test:rules:domotics (needs Java).
@@ -76,6 +77,11 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'another signed-in user reads it', () => getDoc(guard(stranger)));
   await expect('denied', 'another signed-in user changes it', () => setDoc(guard(stranger), { enabled: true }));
   await expect('denied', 'signed-out read of the guard setting', () => getDoc(guard(anon)));
+  // Its early warning (`preempt`, domotics-bridge/src/preempt.ts), saved on its own by the app (merge).
+  await expect('allowed', 'owner switches the early warning off', () => setDoc(guard(owner), { preempt: false }, { merge: true }));
+  await expect('allowed', 'bridge reads it', () => getDoc(guard(bridge)));
+  await expect('denied', 'bridge switches the early warning back on', () => setDoc(guard(bridge), { preempt: true }, { merge: true }));
+  await expect('denied', 'another signed-in user switches it', () => setDoc(guard(stranger), { preempt: true }, { merge: true }));
 
   await Promise.all([owner, bridge, stranger, anon].map(terminate));
   console.log(failures ? `\n${failures} FAILED` : '\nall passed');

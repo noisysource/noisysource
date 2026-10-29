@@ -111,6 +111,7 @@ export function TripTable({ trips, light = false }: { trips: FaultIncident[]; li
           <tr className={head}>
             <th className={cell}>Disparo</th>
             <th className={cell}>Água (setpoint)</th>
+            <th className={cell}>A trabalhar</th>
             <th className={cell}>Parada no setpoint antes</th>
             <th className={cell}>Compressor (~3 min antes → disparo)</th>
             <th className={cell}>Descarga (~3 min antes → disparo)</th>
@@ -124,6 +125,7 @@ export function TripTable({ trips, light = false }: { trips: FaultIncident[]; li
             <tr key={f.id} className={line}>
               <td className={`${cell} whitespace-nowrap font-medium`}>{fmtDateTime(f.at)}</td>
               <td className={`${cell} whitespace-nowrap`}>{num(c!.last.out)}° ({c!.last.sp ?? '—'}°)</td>
+              <td className={`${cell} whitespace-nowrap`}>{c!.runMin !== undefined ? `${c!.runMin} min` : c!.runOver !== undefined ? `> ${c!.runOver} min` : '—'}</td>
               <td className={cell}>{c!.idleMin > 0 ? `${c!.idleMin} min` : '—'}</td>
               <td className={`${cell} whitespace-nowrap`}>{c!.hzBefore ?? '—'} → {c!.hzMax ?? '—'} Hz</td>
               <td className={`${cell} whitespace-nowrap`}>

@@ -14,3 +14,6 @@ incidents-pending.json
 # Heating automation state (see src/automation.ts, src/warmby.ts).
 warm-by.json
 automation-state.json
+# kWh history recorder state (see src/energy.ts, src/energy-store.ts).
+energy-state.json
+energy-registers.jsonl

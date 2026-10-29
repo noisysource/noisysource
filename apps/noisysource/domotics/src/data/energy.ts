@@ -46,6 +46,32 @@ export function gridFlow(reading: EnergyReading): FlowDirection {
   return w > 0 ? 'out' : 'in';
 }
 
+/**
+ * Solar going to the grid right now because the battery can't take it — the
+ * same rule as the Energia page's history (packages/shared/lib/energyBill.ts):
+ * at least 100 W out, the panels producing, and the battery full (SoC ≥ 97 %)
+ * or not charging. Unpaid: Renato has no selling contract, so this is energy
+ * worth using in the house. Undefined when it isn't happening.
+ */
+// The same thresholds as the history's (BATTERY_FULL_SOC, SURPLUS_MIN_W in
+// packages/shared/lib/energyBill.ts), copied rather than imported: importing
+// them pulls that whole module into the main bundle. functions/src/domotics/
+// energyBill.test.ts fails if they drift apart.
+const SURPLUS_MIN_W = 100;
+const BATTERY_FULL_SOC = 97;
+
+export function liveSurplus(reading: EnergyReading): { exportW: number; full: boolean } | undefined {
+  if (!reading.online) return undefined;
+  const exportW = reading.gridPowerW ?? 0;
+  const pv = reading.pvPowerW ?? 0;
+  const battery = reading.batteryPowerW ?? 0;
+  // A discharging battery sending power out isn't solar surplus.
+  if (exportW < SURPLUS_MIN_W || pv < SURPLUS_MIN_W || battery < -DEAD_BAND_W) return undefined;
+  const full = (reading.soc ?? 0) >= BATTERY_FULL_SOC;
+  if (!full && battery >= SURPLUS_MIN_W) return undefined;
+  return { exportW: Math.min(exportW, pv), full };
+}
+
 /** Share of consumption currently coming from the sun, 0–1. */
 export function solarShare(reading: EnergyReading): number | undefined {
   const { pvPowerW, consumptionW } = reading;
