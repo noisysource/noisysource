@@ -225,8 +225,11 @@ export function plannedItems(state: NsState, opts: PlanOptions): PlannedItem[] {
           nominal = dayInMonth(month, v.day);
         }
         if (nominal < v.from || (v.to && nominal > v.to) || (next && nominal >= next.from)) continue;
+        const date = adjustToBusinessDay(nominal, 'after', national);
         let amount = v.amountCents;
-        let inputs = v.toConfirm ? 'plano a confirmar' : 'plano';
+        let inputs = v.frequency === 'monthly' ? `mensal, dia ${v.day}`
+          : v.frequency === 'annual' ? `anual (${(v.months ?? []).map(n => MONTHS_PT[n - 1]).join(', ')}), dia ${v.day}`
+          : `uma vez, ${v.from}`;
         if (v.loan) {
           const k = monthsBetween(v.loan.firstPaymentMonth, month).length - 1;
           if (k < 0) continue;
@@ -237,7 +240,6 @@ export function plannedItems(state: NsState, opts: PlanOptions): PlannedItem[] {
           amount = Math.min(v.loan.capitalPerMonthCents, balance) + interest + stamp;
           inputs = `capital ${formatEUR(Math.min(v.loan.capitalPerMonthCents, balance))} + juros ${formatEUR(interest)} sobre ${formatEUR(balance)} + selo ${formatEUR(stamp)}`;
         }
-        const date = adjustToBusinessDay(nominal, 'after', national);
         items.push({
           id: `custo:${key}:${month}`, date, nominalDate: nominal, kind: 'custo',
           label: v.description, amountCents: v.direction === 'entrada' ? amount : -amount, month,

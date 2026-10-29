@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react';
 import { Outlet } from 'react-router-dom';
 import { useNsData, type NsData } from './useNsData';
 
-const NsDataContext = createContext<NsData | null>(null);
+export const NsDataContext = createContext<NsData | null>(null);
 
 export function useNs(): NsData {
   const v = useContext(NsDataContext);

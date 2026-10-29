@@ -171,6 +171,14 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
+/** A few dates one by one; a long run as "first → last (n dias)". */
+function fmtDateList(dates: readonly string[]): string {
+  const sorted = [...dates].sort();
+  const contiguous = sorted.every((d, i) => i === 0 || daysBetween(sorted[i - 1], d) <= 3);
+  if (sorted.length > 4 && contiguous) return `${fmtDate(sorted[0])} → ${fmtDate(sorted[sorted.length - 1])} (${sorted.length} dias)`;
+  return sorted.map(fmtDate).join(', ');
+}
+
 /** The calendars the days come from: the client's holidays and each person's entries. */
 function Calendars({ state }: { state: NsState }) {
   const calendarIds = [...new Set(state.contracts.map(c => c.holidayCalendar))];
@@ -204,7 +212,7 @@ function Calendars({ state }: { state: NsState }) {
             {calendarOf(state, p).sort((a, b) => a.dates[0].localeCompare(b.dates[0])).map(e => (
               <li key={e.eventId} className="flex flex-wrap items-center gap-1.5">
                 <span className="w-44 shrink-0 text-zinc-300">{CALENDAR_KIND_LABEL[e.kind]}</span>
-                <span>{e.dates.length === 1 ? fmtDate(e.dates[0]) : `${fmtDate(e.dates[0])} → ${fmtDate(e.dates[e.dates.length - 1])} (${e.dates.length} dias)`}</span>
+                <span>{fmtDateList(e.dates)}</span>
                 {e.label && <span className="text-zinc-500">— {e.label}</span>}
                 {e.datesToConfirm && <Badge tone="amber">datas a confirmar</Badge>}
               </li>
