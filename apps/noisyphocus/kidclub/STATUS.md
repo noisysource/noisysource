@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-25 (only the parked shared-custody note; nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-10-25 (only the Vendus listing line under ▶️ Start here and the parked shared-custody note; nothing else re-checked since 2026-10-21)
 
 ## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 
@@ -110,6 +110,13 @@ Scheduler job (8 scheduled functions now; ~$0.10/month past the 3 free). The new
 after the first real deploy.
 
 ## ▶️ Start here (left 2026-10-21)
+
+**🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`, NOT in prod.** `listDocuments` (`vendus.ts`) filtered
+with `date_from`/`date_to`, which live Vendus rejects with 403 `P001`, so `getKidclubVatSummary` (FinHub → IVA,
+NoisyPhocus) failed. #116 switches it to `since`/`until` with `per_page=50` and a 40-page cap, and treats Vendus's
+empty-page answer (404 `A001` "No data", verified live 2026-10-25) as the end of the list. It reaches prod only via
+the next `staging` → `main` promotion. After that, check the IVA page on prod: the KidClub rows should be there with no
+"Erro Vendus" banner.
 
 **Parties are live in prod** (#109 promoted with #111, merged 2026-10-21 15:32 UTC). That covers the deposit bill
 and emails at confirmation, and booking without an account at `kidclub.pt/festas`. Section 🎈 below has the details.
