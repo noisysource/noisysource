@@ -87,6 +87,23 @@ chmod 600 bridge.env
 with the service account, which removed gRPC and roughly two thirds of the
 install. On this board that matters.
 
+### Updating an existing install
+
+`pnpm build`, keep a backup of `lib`, rsync as above (it leaves `bridge.env`
+and the state files alone), restart, then check 7/7 and the ARP pins (see
+`../../domotics/STATUS.md`):
+
+```bash
+ssh pi@192.168.1.125 'cd ~/domotics-bridge && cp -a lib lib.bak-$(date +%Y%m%d)'
+rsync -a --exclude bridge.env package.json lib deploy pi@192.168.1.125:~/domotics-bridge/
+ssh pi@192.168.1.125 'sudo systemctl restart domotics-bridge && sleep 90 && journalctl -u domotics-bridge -n 40 --no-pager'
+```
+
+State the bridge keeps next to `lib/` (gitignored, safe to delete except while
+the guard is resting): `device-cache.json`, `automation-config.json`,
+`guard-config.json`, `guard-state.json`, `incidents-state.json`,
+`incidents-pending.json`.
+
 ## 4. Check it can actually see the devices
 
 **Do not skip this.** The Pi may be on a different band or VLAN from the

@@ -1,0 +1,265 @@
+<title>Relatório E13 Vancouver 13</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one service-report column; data tables scroll inside their own frame on a phone. */
+:root {
+  --bg: #f6f7f8;
+  --paper: #ffffff;
+  --fg: #1d2329;
+  --muted: #5b6670;
+  --rule: #d9dee3;
+  --alarm: #b42318;
+  --alarm-bg: #fdecea;
+  --warn: #9a5b00;
+  --warn-bg: #fff4e0;
+  --accent: #23577a;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161a; --paper: #1a2026; --fg: #e4e8ec; --muted: #9aa5af; --rule: #2e363e;
+    --alarm: #ff8a80; --alarm-bg: #3a1714; --warn: #f5b552; --warn-bg: #352610; --accent: #7fb6dc;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161a; --paper: #1a2026; --fg: #e4e8ec; --muted: #9aa5af; --rule: #2e363e;
+  --alarm: #ff8a80; --alarm-bg: #3a1714; --warn: #f5b552; --warn-bg: #352610; --accent: #7fb6dc;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+main { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+header { display: flex; flex-direction: column; gap: 10px; border-bottom: 2px solid var(--fg); padding-bottom: 18px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 26px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 17px; margin: 0 0 10px; font-weight: 600; text-wrap: balance; }
+h3 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 14px; }
+.meta dt { color: var(--muted); }
+.meta dd { margin: 0; min-width: 0; }
+.code { font-family: var(--mono); font-size: .92em; }
+section { display: flex; flex-direction: column; gap: 10px; }
+.summary { background: var(--alarm-bg); border-left: 4px solid var(--alarm); padding: 14px 16px; border-radius: 2px; }
+.summary ul, ul.plain { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.frame { overflow-x: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; white-space: nowrap; }
+td.wrap { white-space: normal; min-width: 16ch; }
+th { font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--bg); }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+tr.trip td { background: var(--alarm-bg); color: var(--alarm); font-weight: 500; }
+tr.hot td.num.dis { color: var(--warn); font-weight: 600; }
+.tag { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 2px; background: var(--alarm-bg); color: var(--alarm); font-weight: 500; }
+.tag.warn { background: var(--warn-bg); color: var(--warn); }
+.tag.info { background: var(--bg); color: var(--muted); }
+.trips { display: grid; gap: 18px; }
+.trip-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.note { font-size: 13px; color: var(--muted); }
+.checks { counter-reset: c; list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.checks li { background: var(--paper); border: 1px solid var(--rule); padding: 10px 12px 10px 14px; border-radius: 2px; }
+.checks li strong { display: block; margin-bottom: 2px; }
+footer { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; display: flex; flex-direction: column; gap: 4px; }
+</style>
+
+<main>
+  <header>
+    <span class="eyebrow">Relatório para assistência técnica · atualizado a 23 de outubro de 2026, 06:40</span>
+    <h1>Bomba de calor: alarme E13 (alta pressão) repetido</h1>
+    <dl class="meta">
+      <dt>Equipamento</dt><dd>Zantia Vancouver 13 (13DC-32), R32, monofásica · código <span class="code">2301-0273</span> (etiqueta <span class="code">2301-8273</span>)</dd>
+      <dt>Utilização</dt><dd>Só aquecimento por piso radiante, 6 zonas com termóstato e válvula. As águas quentes (AQS) são feitas por outra bomba de calor.</dd>
+      <dt>Período</dt><dd>2 a 22 de outubro de 2026</dd>
+      <dt>Alarme</dt><dd><span class="tag">E13</span> proteção de alta pressão (registo de falhas = 4096, bit 12)</dd>
+    </dl>
+  </header>
+
+  <section class="summary" aria-labelledby="resumo">
+    <h2 id="resumo">Resumo</h2>
+    <ul>
+      <li>O E13 disparou pelo menos <strong>11 vezes em 21 dias</strong>, 9 delas entre 21 e 23 de outubro, depois da intervenção de 16/10.</li>
+      <li>Dispara com a água a <strong>34, 35, 39 e 40–42 °C</strong>. Baixar a temperatura da água não resolveu.</li>
+      <li>Nos 5 disparos registados ao detalhe o padrão é sempre o mesmo: <strong>o compressor acelera (para 50–55 Hz) e em cerca de 1 minuto a temperatura de descarga sobe 15 a 30 °C</strong>, e salta o E13. As temperaturas da água eram normais (saída 32,5–39,5 °C, diferença saída–entrada 1,3–2,5 °C).</li>
+      <li>Um disparo isolado <strong>limpa em cerca de 1,5 minutos</strong>, sem intervenção do cliente, e a máquina volta a arrancar. Com <strong>dois disparos em 14–16 minutos</strong> fica <strong>bloqueada</strong>: aconteceu a 22/10 (12:37 e 12:53, rearmada às 19:11, não pelo cliente) e de novo na noite de 22 para 23/10 (23:11 e 23:25), ficando a casa sem aquecimento a noite toda.</li>
+      <li>O que distingue um disparo: hoje o compressor acelerou pelo menos 18 vezes sem falha e a descarga subiu no máximo 13 °C; nos 5 disparos subiu <strong>16 a 29 °C em 1–2 minutos</strong>.</li>
+      <li>Descarga muito alta com água baixa: <strong>100 °C com a água a 34 °C</strong> (22/10 às 08:31, 70 Hz, 4,4 °C no exterior).</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="ocorrencias">
+    <h2 id="ocorrencias">Ocorrências</h2>
+    <div class="frame">
+      <table>
+        <thead><tr><th>Data e hora</th><th class="num">Água (setpoint)</th><th>Situação</th><th>Notas</th></tr></thead>
+        <tbody>
+          <tr><td>02/10 ~12:09</td><td class="num">42 °C</td><td><span class="tag">E13</span></td><td class="wrap">Compressor parado; exterior 22,3 °C; água entrada/saída 33,0/33,0 °C.</td></tr>
+          <tr><td>16/10</td><td class="num">—</td><td><span class="tag info">intervenção</span></td><td class="wrap">Reparação na máquina; E13 dado como resolvido.</td></tr>
+          <tr><td>17/10 ~14:18</td><td class="num">42 °C</td><td><span class="tag">E13</span></td><td class="wrap">Máquina parada e desligada.</td></tr>
+          <tr><td>20/10 manhã</td><td class="num">33–35 °C</td><td><span class="tag info">desligada</span></td><td class="wrap">Encontrada desligada às 07:00, causa desconhecida (não havia registo contínuo).</td></tr>
+          <tr><td>20→21/10 noite</td><td class="num">40 °C</td><td><span class="tag">E13</span></td><td class="wrap">Hora exata desconhecida; encontrada em E13 às 08:09.</td></tr>
+          <tr><td>21/10 11:45</td><td class="num">39 °C</td><td><span class="tag">E13</span></td><td class="wrap">Registo ao minuto (disparo A, abaixo).</td></tr>
+          <tr><td>21/10 16:20–18:45</td><td class="num">34 °C</td><td><span class="tag">E13</span></td><td class="wrap">Após rearme às ~16:20; hora exata desconhecida.</td></tr>
+          <tr><td>22/10 00:25</td><td class="num">34 °C</td><td><span class="tag">E13</span></td><td class="wrap">Registo ao minuto (disparo B, abaixo). Rearmada às 00:26.</td></tr>
+          <tr><td>22/10 00:55</td><td class="num">38 °C</td><td><span class="tag warn">desligada</span></td><td class="wrap">Após 27 min a 38 °C com descarga de 87–91 °C, passou a desligada sem código de falha. Não foi o cliente (setpoint de 38 °C às 00:28 também não); talvez ação remota da assistência.</td></tr>
+          <tr><td>22/10 12:37</td><td class="num">35 °C</td><td><span class="tag">E13</span></td><td class="wrap">Registo a cada 20 s (disparo C, abaixo). Tinha trabalhado 4 h 38 min sem falhas. Limpou sozinho às 12:39 e voltou a arrancar.</td></tr>
+          <tr><td>22/10 12:53</td><td class="num">35 °C</td><td><span class="tag">E13</span></td><td class="wrap">Disparo D, abaixo. Segundo disparo em 16 min: ficou bloqueada até um rearme às 19:11 (não feito pelo cliente).</td></tr>
+          <tr><td>22/10 20:30</td><td class="num">35 °C</td><td><span class="tag">E13</span></td><td class="wrap">Disparo E, abaixo. Limpou sozinho às 20:31 e voltou a arrancar às 20:34.</td></tr>
+          <tr><td>22/10 23:11</td><td class="num">35 °C</td><td><span class="tag">E13</span></td><td class="wrap">Descarga 45,5 → 73,5 °C. Limpou sozinho às 23:13.</td></tr>
+          <tr><td>22/10 23:25</td><td class="num">35 °C</td><td><span class="tag">E13</span></td><td class="wrap">Descarga 43,0 → 68,3 °C. Segundo disparo em 14 min: <strong>ficou bloqueada</strong>, sem aquecimento a partir daqui.</td></tr>
+          <tr><td>23/10 00:54</td><td class="num">35 °C</td><td><span class="tag warn">desligada</span></td><td class="wrap">Passou a desligada, ainda em E13. Não foi o cliente.</td></tr>
+          <tr><td>23/10 06:03–06:04</td><td class="num">44 °C</td><td><span class="tag warn">ligada, E13</span></td><td class="wrap">Ligada e setpoint alterado para 44 °C, ainda em E13 às 06:38. Não foi o cliente.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="detalhe">
+    <h2 id="detalhe">Os minutos antes de cada disparo</h2>
+    <p class="note">Leituras da própria máquina. Descarga = C01, bateria exterior = C00, sucção = C03. A linha a vermelho é a primeira leitura já em E13.</p>
+    <div class="trips">
+
+      <div>
+        <div class="trip-head"><h3>Disparo A · 21/10 · água a 39 °C</h3><span class="note">exterior 15 °C · leituras ao minuto · 1 zona aberta (das 4 legíveis)</span></div>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Hora</th><th class="num">Compressor</th><th class="num">Água saída</th><th class="num">Água entrada</th><th class="num">Descarga</th></tr></thead>
+            <tbody>
+              <tr><td>11:42</td><td class="num">35 Hz</td><td class="num">39,5 °C</td><td class="num">37,5 °C</td><td class="num dis">50,0 °C</td></tr>
+              <tr><td>11:43</td><td class="num">35 Hz</td><td class="num">39,5 °C</td><td class="num">37,5 °C</td><td class="num dis">51,5 °C</td></tr>
+              <tr class="hot"><td>11:44</td><td class="num">50 Hz</td><td class="num">38,8 °C</td><td class="num">37,5 °C</td><td class="num dis">64,0 °C</td></tr>
+              <tr class="trip"><td>11:45 · E13</td><td class="num">0 Hz</td><td class="num">37,5 °C</td><td class="num">37,5 °C</td><td class="num dis">66,3 °C</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="trip-head"><h3>Disparo B · 22/10 · água a 34 °C</h3><span class="note">exterior 7 °C · leituras ao minuto · 3–4 zonas abertas (das 4 legíveis)</span></div>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Hora</th><th class="num">Compressor</th><th class="num">Água saída</th><th class="num">Água entrada</th><th class="num">Descarga</th></tr></thead>
+            <tbody>
+              <tr><td>00:22</td><td class="num">39 Hz</td><td class="num">33,0 °C</td><td class="num">31,0 °C</td><td class="num dis">46,5 °C</td></tr>
+              <tr><td>00:23</td><td class="num">39 Hz</td><td class="num">32,5 °C</td><td class="num">31,0 °C</td><td class="num dis">53,8 °C</td></tr>
+              <tr class="hot"><td>00:24</td><td class="num">51 Hz</td><td class="num">32,5 °C</td><td class="num">31,0 °C</td><td class="num dis">71,5 °C</td></tr>
+              <tr class="trip"><td>00:25 · E13</td><td class="num">0 Hz</td><td class="num">30,5 °C</td><td class="num">30,5 °C</td><td class="num dis">69,0 °C</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="trip-head"><h3>Disparo C · 22/10 · água a 35 °C</h3><span class="note">exterior 15,5 °C · leituras a cada 20 s · 2 zonas abertas (só 2 de 6 legíveis nesta altura)</span></div>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Hora</th><th class="num">Compressor</th><th class="num">Água saída</th><th class="num">Água entrada</th><th class="num">Descarga</th><th class="num">C00 bateria</th><th class="num">C03 sucção</th></tr></thead>
+            <tbody>
+              <tr><td>12:36:24</td><td class="num">37 Hz</td><td class="num">34,3 °C</td><td class="num">31,8 °C</td><td class="num dis">44,8 °C</td><td class="num">8,0 °C</td><td class="num">8,5 °C</td></tr>
+              <tr><td>12:36:45</td><td class="num">39 Hz</td><td class="num">34,0 °C</td><td class="num">31,8 °C</td><td class="num dis">49,8 °C</td><td class="num">5,0 °C</td><td class="num">8,5 °C</td></tr>
+              <tr><td>12:37:06</td><td class="num">41 Hz</td><td class="num">33,5 °C</td><td class="num">31,8 °C</td><td class="num dis">58,5 °C</td><td class="num">8,0 °C</td><td class="num">10,5 °C</td></tr>
+              <tr class="trip"><td>12:37:49 · E13</td><td class="num">53 Hz</td><td class="num">33,5 °C</td><td class="num">31,8 °C</td><td class="num dis">70,0 °C</td><td class="num">9,7 °C</td><td class="num">12,0 °C</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="trip-head"><h3>Disparo D · 22/10 · água a 35 °C</h3><span class="note">exterior 16,7 °C · leituras a cada 20 s · 16 min depois do disparo C · 2 zonas abertas (só 2 de 6 legíveis)</span></div>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Hora</th><th class="num">Compressor</th><th class="num">Água saída</th><th class="num">Água entrada</th><th class="num">Descarga</th></tr></thead>
+            <tbody>
+              <tr><td>12:51:34</td><td class="num">35 Hz</td><td class="num">34,8 °C</td><td class="num">32,0 °C</td><td class="num dis">44,8 °C</td></tr>
+              <tr><td>12:51:55</td><td class="num">37 Hz</td><td class="num">34,3 °C</td><td class="num">32,0 °C</td><td class="num dis">49,8 °C</td></tr>
+              <tr><td>12:52:38</td><td class="num">39 Hz</td><td class="num">34,0 °C</td><td class="num">32,0 °C</td><td class="num dis">57,8 °C</td></tr>
+              <tr class="trip"><td>12:53:20 · E13</td><td class="num">0 Hz</td><td class="num">34,3 °C</td><td class="num">32,0 °C</td><td class="num dis">73,5 °C</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="trip-head"><h3>Disparo E · 22/10 · água a 35 °C</h3><span class="note">exterior 13 °C · leituras a cada 20 s · 2 zonas abertas (só 2 de 6 legíveis)</span></div>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Hora</th><th class="num">Compressor</th><th class="num">Água saída</th><th class="num">Água entrada</th><th class="num">Descarga</th></tr></thead>
+            <tbody>
+              <tr><td>20:29:03</td><td class="num">48 Hz</td><td class="num">34,0 °C</td><td class="num">30,5 °C</td><td class="num dis">43,5 °C</td></tr>
+              <tr><td>20:29:24</td><td class="num">50 Hz</td><td class="num">33,5 °C</td><td class="num">30,5 °C</td><td class="num dis">45,5 °C</td></tr>
+              <tr><td>20:29:45</td><td class="num">50 Hz</td><td class="num">33,0 °C</td><td class="num">30,5 °C</td><td class="num dis">53,0 °C</td></tr>
+              <tr class="trip"><td>20:30:27 · E13</td><td class="num">55 Hz</td><td class="num">32,5 °C</td><td class="num">30,5 °C</td><td class="num dis">64,8 °C</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="padrao">
+    <h2 id="padrao">O que distingue os disparos</h2>
+    <div class="frame">
+      <table>
+        <thead><tr><th>Disparo</th><th class="num">Compressor antes</th><th class="num">Descarga antes</th><th class="num">Descarga no disparo</th><th class="num">Subida</th><th class="num">Exterior</th></tr></thead>
+        <tbody>
+          <tr><td>A · 21/10 11:45</td><td class="num">35 Hz</td><td class="num">50,0 °C</td><td class="num">66,3 °C</td><td class="num dis">+16 °C</td><td class="num">15 °C</td></tr>
+          <tr><td>B · 22/10 00:25</td><td class="num">39 Hz</td><td class="num">46,5 °C</td><td class="num">71,5 °C</td><td class="num dis">+25 °C</td><td class="num">7 °C</td></tr>
+          <tr><td>C · 22/10 12:37</td><td class="num">37 Hz</td><td class="num">44,8 °C</td><td class="num">70,0 °C</td><td class="num dis">+25 °C</td><td class="num">15,5 °C</td></tr>
+          <tr><td>D · 22/10 12:53</td><td class="num">35 Hz</td><td class="num">44,8 °C</td><td class="num">73,5 °C</td><td class="num dis">+29 °C</td><td class="num">16,7 °C</td></tr>
+          <tr><td>E · 22/10 20:30</td><td class="num">48 Hz</td><td class="num">45,5 °C</td><td class="num">64,8 °C</td><td class="num dis">+19 °C</td><td class="num">13 °C</td></tr>
+          <tr><td>18 acelerações sem falha (22/10)</td><td class="num">12–60 Hz</td><td class="num">—</td><td class="num">—</td><td class="num">mediana +3,5 °C, máx. +13 °C</td><td class="num">4–17 °C</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="plain">
+      <li>Não depende da temperatura da água (34–42 °C), da hora do dia nem do número de zonas abertas.</li>
+      <li>Aconteceu a meio regime (35–50 Hz) com 7–17 °C no exterior. Na hora mais exigente de 22/10 (08:00–09:00, 4–5 °C no exterior, 70 Hz, descarga até 100 °C) não houve disparos.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="descarga">
+    <h2 id="descarga">Descarga alta com água baixa</h2>
+    <div class="frame">
+      <table>
+        <thead><tr><th>Quando</th><th class="num">Água saída/entrada</th><th class="num">Compressor</th><th class="num">Exterior</th><th class="num">Descarga</th><th class="num">C00 / C03</th></tr></thead>
+        <tbody>
+          <tr class="hot"><td>22/10 08:31 (setpoint 35 °C)</td><td class="num">34,3 / 30,5 °C</td><td class="num">70 Hz</td><td class="num">4,4 °C</td><td class="num dis">100 °C</td><td class="num">−2,5 / −2,0 °C</td></tr>
+          <tr class="hot"><td>22/10 00:50–00:52 (setpoint 38 °C)</td><td class="num">36,5–37 / 33 °C</td><td class="num">42–62 Hz</td><td class="num">6–6,5 °C</td><td class="num dis">87,5–91 °C</td><td class="num">—</td></tr>
+          <tr><td>22/10 08:22–08:32</td><td class="num" colspan="4" style="text-align:left;font-family:var(--sans)">13 leituras seguidas com descarga ≥ 95 °C</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Descongelação vista às 09:15–09:22 do dia 22 (bateria a −3 °C antes), aparentemente normal.</p>
+  </section>
+
+  <section aria-labelledby="feito">
+    <h2 id="feito">O que já foi tentado</h2>
+    <ul class="plain">
+      <li>Rearme manual depois de cada E13.</li>
+      <li>Baixar a temperatura da água de 42 °C para 34–35 °C: continua a disparar (21/10 e 22/10).</li>
+      <li>Registo contínuo das leituras da máquina desde 21/10, a cada minuto e depois a cada 20 s.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="pedido">
+    <h2 id="pedido">Pedido de verificação</h2>
+    <p>Causas que o manual indica para o E13, a confirmar no local:</p>
+    <ol class="checks">
+      <li><strong>Carga de refrigerante</strong>Possível excesso de R32.</li>
+      <li><strong>Restrições no circuito de refrigerante</strong>Filtro desidratador, válvula de expansão eletrónica. O salto rápido da descarga sempre que o compressor acelera pode ajudar no diagnóstico.</li>
+      <li><strong>Pressostato e sensor de alta pressão</strong>Funcionamento e ponto de disparo.</li>
+      <li><strong>Caudal de água</strong>Filtro, purga de ar e circulador, e se existe bypass ou caudal mínimo quando as zonas fecham. Nota: o disparo B foi com 3–4 zonas abertas e diferença saída–entrada normal, por isso não parece ser só falta de caudal.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <span>Leituras obtidas da própria máquina através do seu módulo Wi-Fi (Tuya), com o significado de cada sensor segundo o modelo de dados do equipamento. Horas em hora legal de Portugal (WEST).</span>
+    <span>Os registos completos (minuto a minuto e a cada 20 s) estão disponíveis em ficheiro.</span>
+  </footer>
+</main>

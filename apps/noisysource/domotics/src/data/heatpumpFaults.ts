@@ -109,3 +109,68 @@ export function decodeFaults(get: (code: string) => unknown): string[] {
   }
   return out;
 }
+
+/**
+ * What each fault means for this house: likely causes, how the unit behaves
+ * with it, what to do. For the Reports page and the technicians' printout.
+ * Causes are the manual's (§5.3.2-8); behaviour is what was seen here.
+ * Codes without an entry fall back to their meaning and "see the manual".
+ */
+export interface FaultGuide {
+  name: string;
+  /** Where it shows up in the pump's data. */
+  where?: string;
+  causes: string[];
+  behaviour?: string;
+  todo: string[];
+}
+
+const GUIDE: Readonly<Record<string, FaultGuide>> = {
+  E13: {
+    name: 'Proteção de alta pressão',
+    where: 'registo de falhas (dp 15) = 4096, bit 12',
+    causes: [
+      'Carga de refrigerante: possível excesso de R32.',
+      'Restrição no circuito de refrigerante: filtro desidratador, válvula de expansão eletrónica.',
+      'Pressostato ou sensor de alta pressão: funcionamento e ponto de disparo.',
+      'Caudal de água: filtro, purga de ar, circulador, e se há bypass ou caudal mínimo quando as zonas fecham.',
+    ],
+    behaviour:
+      'Um disparo isolado limpa sozinho em cerca de 1,5 min e a máquina volta a arrancar. ' +
+      'Dois disparos em cerca de 15 min bloqueiam-na: só o painel, o disjuntor ou a assistência a rearmam ' +
+      '(o módulo Wi-Fi/Tuya não tem rearme).',
+    todo: [
+      'Verificação no local pela assistência: carga de refrigerante, restrições, pressostato/sensor de alta pressão e caudal de água.',
+      'Até lá, a proteção E13 da ponte desliga a bomba quando fica parada no setpoint (60 min) e logo a seguir a um disparo (120 min), para não chegar ao bloqueio.',
+    ],
+  },
+  E14: {
+    name: 'Proteção de baixa pressão',
+    causes: ['Refrigerante a menos (fuga).', 'Restrição no circuito de refrigerante.', 'Sensor ou pressostato de baixa pressão.'],
+    todo: ['Chamar a assistência: não se resolve na casa.'],
+  },
+  E15: {
+    name: 'Erro de caudal',
+    causes: ['Caudal de água baixo: filtro sujo, ar no circuito, circulador, zonas todas fechadas.', 'Fluxostato com defeito.'],
+    todo: ['Verificar o filtro de água e purgar o ar.', 'Se repetir, chamar a assistência.'],
+  },
+  E22: {
+    name: 'Diferencial de temperatura da água muito elevado',
+    causes: ['Pouca água a circular: circulador ou filtro.'],
+    todo: ['Verificar a bomba circuladora e o filtro.'],
+  },
+  E32: {
+    name: 'Temperatura de saída de água acima de 75 °C',
+    causes: ['Pouca água a circular: circulador ou filtro.'],
+    todo: ['Verificar a bomba circuladora e o filtro.'],
+  },
+};
+
+/** Never empty: codes without an entry get their meaning and a pointer to the manual. */
+export function faultGuide(code: string): FaultGuide {
+  return GUIDE[code] ?? {
+    name: faultMeaning(code),
+    causes: [],
+    todo: ['Ver o manual (Vancouver 13DC-32, §5.3.2-8) e, se repetir, chamar a assistência.'],
+  };
+}

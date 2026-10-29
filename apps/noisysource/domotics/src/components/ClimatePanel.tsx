@@ -81,7 +81,7 @@ export default function ClimatePanel({
   );
 }
 
-function HeatPumpCard({
+export function HeatPumpCard({
   device, onCommand,
 }: { device: HeatPumpDevice; onCommand: Props['onHeatPumpCommand'] }) {
   const p = device.state;
@@ -189,7 +189,7 @@ function HeatPumpCard({
   );
 }
 
-function ThermostatRow({
+export function ThermostatRow({
   device, room, onCommand,
 }: { device: ThermostatDevice; room?: string; onCommand: Props['onThermostatCommand'] }) {
   const t = device.state;
@@ -242,6 +242,14 @@ function ThermostatRow({
             <span className="flex items-center gap-1"><WifiOff size={11} /> sem ligação</span>
           ) : (
             <>
+              {/* Said in words, not only by the flame: whether this zone's floor
+                  circuit is open is the thing to check when a room stays cold. */}
+              <span
+                className={`shrink-0 px-1.5 rounded ${t.heating ? 'bg-orange-950 text-orange-300' : 'bg-zinc-800 text-zinc-400'}`}
+                title="Válvula do circuito de pavimento desta zona"
+              >
+                {t.heating ? 'válvula aberta' : 'válvula fechada'}
+              </span>
               <span className={`truncate ${room ? '' : 'text-zinc-600'}`}>
                 {room ?? 'sem divisão'}
                 {t.humidity !== undefined && ` · ${t.humidity}% hum.`}

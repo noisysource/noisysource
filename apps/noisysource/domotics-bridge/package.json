@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node lib/index.js",
-    "dev": "tsc -p tsconfig.json && node lib/index.js"
+    "dev": "tsc -p tsconfig.json && node lib/index.js",
+    "test": "tsc -p tsconfig.json && node test/automation.test.cjs && node test/solar-heating.test.cjs && TZ=Pacific/Auckland node test/solar-heating.test.cjs && node test/warmby.test.cjs && node test/incidents.test.cjs && node test/preempt.test.cjs && TZ=Pacific/Auckland node test/preempt.test.cjs && node test/energy.test.cjs && node test/climate.test.cjs && node test/windows.test.cjs && TZ=Pacific/Auckland node test/windows.test.cjs"
   },
   "dependencies": {
     "tuyapi": "^7.7.1"

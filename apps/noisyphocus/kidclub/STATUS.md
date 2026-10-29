@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-25 (only the Vendus listing line under ▶️ Start here; the rest is as of 2026-10-21)
+**Last updated:** 2026-10-25 (only the Vendus listing line under ▶️ Start here and the parked shared-custody note; nothing else re-checked since 2026-10-21)
 
 ## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 
@@ -143,6 +143,11 @@ Next for parties:
    were done.
 6. Follow-ups, none urgent: per-child calendar still broken for parents; `clientErrors` TTL not enabled;
    rules tests not in CI. Details in the two sections below.
+
+**Parked 2026-10-25: shared custody** (divorced parents, one child, alternating weeks, separate bills and
+invoices). The design is agreed in outline, with 4 open decisions; nothing is built. Read the first Backlog entry
+before picking it up. The entry after it (the quinzenal pattern isn't calendar weeks) may affect current
+customers, so it's worth a prod check on its own.
 
 **Branch state (2026-10-21, after #111):** `main` and `staging` match in content.
 
@@ -3053,6 +3058,86 @@ than another one-off patch.
   *historical data* question, not a live one — relevant to the data pass.
 
 ## Backlog — bigger features surfaced but not started
+- **Shared custody: one child, two parents, alternating weeks** (surfaced 2026-10-17, parked by Renato
+  2026-10-25). Design only: no code, no branch, nothing in prod.
+
+  **The case.** One child so far (Renato knows which family; not recorded here). The parents are divorced and
+  have the child on alternating weeks. On their own weeks each parent manages everything (absences, the
+  schedule) and pays for those days. **The admin decides who gets each week, not the parents.** Each parent
+  wants their own bill, an invoice with their own NIF, and to pay separately. The enrollment fee and insurance
+  are split between them.
+
+  **Why the platform can't do it today.** Everything assumes one owner per family:
+  - `Family.primaryContact` is one login, one email, one NIF (`packages/shared/models/Family.ts`).
+  - Billing writes one bill per family per month, `billing/{familyId}_{yyyy-mm}`, addressed to that contact
+    (`buildBillingRecord`, `autoCreateBillingSchedule` in `functions/src/kidclub/billing.ts`). The Vendus
+    invoice uses the family's NIF.
+  - Rules, the Pagamentos page and the payment callables only let `billing.userId` see and pay a bill.
+    Children, subscriptions and `reservationEvents` are readable by that one owner only.
+  - `setReservationEventStatus` (`functions/src/kidclub/reservationEvents.ts`) lets only the family owner
+    change a day.
+
+  **Direction agreed (Renato's model, 2026-10-17):** keep one child with one normal weekly subscription, link a
+  second parent, and assign each week to a parent. Considered and dropped: two families with the child
+  duplicated (fee and insurance charged twice, two child records, and it relies on the quinzenal pattern, see
+  the next entry); one family with a percentage co-payer (doesn't capture who manages which week).
+  - **Custody calendar on the child, admin-only:** which parent has the first week, a starting date, the
+    weekday the week switches on, and exceptions (holidays, swaps). Parents can see it but not change it.
+    Count weeks from the starting date, not by ISO week number: 2026 has 53 ISO weeks, so parity would give one
+    parent two weeks in a row at New Year.
+  - **Stamp each `reservationEvents` doc with the parent who owns that day** when the server generates it, and
+    re-stamp future days when the admin changes the calendar. That one field drives the rest:
+    - `setReservationEventStatus` checks "is this your day" instead of "is this your family".
+    - Billing: each parent's bill = the child's monthly price × their share of that month's days. Absence
+      credits go to whoever's day it was. Enrollment fee and insurance 50/50 (today they're charged once per
+      child record, in `computeLineItems`).
+    - Calendar: each parent manages their own days and can see whose week it is.
+  - **The second parent's own account and family doc is their billing profile** (name, NIF, address, payment
+    method). They get that doc at first sign-in, and it already syncs to Vendus. Their share is billed to that
+    family, so every bill still has one owner and one NIF. The invoice NIF, payment method, Pagamentos,
+    MB WAY/Multibanco/card, months paid in order, and the "Fatura disponível" email then work unchanged.
+  - **What has to change:**
+    1. Billing builds each parent's share, which means pulling the shared child's subscriptions into the second
+       parent's family. The "month already paid → days locked" check in `setReservationEventStatus` must look
+       at the bill of the parent who owns the day, not `{event.familyId}_{yyyy-mm}`.
+    2. The second parent needs read access to the child, the subscription and their own days, but every rule
+       today allows one owner. **This is the risky part:** it's the same class of bug as the 2026-10-16
+       enrollment outage. Since #96, parent reads go through `familyService`, and `pnpm test:rules` can cover the
+       new query shapes.
+    3. Whole-schedule actions affect both parents' weeks: changing the weekly days, cancelling, a new
+       enrollment. Today parents edit the subscription directly (`updateDoc` on `studyroom` in
+       `StudySubscriptionDetailPage.tsx`). Proposed: admin-only for shared children.
+    4. An admin screen on the child: link the second parent by email, set the weeks and exceptions, and preview
+       the coming months.
+    5. FinHub: a family's monthly bill can then carry a share of another family's child. Add a Cross-App Data
+       Contracts entry to the root `CLAUDE.md` when this ships.
+  - **Suggested PRs into `staging`:** (1) custody calendar, day stamping and the admin screen, with nothing
+    parents can see; (2) split billing, which is what the parents are asking for; (3) the second parent manages
+    their own days.
+
+  **Open decisions for Renato (not answered when parked):**
+  - Which weekday does the custody week switch on? Often Friday or Sunday, not Monday.
+  - Should whole-schedule changes be admin-only for shared children? (Proposed: yes.)
+  - The absence credit starts at 3 absences in a month. Count per parent, or for the child as a whole?
+    (Proposed: per parent, since they pay separately.)
+  - Does the child use transport, and does each home have a different address? One subscription holds one set
+    of addresses.
+  - Not checked: whether the second parent already has an account. If they've signed in, they have an empty
+    family of their own and may have added the child to it. A read-only prod check answers this.
+  - Worth asking the accountant: if the reason for separate invoices is the IRS deduction, is invoicing to the
+    child's NIF enough? (Unverified understanding: with joint custody and alternating residence, the tax
+    authority splits a dependent's expenses between both parents.) That would cover the invoices, not the
+    separate payments.
+- **The "quinzenal" week pattern doesn't follow calendar weeks** (found 2026-10-17 while looking at shared
+  custody; not checked against prod data, not acted on). `odd`/`even` count the 1st/3rd vs 2nd/4th
+  *occurrence of each weekday in the month* (`packages/shared/models/weekPattern.ts`, copied in
+  `functions/src/kidclub/reservationEvents.ts` and `StudyRoomPlannerPage.tsx`). The client pages call it
+  "1.ª e 3.ª semanas do mês". Run on October 2026: Mon 5–Wed 7 are `odd` and Thu 8–Fri 9 are `even`, so one
+  calendar week is split between the two patterns, and Thu 29–Fri 30 are neither (a 5th occurrence belongs to
+  nobody). The count restarts every month. Whether this is a bug depends on what quinzenal parents expect: if
+  they read it as "every other week", any quinzenal subscription with days on both sides of the month's first
+  weekday gets split weeks. Next step: check prod for subscriptions with `weekPattern` `odd`/`even`, then
+  decide whether to change the rule.
 - **Billing page refactor — stop clients paying the wrong period** (surfaced 2026-09-24,
   confirmed by Renato as a real incident, not a data glitch): a parent can pay *any* period
   offered to them, including one eleven months out. Mary Pratas (Manuel Oliveira's family)

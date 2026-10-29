@@ -82,6 +82,8 @@ const DIMMABLE_IDS = new Set([
 export function buildDevices(
   statusModules?: Array<{
     id: string; on?: boolean; current_position?: number; bridge?: string;
+    /** Dimmers (NLFN) only, 0–100. */
+    brightness?: number;
   }> | null
 ): Device[] {
   const statusMap = new Map((statusModules ?? []).map(m => [m.id, m]));
@@ -93,7 +95,9 @@ export function buildDevices(
         bridge: s?.bridge,
         state: {
           on: s?.on ?? false,
-          brightness: 100,
+          // Netatmo reports the level of dimmers only; a plain switch is
+          // simply full when on.
+          brightness: typeof s?.brightness === 'number' ? s.brightness : 100,
           dimmable: DIMMABLE_IDS.has(meta.id),
         },
       } as Device;

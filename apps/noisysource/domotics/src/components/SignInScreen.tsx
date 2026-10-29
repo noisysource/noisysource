@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { House, LogIn } from 'lucide-react';
+import { describeSignInError } from '../lib/auth';
 
 /**
  * Shown instead of the house when the app is served from the public internet
@@ -18,17 +19,7 @@ export function SignInScreen({ onSignIn }: { onSignIn: () => Promise<void> }) {
     try {
       await onSignIn();
     } catch (err) {
-      const code = (err as { code?: string }).code ?? '';
-      // Worth naming explicitly: this one is a project misconfiguration rather
-      // than anything the person at the keyboard did wrong, and the raw
-      // Firebase message does not say which domain is missing.
-      setError(
-        code === 'auth/unauthorized-domain'
-          ? `${window.location.hostname} não está nos domínios autorizados do Firebase Auth.`
-          : code === 'auth/popup-closed-by-user'
-            ? 'Sessão cancelada.'
-            : (err as Error).message,
-      );
+      setError(describeSignInError(err));
     } finally {
       setBusy(false);
     }
