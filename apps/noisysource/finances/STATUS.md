@@ -7,7 +7,7 @@
 ## FinHub v2 — night 1 morning report (2026-10-29)
 
 **Open on dev:** https://kidclub-dev-finhub.web.app/v2/noisysource (or the "FinHub v2 · NoisySource"
-link at the top of the old sidebar). PR → `staging`: (being opened). Dev deploy: (pending).
+link at the top of the old sidebar). PR **#125** → `staging`. Dev deploy: **green** (2026-10-29 10:35 UTC run: Firestore rules + FinHub hosting; nothing else deployed). Checked after it: dev's live rules hold the v2 block and still hold #124's domotics blocks; the hosted bundle has both screens and the dev config.
 
 **Built** (branch `agent/finhub-v2-noisysource`, worktree `.claude/worktrees/finhub-v2-noisysource`):
 - **Domain** `packages/shared/finhub/`, pure, 39 tests with made-up values: event envelope
