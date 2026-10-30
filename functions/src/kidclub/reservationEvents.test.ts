@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { reconcileService } from "./reconciliation";
-import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart, resolveGenerationWindowStart, resolveGenerationWindowEnd, splitRegenerationWrites, REASON_BEFORE_START, REASON_AFTER_END } from "./reservationEvents";
+import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart, resolveGenerationWindowStart, resolveGenerationWindowEnd, splitRegenerationWrites, REASON_BEFORE_START, REASON_AFTER_END, resolvePreStartBackfillWindow, planRegeneration, regenerationQueryStart, ExistingEventLite } from "./reservationEvents";
 
 // Regression: StudyRoomEntry.endDate is a Firestore Timestamp while
 // TransportationSubscription.endDate is a "YYYY-MM-DD" string. Passing a
@@ -524,5 +524,158 @@ describe("splitRegenerationWrites (human absences survive a regeneration)", () =
   it("never voids an occurrence it is about to rewrite", () => {
     const { toVoid } = splitRegenerationWrites(generated, generated.map(g => ({ id: g.id })));
     expect(toVoid).toEqual([]);
+  });
+});
+
+// ── Start month already under way (2026-10-30) ─────────────────────────────
+// On the trigger path generation opened at TODAY, so a subscription created or
+// approved mid-month, in its own start month, never got the days before its
+// startDate written as system absences, and paid the full flat month. Real
+// case: Laura Silva, study Mon/Fri, startDate Fri 16 Oct 2026, billed EUR 48
+// for October instead of EUR 24 (no events for 2, 5, 9, 12 Oct).
+//
+// October 2026: Oct 1 is a Thursday. Mondays 5, 12, 19, 26; Fridays 2, 9, 16, 23, 30.
+
+describe("pre-start days of a start month already under way", () => {
+  const SCHOOL_YEAR_END = new Date(2027, 6, 15, 23, 59, 59);
+  const MON_FRI_STUDY = [{ day: "monday", hour: "16:00" }, { day: "friday", hour: "16:00" }];
+  const ts = (d: Date) => ({ toDate: () => d }); // the studyroom shape
+  // Study startDate is the parent's `new Date()` at enrollment: mid-morning, not midnight.
+  const laura = { familyId: "famL", childId: "cL", startDate: ts(new Date(2026, 9, 16, 10, 30)), days: MON_FRI_STUDY, weekPattern: "all" };
+  const plan = (sub: any, today: Date, existing: ExistingEventLite[] = [], type: "study" | "transport" = "study") =>
+    planRegeneration({ sub, subId: "s1", type, rate: 6, today, contractEnd: SCHOOL_YEAR_END, windowEnd: SCHOOL_YEAR_END, existing });
+  const datesBefore = (events: { data: { date: string } }[], iso: string) => events.map(e => e.data.date).filter(d => d < iso).sort();
+  const isSystemPreStart = (e: { data: any }) =>
+    e.data.status === "CANCELLED" && e.data.changedByRole === "system" && e.data.reason === REASON_BEFORE_START;
+
+  it("created mid-month with startDate today: the elapsed pre-start days are written as CANCELLED system absences", () => {
+    const today = new Date(2026, 9, 16);
+    // The bug: the regular window alone starts at today and never sees 2-12 Oct.
+    expect(resolveGenerationWindowStart(laura, today).getTime()).toBe(today.getTime());
+
+    const { toCreate, toVoid, newPreStartAbsences } = plan(laura, today);
+    const pre = toCreate.filter(e => e.data.date < "2026-10-16");
+    expect(pre.map(e => e.id).sort()).toEqual(["s1_2026-10-02", "s1_2026-10-05", "s1_2026-10-09", "s1_2026-10-12"]);
+    expect(pre.every(isSystemPreStart)).toBe(true);
+    // The start day itself is served.
+    const first = toCreate.find(e => e.data.date === "2026-10-16")!;
+    expect(first.data.status).toBe("EXPECTED");
+    expect(first.data.changedByRole).toBeUndefined();
+    expect(toVoid).toEqual([]);
+    expect(newPreStartAbsences).toBe(4);
+    // The existing-events read has to start on the 1st to see what's there.
+    expect(regenerationQueryStart(laura, today).getTime()).toBe(new Date(2026, 9, 1).getTime());
+  });
+
+  it("startDate later in the current month: elapsed AND upcoming pre-start days are absences (transport string shape)", () => {
+    const today = new Date(2026, 9, 16);
+    const t = {
+      familyId: "famT", childId: "cT", weekPattern: "all", startDate: "2026-10-26",
+      schedule: [{ dayOfWeek: "monday" }, { dayOfWeek: "friday" }],
+    };
+    const { toCreate, newPreStartAbsences } = plan(t, today, [], "transport");
+    const pre = toCreate.filter(e => e.data.date < "2026-10-26");
+    expect(pre.map(e => e.data.date).sort()).toEqual(
+      ["2026-10-02", "2026-10-05", "2026-10-09", "2026-10-12", "2026-10-16", "2026-10-19", "2026-10-23"]);
+    expect(pre.every(isSystemPreStart)).toBe(true);
+    expect(pre.find(e => e.data.date === "2026-10-02")!.id).toBe("s1_2026-10-02_1"); // Friday = leg 1
+    expect(toCreate.find(e => e.data.date === "2026-10-26")!.data.status).toBe("EXPECTED");
+    expect(newPreStartAbsences).toBe(7);
+  });
+
+  it("startDate in a future month: same events as before, nothing written in the current month", () => {
+    const today = new Date(2026, 9, 16);
+    const nov = { ...laura, startDate: ts(new Date(2026, 10, 10)) }; // Tue 10 Nov
+    expect(resolvePreStartBackfillWindow(nov, today)).toBeNull();
+    expect(regenerationQueryStart(nov, today).getTime()).toBe(today.getTime());
+
+    const { toCreate } = plan(nov, today);
+    // Unchanged: exactly what the regular window alone generated before this fix.
+    const before = generateStudyEvents(nov, "s1", 6, resolveGenerationWindowStart(nov, today), SCHOOL_YEAR_END,
+      { start: coerceStartDate(nov.startDate), end: SCHOOL_YEAR_END });
+    expect(toCreate.map(e => e.id)).toEqual(before.map(e => e.id));
+    expect(toCreate.some(e => e.data.date.startsWith("2026-10"))).toBe(false);
+    expect(toCreate.filter(isSystemPreStart).map(e => e.data.date)).toEqual(["2026-11-02", "2026-11-06", "2026-11-09"]);
+  });
+
+  it("startDate in a past month: nothing is written before today", () => {
+    const today = new Date(2026, 9, 16);
+    const sep = { ...laura, startDate: ts(new Date(2026, 8, 21)) };
+    expect(resolvePreStartBackfillWindow(sep, today)).toBeNull();
+    const { toCreate, newPreStartAbsences } = plan(sep, today, [
+      { id: "s1_2026-10-02", date: "2026-10-02" }, // an elapsed October day with no event is not "repaired" either
+    ]);
+    expect(datesBefore(toCreate, "2026-10-16")).toEqual([]);
+    expect(newPreStartAbsences).toBe(0);
+  });
+
+  it("leaves existing past events untouched, human-recorded or not, and never fills in-contract past days", () => {
+    const today = new Date(2026, 9, 22); // Thu: approved six days after the start
+    const existing: ExistingEventLite[] = [
+      { id: "s1_2026-10-05", date: "2026-10-05", changedByRole: "staff" },  // pre-start, recorded by a human
+      { id: "s1_2026-10-16", date: "2026-10-16" },                          // served
+      { id: "s1_2026-10-19", date: "2026-10-19", changedByRole: "parent" }, // a real absence
+      { id: "s1_2026-10-23", date: "2026-10-23", changedByRole: "parent" }, // a future one (kept, as before)
+    ];
+    const { toCreate, toVoid, newPreStartAbsences } = plan(laura, today, existing);
+    const written = toCreate.map(e => e.id);
+    for (const e of existing) expect(written).not.toContain(e.id);
+    expect(toVoid).toEqual([]);
+    // Only the MISSING pre-start days are added; 16-21 Oct are never written,
+    // even though 19 Oct had no event of its own here before the parent's.
+    expect(datesBefore(toCreate, "2026-10-22")).toEqual(["2026-10-02", "2026-10-09", "2026-10-12"]);
+    expect(newPreStartAbsences).toBe(3);
+
+    // With nothing at all on record, the past in-contract days still aren't created.
+    expect(datesBefore(plan(laura, today).toCreate, "2026-10-22")).toEqual(["2026-10-02", "2026-10-05", "2026-10-09", "2026-10-12"]);
+  });
+
+  it("a rerun finds the absences already there: nothing new, so billing isn't recomputed again", () => {
+    const today = new Date(2026, 9, 16);
+    const first = plan(laura, today);
+    const existing = first.toCreate.map(e => ({ id: e.id, date: e.data.date, changedByRole: e.data.changedByRole }));
+    const second = plan(laura, today, existing);
+    expect(second.newPreStartAbsences).toBe(0);
+    expect(datesBefore(second.toCreate, "2026-10-16")).toEqual([]);
+  });
+
+  it("the window: only elapsed days, only the current month, nothing when there is nothing to backfill", () => {
+    const w = resolvePreStartBackfillWindow(laura, new Date(2026, 9, 16))!;
+    expect(isoLike(w.from)).toBe("2026-10-01");
+    expect(isoLike(w.to)).toBe("2026-10-15");
+    // Starting later this month: stops the day before today.
+    expect(isoLike(resolvePreStartBackfillWindow({ startDate: "2026-10-26" }, new Date(2026, 9, 16))!.to)).toBe("2026-10-15");
+    // Starting on the 1st, or created on the 1st: nothing has elapsed before the start.
+    expect(resolvePreStartBackfillWindow({ startDate: "2026-10-01" }, new Date(2026, 9, 16))).toBeNull();
+    expect(resolvePreStartBackfillWindow({ startDate: "2026-10-20" }, new Date(2026, 9, 1))).toBeNull();
+    // No startDate (most transport subs): unchanged.
+    expect(resolvePreStartBackfillWindow({}, new Date(2026, 9, 16))).toBeNull();
+  });
+
+  it("Laura's October bills EUR 24, not EUR 48: Mon/Fri, EUR 6/day, every week, start Fri 16 Oct", () => {
+    const today = new Date(2026, 9, 16);
+    const october = (events: { data: { date: string; basePriceCents: number; status: string } }[]) => new Map([["s1",
+      events.filter(e => e.data.date.startsWith("2026-10"))
+        .map(e => ({ date: e.data.date, basePriceCents: e.data.basePriceCents, status: e.data.status as "EXPECTED" | "CANCELLED" }))]]);
+    const bill = (events: Parameters<typeof october>[0]) => reconcileService(
+      [{
+        id: "s1", childId: "cL", manualDiscountPct: 0, enrollmentDate: new Date(2026, 9, 16),
+        scheduleWeekdays: ["monday", "friday"], weekPattern: "all", ratePerOccurrenceCents: 600, coversPeriod: true,
+      }],
+      october(events),
+      { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
+    )[0];
+
+    const fixed = bill(plan(laura, today).toCreate);
+    expect(fixed.grossCents).toBe(4800); // flat: 2 days x 4 weeks x EUR 6
+    expect(fixed.absenceCount).toBe(4);   // 2, 5, 9, 12 Oct
+    expect(fixed.absenceDates).toEqual(["2026-10-02", "2026-10-05", "2026-10-09", "2026-10-12"]);
+    expect(fixed.absenceCreditCents).toBe(2400);
+    expect(fixed.finalCents).toBe(2400);
+
+    // What prod billed before: generation from today only, no absences.
+    const old = generateStudyEvents(laura, "s1", 6, resolveGenerationWindowStart(laura, today), SCHOOL_YEAR_END,
+      { start: coerceStartDate(laura.startDate), end: SCHOOL_YEAR_END });
+    expect(bill(old).finalCents).toBe(4800);
   });
 });
