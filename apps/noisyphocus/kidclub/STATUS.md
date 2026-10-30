@@ -4,7 +4,7 @@
 
 **Last updated:** 2026-10-30 (only the 🧾 mid-month start section just below. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
 
-## 🧾 Mid-month start billed as a full month (2026-10-30): fix on branch `agent/kidclub-prestart-absences`, PR → `staging`, NOT in prod
+## 🧾 Mid-month start billed as a full month (2026-10-30): fix on branch `agent/kidclub-prestart-absences`, PR #126 → `staging`, NOT in prod
 
 **Bug.** A subscription starting mid-month, created or approved in that same month, was billed the full flat
 month. A start month is pro-rated only through system absences: `reservationEvents.ts` writes the days before
