@@ -2,6 +2,7 @@ import * as admin from "firebase-admin";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { appCol } from "./db";
+import { autoCreateBillingSchedule } from "./billing";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -142,11 +143,44 @@ export const REASON_AFTER_END = "after subscription end";
 // subscription starts later than that, the 1st of startDate's own month, so the
 // pre-start days of the boundary month get written (as CANCELLED). Months
 // wholly before the boundary month are still skipped entirely.
+//
+// On the trigger path `from` is today, so this alone never reaches the part of
+// the CURRENT month that has already gone by. A subscription created (or
+// approved) mid-month, with startDate ~ its creation time, therefore never got
+// its earlier days written as absences and paid the full flat month (Laura
+// Silva, October 2026: EUR 48 instead of EUR 24). Those days are covered by
+// resolvePreStartBackfillWindow below, create-only, because this window is
+// the one regeneration rewrites.
 export function resolveGenerationWindowStart(sub: any, from: Date): Date {
   const subStart = coerceStartDate(sub?.startDate);
   if (!subStart || subStart <= from) return from;
   const monthStart = startOfMonth(subStart);
   return monthStart > from ? monthStart : from;
+}
+
+// The already-elapsed pre-start days of a start month that is the CURRENT
+// month: from the 1st up to the day before the earlier of today and the start
+// day. Null when there are none.
+//   - A start month that is already over gets nothing: its bill may already be
+//     invoiced or paid, and backfilling it would change a closed month.
+//   - A start month still in the future gets nothing here either: its
+//     pre-start days are all today or later, and the regular window already
+//     opens on its 1st (resolveGenerationWindowStart).
+//   - Days between startDate and today are never in this window. They are
+//     in-contract and may carry an absence a parent or staff member recorded.
+// Everything is compared with local getters, the same way isoDate and
+// boundaryStatus do (UTC on Cloud Functions), so this window and the
+// CANCELLED/EXPECTED decision always agree on which day startDate falls on.
+export function resolvePreStartBackfillWindow(sub: any, today: Date): { from: Date; to: Date } | null {
+  const subStart = coerceStartDate(sub?.startDate);
+  if (!subStart) return null;
+  const monthStart = startOfMonth(subStart);
+  if (monthStart.getTime() !== startOfMonth(today).getTime()) return null;
+  const startDay = new Date(subStart.getFullYear(), subStart.getMonth(), subStart.getDate());
+  const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const cutoff = startDay < todayDay ? startDay : todayDay;
+  const to = new Date(cutoff.getFullYear(), cutoff.getMonth(), cutoff.getDate() - 1, 23, 59, 59, 999);
+  return to < monthStart ? null : { from: monthStart, to };
 }
 
 // Where generation must END. `contractEnd` is the real last served day (the
@@ -464,34 +498,120 @@ async function ensureEventsExist(
   return missing.length;
 }
 
+function isPreStartAbsence(e: NewEvent): boolean {
+  return e.status === "CANCELLED" && e.changedByRole === "system" && e.reason === REASON_BEFORE_START;
+}
+
+export interface ExistingEventLite { id: string; date: string; changedByRole?: string }
+
+/**
+ * What one regeneration writes, decided without Firestore so it can be tested.
+ *
+ * Two parts, with different rules:
+ *   1. Today onward: exactly as before. The generated window is rewritten,
+ *      human-recorded events are kept, stale ones voided (splitRegenerationWrites).
+ *   2. The current start month's already-elapsed pre-start days
+ *      (resolvePreStartBackfillWindow): CREATE-ONLY. Only CANCELLED
+ *      "before subscription start" system absences, only for occurrences with
+ *      no event yet, never a write to an existing past event.
+ *      splitRegenerationWrites only protects human-recorded events dated today
+ *      or later, so the past must never go through it.
+ *
+ * `existing` must hold every event of this subscription dated on or after the
+ * earlier of today and the backfill window's start (see regenerationQueryStart).
+ * `newPreStartAbsences` counts the pre-start absences that did not exist
+ * before this run, in either part: that is what decides whether billing must
+ * be recomputed, since creating an event never triggers billing on its own.
+ */
+export function planRegeneration(input: {
+  sub: any; subId: string; type: "study" | "transport"; rate: number;
+  today: Date; contractEnd: Date; windowEnd: Date; existing: ExistingEventLite[];
+}): { toCreate: { id: string; data: NewEvent }[]; toVoid: string[]; newPreStartAbsences: number } {
+  const { sub, subId, type, rate, today, contractEnd, windowEnd, existing } = input;
+  const todayIso = isoDate(today);
+  const from = resolveGenerationWindowStart(sub, today);
+  const preStart = resolvePreStartBackfillWindow(sub, today);
+  const rangeStart = preStart ? preStart.from : from;
+  if (windowEnd < rangeStart) return { toCreate: [], toVoid: [], newPreStartAbsences: 0 };
+
+  const bounds: ContractBounds = { start: coerceStartDate(sub?.startDate), end: contractEnd };
+  const generated = type === "study"
+    ? generateStudyEvents(sub, subId, rate, rangeStart, windowEnd, bounds)
+    : generateTransportEvents(sub, subId, rate, rangeStart, windowEnd, bounds);
+  const existingIds = new Set(existing.map(e => e.id));
+
+  // 1. Today onward. Clearing starts at today, not at `from`: anything already
+  // written between today and a later startDate is exactly the bad data the
+  // startDate clamp prevents, and it should be cleared rather than left behind.
+  // A window that ends before `from` writes and voids nothing, as before.
+  let future: { id: string; data: NewEvent }[] = [];
+  let toVoid: string[] = [];
+  if (windowEnd >= from) {
+    const split = splitRegenerationWrites(
+      generated.filter(e => e.data.date >= todayIso),
+      existing.filter(e => e.date >= todayIso),
+    );
+    future = split.toCreate;
+    toVoid = split.toVoid;
+  }
+
+  // 2. Elapsed pre-start days of the current start month: create-only.
+  const backfillToIso = preStart ? isoDate(preStart.to) : "";
+  const past = preStart
+    ? generated.filter(e => e.data.date < todayIso && e.data.date <= backfillToIso
+        && isPreStartAbsence(e.data) && !existingIds.has(e.id))
+    : [];
+
+  const newPreStartAbsences = past.length
+    + future.filter(e => isPreStartAbsence(e.data) && !existingIds.has(e.id)).length;
+  return { toCreate: [...past, ...future], toVoid, newPreStartAbsences };
+}
+
+// Where regenerateFutureEvents must start reading existing events so that
+// planRegeneration sees everything it may write over or must not duplicate.
+export function regenerationQueryStart(sub: any, today: Date): Date {
+  return resolvePreStartBackfillWindow(sub, today)?.from ?? today;
+}
+
 async function regenerateFutureEvents(
   sub: any, subId: string, type: "study" | "transport", configs: { studyConfig: any; transportConfig: any },
 ): Promise<void> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const from = resolveGenerationWindowStart(sub, today);
   const ends = await resolveGenerationEnd(sub, subId, type);
-  if (!ends || ends.windowEnd < from) return;
-  const { contractEnd, windowEnd: to } = ends;
-  const bounds: ContractBounds = { start: coerceStartDate(sub?.startDate), end: contractEnd };
+  if (!ends) return;
 
-  const events = type === "study"
-    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to, bounds)
-    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to, bounds);
-
-  // Clearing still starts at today, not at `from`: anything already written
-  // between today and a later startDate is exactly the bad data the startDate
-  // clamp prevents, and it should be cleared rather than left behind.
-  const existingFuture = await appCol("reservationEvents")
+  const existing = await appCol("reservationEvents")
     .where("subscriptionId", "==", subId)
-    .where("date", ">=", isoDate(today))
+    .where("date", ">=", isoDate(regenerationQueryStart(sub, today)))
     .get();
-  const { toCreate, toVoid } = splitRegenerationWrites(
-    events,
-    existingFuture.docs.map(d => ({ id: d.id, changedByRole: d.data()?.changedByRole })),
-  );
+  const { toCreate, toVoid, newPreStartAbsences } = planRegeneration({
+    sub, subId, type,
+    rate: type === "study" ? studyPerDayRate(configs.studyConfig) : (configs.transportConfig?.flatRatePerTrip ?? 0),
+    today, contractEnd: ends.contractEnd, windowEnd: ends.windowEnd,
+    existing: existing.docs.map(d => ({ id: d.id, date: String(d.data()?.date ?? ""), changedByRole: d.data()?.changedByRole })),
+  });
   if (toVoid.length) await commitInChunks(toVoid.map(id => ({ id, status: "VOIDED" })), "setStatus");
   if (toCreate.length) await commitInChunks(toCreate, "create");
+
+  // New pre-start absences lower this family's bill, but nothing else will
+  // tell billing: onReservationEventBillingSync ignores event creation, and
+  // the subscription's own billing trigger runs in parallel with this one, so
+  // it may already have priced the month without them. One recompute, after
+  // every write above has committed, however many events were written. A
+  // rerun finds them all existing and doesn't recompute again, which is also
+  // what stops this from looping through the enrollmentFeeBilled update the
+  // recompute can make to the subscription.
+  if (newPreStartAbsences > 0 && sub?.familyId) {
+    try {
+      await autoCreateBillingSchedule(sub.familyId);
+    } catch (err) {
+      console.error(
+        `[reservationEvents] ${type} subscription ${subId}: wrote ${newPreStartAbsences} pre-start absence(s) `
+        + `but recomputing family ${sub.familyId}'s bills failed. They will apply on its next recompute.`, err,
+      );
+    }
+  }
 }
 
 async function loadConfigs(): Promise<{ studyConfig: any; transportConfig: any }> {
@@ -508,7 +628,9 @@ const CANCELLED_SUB_STATUSES = new Set(["cancelled", "canceled"]);
 // Schedule/weekPattern/status changes only ever touch FUTURE events (see
 // voidFutureEvents above) — already-elapsed occurrences are immutable facts
 // once their date has passed, regardless of what happens to the subscription
-// afterward.
+// afterward. The one past write is additive: a start month that is the
+// current month gets its missing pre-start days CREATED as system absences
+// (planRegeneration), never an existing event changed.
 
 export const onStudyroomReservationEventsSync = onDocumentWritten(
   { document: "_apps/arcoiris/studyroom/{entryId}", region: REGION },

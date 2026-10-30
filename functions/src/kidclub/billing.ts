@@ -1298,7 +1298,13 @@ function pastMonthSafe(existing: BillingLineItem[], next: BillingLineItem[]): bo
   return next.length > 0 && [...ids(existing)].every(id => after.has(id));
 }
 
-async function autoCreateBillingSchedule(familyId: string): Promise<void> {
+// Exported for reservationEvents.ts, which calls it once after writing a
+// subscription's pre-start system absences: event CREATION never reaches
+// onReservationEventBillingSync below, and the subscription's own billing
+// trigger runs in parallel with event generation, so it can price the month
+// before those absences exist. (billing.ts must not import reservationEvents.ts
+// back, or the two modules become circular.)
+export async function autoCreateBillingSchedule(familyId: string): Promise<void> {
   const [studySnap, transportSnap, configs, famInfo] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
@@ -1519,6 +1525,9 @@ export const onTransportBillingSync = onDocumentWritten(
 // scoped to STATUS CHANGES only (before.status !== after.status), not every
 // write — the initial bulk generation of a subscription's full school-year
 // event set (up to ~150 docs) would otherwise fire this once per document.
+// The one creation that does move money — a subscription's pre-start system
+// absences — is recomputed once by reservationEvents.ts itself, after it has
+// written them (see regenerateFutureEvents there).
 // familyId comes straight off the event doc itself, which the generator in
 // reservationEvents.ts always sets correctly — unlike the old
 // eventModifications collection, whose four separate client write sites
