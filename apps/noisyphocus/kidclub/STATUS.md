@@ -2,7 +2,55 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-25 (only the Vendus listing line under ▶️ Start here and the parked shared-custody note; nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-10-30 (only the 🧾 mid-month start section just below. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## 🧾 Mid-month start billed as a full month (2026-10-30): fix on branch `agent/kidclub-prestart-absences`, PR → `staging`, NOT in prod
+
+**Bug.** A subscription starting mid-month, created or approved in that same month, was billed the full flat
+month. A start month is pro-rated only through system absences: `reservationEvents.ts` writes the days before
+`startDate` as `CANCELLED` (`changedByRole: "system"`, reason "before subscription start"), and the ≥3-absence
+credit lowers the price. But the trigger generated from today, and a parent's `startDate` is the moment they
+enroll, so the days of the month already gone by were never written.
+
+**Fix (approved by Renato 2026-10-30).** Regeneration now also creates the current start month's missing
+pre-start days as those system absences, past dates included. It only creates: it never changes an existing
+event (so a recorded absence can't be wiped), never writes a day on or after `startDate`, and never touches an
+earlier month or a start month that's already over (its bill may be invoiced or paid). Pricing is unchanged.
+After writing new pre-start absences, the trigger recomputes the family's bills once
+(`autoCreateBillingSchedule`, now exported from `billing.ts`). Event creation doesn't trigger billing, and the
+subscription's own billing trigger can run before the absences exist. Code: `planRegeneration` and
+`resolvePreStartBackfillWindow` in `functions/src/kidclub/reservationEvents.ts`. Tests: `reservationEvents.test.ts`
+and `reservationEventsTrigger.test.ts`, 413/413 functions tests pass. No data repair in the PR: a prod scan found no
+other affected subscription (September mid-month starts are fine, the go-live backfill generated from 1 Sep).
+
+**Laura's October, fixed by hand in prod.** 4 system absences (2, 5, 9, 12 Oct) added to study
+`HIJnfN9AnFaryKlPMbiI` (Mon/Fri, start Fri 16 Oct). The October bill went from €108 to €84 (study €24 + €35
+enrolment fee + €25 insurance). Still `pending`.
+
+**Laura's transport stays pending on purpose.** `y6TexqKSrRBvLvTlH7Ud` is `pending` because she has no transport
+for now (Renato, 2026-10-30). If it's ever approved, first set its `startDate` to the real first day, or October
+gets billed too.
+
+**❓ Open question for Renato: João Duarte Silva Lopes** (family `lddlbiV88GtspJNhHCxO`). Study
+`kQghZAWR98ZHme4MZR9f` started 21 Sep and was cancelled 22 Sep. It has never had a reservation event, but the
+pending September bill (`lddlbiV88GtspJNhHCxO_2026-09`, €96) still charges €48 for it. `pastMonthSafe` freezes a
+past month's bill once a subscription on it is no longer active, so it won't correct itself. Needs a decision: did
+João attend any session? Nothing has been done about it in code or data.
+
+**Next step.** Renato reviews the PR (it deploys functions to dev). To check on dev: enroll a child in the study
+room as a parent, with days that already fell earlier this month. Its `reservationEvents` should include those
+earlier days as `CANCELLED`, `changedByRole: "system"`. Once approved, that month's bill should list them as
+absences, with the credit applied if there are 3 or more. Prod comes with the next `staging` → `main` promotion.
+
+**Known limits, not fixed here:**
+- Changing a subscription's days inside its start month leaves the old days' elapsed pre-start absences in place
+  (past events are never voided), and this fix adds the new days' missing ones. Removing or swapping days that way
+  can over-credit that one month. The leftover old days were already a problem before; voiding them would mean
+  writing to past events, so that's Renato's call.
+- `backfillReservationEvents` (admin callable) writes the same days but still doesn't recompute bills. Run
+  "gerar calendário de cobranças" after it, as before.
+- Event dates are worked out in the functions' timezone (UTC), like the rest of event generation. A parent
+  enrolling between 00:00 and 01:00 Lisbon summer time gets the previous day as `startDate`. Not new, not changed.
 
 ## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 
