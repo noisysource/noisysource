@@ -2,7 +2,20 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-28 (~23:00)
+**Last updated:** 2026-10-31 (~12:00)
+
+## ▶️ Where things stand (31/10, session closed)
+- **Code:** #118, #119, #120, #122, #123 and #124 were all **merged into `staging` on 29/10**. The Pi runs #124's build. Nothing domotics is in `main`/prod (there's no prod target). Only these STATUS/handoff notes from after the merge are left, on `agent/domotics-comfort-log` in their own PR.
+- **The house right now:**
+  - **Pump:** off since 09:45 (by Renato), water setpoint 43 (he restored it after a timer set it to 10, see below).
+  - **Guard:** off since 28/10 11:19 (for the technicians).
+  - **Automation:** enabled, **dry-run**, with the experiment config (windows 19–23 and 06–10, comfort 24, `warmupMaxMin` 180, solar/flow/rest off).
+  - **Thermostats:** set to 25–26 by hand since 30/10 01:02.
+- **Risky in flight:**
+  - The guard is off, so an E13 lockout means no heat until someone resets the pump.
+  - **A timer Renato set in an app (likely SmartLife) switches the pump on and also sets the water setpoint to 10.** Unless he edited it, it does the same next time it fires.
+  - Sala and Kids Bathroom are offline (`read ECONNRESET`).
+- **Next:** a fresh session analyses the 28–31/10 data and proposes the heating schedule (`HANDOFF-comfort-experiment.md`, "What actually happened" and "The analysis"). The thermostat drop-outs are a separate small task. Worktree cleanup: the domotics-energy, -pump-log, -solar-heating, -tech-report and -guard-preempt worktrees were removed 31/10. Remove domotics-comfort-log once its notes PR merges.
 
 ## 🧪 Comfort experiment, 29–31/10: analysis due ~31/10 (`HANDOFF-comfort-experiment.md`)
 Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00 to 10:00, with the pump off in between, to measure how long the floor holds its heat and how long it takes to warm up, night and day. His own on/off and thermostat changes are recorded as comfort feedback: on means cold, off means warm enough.
