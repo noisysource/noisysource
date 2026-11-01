@@ -8,6 +8,7 @@ import MarkPaidModal from './billing/MarkPaidModal';
 import BankDetailsPanel from './billing/BankDetailsPanel';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
+import { carriedCreditText } from '../../lib/billingLines';
 
 // Bills a payment can still be recorded on (markBillingPaid accepts these).
 const OPEN_STATUSES: BillingStatus[] = ['pending', 'processing', 'failed'];
@@ -88,7 +89,7 @@ const SERVICE_META = {
 // same ReservationEvents the client calendar and absence threshold read.
 function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
   const meta = lineItem.type ? SERVICE_META[lineItem.type] : null;
-  const hasBreakdown = !!(lineItem.multiTripDiscountAmount || lineItem.siblingDiscountAmount || lineItem.institutionalDiscountAmount || lineItem.absenceCreditAmount);
+  const hasBreakdown = !!(lineItem.multiTripDiscountAmount || lineItem.siblingDiscountAmount || lineItem.institutionalDiscountAmount || lineItem.absenceCreditAmount || lineItem.carriedAbsenceCredits?.length);
   return (
     <div className="py-1">
       <div className="flex justify-between text-xs text-gray-600">
@@ -105,6 +106,10 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           {!!lineItem.institutionalDiscountAmount && (
             <p>{lineItem.legacyPricing ? 'Tarifário antigo (descontos somados)' : 'Desconto escola/aluno repetente'}{lineItem.institutionalDiscountPct ? ` (${Math.round(lineItem.institutionalDiscountPct * 100)}%)` : ''}: −{fmtEur(lineItem.institutionalDiscountAmount)}</p>
           )}
+          {/* Carried in from a paid month of this subscription (absenceCarryOver.ts). */}
+          {lineItem.carriedAbsenceCredits?.map(c => (
+            <p key={c.fromPeriod} className={c.amount >= 0 ? 'text-emerald-700' : 'text-amber-700'}>{carriedCreditText(c)}</p>
+          ))}
         </div>
       )}
       {/* Absences are shown from absenceCount, NOT from absenceCreditDates.
@@ -168,12 +173,11 @@ function childNameOf(li: BillingLineItem): string | null {
   return name || null;
 }
 
-function ServiceCalendar({ li, events, onToggle, savingId, locked }: {
+function ServiceCalendar({ li, events, onToggle, savingId }: {
   li: BillingLineItem;
   events: ReservationEventDoc[];
   onToggle: (ev: ReservationEventDoc) => void;
   savingId: string | null;
-  locked: boolean;
 }) {
   const meta = SERVICE_META[li.type!];
   const accent = ACCENT_CLASSES[meta.accent];
@@ -214,7 +218,7 @@ function ServiceCalendar({ li, events, onToggle, savingId, locked }: {
                     <button
                       key={ev.id}
                       type="button"
-                      disabled={locked || savingId === ev.id}
+                      disabled={savingId === ev.id}
                       onClick={() => onToggle(ev)}
                       title={`${dateLabel}${legLabel} — ${isMarked ? 'marcado como falta, clicar para restaurar' : 'clicar para marcar falta'}`}
                       className={`text-[11px] px-2 py-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isMarked ? accent.marked : accent.idle}`}
@@ -259,8 +263,10 @@ function DayEditor({ record, onRefreshNeeded }: {
   const [error, setError] = useState<string | null>(null);
   const [changed, setChanged] = useState(false);
 
-  // Paid / being paid / invoiced: the month is closed (the server refuses too).
-  const locked = ['paid', 'invoiced', 'processing'].includes(record.status);
+  // Paid / being paid / invoiced: the bill can't change any more, but its days
+  // still can (Renato, 2026-10-31). The credit they make goes on the next open
+  // bill of the same subscription instead.
+  const closed = ['paid', 'invoiced', 'processing', 'failed'].includes(record.status);
   const periodStart = toIsoDate(record.periodStart.toDate());
   const periodEnd = toIsoDate(record.periodEnd.toDate());
 
@@ -349,10 +355,14 @@ function DayEditor({ record, onRefreshNeeded }: {
               events={eventsBySub.get(li.subscriptionId!) ?? []}
               onToggle={handleToggle}
               savingId={savingId}
-              locked={locked}
             />
           ))}
-        {locked && <p className="text-xs text-gray-600">Este mês já está pago — os dias não podem ser alterados.</p>}
+        {closed && (
+          <p className="text-xs text-gray-600">
+            Esta fatura já não muda. As alterações aos dias deste mês dão crédito (ou acerto) na próxima
+            fatura em aberto do mesmo serviço.
+          </p>
+        )}
         {error && <p className="text-xs text-red-600">{error}</p>}
         <div className="flex items-center justify-between gap-3 pt-1">
           <p className="text-[11px] text-gray-500">

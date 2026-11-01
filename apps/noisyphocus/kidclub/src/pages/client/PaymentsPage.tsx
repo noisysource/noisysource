@@ -12,6 +12,7 @@ import { PaymentProofList, PaymentProofUpload } from '../../components/billing/P
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
 import { needsNifPrompt } from '../../lib/nif';
 import { reportClientError } from '../../lib/clientErrors';
+import { carriedCreditText } from '../../lib/billingLines';
 
 const STATUS_META: Record<string, { label: string; className: string; icon: string }> = {
   pending:    { label: 'Por pagar',             className: 'bg-yellow-50 border-yellow-200 text-yellow-800', icon: '⏳' },
@@ -512,9 +513,15 @@ export default function PaymentsPage() {
                     {/* Line items */}
                     <div className="mt-2 space-y-0.5">
                       {record.lineItems?.map((li, i) => (
-                        <div key={i} className="flex justify-between text-xs text-gray-500">
-                          <span>{li.title}</span>
-                          <span>{fmtEur(li.amount)}</span>
+                        <div key={i}>
+                          <div className="flex justify-between text-xs text-gray-500">
+                            <span>{li.title}</span>
+                            <span>{fmtEur(li.amount)}</span>
+                          </div>
+                          {/* A paid month's absences, credited here (already in the amount). */}
+                          {li.carriedAbsenceCredits?.map(c => (
+                            <p key={c.fromPeriod} className="pl-3 text-[11px] text-emerald-700">{carriedCreditText(c)}</p>
+                          ))}
                         </div>
                       ))}
                     </div>
