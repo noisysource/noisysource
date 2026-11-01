@@ -19,7 +19,13 @@ const fake = vi.hoisted(() => {
     id: path.split("/")[1], exists: !!state.docs[path],
     data: () => (state.docs[path] ? { ...state.docs[path] } : undefined),
   });
-  const ref = (path: string) => ({ path, id: path.split("/")[1], get: async () => snapOf(path) });
+  const ref = (path: string) => ({
+    path, id: path.split("/")[1], get: async () => snapOf(path),
+    update: async (data: Record<string, any>) => {
+      if (!state.docs[path]) throw new Error(`NOT_FOUND ${path}`);
+      write(path, data, true);
+    },
+  });
   const matches = (x: any, op: string, v: any) =>
     op === "==" ? x === v : op === ">=" ? x >= v : op === "<=" ? x <= v : op === "in" ? (v as any[]).includes(x) : false;
   const collection = (c: string) => {
@@ -61,7 +67,7 @@ vi.mock("firebase-admin", () => ({
 vi.mock("./db", () => ({ appCol: (c: string) => fake.collection(c) }));
 vi.mock("./billing", () => ({ autoCreateBillingSchedule: vi.fn() }));
 
-import { onStudyroomReservationEventsSync, REASON_BEFORE_START } from "./reservationEvents";
+import { onStudyroomReservationEventsSync, setReservationEventStatus, REASON_BEFORE_START, REASON_AFTER_END } from "./reservationEvents";
 import { autoCreateBillingSchedule } from "./billing";
 
 const { state } = fake;
@@ -148,5 +154,61 @@ describe("onStudyroomReservationEventsSync — pre-start absences reach billing"
     await run(undefined, laura({ startDate: ts(new Date(2026, 8, 21)) }));
     expect(eventDates().filter(d => d < "2026-10-16")).toEqual([]);
     expect(recompute).not.toHaveBeenCalled();
+  });
+});
+
+// The paid-month lock (2026-10-01 to 2026-10-31) is gone: a parent or staff
+// member can change a day whatever the month's bill status. The two guards that
+// were next to it stay exactly as they were.
+describe("setReservationEventStatus — days stay changeable in a paid month", () => {
+  const call = (uid: string, data: Record<string, unknown>) =>
+    (setReservationEventStatus as any).run({ auth: { uid }, data });
+  const ev = (o: Record<string, any> = {}) => ({
+    subscriptionId: "s1", subscriptionType: "study", familyId: "famL", childId: "cL", date: "2026-10-19",
+    basePriceCents: 600, status: "EXPECTED", ...o,
+  });
+
+  beforeEach(() => {
+    state.docs["families/famL"] = { primaryContact: { userId: "parentL" } };
+    state.docs["users/parentL"] = { roles: {} };
+    state.docs["users/staff1"] = { roles: { rainbowAdmin: true } };
+  });
+
+  for (const status of ["paid", "invoiced", "processing"]) {
+    it(`a parent can mark and undo an absence when October is ${status}`, async () => {
+      state.docs["billing/famL_2026-10"] = { familyId: "famL", status };
+      state.docs["reservationEvents/s1_2026-10-19"] = ev();
+
+      await expect(call("parentL", { eventId: "s1_2026-10-19", status: "CANCELLED" })).resolves.toEqual({ ok: true });
+      expect(event("2026-10-19")).toMatchObject({ status: "CANCELLED", changedByRole: "parent", changedBy: "parentL" });
+      await expect(call("parentL", { eventId: "s1_2026-10-19", status: "EXPECTED" })).resolves.toEqual({ ok: true });
+      expect(event("2026-10-19").status).toBe("EXPECTED");
+      expect(state.docs["billing/famL_2026-10"]).toEqual({ familyId: "famL", status }); // the bill itself is untouched
+    });
+  }
+
+  it("staff can too", async () => {
+    state.docs["billing/famL_2026-10"] = { familyId: "famL", status: "paid" };
+    state.docs["reservationEvents/s1_2026-10-19"] = ev();
+    await call("staff1", { eventId: "s1_2026-10-19", status: "CANCELLED" });
+    expect(event("2026-10-19")).toMatchObject({ status: "CANCELLED", changedByRole: "staff" });
+  });
+
+  it("still refuses a VOIDED day", async () => {
+    state.docs["reservationEvents/s1_2026-10-19"] = ev({ status: "VOIDED" });
+    await expect(call("parentL", { eventId: "s1_2026-10-19", status: "CANCELLED" })).rejects.toThrow(/ended/);
+  });
+
+  it("still refuses to restore a boundary absence the system wrote", async () => {
+    for (const reason of [REASON_BEFORE_START, REASON_AFTER_END]) {
+      state.docs["reservationEvents/s1_2026-10-19"] = ev({ status: "CANCELLED", changedByRole: "system", reason });
+      await expect(call("parentL", { eventId: "s1_2026-10-19", status: "EXPECTED" })).rejects.toThrow(/start\/end dates/);
+    }
+  });
+
+  it("still refuses another family's day", async () => {
+    state.docs["users/parentX"] = { roles: {} };
+    state.docs["reservationEvents/s1_2026-10-19"] = ev();
+    await expect(call("parentX", { eventId: "s1_2026-10-19", status: "CANCELLED" })).rejects.toThrow(/does not belong/);
   });
 });
