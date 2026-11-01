@@ -2,7 +2,105 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-25 (only the Vendus listing line under ▶️ Start here and the parked shared-custody note; nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-10-31 (the 🧾 hotfix section just below only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR → `main` (NOT merged, NOT in prod)
+
+Three fixes, all decided by Renato (A on 2026-10-30, B and C on 2026-10-31), shipped as a hotfix off `main`
+("today's fixes only", not a staging→main promotion). It replaces PR #126 (closed). A second PR,
+`hotfix/kidclub-absences` → `staging`, is only there for the dev preview. Merging it later also does the
+main→staging sync.
+
+**Before / after merging the `main` PR.** A hotfix PR doesn't deploy when opened; **merging it deploys to prod**
+(push to `main`). Branch protection isn't enforced, so check the merge run is green yourself. Then sync `staging`:
+the automatic `sync/main-to-staging-*` PR is known to fail. Merging the `→ staging` PR does the sync. After the
+prod deploy, watch the functions logs for `[billing] … absence credit … has no open bill` (credit with nowhere to
+go) and `no absence carry-over from …` lines. The first recompute of each family can carry credit (or a charge,
+see B) from months whose days changed after they were paid, including changes made before this fix (a mid-month
+cancellation's tail, a schedule edit). A read-only prod scan before merging would show who; not done.
+
+### A. Mid-month start billed as a full month
+**Bug.** A start month is pro-rated only through system absences: `reservationEvents.ts` writes the days before
+`startDate` as `CANCELLED` (`changedByRole: "system"`, reason "before subscription start"), and the ≥3-absence
+credit lowers the price. The trigger generated from today, and a parent's `startDate` is the moment they enroll,
+so the days of the month already gone by were never written. The family paid the full flat month.
+**Fix.** Regeneration also creates the current start month's missing pre-start days as those system absences,
+past dates included. It only creates: never an existing event (a recorded absence can't be wiped), never a day on
+or after `startDate`, never an earlier month or a start month that's over. Then it recomputes the family's bills
+once (`autoCreateBillingSchedule`), because event creation doesn't trigger billing. Code: `planRegeneration` /
+`resolvePreStartBackfillWindow` (`functions/src/kidclub/reservationEvents.ts`). No data repair needed: a prod scan
+found no other affected subscription.
+- **Laura's October, fixed by hand in prod (2026-10-30).** 4 system absences (2, 5, 9, 12 Oct) added to study
+  `HIJnfN9AnFaryKlPMbiI` (Mon/Fri, start Fri 16 Oct). October bill €108 → €84 (study €24 + €35 enrolment fee +
+  €25 insurance), still `pending`.
+- **Laura's transport stays pending on purpose.** `y6TexqKSrRBvLvTlH7Ud` is `pending` because she has no
+  transport for now (Renato, 2026-10-30). If it's ever approved, first set its `startDate` to the real first day,
+  or October gets billed too.
+- **João Duarte Silva Lopes, decided** (family `lddlbiV88GtspJNhHCxO`). Renato: João didn't attend. The study line
+  (`kQghZAWR98ZHme4MZR9f`, started 21 Sep, cancelled 22 Sep, never had events) was removed from the pending
+  September bill `lddlbiV88GtspJNhHCxO_2026-09` in prod on 2026-10-31: €96 → €48, the transport line only, still
+  `pending`. His transport sub `5NXyjJ0tRePrK44BzBSq` is also cancelled and has no September events. Nobody
+  questioned it, so that line was left as it is.
+
+### B. Days stay changeable in a paid month; the credit goes on the next bill
+**Problem (prod).** `setReservationEventStatus` refused any day change once the month's bill was
+paid/invoiced/processing ("Este mês já está pago…", lock from c8c4ff1, 2026-10-01). Families pay in the first week
+(18 of 27 October bills paid, mostly days 1–8), so on-time payers couldn't report an absence for the rest of the
+month. The van never knew, and the credit was lost. Three parents were refused, on 27, 29 and 30 Oct.
+**Fix.** The lock is gone (VOIDED and boundary-restore guards unchanged; the admin day editor no longer locks
+either). The paid bill is never touched. `functions/src/kidclub/absenceCarryOver.ts` runs a ledger on every
+billing recompute. For a closed month M (paid/invoiced/processing/**failed**) and subscription S:
+`outstanding = should(M) − granted(M) − carried(M)`.
+- `should`: the ≥3 credit on M's current events, priced on M's stored line (amount + its credit + whatever it
+  received). `granted`: the line's `absenceCreditAmount`. `carried`: what closed bills already carry from M.
+- A credit comes off S's next open line (same service, so the same VAT), never below €0. Any remainder goes to the
+  month after. It's recorded as `carriedAbsenceCredits: [{ fromPeriod, amount }]` on the line, already included in
+  `amount`. Titles never change (Vendus maps products by title).
+- **A negative outstanding is charged back** ("Acerto de faltas", +€): days restored after a credited month was
+  paid. That's the exact correction. ❓ Renato: keep it, or never charge back?
+- **Nowhere to put it** (S ended, or no later open line): left unapplied and logged as a warning on every
+  recompute. Settle by hand if it should stand (e.g. a mid-month cancellation of a paid month).
+- **Bills paid before the 2026-09-27 cutover are skipped as a source**: lines with no `absenceCount`, priced by the
+  old `excludedDates` model. Their excluded days were migrated as CANCELLED events, so reading them as "0 granted"
+  would credit the same days twice. ❓ This deviates from the brief ("treat missing as 0"). It wasn't checked
+  against prod data: this session had no prod access. Confirm with a prod read of the 6 pre-cutover paid bills.
+- `failed` counts as closed (not recomputable, still payable at its amount). ❓ The brief listed only
+  paid/invoiced/processing.
+- A month whose open bill is fully covered by credit totals €0 and is auto-cancelled (`autoCancelled`), as any €0
+  month already was. It now stores its lines, so the credit shows on the admin page. Parents may not see it in
+  Pagamentos.
+- Shown on Pagamentos, on the admin billing page, and in the payment-notice email: "Crédito de faltas de Outubro
+  2026: −€X". Calendar footer: "Se o mês já estiver pago, o crédito é descontado na fatura do mês seguinte."
+- **Vendus:** each line is invoiced as `gross_price = amount` (VAT-inclusive) on the product matched by title
+  (study 23%, transport 6%), so a reduced amount invoices at that service's rate. A line can already reach €0
+  through its own month's credit; whether Vendus accepts a €0 line wasn't checked.
+- Cross-app: billing line `amount` can now include carried credit (`carriedAbsenceCredits`). FinHub doesn't read
+  `absenceCreditAmount` today. ❓ Renato: add a Cross-App Data Contracts entry to the root CLAUDE.md if FinHub
+  ever derives income per line.
+
+### C. Per-child calendar
+`/client/children/:childId/calendar` (`EventCalendarPage`) failed with permission-denied for parents (it queried
+subs by `childId` and every family's transport; Patrícia Tavares, 2026-10-20). It now redirects to
+`/client/calendar?child=<id>`, which opens with only that child shown. `EventCalendarPage` is deleted, and the
+child page links straight to the family calendar.
+
+### Still open (from A, none blocking)
+- Changing days inside the start month leaves the old days' elapsed pre-start absences in place and adds the new
+  ones' missing ones: removing or swapping days can over-credit that month. Fixing it means voiding past system
+  events; Renato's call.
+- Narrow race: the subscription's own billing trigger can still write a stale bill after A's recompute if it read
+  events before they existed (needs a cold start in an unlucky spot).
+- `ManualEnrollForm` creates study subs with `familyId: ''`: no events until a family is linked, and if that's
+  after the start month, its pre-start days are never written.
+- `backfillReservationEvents` (admin callable) writes pre-start days but doesn't recompute bills: run
+  "Recalcular tudo" after it.
+- `startDate` days are worked out in UTC: enrolling between 00:00 and 01:00 Lisbon summer time gives the previous
+  day.
+
+**Tests:** functions 364/364 on `main`'s base (also under `TZ=UTC`): `reservationEvents.test.ts` (A),
+`reservationEventsTrigger.test.ts` (A's recompute, B's lock removed), `absenceCarryOver.test.ts` (ledger, parity
+with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
+`pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
 
 ## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 

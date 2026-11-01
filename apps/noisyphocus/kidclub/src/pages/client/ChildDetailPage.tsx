@@ -427,7 +427,7 @@ export default function ChildDetailPage() {
             <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
             <div className="space-y-2">
               <Link
-                to={`/client/children/${childId}/calendar`}
+                to={`/client/calendar?child=${childId}`}
                 className="block w-full bg-purple-50 text-purple-600 py-2 px-4 rounded text-center hover:bg-purple-100 transition-colors"
               >
                 📅 Manage Events Calendar

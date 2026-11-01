@@ -12,6 +12,8 @@ export interface BillLine {
   title?: string;
   amount: number;
   absenceCreditAmount: number;
+  /** Net credit carried in from paid months (positive lowers `amount`). */
+  carriedCredit: number;
   grossAmount: number;
   multiTripDiscountAmount: number;
   siblingDiscountAmount: number;
@@ -26,6 +28,7 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
     title: l.title,
     amount: l.amount ?? 0,
     absenceCreditAmount: l.absenceCreditAmount ?? 0,
+    carriedCredit: (l.carriedAbsenceCredits ?? []).reduce((n: number, c: any) => n + (c?.amount ?? 0), 0),
     grossAmount: l.grossAmount ?? l.amount ?? 0,
     multiTripDiscountAmount: l.multiTripDiscountAmount ?? 0,
     siblingDiscountAmount: l.siblingDiscountAmount ?? 0,
@@ -33,8 +36,28 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
     legacyPricing: !!l.legacyPricing,
   }));
 
-/** The standard monthly amount: net of discounts, before absence credits. */
-export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount) * 100) / 100;
+/** The standard monthly amount: net of discounts, before absence credits (this month's and any carried in). */
+export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount + l.carriedCredit) * 100) / 100;
+
+const MONTHS_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+/** "2026-10" -> "Outubro 2026". */
+export function periodLabelPt(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  return MONTHS_PT[m - 1] ? `${MONTHS_PT[m - 1]} ${y}` : period;
+}
+
+/**
+ * "Crédito de faltas de Outubro 2026: −€12.00" — a paid month's absence credit
+ * taken off this line. Negative: "Acerto de faltas", days restored after the
+ * credit was paid out. Same wording as the payment email (billing.ts).
+ */
+export function carriedCreditText(c: { fromPeriod: string; amount: number }): string {
+  const label = periodLabelPt(c.fromPeriod);
+  return c.amount >= 0
+    ? `Crédito de faltas de ${label}: −€${c.amount.toFixed(2)}`
+    : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
+}
 
 /** yyyy-mm of a billing doc, from periodStart (Timestamp/Date/string) or the `_yyyy-mm` id suffix. */
 export function billPeriodKey(id: string, periodStart: any): string {
