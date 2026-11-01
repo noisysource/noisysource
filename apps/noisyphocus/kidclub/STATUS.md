@@ -4,16 +4,16 @@
 
 **Last updated:** 2026-10-31 (the 🧾 hotfix section just below only; nothing else re-checked since 2026-10-21)
 
-## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR → `main` (NOT merged, NOT in prod)
+## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (NOT merged, NOT in prod); dev preview #129
 
 Three fixes, all decided by Renato (A on 2026-10-30, B and C on 2026-10-31), shipped as a hotfix off `main`
-("today's fixes only", not a staging→main promotion). It replaces PR #126 (closed). A second PR,
-`hotfix/kidclub-absences` → `staging`, is only there for the dev preview. Merging it later also does the
-main→staging sync.
+("today's fixes only", not a staging→main promotion). It replaces PR #126 (closed). The dev preview is
+#129 (`sync/hotfix-absences-to-staging` → `staging`, which carries the hotfix with the staging conflicts resolved).
+Merging #129 after #128 also does the main→staging sync.
 
 **Before / after merging the `main` PR.** A hotfix PR doesn't deploy when opened; **merging it deploys to prod**
 (push to `main`). Branch protection isn't enforced, so check the merge run is green yourself. Then sync `staging`:
-the automatic `sync/main-to-staging-*` PR is known to fail. Merging the `→ staging` PR does the sync. After the
+the automatic `sync/main-to-staging-*` PR is known to fail. Merging #129 does the sync. After the
 prod deploy, watch the functions logs for `[billing] … absence credit … has no open bill` (credit with nowhere to
 go) and `no absence carry-over from …` lines. The first recompute of each family can carry credit (or a charge,
 see B) from months whose days changed after they were paid, including changes made before this fix (a mid-month
