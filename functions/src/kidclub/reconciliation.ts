@@ -110,6 +110,8 @@ export interface ReconciledLineItem {
   absenceDates: string[];
   absenceCreditDates: string[];
   finalCents: number;
+  /** scheduleLength x activeWeeks: the denominator behind gross and the per-absence credit. */
+  notionalOccurrences: number;
 }
 
 /**
@@ -379,6 +381,7 @@ export function reconcileService(
       absenceDates: cancelled.map(c => c.date),
       absenceCreditDates: qualifies ? cancelled.map(c => c.date) : [],
       finalCents: Math.max(0, item.netBeforeAbsence - absenceCreditCents),
+      notionalOccurrences: item.notionalOccurrences,
     };
   });
 }
