@@ -12,6 +12,9 @@ import { db, warmByFn } from '../lib/firebase';
  *
  * The plan since 2026-10-26: a warm floor in the warm window (19:00–09:00),
  * by day only on spare sun (battery ≥ 90 %) or below the day minimum (21 °C).
+ * From 2026-11-02 spare sun includes what the inverter holds back (the battery
+ * charging at its ~3 kW limit, or full), with the rooms set `solar.boost`
+ * warmer while it heats on it.
  */
 
 export interface AutomationConfig {
@@ -28,7 +31,15 @@ export interface AutomationConfig {
    */
   windows?: Array<{ from: string; to: string }>;
   dayMin: number;
-  solar: { enabled: boolean; socOn: number; pumpW: number; exportW: number };
+  solar: {
+    enabled: boolean; socOn: number; pumpW: number; exportW: number;
+    /** Or the battery charging at least this fast (at its limit, the panels held back), W. */
+    chargeW: number;
+    /** Heating on sun, it carries on while the battery still charges at least this fast, W. */
+    keepChargeW: number;
+    /** Heating on sun, the rooms this much above the temperature (up to the maximum), °C. */
+    boost: number;
+  };
   flow: { enabled: boolean; at15: number; slope: number; min: number; max: number };
   recovery: { enabled: boolean };
   rest: { enabled: boolean; minutes: number };
@@ -43,7 +54,7 @@ export const DEFAULT_AUTOMATION: AutomationConfig = {
   comfort: 24,
   warm: { from: '19:00', to: '09:00' },
   dayMin: 21,
-  solar: { enabled: true, socOn: 90, pumpW: 3300, exportW: 500 },
+  solar: { enabled: true, socOn: 90, pumpW: 3300, exportW: 500, chargeW: 2700, keepChargeW: 1500, boost: 0 },
   flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 45 },
   recovery: { enabled: true },
   rest: { enabled: true, minutes: 60 },
@@ -80,8 +91,11 @@ export interface AutomationStatus {
   state: 'off' | 'running' | 'dry-run';
   /** The pause in force, ms it ends; null = not paused. Absent on a bridge from before 2026-10-26. */
   pausedUntil?: number | null;
-  /** The four settings shown on top. Absent on an older bridge. */
-  settings?: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number; windows?: Array<{ from: string; to: string }> };
+  /** The settings shown on top. Absent on an older bridge; `solar` from 2026-11-02. */
+  settings?: {
+    warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number; windows?: Array<{ from: string; to: string }>;
+    solar?: { enabled: boolean; boost: number };
+  };
   /** 'warm' = horário quente; 'warmup' = a aquecer para ele; 'day'. */
   mode?: 'warm' | 'warmup' | 'day';
   wantOn?: boolean;
@@ -90,7 +104,8 @@ export interface AutomationStatus {
   /** Today's plan in plain words. */
   plan?: string;
   warm?: WarmPlan;
-  solar?: { on: boolean; soc: number | null; spareW: number | null; note: string };
+  /** `batteryW` (> 0 charging) from 2026-11-02. */
+  solar?: { on: boolean; soc: number | null; spareW: number | null; batteryW?: number | null; note: string };
   dayMinActive?: boolean;
   meanRoom?: number;
   roomTarget?: number;

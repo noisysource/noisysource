@@ -15,6 +15,14 @@
  *   (battery ≥ 90 % and the panels covering the house plus the pump, or power
  *   going out to the grid) or the rooms' mean falls below the day minimum
  *   (21). The battery comes first: a house a little colder by day is fine.
+ *   Spare sun is also the sun the inverter holds back (2026-11-02): it makes
+ *   only what the house and the battery take, and the battery charges at most
+ *   ~3 kW, so on a sunny day the panels are throttled from mid-morning while
+ *   the battery is still far from full (it reached 76–84 % by 16:00 on
+ *   29/10–1/11). The battery charging at its limit, or full, is that signal;
+ *   with the pump on, the panels make more (29/10 10:00: 5.9 kW). Heating on
+ *   it, the room targets go up by `solar.boost`, so the valves open and the
+ *   floor stores the heat for the evening.
  * - Live, the automation OWNS on/off: an off in the warm window (the
  *   controller's nightly 23:54 UTC timer) is undone after the minimum off time,
  *   and an on outside the plan by day is undone after the minimum on time. A
@@ -92,6 +100,12 @@ export interface AutomationConfig {
     pumpW: number;
     /** Or at least this much going out to the grid, W. */
     exportW: number;
+    /** Or the battery charging at least this fast: at its limit (~3 kW), the panels held back, W. */
+    chargeW: number;
+    /** Heating on sun, it carries on while the battery still charges at least this fast (the pump takes the rest), W. */
+    keepChargeW: number;
+    /** Heating on sun, the room targets this much above comfort (up to `limits.roomMax`), so the floor stores it, °C. */
+    boost: number;
   };
   /** Water temperature from the outdoor temperature: at15 + (15 − outdoor) × slope. */
   flow: { enabled: boolean; at15: number; slope: number; min: number; max: number };
@@ -118,7 +132,7 @@ export const DEFAULT_CONFIG: AutomationConfig = {
   windows: [{ from: '19:00', to: '09:00' }],
   warmupMaxMin: 6 * 60, // MAX_WARMUP_LEAD_MIN
   dayMin: 21,
-  solar: { enabled: true, socOn: 90, pumpW: 3300, exportW: 500 },
+  solar: { enabled: true, socOn: 90, pumpW: 3300, exportW: 500, chargeW: 2700, keepChargeW: 1500, boost: 0 },
   flow: { enabled: true, at15: 30, slope: 0.8, min: 28, max: 45 },
   recovery: { enabled: true },
   rest: { enabled: true, minutes: 60 },
@@ -179,6 +193,9 @@ export function parseConfig(raw: unknown): AutomationConfig {
       socOn: num(so.socOn, d.solar.socOn, 20, 100),
       pumpW: num(so.pumpW, d.solar.pumpW, 500, 10_000),
       exportW: num(so.exportW, d.solar.exportW, 100, 10_000),
+      chargeW: num(so.chargeW, d.solar.chargeW, 500, 10_000),
+      keepChargeW: num(so.keepChargeW, d.solar.keepChargeW, 0, 10_000),
+      boost: num(so.boost, d.solar.boost, 0, 2),
     },
     flow: {
       enabled: bool(fl.enabled, d.flow.enabled),
@@ -344,12 +361,23 @@ export interface GuardView {
 const SOLAR_START_MS = 10 * MIN;
 /** …and be gone this long before it is switched off again. */
 const SOLAR_STOP_MS = 15 * MIN;
+/**
+ * Stopped for want of sun, it doesn't start again on the battery's signal for
+ * this long. With the pump off the panels are held back again, so the battery
+ * is back at its limit at once and would say "spare sun" every cycle, though
+ * the sun that just fell short is no stronger (an afternoon would flap).
+ */
+const SOLAR_RETRY_MS = 60 * MIN;
 /** Running on sun, it carries on down to this many points below the battery threshold. */
 const SOC_HYST = 5;
 /** Running on sun, it carries on while the panels still cover this share of the pump. */
 const KEEP_SHARE = 0.5;
 /** Running on sun, buying this much from the grid stops it (the battery isn't covering). */
 const IMPORT_STOP_W = 500;
+/** From here the battery counts as full: it stops charging, and the panels make only what the house takes. */
+const FULL_SOC = 97;
+/** Full, the battery giving no more than this: the panels cover the house (weak sun, it would be giving more). */
+const COVERED_W = 100;
 /** The house never draws less than this (night baseline 0.2–0.3 kW, 26/10). */
 const BASELINE_W = 200;
 
@@ -359,6 +387,8 @@ export interface SolarView {
   soc: number | null;
   /** Panels minus the house without the pump, W; null without inverter readings. */
   spareW: number | null;
+  /** > 0 charging, < 0 discharging, W; null without a reading. */
+  batteryW: number | null;
   /** In Portuguese, for the app. */
   note: string;
 }
@@ -419,8 +449,12 @@ export interface AutomationStatus {
   state: 'off' | 'running' | 'dry-run';
   /** The person's pause in force, ms it ends; null = not paused. */
   pausedUntil: number | null;
-  /** The four settings the app shows on top. */
-  settings: { warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number; windows: Array<{ from: string; to: string }> };
+  /** The settings the app shows on top. */
+  settings: {
+    warmFrom: string; warmTo: string; comfort: number; dayMin: number; socOn: number; windows: Array<{ from: string; to: string }>;
+    /** Heating on sun at all, and how much warmer the rooms are set while it does. */
+    solar: { enabled: boolean; boost: number };
+  };
   mode?: PlanMode;
   /** The plan wants the pump on now. */
   wantOn?: boolean;
@@ -538,6 +572,8 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
   /** Heating on sun, and since when the condition to change that has held. */
   let solarOn = false;
   let solarSince: number | null = null;
+  /** After a stop for want of sun: the battery's signal counts again from then. */
+  let solarRetryAt: number | null = null;
   let dayMinOn = false;
   /** What the plan wanted of the pump at the previous tick. */
   let lastWantOn: boolean | null = null;
@@ -647,13 +683,17 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       if (warmBy.phase === 'heating') warm.started = true;
     }
 
-    const settings = { warmFrom: cfg.warm.from, warmTo: cfg.warm.to, comfort: cfg.comfort, dayMin: cfg.dayMin, socOn: cfg.solar.socOn, windows: cfg.windows };
+    const settings = {
+      warmFrom: cfg.warm.from, warmTo: cfg.warm.to, comfort: cfg.comfort, dayMin: cfg.dayMin, socOn: cfg.solar.socOn, windows: cfg.windows,
+      solar: { enabled: cfg.solar.enabled, boost: cfg.solar.boost },
+    };
     const save = () => { memo = { model, flow: ownFlow, warmup, ons }; };
     const base = { enabled: cfg.enabled, dryRun: cfg.dryRun, pausedUntil: paused, settings, actions, evaluatedAt: t, model, warmBy };
     if (!cfg.enabled) {
       recovery = false;
       solarOn = false;
       solarSince = null;
+      solarRetryAt = null;
       dayMinOn = false;
       if (warmBy) warmBy = { ...warmBy, note: `A automação está desligada: o pedido fica guardado mas não aquece. ${warmBy.note}` };
       save();
@@ -725,31 +765,54 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
     const spareW = spareSun(cfg, e, pumpRunning);
     const soc = e?.soc;
     const gridW = e?.gridW ?? 0;
+    const bat = e?.batteryW;
     let solarNote: string;
     if (mode !== 'day' || !cfg.solar.enabled) {
       solarOn = false;
       solarSince = null;
+      solarRetryAt = null;
       solarNote = !cfg.solar.enabled ? 'aquecer com o sol está desligado' : '';
     } else {
-      const startOk = soc !== undefined && soc >= cfg.solar.socOn && spareW !== null
-        && (spareW >= cfg.solar.pumpW || gridW >= cfg.solar.exportW);
-      const keepOk = soc !== undefined && soc >= cfg.solar.socOn - SOC_HYST && spareW !== null
-        && spareW >= cfg.solar.pumpW * KEEP_SHARE && gridW > -IMPORT_STOP_W;
+      // The panels held back: the battery at its charging limit, or full.
+      if (solarRetryAt !== null && t >= solarRetryAt) solarRetryAt = null;
+      const heldBack = bat !== undefined && soc !== undefined && solarRetryAt === null
+        && (bat >= cfg.solar.chargeW || (soc >= FULL_SOC && bat >= -COVERED_W));
+      const startOk = soc !== undefined && soc >= cfg.solar.socOn && gridW > -IMPORT_STOP_W && (heldBack
+        || (spareW !== null && (spareW >= cfg.solar.pumpW || gridW >= cfg.solar.exportW)));
+      // Running: the battery still charging (full, hardly giving), or else the
+      // pump is running on it. Without a battery reading, the panels' share.
+      const batteryKeeps = bat === undefined || soc === undefined
+        ? spareW !== null && spareW >= cfg.solar.pumpW * KEEP_SHARE
+        : bat >= (soc >= FULL_SOC - SOC_HYST ? -IMPORT_STOP_W : cfg.solar.keepChargeW);
+      const keepOk = soc !== undefined && soc >= cfg.solar.socOn - SOC_HYST && gridW > -IMPORT_STOP_W && batteryKeeps;
       if (!solarOn) {
         solarSince = startOk ? (solarSince ?? t) : null;
         if (solarSince !== null && t - solarSince >= SOLAR_START_MS) { solarOn = true; solarSince = null; }
       } else {
         solarSince = keepOk ? null : (solarSince ?? t);
-        if (solarSince !== null && t - solarSince >= SOLAR_STOP_MS) { solarOn = false; solarSince = null; }
+        if (solarSince !== null && t - solarSince >= SOLAR_STOP_MS) { solarOn = false; solarSince = null; solarRetryAt = t + SOLAR_RETRY_MS; }
       }
       const socTxt = soc !== undefined ? `bateria ${Math.round(soc)} %` : 'bateria sem leitura';
       const spareTxt = spareW !== null ? `${kw(Math.max(0, spareW))} de sol a sobrar` : 'sem leitura do inversor';
+      // What the battery is doing says more than the spare sun, which the inverter hides by holding the panels back.
+      const batTxt = bat === undefined || soc === undefined ? spareTxt
+        : soc >= FULL_SOC ? 'cheia'
+        : bat >= 0 ? `a carregar ${kw(bat)}` : `a descarregar ${kw(-bat)}`;
+      const waitTxt = bat === undefined || soc === undefined ? `${spareTxt} de ${kw(cfg.solar.pumpW)}`
+        : soc >= FULL_SOC ? batTxt
+        : `a carregar ${kw(Math.max(0, bat))} de ${kw(cfg.solar.chargeW)}`;
       solarNote = solarOn
-        ? (solarSince !== null ? `sol a acabar: ${socTxt}, ${spareTxt}; desliga se durar 15 min` : `${socTxt}, ${spareTxt}`)
-        : solarSince !== null ? `sol a chegar: ${socTxt}, ${spareTxt}; liga se durar 10 min`
-        : `${socTxt} de ${Math.round(cfg.solar.socOn)} %, ${spareTxt} de ${kw(cfg.solar.pumpW)}`;
+        ? (solarSince !== null ? `sol a acabar: ${socTxt}, ${batTxt}; desliga se durar 15 min` : `${socTxt}, ${batTxt}`)
+        : solarSince !== null ? `sol a chegar: ${socTxt}, ${batTxt}; liga se durar 10 min`
+        : solarRetryAt !== null ? `${socTxt}, ${batTxt}; o sol não chegou para a bomba, volta a tentar às ${clock(solarRetryAt)}`
+        : `${socTxt} de ${Math.round(cfg.solar.socOn)} %, ${waitTxt}`;
     }
-    const solar: SolarView = { on: solarOn, soc: soc ?? null, spareW, note: solarNote };
+    const solar: SolarView = { on: solarOn, soc: soc ?? null, spareW, batteryW: bat ?? null, note: solarNote };
+    /** Heating on sun: the rooms a little warmer, so the valves open and the floor stores it for the evening. */
+    const sunTarget = solarOn && !heating && cfg.solar.boost > 0
+      ? clamp(half(comfort + cfg.solar.boost), cfg.limits.roomMin, cfg.limits.roomMax) : undefined;
+    const zoneTarget = sunTarget !== undefined && sunTarget > target ? sunTarget : target;
+    if (zoneTarget !== target) reasons.push(`Com o sol: divisões a ${fmt(zoneTarget)}, para o chão guardar o calor para a noite.`);
     if (mode !== 'day' || meanRoom === undefined || !quorum) dayMinOn = false;
     else if (!dayMinOn && meanRoom < cfg.dayMin) dayMinOn = true;
     else if (dayMinOn && meanRoom >= cfg.dayMin + DAY_MIN_HYST) dayMinOn = false;
@@ -770,12 +833,12 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
         zones.push({ id: z.id, name: z.name, note: 'alterada à mão — respeitada até mudar de dia para noite (ou o contrário)' });
         continue;
       }
-      if (z.target !== undefined && Math.abs(z.target - target) < 0.25) { zones.push({ id: z.id, name: z.name, note: 'no alvo' }); continue; }
-      if (dry && prev?.dry && Number(prev.value) === target) { zones.push({ id: z.id, name: z.name, note: `definiria ${fmt(target)}` }); continue; }
+      if (z.target !== undefined && Math.abs(z.target - zoneTarget) < 0.25) { zones.push({ id: z.id, name: z.name, note: 'no alvo' }); continue; }
+      if (dry && prev?.dry && Number(prev.value) === zoneTarget) { zones.push({ id: z.id, name: z.name, note: `definiria ${fmt(zoneTarget)}` }); continue; }
       if (prev && t - prev.at < ZONE_EVERY) { zones.push({ id: z.id, name: z.name, note: `a aguardar (${fmt(Number(prev.value))} pedido há pouco)` }); continue; }
-      await act(z.id, z.id, z.name, `alvo ${z.target !== undefined ? fmt(z.target) : '—'} → ${fmt(target)}`,
-        [{ code: 'temp_set', value: Math.round(target * 10) }], target, periodKey, dry, t);
-      zones.push({ id: z.id, name: z.name, note: `${dry ? 'definiria' : 'definido'} ${fmt(target)}` });
+      await act(z.id, z.id, z.name, `alvo ${z.target !== undefined ? fmt(z.target) : '—'} → ${fmt(zoneTarget)}`,
+        [{ code: 'temp_set', value: Math.round(zoneTarget * 10) }], zoneTarget, periodKey, dry, t);
+      zones.push({ id: z.id, name: z.name, note: `${dry ? 'definiria' : 'definido'} ${fmt(zoneTarget)}` });
     }
 
     // --- What the plan wants of the pump ------------------------------------
@@ -995,7 +1058,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       solar,
       dayMinActive: dayMinOn,
       meanRoom: meanRoom !== undefined ? Math.round(meanRoom * 10) / 10 : undefined,
-      roomTarget: target,
+      roomTarget: zoneTarget,
       outdoor: p?.outdoor,
       flowTarget,
       flowCorrection: correction,
@@ -1020,7 +1083,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
 /** Today's plan in plain words, e.g. "Aquece a partir das 17:20 para estar quente às 19:00; de dia só com sol…". */
 export function planText(cfg: AutomationConfig, w: WarmPlan, mode: PlanMode, model: WarmupModel, paused: number | null, mean?: number) {
   const dayRule = cfg.solar.enabled
-    ? `de dia só com sol e bateria ≥ ${Math.round(cfg.solar.socOn)} %, ou se a casa descer dos ${deg(cfg.dayMin)}`
+    ? `de dia só com sol e bateria ≥ ${Math.round(cfg.solar.socOn)} %${cfg.solar.boost > 0 ? ` (aí as divisões a ${deg(Math.min(cfg.limits.roomMax, half(cfg.comfort + cfg.solar.boost)))})` : ''}, ou se a casa descer dos ${deg(cfg.dayMin)}`
     : `de dia só se a casa descer dos ${deg(cfg.dayMin)}`;
   const how = `faltam ${deg(w.need)}: chão ~${model.floorMin} min + divisões a ${model.roomRatePerH.toFixed(2).replace('.', ',')}°/h + ${WARM_MARGIN_MIN} min de margem`;
   const late = w.expectedAt ? ` Previsto quente às ${lisbonClock(w.expectedAt)}.` : '';
