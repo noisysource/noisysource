@@ -37,8 +37,7 @@ import ClientLayout from './pages/client/ClientLayout';
 import FamilyDashboardPage from './pages/client/FamilyDashboardPage';
 import ChildManagementPage from './pages/client/ChildManagementPage';
 import ChildDetailPage from './pages/client/ChildDetailPage';
-import EventCalendarPage from './pages/client/EventCalendarPage';
-import FamilyCalendarPage from './pages/client/FamilyCalendarPage';
+import FamilyCalendarPage, { ChildCalendarRedirect } from './pages/client/FamilyCalendarPage';
 import StudySubscriptionDetailPage from './pages/client/StudySubscriptionDetailPage';
 import TransportSubscriptionDetailPage from './pages/client/TransportSubscriptionDetailPage';
 import MySubscriptionsPage from './pages/client/MySubscriptionsPage';
@@ -124,7 +123,9 @@ export default function App() {
           {/* Children */}
           <Route path="children" element={<ChildManagementPage />} />
           <Route path="children/:childId" element={<ChildDetailPage />} />
-          <Route path="children/:childId/calendar" element={<EventCalendarPage />} />
+          {/* The per-child calendar was broken for parents (permission-denied);
+              its route now opens the family calendar on that child. */}
+          <Route path="children/:childId/calendar" element={<ChildCalendarRedirect />} />
 
           {/* One calendar for every child and both services */}
           <Route path="calendar" element={<FamilyCalendarPage />} />

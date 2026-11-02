@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { useUser } from '@shared/hooks';
 import { getDocs, query, where } from 'firebase/firestore';
 import { col } from '../../lib/db';
@@ -55,8 +55,22 @@ interface EventRow {
   label?: string;
 }
 
+/**
+ * The old per-child calendar (/client/children/:childId/calendar,
+ * EventCalendarPage) queried subscriptions by childId and every family's
+ * transport subscriptions, which the rules deny a parent: it failed with
+ * permission-denied (Patrícia Tavares, 2026-10-20). That route now lands here
+ * with the child pre-selected (Renato, 2026-10-31).
+ */
+export function ChildCalendarRedirect() {
+  const { childId } = useParams();
+  return <Navigate to={childId ? `/client/calendar?child=${encodeURIComponent(childId)}` : '/client/calendar'} replace />;
+}
+
 export default function FamilyCalendarPage() {
   const user = useUser();
+  const [searchParams] = useSearchParams();
+  const preselectChild = searchParams.get('child');
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [children, setChildren] = useState<Child[]>([]);
   const [subs, setSubs] = useState<(StudyRoomEntry | TransportationSubscription)[]>([]);
@@ -129,6 +143,17 @@ export default function FamilyCalendarPage() {
   }, [user, month]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ?child=<id> (from a child's page): show only that child to start with.
+  // The other children's chips stay there to switch back on.
+  const [preselected, setPreselected] = useState(false);
+  useEffect(() => {
+    if (preselected || !preselectChild || !children.length) return;
+    if (children.some(c => c.id === preselectChild)) {
+      setHiddenChildren(new Set(children.filter(c => c.id !== preselectChild).map(c => c.id)));
+    }
+    setPreselected(true);
+  }, [children, preselectChild, preselected]);
 
   const childIndex = useMemo(
     () => new Map(children.map((c, i) => [c.id, i % CHILD_COLOURS.length])), [children]
@@ -328,6 +353,7 @@ export default function FamilyCalendarPage() {
 
       <p className="mt-3 text-xs text-gray-400">
         As faltas contam para o crédito mensal a partir de 3 faltas no mesmo serviço.
+        Se o mês já estiver pago, o crédito é descontado na fatura do mês seguinte.
         Precisa de alterar horários ou cancelar uma inscrição?{' '}
         <Link to="/client/subscriptions" className="text-blue-600 hover:underline">Ver inscrições</Link>.
       </p>
