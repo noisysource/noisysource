@@ -2,30 +2,25 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-02 (~12:00)
+**Last updated:** 2026-11-02 (~15:30)
 
-## ▶️ Where things stand (2/11, heating schedule proposed, waiting for Renato's OK)
-- **Session 2/11:** the experiment analysis is done (`HANDOFF-comfort-experiment.md`, "Results"). The schedule built from it is in that file's "Results" and in this session's proposal. **It's not set yet: Renato agrees first**, and then an agent writes `domotics_config/automation`. Branch `agent/domotics-heating-schedule` (worktree `.claude/worktrees/domotics-heating-schedule`, off `staging`): docs only so far, not pushed.
-- **The proposal:**
-  - **Times:** pump on 05:30–08:00 (vazio) and 16:30–23:00 (on the battery), off by day and 23:00–05:30.
-  - **Room targets and water:** thermostats 25 (rooms ~24.5), water 40 °C fixed (what the pump has now), outdoor curve off.
-  - **Solar heating off;** recovery off; rest off; day minimum 21.
-  - **Cost:** ~€1.50/day on a sunny day against €3.65 on 28/10, and ~€3.5–4.5 on a cloudy one (no cloudy day measured).
-  - **Config:** windows 17:00–23:00 and 06:00–08:00 with `warmupMaxMin` 30.
-- **Code:** #127 (the experiment notes) merged into `staging` on 2/11. The Pi still runs #124's build. Nothing domotics is in `main`/prod (there's no prod target).
-- **The house right now (2/11 ~11:30):**
-  - **Pump:** off since 1/11 21:09 (by hand), water setpoint 40 (it went 43 → 40 at the 1/11 07:30 timer switch-on). Rooms 21.9–22.5 at 09:30 after 12 h off, the coldest of the run.
-  - **Guard:** off since 28/10 11:19 (for the technicians).
-  - **Automation:** enabled, **dry-run**, still with the experiment config (windows 19–23 and 06–10, comfort 24, `warmupMaxMin` 180, solar/flow/rest off, `dayMin` 19).
-  - **Thermostats:** Hall and Quarto at 25, Master and Diniz at 26, by hand since 30/10 01:02.
-- **Risky in flight:**
-  - The guard is off, so an E13 lockout means no heat until someone resets the pump. No E13 from 28/10 to 2/11.
-  - **The app timer** (likely SmartLife) switched the pump on at 07:30 on 31/10 (setpoint → 10) and 1/11 (setpoint → 40), and not on 2/11. Whether it's still there, and what it sets, is unknown.
-  - **Thermostats offline:** Sala (since 29/10), Kids Bathroom (since 30/10), **and now Hall too (since ~03:00 on 2/11)**: 3 of 6 answer. One more and the automation loses its quorum: it then assumes a zone wants heat (the pump runs the whole window whatever the valves) and the day minimum can't act.
-- **Next:**
-  1. Renato agrees to (or changes) the schedule, then an agent writes it to `domotics_config/automation` (dry-run stays on) and updates the app texts.
-  2. Renato taps Ligar.
-  3. The thermostat drop-outs are a separate small task.
+## ▶️ Where things stand (2/11: schedule agreed, plus a new solar rule; config not written yet)
+- **Session 2/11, branch `agent/domotics-heating-schedule`** (worktree `.claude/worktrees/domotics-heating-schedule`, off `staging`), 2 commits, **not pushed, no PR**:
+  - `2a12059` docs: the experiment analysis (`HANDOFF-comfort-experiment.md`, "Results").
+  - `e6de0b1` feat: heating on the sun the inverter holds back (below). Bridge tests all pass (both time zones); app builds.
+- **The schedule (Renato agreed 2/11, adding the solar rule):**
+  - **Times:** pump on 05:30–08:00 (vazio) and 16:30–23:00 (on the battery); off 23:00–05:30; by day only on spare sun or below 21.
+  - **Rooms:** thermostats 25 (rooms ~24.5); **26 while heating on sun**. Water 40 °C fixed (what the pump has), outdoor curve off. Recovery off, rest off.
+  - **Cost:** ~€1.50/day sunny (vs €3.65 on 28/10), ~€3.5–4.5 cloudy, before any gain from the solar rule (unmeasured).
+- **The solar rule (Renato 2/11: "once the battery is almost full and there's spare PV, turn it on to keep the floor warm"):**
+  - **Why not "almost full":** the battery never got there (76–84 % by 16:00 on 29/10–1/11), but sun is thrown away anyway. The inverter makes only what the house and battery take, and the battery charges at most 3 kW, so the panels are throttled from mid-morning. Proof: 29/10 10:00–10:45, pump at 70 Hz, PV rose to 5.6–5.9 kW, nothing bought, battery still charging 1.6–2.2 kW.
+  - **Rule:** starts (10 min) when the battery has ≥ `socOn` and is charging ≥ `chargeW` (2.7 kW, its limit) or is full and not discharging; it carries on while the battery still charges ≥ `keepChargeW` (1.5 kW), otherwise it stops after 15 min and waits 60 min before trying again. While on, the thermostats go to comfort + `boost` (26), so the valves open and the slab stores the heat (with them shut the pump would idle at the setpoint, the E13 pattern).
+  - Simulated November day: on 11:10–14:25; rooms 24.1° vs 22.8° at 16:25 without it, battery 83 vs 88 %. Real effect unknown until it runs.
+- **Config to write (blocked 2/11: the permission check refused the Firestore write; needs Renato's OK):** field-level PATCH of dev `domotics_config/automation`, preconditioned on updateTime `2026-10-29T20:44:07.746902Z`: `comfort` 25, `windows` [17:00–23:00, 06:00–08:00], `warm` 17:00–23:00, `warmupMaxMin` 30, `dayMin` 21, `solar` {enabled, socOn 40, pumpW 3300, exportW 500, chargeW 2700, keepChargeW 1500, boost 1}, `recovery` {enabled false}, `limits` {21, 26}. Leaves `enabled`/`dryRun`/`pauseUntil`/`flow`/`rest`/`pumpFollowsZones` as they are. Backup of the current doc: the session scratchpad `config-before.json` (experiment values, also listed below). The bridge on the Pi (#124 build) runs this schedule fine; it ignores the new solar fields and its old solar rule can't fire under throttling, so solar only works after the bridge deploy.
+- **Still to do, in order:** (1) write the config; (2) push + PR → `staging` (check the base); (3) deploy the bridge to the Pi (`deploy/README.md` "Updating an existing install"; backup `lib` first); (4) Renato taps Ligar. Dry-run stays on until then.
+- **Thermostats dropping out, diagnosed 2/11 (not fixed in code):** Sala (since ~03:15 29/10), Kids Bathroom (~07:21 30/10), Hall (03:00 2/11). Same as 22–25/10: they're on the network at their reserved IPs, broadcast normally, keys/IPs/protocol (3.4) match the cloud and the Pi's `device-cache.json`, nothing on the Pi or Mac holds a connection, and a **bare TCP connection that sends nothing is reset by the device in ~0.12 s** (Quarto, healthy, holds it open). Hall read fine at 02:55 and refused from 03:00, with nothing in the bridge log between. On 25/10 a power-cycle (Sala) or a WiFi reconnect (the others, when the repeater came back) cured it with the same key. So the thermostat's local server sticks; the trigger is unknown (firmware, or a phone's SmartLife holding the one LAN session). **Cure now: power-cycle Sala, Kids Bathroom and Hall** (or power-cycle the repeater for Kids Bathroom + Hall). Durable options for Renato: (a) bridge detects "stuck" (bare-connect reset) and says so in the app, with the time, to find the trigger; (b) read/set stuck thermostats through the Tuya cloud, capped per day (metered, and the IoT Core subscription lapses; needs his OK); (c) check SmartLife for a thermostat firmware update. Every thermostat has stuck at least once since 21/10.
+- **The house right now (2/11 ~15:00):** pump off since 1/11 21:09 (by hand), setpoint 40; guard off since 28/10; automation enabled, dry-run, experiment config (windows 19–23 and 06–10, comfort 24, `warmupMaxMin` 180, solar/flow/rest off, `dayMin` 19); thermostats Hall/Quarto 25, Master/Diniz 26 (by hand since 30/10).
+- **Risky in flight:** guard off (an E13 lockout = no heat until reset); the app timer fired 31/10 (setpoint → 10) and 1/11 (→ 40), not 2/11; 3 of 6 thermostats answering, one more and the automation loses its quorum (assumes a zone wants heat; the day minimum can't act). This session also made 2 read-only Tuya cloud calls (`sync-tuya-keys.js` preview).
 - **Worktree cleanup:** remove `domotics-comfort-log` (#127 merged).
 
 ## 🧪 Comfort experiment, 29–31/10: analysis due ~31/10 (`HANDOFF-comfort-experiment.md`)
