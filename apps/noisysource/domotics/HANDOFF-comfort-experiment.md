@@ -17,7 +17,7 @@ Comfort in his words: "after 19 I would like it to always be around 22–24." It
 | Setting | Value | Why |
 |---|---|---|
 | `windows` | 19:00–23:00, 06:00–10:00 | the warm windows; outside them the day rules hold, the night included |
-| `comfort` | 23 | the room target in the windows; the thermostats get it when live |
+| `comfort` | 24 (was 23 until 29/10 20:46) | the room target in the windows; the thermostats get it when live. Raised because people wore jackets at 23.6° (29/10) |
 | `dayMin` | 19 | a safety floor outside the windows (the rooms' mean) |
 | `warmupMaxMin` | 180 | the warm-up starts at most 3 h before a window. The learned model (0.15 °C/h, floor 68 min) would otherwise start ~6 h early and leave no coasting to measure. |
 | `solar.enabled` | false | daytime heating on the sun would break the day coast. Back on after the analysis, with `socOn` ≈ 40 (Renato OK'd this; the bound is now 20–100). |
@@ -54,6 +54,17 @@ To stop it: **Pausar** in the app (2 h / until 19:00 / until 09:00). To end the 
 **Elsewhere:** kWh per slot is in `domotics_energy`. Every pump switch with its source, every fault with 30 min of 30-s readings, and the guard's actions are in `domotics_incidents`.
 
 **Export it all:** `node apps/noisysource/domotics-bridge/deploy/climate-export.mjs 2026-10-29 2026-10-31 > climate.json`. It uses your gcloud login, is read-only, and joins the climate and energy slots and lists interventions and incidents.
+
+## What actually happened (28–31/10)
+
+**The automation never went live.** Renato didn't tap Ligar, so the plan stayed `(sim)` throughout. Every switch and target change was by hand, which makes the run a manual experiment, logged. The night-by-night account, a table of energy and € per period, and the first conclusions are in `STATUS.md` (🧪 section, "Night 28→29/10" through "Night 30→31/10"). Read that before the export.
+
+Things the export alone won't tell you:
+- **31/10 07:30 is a timer Renato set in an app, not "cold".** The same timer also set the water setpoint (`p02_heating`) from 44 to 10, so the compressor never ran from 07:30 until Renato put it back (43) before 09:45. Leave that stretch out of any warm-up figure.
+- **18:54 on 29/10 is a real "cold" (jackets at 23.6°).** The 01:02 target changes on 30/10 were done outside our app, and they're real "warmer" signals.
+- **Missing rooms:** Sala is gone from 09:37 on 29/10 (offline from ~03:15), and Kids Bathroom from 07:21 on 30/10. Both fail with `read ECONNRESET`. So the means are over 5 rooms, then 4. Compare like with like, and don't read a mean's jump as heat when a room drops out.
+- **The water temperatures with the pump off are the outdoor unit's,** falling towards outdoor (13–16 °C on the night of 30–31/10). Once the circulator runs with the compressor idle (31/10 07:30–09:40), out = in is the slab's temperature, about 27 °C after 6.5 h off.
+- **No E13 from 28/10 to 31/10.** Cold starts from 20 °C water on 29/10 18:54 and 30/10 20:10 were both clean.
 
 ## The analysis (the session ~31/10)
 
