@@ -2,20 +2,31 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-31 (~12:00)
+**Last updated:** 2026-11-02 (~12:00)
 
-## ▶️ Where things stand (31/10, session closed)
-- **Code:** #118, #119, #120, #122, #123 and #124 were all **merged into `staging` on 29/10**. The Pi runs #124's build. Nothing domotics is in `main`/prod (there's no prod target). Only these STATUS/handoff notes from after the merge are left, on `agent/domotics-comfort-log` in their own PR.
-- **The house right now:**
-  - **Pump:** off since 09:45 (by Renato), water setpoint 43 (he restored it after a timer set it to 10, see below).
+## ▶️ Where things stand (2/11, heating schedule proposed, waiting for Renato's OK)
+- **Session 2/11:** the experiment analysis is done (`HANDOFF-comfort-experiment.md`, "Results"). The schedule built from it is in that file's "Results" and in this session's proposal. **It's not set yet: Renato agrees first**, and then an agent writes `domotics_config/automation`. Branch `agent/domotics-heating-schedule` (worktree `.claude/worktrees/domotics-heating-schedule`, off `staging`): docs only so far, not pushed.
+- **The proposal:**
+  - **Times:** pump on 05:30–08:00 (vazio) and 16:30–23:00 (on the battery), off by day and 23:00–05:30.
+  - **Room targets and water:** thermostats 25 (rooms ~24.5), water 40 °C fixed (what the pump has now), outdoor curve off.
+  - **Solar heating off;** recovery off; rest off; day minimum 21.
+  - **Cost:** ~€1.50/day on a sunny day against €3.65 on 28/10, and ~€3.5–4.5 on a cloudy one (no cloudy day measured).
+  - **Config:** windows 17:00–23:00 and 06:00–08:00 with `warmupMaxMin` 30.
+- **Code:** #127 (the experiment notes) merged into `staging` on 2/11. The Pi still runs #124's build. Nothing domotics is in `main`/prod (there's no prod target).
+- **The house right now (2/11 ~11:30):**
+  - **Pump:** off since 1/11 21:09 (by hand), water setpoint 40 (it went 43 → 40 at the 1/11 07:30 timer switch-on). Rooms 21.9–22.5 at 09:30 after 12 h off, the coldest of the run.
   - **Guard:** off since 28/10 11:19 (for the technicians).
-  - **Automation:** enabled, **dry-run**, with the experiment config (windows 19–23 and 06–10, comfort 24, `warmupMaxMin` 180, solar/flow/rest off).
-  - **Thermostats:** set to 25–26 by hand since 30/10 01:02.
+  - **Automation:** enabled, **dry-run**, still with the experiment config (windows 19–23 and 06–10, comfort 24, `warmupMaxMin` 180, solar/flow/rest off, `dayMin` 19).
+  - **Thermostats:** Hall and Quarto at 25, Master and Diniz at 26, by hand since 30/10 01:02.
 - **Risky in flight:**
-  - The guard is off, so an E13 lockout means no heat until someone resets the pump.
-  - **A timer Renato set in an app (likely SmartLife) switches the pump on and also sets the water setpoint to 10.** Unless he edited it, it does the same next time it fires.
-  - Sala and Kids Bathroom are offline (`read ECONNRESET`).
-- **Next:** a fresh session analyses the 28–31/10 data and proposes the heating schedule (`HANDOFF-comfort-experiment.md`, "What actually happened" and "The analysis"). The thermostat drop-outs are a separate small task. Worktree cleanup: the domotics-energy, -pump-log, -solar-heating, -tech-report and -guard-preempt worktrees were removed 31/10. Remove domotics-comfort-log once its notes PR merges.
+  - The guard is off, so an E13 lockout means no heat until someone resets the pump. No E13 from 28/10 to 2/11.
+  - **The app timer** (likely SmartLife) switched the pump on at 07:30 on 31/10 (setpoint → 10) and 1/11 (setpoint → 40), and not on 2/11. Whether it's still there, and what it sets, is unknown.
+  - **Thermostats offline:** Sala (since 29/10), Kids Bathroom (since 30/10), **and now Hall too (since ~03:00 on 2/11)**: 3 of 6 answer. One more and the automation loses its quorum: it then assumes a zone wants heat (the pump runs the whole window whatever the valves) and the day minimum can't act.
+- **Next:**
+  1. Renato agrees to (or changes) the schedule, then an agent writes it to `domotics_config/automation` (dry-run stays on) and updates the app texts.
+  2. Renato taps Ligar.
+  3. The thermostat drop-outs are a separate small task.
+- **Worktree cleanup:** remove `domotics-comfort-log` (#127 merged).
 
 ## 🧪 Comfort experiment, 29–31/10: analysis due ~31/10 (`HANDOFF-comfort-experiment.md`)
 Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00 to 10:00, with the pump off in between, to measure how long the floor holds its heat and how long it takes to warm up, night and day. His own on/off and thermostat changes are recorded as comfort feedback: on means cold, off means warm enough.
