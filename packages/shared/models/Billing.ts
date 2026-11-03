@@ -42,6 +42,16 @@ export interface BillingLineItem {
   absenceCreditAmount?: number;
   absenceDates?: string[];              // "yyyy-mm-dd" — every CANCELLED date this period, credited or not
   absenceCreditDates?: string[];        // "yyyy-mm-dd" — every CANCELLED date credited once the 3-absence threshold was reached (uncapped)
+  notionalOccurrences?: number;         // scheduleLength x activeWeeks behind grossAmount (lines written from 2026-10-31)
+  /** Absence credit carried in from a paid month of the same subscription
+   *  (functions/src/kidclub/absenceCarryOver.ts). Already included in `amount`.
+   *  Positive = credit, negative = charge-back for days restored after payment. */
+  carriedAbsenceCredits?: CarriedAbsenceCredit[];
+}
+
+export interface CarriedAbsenceCredit {
+  fromPeriod: string; // "yyyy-mm" of the paid month the credit comes from
+  amount: number;     // euros
 }
 
 export interface BillingRecord {

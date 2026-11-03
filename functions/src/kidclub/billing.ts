@@ -10,6 +10,7 @@ import { ensurePartyDeposit } from "./partyDeposit";
 import { familyInvoiceNif, realNif } from "./vendusClientLogic";
 import { retryInvoiceRefusal } from "./retryInvoiceLogic";
 import { eventLineId } from "./adhocEventLogic";
+import { CLOSED_STATUSES, CarriedAbsenceCredit, CarryApplier, MonthEvents, LedgerBill, createCarryApplier, isServiceLine, outstandingCarryOver, periodLabelPt } from "./absenceCarryOver";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -420,6 +421,11 @@ export interface BillingLineItem {
   absenceDates?: string[];       // ISO yyyy-mm-dd — every CANCELLED date, credited or not
   absenceCreditAmount?: number;
   absenceCreditDates?: string[]; // ISO yyyy-mm-dd — every CANCELLED date credited once the 3-absence threshold was reached (uncapped, not just the first 3)
+  notionalOccurrences?: number;  // scheduleLength x activeWeeks behind gross; lets a later carry-over price this month's absences on this line's own terms
+  // Credit (or charge) carried in from a closed month of the SAME subscription
+  // (absenceCarryOver.ts). Already included in `amount`; the title is never
+  // changed, because Vendus products are mapped by title.
+  carriedAbsenceCredits?: CarriedAbsenceCredit[];
 }
 
 interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules: any[] }
@@ -619,6 +625,7 @@ async function computeLineItems(
         ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
         ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
+        notionalOccurrences: r.notionalOccurrences,
       });
       total += amount;
       maybeAddEnrollmentFee(sub);
@@ -661,6 +668,7 @@ async function computeLineItems(
         ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
         ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
+        notionalOccurrences: r.notionalOccurrences,
       });
       total += amount;
       maybeAddEnrollmentFee(sub);
@@ -705,7 +713,7 @@ async function buildBillingRecord(
   period: ReturnType<typeof periodForDate>,
   dryRun: boolean,
   configs: BillingConfigs,
-  opts: { docId?: string; sendEmail?: boolean } = {},
+  opts: { docId?: string; sendEmail?: boolean; precomputed?: Awaited<ReturnType<typeof computeLineItems>> } = {},
 ): Promise<{ id: string; newlyBilledEnrollmentFeeSubs: { collection: "studyroom" | "transportationSubscriptions"; id: string }[] } | undefined> {
   const { familyId } = group;
   const { docId, sendEmail = !dryRun } = opts;
@@ -721,7 +729,11 @@ async function buildBillingRecord(
   const billingEmail: string = contact.email ?? "";
   const paymentMethod: string = familyPaymentMethod(fam) ?? "mbway";
 
-  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, []);
+  // The recompute loops pass their own lines, already carrying any absence
+  // credit from a closed month (absenceCarryOver.ts); computing again here
+  // would drop it.
+  const { lineItems, total, newlyBilledEnrollmentFeeSubs } = opts.precomputed
+    ?? await computeLineItems(group, period, configs, []);
   if (lineItems.length === 0 || total === 0) { console.log(`No billable items for family ${familyId}`); return; }
 
   const dueDate = new Date(period.start);
@@ -1356,7 +1368,69 @@ function pastMonthSafe(existing: BillingLineItem[], next: BillingLineItem[]): bo
   return next.length > 0 && [...ids(existing)].every(id => after.has(id));
 }
 
-async function autoCreateBillingSchedule(familyId: string): Promise<void> {
+// ── Absence credit carried out of closed months ─────────────────────────────
+// The ledger itself is absenceCarryOver.ts. Loaded once per family recompute
+// and applied by both loops below (autoCreateBillingSchedule and the
+// backfillBillingSchedules repair button), in ascending period order. Both
+// must apply it: a recompute that left it out would strip every carried
+// credit off the open bills it rewrites.
+async function loadAbsenceCarryOver(familyId: string): Promise<CarryApplier> {
+  const snap = await appCol("billing").where("familyId", "==", familyId).get();
+  const bills: LedgerBill[] = [];
+  for (const d of snap.docs) {
+    const data = d.data();
+    if (data.type || !MONTHLY_BILLING_ID.test(d.id)) continue; // party/camp bills aren't monthly
+    bills.push({ period: d.id.slice(-7), status: data.status, lines: data.lineItems ?? [] });
+  }
+  // The current events of every closed month, for the subscriptions on it.
+  const events = new Map<string, MonthEvents>();
+  for (const b of bills) {
+    if (!CLOSED_STATUSES.has(b.status)) continue;
+    const subIds = [...new Set(b.lines.filter(isServiceLine).map(l => l.subscriptionId!))];
+    if (!subIds.length) continue;
+    const [y, m] = b.period.split("-").map(Number);
+    const bySub = await fetchReservationEventsForPeriod(subIds, [], periodForDate(new Date(y, m - 1, 1)));
+    for (const [subId, list] of bySub) {
+      events.set(`${b.period}|${subId}`, {
+        total: list.length,
+        cancelled: list.filter(e => e.status === "CANCELLED").length,
+        rateCents: list.find(e => e.basePriceCents > 0)?.basePriceCents,
+      });
+    }
+  }
+  const { outstanding, skipped } = outstandingCarryOver(bills, (period, subId) => events.get(`${period}|${subId}`));
+  for (const x of skipped) {
+    console.log(`[billing] ${familyId}: no absence carry-over from ${x.fromPeriod} for ${x.subscriptionId}: ${x.reason}`);
+  }
+  return createCarryApplier(outstanding);
+}
+
+function applyCarry(
+  carry: CarryApplier,
+  period: ReturnType<typeof periodForDate>,
+  computed: Awaited<ReturnType<typeof computeLineItems>>,
+): Awaited<ReturnType<typeof computeLineItems>> {
+  const { lines, deltaCents } = carry.apply(period.isoDate.slice(0, 7), computed.lineItems);
+  return { ...computed, lineItems: lines, total: Math.round(computed.total * 100 + deltaCents) / 100 };
+}
+
+function warnUnappliedCarry(familyId: string, carry: CarryApplier): void {
+  for (const u of carry.unapplied()) {
+    console.warn(
+      `[billing] ${familyId}: absence ${u.cents > 0 ? "credit" : "charge"} of EUR ${(Math.abs(u.cents) / 100).toFixed(2)} `
+      + `from ${u.fromPeriod} for subscription ${u.subscriptionId} has no open bill of that subscription to go on. `
+      + `Left unapplied: settle it by hand (refund / credit note) if it should stand.`,
+    );
+  }
+}
+
+// Exported for reservationEvents.ts, which calls it once after writing a
+// subscription's pre-start system absences: event CREATION never reaches
+// onReservationEventBillingSync below, and the subscription's own billing
+// trigger runs in parallel with event generation, so it can price the month
+// before those absences exist. (billing.ts must not import reservationEvents.ts
+// back, or the two modules become circular.)
+export async function autoCreateBillingSchedule(familyId: string): Promise<void> {
   const [studySnap, transportSnap, configs, famInfo] = await Promise.all([
     appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
     appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
@@ -1373,6 +1447,7 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
   };
 
   const { periods, startOfCurrentMonth } = await periodsToRecompute(familyId);
+  const carry = await loadAbsenceCarryOver(familyId);
   let created = 0, updated = 0, cancelled = 0;
 
   // group.study/group.transport are fetched once and reused across every
@@ -1389,24 +1464,30 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
     const docId = `${familyId}_${period.isoDate.slice(0, 7)}`;
     const existing = await appCol("billing").doc(docId).get();
     const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-    const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, existingLineItems);
+    const computed = await computeLineItems(group, period, configs, existingLineItems);
 
     if (existing.exists) {
-      if (period.start < startOfCurrentMonth && !pastMonthSafe(existingLineItems, lineItems)) {
+      if (period.start < startOfCurrentMonth && !pastMonthSafe(existingLineItems, computed.lineItems)) {
+        // Left as it is, so whatever carry it already records stands.
+        if (isRecomputable(existing.data())) carry.standing(existingLineItems);
         console.warn(`[billing] ${docId}: past month left as-is, a subscription on it is no longer active`);
         continue;
       }
       if (isRecomputable(existing.data())) {
+        const { lineItems, total, newlyBilledEnrollmentFeeSubs } = applyCarry(carry, period, computed);
         if (lineItems.length === 0 || total === 0) {
-          // All subscriptions for this family are now cancelled/inactive.
-          // autoCancelled marks this as OUR doing, not a deliberate admin
-          // cancellation — see isRecomputable's comment for why that matters.
-          if (existing.data()?.status !== "cancelled") {
+          // All subscriptions for this family are now cancelled/inactive, or
+          // the month is fully covered by credit. autoCancelled marks this as
+          // OUR doing, not a deliberate admin cancellation — see
+          // isRecomputable's comment for why that matters. With lines left,
+          // they're stored too, so a month zeroed by carried credit shows why.
+          if (existing.data()?.status !== "cancelled" || lineItems.length) {
             await appCol("billing").doc(docId).update({
               status: "cancelled", autoCancelled: true, ...ownerUpdate(userId),
+              ...(lineItems.length ? { lineItems, total } : {}),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             });
-            cancelled++;
+            if (existing.data()?.status !== "cancelled") cancelled++;
           }
         } else {
           await appCol("billing").doc(docId).update({
@@ -1422,13 +1503,15 @@ async function autoCreateBillingSchedule(familyId: string): Promise<void> {
     }
 
     if (period.start < startOfCurrentMonth) continue; // past months: update only, never create
-    if (lineItems.length > 0 && total > 0) {
-      const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
+    const withCarry = applyCarry(carry, period, computed);
+    if (withCarry.lineItems.length > 0 && withCarry.total > 0) {
+      const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false, precomputed: withCarry });
       if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
       created++;
     }
   }
 
+  warnUnappliedCarry(familyId, carry);
   console.log(`Billing schedule for family ${familyId}: ${created} created, ${updated} updated, ${cancelled} cancelled`);
 }
 
@@ -1485,22 +1568,29 @@ export const backfillBillingSchedules = onCall(
         };
 
         const { periods, startOfCurrentMonth: monthStart } = await periodsToRecompute(group.familyId);
+        const carry = await loadAbsenceCarryOver(group.familyId);
         for (const period of periods) {
           const docId = `${group.familyId}_${period.isoDate.slice(0, 7)}`;
           const existing = await appCol("billing").doc(docId).get();
           const existingLineItems: BillingLineItem[] = existing.exists ? (existing.data()?.lineItems ?? []) : [];
-          const { lineItems, total, newlyBilledEnrollmentFeeSubs } = await computeLineItems(group, period, configs, existingLineItems);
+          const computed = await computeLineItems(group, period, configs, existingLineItems);
           if (existing.exists) {
-            if (period.start < monthStart && !pastMonthSafe(existingLineItems, lineItems)) {
+            if (period.start < monthStart && !pastMonthSafe(existingLineItems, computed.lineItems)) {
+              if (isRecomputable(existing.data())) carry.standing(existingLineItems);
               console.warn(`[backfill] ${docId}: past month left as-is, a subscription on it is no longer active`);
               skipped++;
               continue;
             }
             if (isRecomputable(existing.data())) {
+              const { lineItems, total, newlyBilledEnrollmentFeeSubs } = applyCarry(carry, period, computed);
               if (lineItems.length === 0 || total === 0) {
-                if (existing.data()?.status !== "cancelled") {
-                  await existing.ref.update({ status: "cancelled", autoCancelled: true, ...ownerUpdate(group.userId), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-                  cancelled++;
+                if (existing.data()?.status !== "cancelled" || lineItems.length) {
+                  await existing.ref.update({
+                    status: "cancelled", autoCancelled: true, ...ownerUpdate(group.userId),
+                    ...(lineItems.length ? { lineItems, total } : {}),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  });
+                  if (existing.data()?.status !== "cancelled") cancelled++; else skipped++;
                 } else {
                   skipped++;
                 }
@@ -1519,12 +1609,14 @@ export const backfillBillingSchedules = onCall(
             continue;
           }
           if (period.start < monthStart) continue; // past months: update only, never create
-          if (lineItems.length > 0 && total > 0) {
-            const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false });
+          const withCarry = applyCarry(carry, period, computed);
+          if (withCarry.lineItems.length > 0 && withCarry.total > 0) {
+            const result = await buildBillingRecord(group, period, false, configs, { docId, sendEmail: false, precomputed: withCarry });
             if (result?.newlyBilledEnrollmentFeeSubs.length) applyFeeFlags(result.newlyBilledEnrollmentFeeSubs);
             created++;
           }
         }
+        warnUnappliedCarry(group.familyId, carry);
       } catch (err) {
         console.error(`Backfill failed for family ${group.familyId}:`, err);
         failed++;
@@ -1580,6 +1672,9 @@ export const onTransportBillingSync = onDocumentWritten(
 // scoped to STATUS CHANGES only (before.status !== after.status), not every
 // write — the initial bulk generation of a subscription's full school-year
 // event set (up to ~150 docs) would otherwise fire this once per document.
+// The one creation that does move money — a subscription's pre-start system
+// absences — is recomputed once by reservationEvents.ts itself, after it has
+// written them (see regenerateFutureEvents there).
 // familyId comes straight off the event doc itself, which the generator in
 // reservationEvents.ts always sets correctly — unlike the old
 // eventModifications collection, whose four separate client write sites
@@ -1620,12 +1715,12 @@ function buildPaymentNoticeEmail(opts: {
   clientName: string;
   periodLabel: string;
   total: number;
-  lineItems: { title: string; amount: number }[];
+  lineItems: { title: string; amount: number; carriedAbsenceCredits?: CarriedAbsenceCredit[] }[];
   billingId: string;
 }): string {
   const { clientName, periodLabel, total, lineItems } = opts;
   const rows = lineItems.map(li =>
-    `<tr><td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#374151;">${li.title}</td>
+    `<tr><td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#374151;">${li.title}${carriedCreditsHtml(li.carriedAbsenceCredits)}</td>
      <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;text-align:right;color:#374151;">€${li.amount.toFixed(2)}</td></tr>`
   ).join("");
 
@@ -1659,6 +1754,21 @@ function buildPaymentNoticeEmail(opts: {
 </td></tr>
 </table></td></tr></table>
 </body></html>`;
+}
+
+// "Crédito de faltas de Outubro 2026: −€12.00" under the line it lowered (a
+// charge for days restored after payment reads "Acerto de faltas", +€).
+// Exported for billingCarryOver.test.ts.
+export function carriedCreditText(c: CarriedAbsenceCredit): string {
+  const label = periodLabelPt(c.fromPeriod);
+  return c.amount >= 0
+    ? `Crédito de faltas de ${label}: −€${c.amount.toFixed(2)}`
+    : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
+}
+
+function carriedCreditsHtml(credits: CarriedAbsenceCredit[] | undefined): string {
+  return (credits ?? []).map(c =>
+    `<br><span style="font-size:12px;color:#6b7280;">${escapeHtml(carriedCreditText(c))}</span>`).join("");
 }
 
 function escapeHtml(s: string): string {
