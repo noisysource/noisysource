@@ -2,20 +2,30 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-31 (~12:00)
+**Last updated:** 2026-11-02 (22:45 UTC = Lisbon)
 
-## ▶️ Where things stand (31/10, session closed)
-- **Code:** #118, #119, #120, #122, #123 and #124 were all **merged into `staging` on 29/10**. The Pi runs #124's build. Nothing domotics is in `main`/prod (there's no prod target). Only these STATUS/handoff notes from after the merge are left, on `agent/domotics-comfort-log` in their own PR.
-- **The house right now:**
-  - **Pump:** off since 09:45 (by Renato), water setpoint 43 (he restored it after a timer set it to 10, see below).
-  - **Guard:** off since 28/10 11:19 (for the technicians).
-  - **Automation:** enabled, **dry-run**, with the experiment config (windows 19–23 and 06–10, comfort 24, `warmupMaxMin` 180, solar/flow/rest off).
-  - **Thermostats:** set to 25–26 by hand since 30/10 01:02.
-- **Risky in flight:**
-  - The guard is off, so an E13 lockout means no heat until someone resets the pump.
-  - **A timer Renato set in an app (likely SmartLife) switches the pump on and also sets the water setpoint to 10.** Unless he edited it, it does the same next time it fires.
-  - Sala and Kids Bathroom are offline (`read ECONNRESET`).
-- **Next:** a fresh session analyses the 28–31/10 data and proposes the heating schedule (`HANDOFF-comfort-experiment.md`, "What actually happened" and "The analysis"). The thermostat drop-outs are a separate small task. Worktree cleanup: the domotics-energy, -pump-log, -solar-heating, -tech-report and -guard-preempt worktrees were removed 31/10. Remove domotics-comfort-log once its notes PR merges.
+## ▶️ Where things stand (2/11 22:45: new schedule + solar rule set and running in dry-run; Renato taps Ligar)
+- **Session 2/11, branch `agent/domotics-heating-schedule`** (worktree `.claude/worktrees/domotics-heating-schedule`, off `staging`), **PR #130 → `staging`** (open, not merged):
+  - `2a12059` docs: the experiment analysis (`HANDOFF-comfort-experiment.md`, "Results").
+  - `e6de0b1` feat: heating on the sun the inverter holds back (below). Bridge tests all pass (both time zones); app builds.
+- **The schedule (Renato agreed 2/11, adding the solar rule):**
+  - **Times:** pump on 05:30–08:00 (vazio) and 16:30–23:00 (on the battery); off 23:00–05:30; by day only on spare sun or below 21.
+  - **Rooms:** thermostats 25 (rooms ~24.5); **26 while heating on sun**. Water 40 °C fixed (what the pump has), outdoor curve off. Recovery off, rest off.
+  - **Cost:** ~€1.50/day sunny (vs €3.65 on 28/10), ~€3.5–4.5 cloudy, before any gain from the solar rule (unmeasured).
+- **The solar rule (Renato 2/11: "once the battery is almost full and there's spare PV, turn it on to keep the floor warm"):**
+  - **Why not "almost full":** the battery never got there (76–84 % by 16:00 on 29/10–1/11), but sun is thrown away anyway. The inverter makes only what the house and battery take, and the battery charges at most 3 kW, so the panels are throttled from mid-morning. Proof: 29/10 10:00–10:45, pump at 70 Hz, PV rose to 5.6–5.9 kW, nothing bought, battery still charging 1.6–2.2 kW.
+  - **Rule:** starts (10 min) when the battery has ≥ `socOn` and is charging ≥ `chargeW` (2.7 kW, its limit) or is full and not discharging; it carries on while the battery still charges ≥ `keepChargeW` (1.5 kW), otherwise it stops after 15 min and waits 60 min before trying again. While on, the thermostats go to comfort + `boost` (26), so the valves open and the slab stores the heat (with them shut the pump would idle at the setpoint, the E13 pattern).
+  - Simulated November day: on 11:10–14:25; rooms 24.1° vs 22.8° at 16:25 without it, battery 83 vs 88 %. Real effect unknown until it runs.
+- **Done 2/11 with Renato's OK (all four points):**
+  - **Config written** 22:39 UTC: field-level PATCH of dev `domotics_config/automation`, preconditioned on the old updateTime (it held): `comfort` 25, `windows` [17:00–23:00, 06:00–08:00], `warm` 17:00–23:00, `warmupMaxMin` 30, `dayMin` 21, `solar` {enabled, socOn 40, pumpW 3300, exportW 500, chargeW 2700, keepChargeW 1500, boost 1}, `recovery` {enabled false}, `limits` {21, 26}. Untouched: `enabled` true, `dryRun` **true**, `pauseUntil` null, `flow`/`rest` off, `pumpFollowsZones`. The old (experiment) values to roll back to: windows 19–23 + 06–10, comfort 24, `warmupMaxMin` 180, `dayMin` 19, solar {enabled false, socOn 90, pumpW 3300, exportW 500}, no `recovery` key, limits {21, 25}.
+  - **Bridge on the Pi** 22:41 UTC: only `lib/automation.js` copied (md5 `cd26c257…`; the rest of `lib` and `package.json` deps are identical; `deploy/` not touched). Backup `~/domotics-bridge/lib.bak-20261102-solar`; roll back with `cp -a lib.bak-20261102-solar/. lib/ && sudo systemctl restart domotics-bridge`. Restarted fine, ARP pins kept, 4/7 online (the 3 stuck thermostats). Its status reads the new plan ("…de dia só com sol e bateria ≥ 40 % (aí as divisões a 26°)…").
+  - **PR #130** pushed (base `staging` checked). Its Deploy to Dev doesn't touch anything domotics; #125's rules were already off dev (six staging deploys since its last one on 29/10).
+- **App on dev hosting:** deployed by PR #130's own Deploy to Dev ("Hosting: domotics", success; since 2026-10-18 a domotics PR redeploys only domotics). Checked 22:47: `kidclub-dev-domotics.web.app` serves `index-5302bbc8.js` (projectId `kidclub-dev`) with the new solar settings. (A manual `firebase deploy` failed first: the Firebase CLI login has expired; not needed now.)
+- **Next:** (1) Renato taps Ligar (Clima → Automação); first things to watch: 23:00 off, 05:30 on, 08:00 off, the first sunny day's solar run (start time, battery charge while it runs, rooms at 16:30), and whether 19:00 reaches 24 (if not: water 42, a device command Renato sends); (2) merge #130 into `staging`; (3) the thermostats (below), in their own session/branch.
+- **Thermostats dropping out, diagnosed 2/11 (not fixed in code):** Sala (since ~03:15 29/10), Kids Bathroom (~07:21 30/10), Hall (03:00 2/11). Same as 22–25/10: they're on the network at their reserved IPs, broadcast normally, keys/IPs/protocol (3.4) match the cloud and the Pi's `device-cache.json`, nothing on the Pi or Mac holds a connection, and a **bare TCP connection that sends nothing is reset by the device in ~0.12 s** (Quarto, healthy, holds it open). Hall read fine at 02:55 and refused from 03:00, with nothing in the bridge log between. On 25/10 a power-cycle (Sala) or a WiFi reconnect (the others, when the repeater came back) cured it with the same key. So the thermostat's local server sticks; the trigger is unknown (firmware, or a phone's SmartLife holding the one LAN session). **Cure now: power-cycle Sala, Kids Bathroom and Hall** (or power-cycle the repeater for Kids Bathroom + Hall). Durable options for Renato: (a) bridge detects "stuck" (bare-connect reset) and says so in the app, with the time, to find the trigger; (b) read/set stuck thermostats through the Tuya cloud, capped per day (metered, and the IoT Core subscription lapses; needs his OK); (c) check SmartLife for a thermostat firmware update. Every thermostat has stuck at least once since 21/10.
+- **The house at 22:45 UTC:** pump on (warm window), setpoint 40, rooms' mean 22.5°, battery 57 % giving 3 kW; guard off since 28/10; automation enabled, **dry-run**, new config; thermostats Quarto 25, Master/Diniz 26 (the automation would set 25 once live), Sala/Kids Bathroom/Hall unreachable.
+- **Risky in flight:** guard off (an E13 lockout = no heat until reset); the app timer fired 31/10 (setpoint → 10) and 1/11 (→ 40), not 2/11; 3 of 6 thermostats answering, one more and the automation loses its quorum (assumes a zone wants heat; the day minimum can't act). This session also made 2 read-only Tuya cloud calls (`sync-tuya-keys.js` preview).
+- **Worktree cleanup:** remove `domotics-comfort-log` (#127 merged).
 
 ## 🧪 Comfort experiment, 29–31/10: analysis due ~31/10 (`HANDOFF-comfort-experiment.md`)
 Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00 to 10:00, with the pump off in between, to measure how long the floor holds its heat and how long it takes to warm up, night and day. His own on/off and thermostat changes are recorded as comfort feedback: on means cold, off means warm enough.

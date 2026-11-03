@@ -57,11 +57,12 @@ pnpm dev:domotics:prod   # dev server against prod Firebase — see root CLAUDE.
 ```
 
 ## Deploy
-Dev only for now (see Status/Hosting above):
+Dev only for now (see Status/Hosting above). A PR into `staging` that changes the app deploys it to `hosting:domotics` on kidclub-dev by itself (`.github/workflows/deploy-dev.yml`, `deploy_domotics`, since 2026-10-18). By hand, only if needed:
 ```bash
 pnpm --filter domotics build:staging
 firebase deploy --only hosting:domotics --project=kidclub-dev
 ```
+The bridge on the Pi is always deployed by hand: `../domotics-bridge/deploy/README.md`.
 There is no prod deploy target yet — don't invent one without checking with Renato first.
 
 ---

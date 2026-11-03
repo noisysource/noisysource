@@ -78,6 +78,8 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge/src/automation.ts
 
 ## Cost plan (proposal 2026-10-28, not built, waiting for Renato's decisions)
 
+> **Superseded 2026-11-02** by the schedule agreed after the comfort experiment, now in `domotics_config/automation` (dev, dry-run): pump 05:30–08:00 and 16:30–23:00, thermostats 25 (26 while heating on held-back sun, battery ≥ 40 %), water 40 °C fixed, ~€1.50/day sunny. Analysis: `HANDOFF-comfort-experiment.md` → "Results"; the solar rule: `domotics-bridge/src/automation.ts` header and PR #130. The levers below are kept as history.
+
 Asked by Renato: "given the data we have, can we optimize costs and propose a plan?" Based on 26–28/10, the only days with 15-min energy slots, all disturbed by E13. The figures size the levers; they are not a forecast.
 
 **What the data shows**

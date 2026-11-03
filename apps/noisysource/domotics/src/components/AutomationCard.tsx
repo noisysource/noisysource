@@ -226,7 +226,10 @@ function Today({ status }: { status: AutomationStatus }) {
   const facts: string[] = [];
   if (status.meanRoom !== undefined) facts.push(`casa ${deg(status.meanRoom)}`);
   if (status.solar?.soc !== null && status.solar?.soc !== undefined) facts.push(`bateria ${Math.round(status.solar.soc)} %`);
-  if (status.solar?.spareW !== null && status.solar?.spareW !== undefined && status.mode === 'day') facts.push(`sol a sobrar ${kw(status.solar.spareW)}`);
+  // The battery's charge says more than the spare sun, which the inverter hides by holding the panels back.
+  const bat = status.solar?.batteryW;
+  if (bat !== null && bat !== undefined) facts.push(bat >= 0 ? `a carregar ${kw(bat)}` : `a descarregar ${kw(-bat)}`);
+  else if (status.solar?.spareW !== null && status.solar?.spareW !== undefined && status.mode === 'day') facts.push(`sol a sobrar ${kw(status.solar.spareW)}`);
   if (status.flowTarget !== undefined) facts.push(`água ${status.flowTarget}°${status.flowManual ? ' (à mão)' : ''}`);
   return (
     <div className="flex flex-col gap-1.5">
@@ -537,8 +540,10 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
 
   const s = summary;
   const several = s?.windows && s.windows.length > 1 ? windowsText(s.windows) : null;
+  const sun = s?.solar?.enabled === false ? 'sem aquecer com o sol'
+    : s ? `sol com bateria ≥ ${Math.round(s.socOn)} %${s.solar?.boost ? ` (divisões +${deg(s.solar.boost)})` : ''}` : '';
   const line = s
-    ? `Quente ${several ?? `${s.warmFrom}–${s.warmTo}`} · ${deg(s.comfort)} · mínimo de dia ${deg(s.dayMin)} · sol com bateria ≥ ${Math.round(s.socOn)} %`
+    ? `Quente ${several ?? `${s.warmFrom}–${s.warmTo}`} · ${deg(s.comfort)} · mínimo de dia ${deg(s.dayMin)} · ${sun}`
     : 'Horário quente, temperatura, mínimo de dia e bateria para aquecer com sol.';
 
   return (
@@ -566,7 +571,7 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
             <div className="flex flex-col gap-0.5">
               <span className={label}>Horários quentes</span>
               <span className="text-xs text-zinc-300 tabular-nums">{windowsText(cfg.windows)}</span>
-              <span className="text-xs text-zinc-500 leading-relaxed">Vários horários, definidos para medir quanto tempo a casa guarda o calor. Ainda não se alteram aqui.</span>
+              <span className="text-xs text-zinc-500 leading-relaxed">Começa a aquecer meia hora antes de cada um; entre eles a bomba fica desligada (de dia, só com sol ou abaixo do mínimo de dia). Ainda não se alteram aqui.</span>
             </div>
           ) : (
             <Times label="Horário quente" hint="Chão quente neste horário; começa a aquecer antes, para estar quente à hora de início."
@@ -576,8 +581,8 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
             min={cfg.limits.roomMin} max={cfg.limits.roomMax} unit="°" onChange={v => patch('comfort', v)} />
           <Stepper label="Mínimo de dia" hint="Se a média das divisões descer daqui, aquece mesmo sem sol." value={cfg.dayMin}
             step={0.5} min={16} max={cfg.comfort} unit="°" onChange={v => patch('dayMin', v)} />
-          <Stepper label="Bateria para aquecer com sol" hint="De dia, só liga com a bateria a este nível e o sol a cobrir a casa e a bomba."
-            value={cfg.solar.socOn} step={5} min={50} max={100} unit=" %" onChange={v => patch('solar', { ...cfg.solar, socOn: v })} />
+          <Stepper label="Bateria para aquecer com sol" hint="De dia, só liga com a bateria a este nível e sol a sobrar: a bateria a carregar no máximo (os painéis travados) ou cheia."
+            value={cfg.solar.socOn} step={5} min={20} max={100} unit=" %" onChange={v => patch('solar', { ...cfg.solar, socOn: v })} />
 
           <button type="button" onClick={() => setAdvanced(a => !a)} className="flex items-center gap-1.5 border-t border-zinc-800 pt-2.5 text-left">
             <span className={`flex-1 ${label}`}>Avançado</span>
@@ -602,6 +607,12 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
                   value={cfg.solar.pumpW} step={100} min={500} max={8000} unit=" W" onChange={v => patch('solar', { ...cfg.solar, pumpW: v })} />
                 <Stepper label="…ou a enviar para a rede" hint="Com a bateria no nível acima, também liga se estiver a ir isto para a rede."
                   value={cfg.solar.exportW} step={100} min={100} max={5000} unit=" W" onChange={v => patch('solar', { ...cfg.solar, exportW: v })} />
+                <Stepper label="…ou a bateria a carregar" hint="O inversor só produz o que a casa e a bateria gastam, e a bateria carrega no máximo ~3000 W: a carregar a isto, os painéis estão travados e há sol a sobrar."
+                  value={cfg.solar.chargeW} step={100} min={500} max={5000} unit=" W" onChange={v => patch('solar', { ...cfg.solar, chargeW: v })} />
+                <Stepper label="Continua com a bateria a carregar" hint="Com a bomba a trabalhar, a bateria tem de continuar a carregar pelo menos isto; abaixo, 15 min depois desliga e só volta a tentar 1 h depois."
+                  value={cfg.solar.keepChargeW} step={100} min={0} max={5000} unit=" W" onChange={v => patch('solar', { ...cfg.solar, keepChargeW: v })} />
+                <Stepper label="Divisões mais quentes com o sol" hint="A aquecer com o sol, os termóstatos ficam isto acima da temperatura (até ao máximo), para as válvulas abrirem e o chão guardar o calor para a noite."
+                  value={cfg.solar.boost} step={0.5} min={0} max={2} unit="°" onChange={v => patch('solar', { ...cfg.solar, boost: v })} />
               </Group>
 
               <Group title="Água do pavimento">

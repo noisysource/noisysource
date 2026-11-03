@@ -22,9 +22,12 @@ const OFFSETS = [-0.2, 0, 0.1, 0.3];
  * A tiny house. The pump does what it's told (by the automation, the guard or
  * `events`); its compressor runs 2 min after a switch-on. Rooms warm `gain` °C/h
  * through an open valve while it runs and cool `loss` °C/h otherwise; each
- * thermostat opens at 0.3 below its 24 and closes at 24. The inverter: panels
- * `pv(t)`, house `base(t)` + 3.3 kW while the compressor runs, a 30 kWh battery
- * taking or giving the difference, the grid the rest.
+ * thermostat opens at 0.3 below its target (24 until the automation sets
+ * another) and closes at it. The inverter: panels `pv(t)`, house `base(t)` +
+ * 3.3 kW while the compressor runs, a 30 kWh battery taking or giving the
+ * difference, the grid the rest. With `cap` (W), the house's RENAC instead:
+ * the battery charges at most `cap`, and the panels make only what the house
+ * and the battery take (no export), `pv(t)` being what they could make.
  */
 async function simulate(o) {
   const step = o.step ?? MIN;
@@ -33,6 +36,7 @@ async function simulate(o) {
     on: o.on ?? false, since: o.from - (o.onFor ?? 0) * MIN, by: 'start',
     rooms: o.rooms ?? 24, sp: 44, soc: o.soc ?? 50,
     open: OFFSETS.map(d => (o.rooms ?? 24) + d < 24),
+    tgt: OFFSETS.map(() => 24),
   };
   const log = [];
   let now = o.from;
@@ -40,10 +44,11 @@ async function simulate(o) {
     if (st.on !== on) { st.on = on; st.since = now; st.by = by; }
     log.push({ t: now, on, by, reason });
   };
-  const tick = createAutomation(async (_id, cmds, reason) => {
+  const tick = createAutomation(async (id, cmds, reason) => {
     for (const c of cmds) {
       if (c.code === 'switch') sw(c.value, 'automation', reason);
       if (c.code === 'p02_heating') st.sp = c.value;
+      if (c.code === 'temp_set' && /^z\d$/.test(id)) st.tgt[Number(id.slice(1))] = c.value / 10;
     }
   }, { flow: { value: 44, at: 0 }, ...(o.memory ?? {}) });
   const guard = o.guard ? createGuard({ ...INITIAL_GUARD, mode: 'watch', ...o.guard }) : null;
@@ -58,10 +63,19 @@ async function simulate(o) {
     const h = step / HOUR;
     const anyOpen = st.open.some(Boolean);
     st.rooms += running && anyOpen ? (o.gain ?? 0.3) * h : -(o.loss ?? 0.1) * h;
-    st.open = OFFSETS.map((d, i) => (st.rooms + d >= 24 ? false : st.rooms + d <= 23.7 ? true : st.open[i]));
+    st.open = OFFSETS.map((d, i) => (st.rooms + d >= st.tgt[i] ? false : st.rooms + d <= st.tgt[i] - 0.3 ? true : st.open[i]));
     // Inverter and battery.
     let energy;
-    if (o.pv) {
+    if (o.pv && o.cap) {
+      const could = o.pv(now);
+      const load = (o.base?.(now) ?? 300) + (running ? 3300 : 0);
+      const takes = st.soc >= 100 ? 0 : o.cap;
+      const pv = Math.min(could, load + takes);
+      let bat = Math.max(-5000, pv - load);
+      if (st.soc <= 10 && bat < 0) bat = 0;
+      st.soc = Math.min(100, st.soc + (bat * h) / 30_000 * 100);
+      energy = { pvW: pv, loadW: load, gridW: pv - load - bat, batteryW: bat, soc: st.soc };
+    } else if (o.pv) {
       const pv = o.pv(now);
       const load = (o.base?.(now) ?? 500) + (running ? 3300 : 0);
       let bat = Math.max(-5000, Math.min(5000, pv - load));
@@ -71,7 +85,7 @@ async function simulate(o) {
       energy = { pvW: pv, loadW: load, gridW: pv - load - bat, batteryW: bat, soc: st.soc };
     }
     const pump = { id: 'hp', online: true, on: st.on, fault: false, outdoor: 10, flowSetpoint: st.sp, hz: running ? 60 : 0, waterOut: running ? 38 : 30, waterIn: running ? 34 : 28 };
-    const zones = OFFSETS.map((d, i) => ({ id: `z${i}`, name: `z${i}`, online: true, current: Math.round((st.rooms + d) * 10) / 10, target: 24, mode: 'manual', valveOpen: st.open[i] }));
+    const zones = OFFSETS.map((d, i) => ({ id: `z${i}`, name: `z${i}`, online: true, current: Math.round((st.rooms + d) * 10) / 10, target: st.tgt[i], mode: 'manual', valveOpen: st.open[i] }));
     // The guard first, as in index.ts, with the automation's previous step.
     let gv;
     if (guard) {
@@ -90,7 +104,7 @@ async function simulate(o) {
     lastOn = st.on;
     status = await tick(cfg, { now: new Date(now), zones, pump, energy, guard: gv });
     lastOn = st.on;
-    statuses.push({ t: now, s: status, soc: st.soc, rooms: st.rooms, on: st.on });
+    statuses.push({ t: now, s: status, soc: st.soc, rooms: st.rooms, on: st.on, energy, tgt: [...st.tgt] });
   }
   return { log, statuses, st, at: t => statuses.find(x => x.t >= t) };
 }
@@ -142,7 +156,7 @@ const hm = t => lisbonClock(t);
     assert.ok(r.at(first.t + 60 * MIN).soc > r.at(first.t).soc);
     assert.ok(ons(r.log).length <= 3, `${ons(r.log).length} switch-ons by 17:00`);
     // Before 90 %, the morning said why it was off.
-    assert.match(r.at(L(11)).s.doing, /^Bomba desligada — de dia só com sol: bateria \d+ % de 90 %, [\d,]+ kW de sol a sobrar de 3,3 kW\.$/);
+    assert.match(r.at(L(11)).s.doing, /^Bomba desligada — de dia só com sol: bateria \d+ % de 90 %, a carregar [\d,]+ kW de 2,7 kW\.$/);
   }
 
   // --- Cloudy day: never 90 % → no daytime heating; the warm-up starts in time for 19:00 ---
@@ -306,10 +320,93 @@ const hm = t => lisbonClock(t);
     assert.equal(s.actions.filter(a => /^ligar/.test(a.what)).length, 1, 'recorded once');
   }
 
+  // --- The sun the inverter holds back (2026-11-02): the battery at its 3 kW limit, far from full ---
+  {
+    // The plan agreed on 2/11, with heating on sun: 25 in the rooms, 26 while on sun, battery ≥ 40 %.
+    const nov = (extra = {}) => parseConfig({
+      enabled: true, dryRun: false, comfort: 25, dayMin: 21,
+      windows: [{ from: '17:00', to: '23:00' }, { from: '06:00', to: '08:00' }], warmupMaxMin: 30,
+      solar: { enabled: true, socOn: 40, chargeW: 2700, keepChargeW: 1500, boost: 1 },
+      flow: { enabled: false }, recovery: { enabled: false }, rest: { enabled: false },
+      limits: { roomMin: 21, roomMax: 26 }, ...extra,
+    });
+    // What the panels could make on a sunny November day: 5.4 kW at 10:00, 7 kW at 12:00, 2.4 kW at 15:30.
+    const could = t => Math.max(0, 7000 * Math.sin(Math.PI * ((t - L(0)) / HOUR - 7.5) / 9));
+    const day = { from: L(9), to: L(17), pv: could, cap: 3000, soc: 20, rooms: 23.5, loss: 0.1, gain: 0.3 };
+    const r = await simulate({ ...day, cfg: nov() });
+    // Before, the throttled inverter: the battery at its limit, nothing going out, no spare sun to see.
+    const t40 = r.statuses.find(x => x.soc >= 40).t;
+    const before = r.at(t40 - 5 * MIN);
+    assert.ok(before.energy.batteryW >= 2900 && before.energy.gridW === 0, JSON.stringify(before.energy));
+    assert.ok(spareSun(nov(), before.energy, false) < 3300, 'what the old rule waited for never shows');
+    assert.ok(r.statuses.filter(x => x.t < t40).every(x => !x.s.solar.on), 'not before the battery has 40 %');
+    const first = ons(r.log)[0];
+    assert.ok(first && first.t >= t40 + 10 * MIN && first.t <= t40 + 15 * MIN, `on at ${first && hm(first.t)}, battery at 40 % at ${hm(t40)}`);
+    assert.match(first.reason, /com o sol: bateria \d+ %, a carregar [\d,]+ kW/);
+    // The thermostats at 26 while it heats on sun, so the floor takes the heat.
+    const mid = r.at(first.t + 30 * MIN);
+    assert.equal(mid.s.roomTarget, 26);
+    assert.ok(mid.tgt.every(x => x === 26), JSON.stringify(mid.tgt));
+    assert.ok(mid.s.reasons.some(x => /^Com o sol: divisões a 26°C/.test(x)));
+    // On the sun the panels were holding back: the battery still charging, nothing bought.
+    const run = r.statuses.filter(x => x.t > first.t + 5 * MIN && x.t < offs(r.log)[0].t);
+    assert.ok(run.length > 120, `${run.length} min on sun`);
+    assert.ok(run.every(x => x.energy.gridW >= 0), 'nothing bought');
+    assert.ok(run.filter(x => x.energy.batteryW < 1500).length <= 15, 'below the keep level only until it stops');
+    // It stops as the sun weakens, and doesn't flap back on through the afternoon.
+    const stop = offs(r.log)[0];
+    assert.ok(stop.t >= L(14) && stop.t <= L(15, 30), `off at ${hm(stop.t)}`);
+    assert.deepEqual(r.log.filter(x => x.t > stop.t && x.t < L(16, 30)).map(x => [hm(x.t), x.on]), []);
+    assert.match(r.at(stop.t + 20 * MIN).s.solar.note, /o sol não chegou para a bomba, volta a tentar às \d\d:\d\d/);
+    // The warm-up at 16:30, the thermostats back to 25.
+    assert.equal(r.at(L(16, 45)).s.mode, 'warmup');
+    assert.equal(r.at(L(16, 45)).s.roomTarget, 25);
+    assert.ok(r.at(L(16, 55)).tgt.every(x => x === 25));
+    // Against the same day without it: rooms ~1° warmer at 16:25, the battery only a few points lower.
+    const w = await simulate({ ...day, cfg: nov({ solar: { enabled: false } }) });
+    const a = r.at(L(16, 25)), b = w.at(L(16, 25));
+    assert.ok(a.rooms - b.rooms >= 0.8, `rooms ${a.rooms.toFixed(2)} vs ${b.rooms.toFixed(2)}`);
+    assert.ok(b.soc - a.soc <= 8, `battery ${a.soc.toFixed(0)} % vs ${b.soc.toFixed(0)} %`);
+    assert.equal(ons(w.log).filter(x => x.t < L(16, 30)).length, 0, 'without it, off all day');
+    console.log(`  November sun (simulated): on ${hm(first.t)}–${hm(stop.t)}; at 16:25 rooms ${b.rooms.toFixed(1)} → ${a.rooms.toFixed(1)}°, battery ${b.soc.toFixed(0)} → ${a.soc.toFixed(0)} %`);
+
+    // A cloud while it runs: off 15 min in (the pump would be on the battery), back on only an hour later.
+    const cloud = t => (t >= L(12) && t < L(12, 40) ? 2000 : could(t));
+    const c = await simulate({ ...day, pv: cloud, cfg: nov() });
+    const cOff = offs(c.log)[0];
+    assert.ok(cOff.t >= L(12, 15) && cOff.t <= L(12, 17), `off at ${hm(cOff.t)}`);
+    const drained = c.statuses.filter(x => x.t >= L(12) && x.t < cOff.t && x.energy.batteryW < 0)
+      .reduce((sum, x) => sum - x.energy.batteryW / 60, 0);
+    assert.ok(drained < 600, `${Math.round(drained)} Wh from the battery`);
+    const again = ons(c.log).find(x => x.t > cOff.t);
+    assert.ok(again && again.t >= cOff.t + 70 * MIN && again.t <= cOff.t + 75 * MIN, `on again at ${again && hm(again.t)}`);
+  }
+
+  // --- A full battery: the panels make only what the house takes; heating on sun until a cloud ---
+  {
+    const cfg = parseConfig({ enabled: true, dryRun: false, comfort: 25, solar: { socOn: 40, boost: 1 }, limits: { roomMax: 26 }, flow: { enabled: false } });
+    const pv = t => (t >= L(12) && t < L(12, 40) ? 800 : 4500);
+    const r = await simulate({ cfg, from: L(11), to: L(13), pv, cap: 3000, soc: 100, rooms: 23.5, loss: 0, gain: 0 });
+    const s0 = r.at(L(11, 5));
+    assert.equal(s0.energy.batteryW, 0, 'full: nothing to charge');
+    assert.equal(s0.energy.pvW, 300, 'the panels held to what the house takes');
+    const first = ons(r.log)[0];
+    // 10 min of it, then the minimum off time counted from when it was first seen off (11:00).
+    assert.equal(first.t, L(11, 15), `on at ${hm(first.t)}`);
+    assert.match(first.reason, /com o sol: bateria 100 %, cheia/);
+    assert.equal(r.at(L(11, 40)).energy.batteryW, 0, 'the panels cover the pump');
+    assert.equal(r.at(L(11, 40)).s.roomTarget, 26);
+    const off = offs(r.log)[0];
+    assert.ok(off.t >= L(12, 15) && off.t <= L(12, 17), `off at ${hm(off.t)}`);
+    // Weak sun on a full battery is no signal: it would be the battery heating the house.
+    const weak = await simulate({ cfg, from: L(11), to: L(12), pv: () => 150, cap: 3000, soc: 100, rooms: 23.5, loss: 0, gain: 0 });
+    assert.deepEqual(weak.log, []);
+  }
+
   // --- The status carries what the app shows on top ---
   {
     const s = await createAutomation(async () => {})(live, { now: new Date(L(15)), zones: [], pump: undefined });
-    assert.deepEqual(s.settings, { warmFrom: '19:00', warmTo: '09:00', comfort: 24, dayMin: 21, socOn: 90, windows: [{ from: '19:00', to: '09:00' }] });
+    assert.deepEqual(s.settings, { warmFrom: '19:00', warmTo: '09:00', comfort: 24, dayMin: 21, socOn: 90, windows: [{ from: '19:00', to: '09:00' }], solar: { enabled: true, boost: 0 } });
     assert.equal(s.pausedUntil, null);
     const off = await createAutomation(async () => {})(parseConfig({ pauseUntil: L(18) }), { now: new Date(L(15)), zones: [], pump: undefined });
     assert.equal(off.state, 'off');

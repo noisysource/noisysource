@@ -86,6 +86,73 @@ Things the export alone won't tell you:
    - Whether 19:00–23:00 at 22–24 °C holds with the pump off from 16:00.
    - Propose a schedule to Renato.
 
+## Results (analysis 2026-11-02)
+
+Data: `climate-export.mjs 2026-10-28 2026-11-02`. The experiment settings stayed in until 2/11, so 1–2/11 is included (another evening run by hand and the first full night off). Room means are over Hall, Quarto, Master and Diniz, the four that answered throughout. Hall dropped out at ~03:00 on 2/11, so it's 3 rooms from then. Sala (out from 29/10) and Kids Bathroom (from 30/10) are left out everywhere. 31/10 07:30–09:45 (timer, setpoint 10, no compressor) is left out of the warm-ups.
+
+**0. The thermostats.** Every valve opens and closes at target − 0.4 to −0.6 (mostly −0.5), in all five rooms with data. So a room sits at target − 0.5: 24 gives 23.5, 25 gives 24.5. On the evening of 29/10 (targets 24), the rooms at 23.6–23.7 were inside that band. The valves were open 9–17 % of the time, so the floor was barely fed: that's the jackets evening.
+
+**1. Cooling, pump off** (4-room mean; τ = (room − outdoor) / rate):
+
+| Stretch | °C/h | Outdoor | τ |
+|---|---|---|---|
+| Night, first ~6 h after a 4–5 h run (31/10, 1/11, 1–2/11) | −0.09 to −0.12 | 8.6–9.8 | 135–170 h |
+| Night, 6–12 h after the pump stopped (2/11 03–09, 3 rooms) | −0.21 | 8.2 | 70 h |
+| Evening after a sunny day (29, 30, 31/10) | −0.15 to −0.27 | 16–19 | 18–46 h |
+| First 1.3 h after a hard run stops (30/10 08:42) | −0.44 | 15 | — |
+| Day with sun (29, 31/10, 1/11) | +0.07 to +0.24 | 19–21 | — |
+| Day, partly cloudy afternoon (30/10) | +0.02 | 20 | — |
+
+- No single τ fits. What sets the rate is how recently the slab was charged, not room − outdoor. A charged slab feeds the air for ~6 h (~0.1 °C/h); after that, or when only the sun warmed the air, it's ~0.2 °C/h.
+- With the circulator stopped, the water readings are the outdoor unit's, not the slab's. They fall to ~25 °C within 1–2 h, then towards outdoor. With the circulator on and the compressor off (31/10 07:30), out = in = 27 °C was the slab after 6.5 h off.
+
+**2. Warm-ups** (cold starts, water 14–23 °C; compressor 60–70 Hz from the first slot):
+
+| Start | Setpoint | Outdoor | Dip | Back at start | Rise after the dip | House kWh |
+|---|---|---|---|---|---|---|
+| 30/10 20:10 | 44 | 10–12 | −0.09 at +35 min | +125 min | 0.18 °C/h | 16.6 in 4.7 h |
+| 31/10 21:23 | 43 | 8–9 | −0.07 at +52 min | +112 min | 0.25 °C/h | 11.9 in 3.8 h |
+| 1/11 07:30 (timer) | 40 | 6.5–8.5 | −0.10 at +45 min | not by +80 min | — | 4.5 in 1.4 h |
+| 1/11 16:41 | 40 | 21 → 10 | −0.22 at +64 min (with the after-sun drop) | +154 min | 0.15 °C/h | 13.0 in 4.5 h |
+
+- 29/10 18:54 isn't a warm-up (valves mostly shut, see 0). On 30/10 01:02 the targets were raised with the pump already warm: no dip, then 0.17 °C/h for 7.7 h.
+- The first water through the floor after a stop is the cold water left in the outdoor unit. So the rooms dip for 35–65 min and are back where they started ~2 h after the start. The floor gets ≥ 34 °C water within ~15 min.
+- The learner (`automation.model`: floor 59 min, 0.17 °C/h, 12–13 samples) matches the rise; "back at start" is nearer 2 h than 1.
+- At a 40 °C setpoint the compressor settled at 55–60 Hz; at 43–44 it ran 70 Hz flat out. These runs can't tell them apart per kWh (the 1/11 evening also fought the after-sun drop).
+- House draw with the compressor at ≥ 65 Hz is 3.1 kW (night slots, n 32), so the pump is ~2.8 kW over the baseline. Circulating with the compressor idle: 0.47 kW.
+
+**3. Holding.**
+- Targets 24, rooms at 23.65 (29/10 19:00–01:00): 1.45–1.7 kWh/h, compressor duty ~50 %, valves open 9–17 %.
+- Targets 25–26, rooms ~25 (30/10 05:30–08:30): 2.0 kWh/h, duty 92 %.
+- Rising, setpoint 40 (1/11 19–21): 2.6 kWh/h, duty 100 %.
+
+**4. Interventions** (4-room mean):
+- **On, cold:** 29/10 18:54 at 23.6 (5 rooms); 30/10 20:10 at 23.8; 31/10 21:23 at 23.3. The 1/11 16:41 on, at 24.1 with the sun still up, reads more like starting the evening early.
+- **Off, warm enough:** 31/10 00:53 at 24.5; 1/11 01:11 at 24.0; 1/11 21:09 at 24.4; 30/10 08:42 at 25.0. The morning offs (08:51–10:58, at 23.1–23.8) mean leaving or sun, not comfort.
+- **Targets:** 30/10 01:02, four rooms 24 → 25/26 at 23.7 (warmer).
+- **Timer:** 31/10 07:30 (setpoint 44 → 10) and 1/11 07:30 (43 → 40). It didn't fire on 2/11.
+- So cold is ≤ 23.8 and warm enough is 24.0–24.5: rooms at ~24.5, which is a target of 25.
+
+**5. E13: none** from 28/10 11:20 to 2/11 10:00, guard off. Five cold starts from 14–23 °C water (29/10 18:54, 30/10 20:10, 31/10 21:23, 1/11 07:30 and 16:41), all at 60–70 Hz from the first minutes. Before the visit, cold starts at a flat 50 Hz tripped at 9–14 min. That's consistent with the technicians lifting a frequency limit, but it's a guess. It's also 5 days, not the week the cost plan asked for.
+
+**6. Energy and €** (grid at €0.117 vazio / €0.202 fora):
+
+| Day | House kWh | PV | Grid | € |
+|---|---|---|---|---|
+| 28/10 (pump on all day, thermostats 26 by hand) | 39.8 | 18.0 | 22.3 | 3.65 |
+| 29/10 | 30.4 | 29.8 | 10.5 | 1.64 |
+| 30/10 | 42.3 | 24.5 | 13.3 | 1.82 |
+| 31/10 (night off, setpoint-10 morning) | 23.6 | 26.8 | 5.3 | 0.69 |
+| 1/11 (both runs on the battery; cold by the morning of 2/11) | 31.1 | 25.8 | 1.1 | 0.21 |
+
+- **Battery:** ≈ 29–30 kWh per 100 %; charge and discharge both capped at 3 kW. On a sunny day it charges at the cap from ~10:00 to 15:30, is at 76–84 % by 16:00, and stops discharging at ~17–18 %. That leaves ~18 kWh for the evening, ~6 h of pump.
+- **The panels are throttled on sunny days.** In 65 midday slots with the battery charging at its 3 kW cap and the pump off, PV = house + charge exactly (export ~0). With the pump on (29/10 10:00), PV reached 5.9 kW. So ≥ 2.5 kW is thrown away at midday on sunny days. How much more is unknown: the inverter doesn't report it.
+
+**Found in the code on the way (not changed):**
+- `spareSun()` can't see the throttled sun. It reads PV − house, which under throttling is the battery's charge (≤ 3 kW, under `pumpW` 3.3 kW) and ~0 once the battery is full. So the solar rule would never start the pump on this inverter, at any `socOn`.
+- **Recovery can't end with these thermostats.** It ends at ≤ 0.2 °C short, but they close the valves at 0.5 short. Once on, it keeps the pump on with every valve shut until the window ends. With the water curve off, that's all it does, so the schedule switches recovery off. Fix it before the water curve goes back on (e.g. measure the shortfall against target − 0.5).
+- The warm-up's "need" is measured against `comfort`, but the rooms sit at comfort − 0.5. So the need is always ≥ 0.5, and the warm-up always runs to `warmupMaxMin`: the cap is the real start time.
+
 ## Known limits
 
 - Thermostats are read every ~5 min when the app is closed, so a room's temperature can be up to 5 min old in a slot.
