@@ -66,7 +66,10 @@ The 6 payslip differences are the same as night 1 and wait for the answers below
 **What to click:**
 1. **Aceitação 2026**: the table, then a month (e.g. April, then March).
 2. **Mês → abril 2026**: read the suggestions, "Confirmar N correspondências exatas", then
-   "Classificar N como sugerido"; Aceitação should then say April **passa**.
+   "Classificar N como sugerido". Those two buttons cover 30 of the 50 lines; the other 20 (costs
+   whose amount differs from the plan, or several lines for one item: Tesla, tolls, MEO, loan, Via
+   Verde, Edenred, BPI fees) need their own "Confirmar" (filter "Por confirmar"). Then Aceitação
+   says April **passa**.
 3. **Mês → março 2026**: "Ligar a…" the State payment of 23 Mar to "IRS retido — fev" if that's
    what it is, or write a reason; classify the occupational-health payment.
 4. **Diário**: your clicks appear at the top; the voucher-rule correction is there too.
