@@ -2,7 +2,12 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-29 (night 2 of FinHub v2)
+**Last updated:** 2026-11-03 (redeploy after staging merges; night 2 of FinHub v2 otherwise unchanged)
+
+> **2026-11-03:** #127/#129/#130 merged into `staging` and staging's deploy took v2 off dev (hosting and the
+> `finhub` rules block). Restored by merging `origin/staging` into the branch and pushing: Deploy to Dev
+> run 41617673929 green (Rules + indexes, Hosting: FinHub). The deployed `firestore.rules` = staging's
+> (domotics_energy / domotics_climate included) + the v2 block. Renato's morning check and answers are still open.
 
 ## FinHub v2 — night 2 morning report (2026-10-29)
 
@@ -95,8 +100,9 @@ before pushing).
 - Merged `origin/staging` into the branch (59 commits: domotics #118–#124, docs). The "carry
   #124's rules — DROP BEFORE MERGE" commit is now a no-op: `git diff origin/staging...HEAD --
   firestore.rules` shows only the v2 block. Left in history (branch is pushed).
-- Any merge into `staging` that touches rules or FinHub removes v2 from dev until #125's Deploy to
-  Dev re-runs (`gh run rerun <id>`), as happened with #124 today.
+- Any push to `staging` (any merge) removes v2 from dev until #125 deploys again. Restore it by
+  merging `origin/staging` into the branch and pushing, **not** `gh run rerun`: a re-run reuses its
+  old merge commit and would also put an older KidClub, functions and rules back on dev.
 - `scripts/finhub-v2/` changed (import corrections, full read of dev's events): flagged for your
   review, like night 1's scripts.
 - Night 3 (HANDOFF § Steps): forms (Folha de horas, Recibo, Calendário, Importar extrato) + Equipa,
