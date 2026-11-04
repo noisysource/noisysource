@@ -510,8 +510,10 @@ export interface AutomationMemory {
 export type Send = (
   deviceId: string,
   commands: Array<{ code: string; value: number | boolean }>,
-  /** Why, for the incident record of a pump switch. */
+  /** What it decided, for the incident record of a pump switch ("ligar (com o sol: …)"). */
   reason?: string,
+  /** The reason alone ("com o sol: …"), for the same record: the app shows it without parsing `reason`. */
+  why?: string,
 ) => Promise<void>;
 
 const ZONE_EVERY = 10 * MIN;
@@ -594,12 +596,12 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
   async function act(
     key: string, deviceId: string, name: string, what: string,
     commands: Array<{ code: string; value: number | boolean }>,
-    value: number | boolean, period: string, dry: boolean, now: number,
+    value: number | boolean, period: string, dry: boolean, now: number, why?: string,
   ) {
     const entry: AutomationAction = { at: now, device: name, what, sent: !dry };
     if (!dry) {
       try {
-        await send(deviceId, commands, what);
+        await send(deviceId, commands, what, why);
       } catch (err) {
         entry.sent = false;
         entry.error = (err as Error).message;
@@ -989,8 +991,9 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
         } else if (recentlySwitched(false)) {
           doing = dry ? `Desligaria a bomba ${cfg.rest.minutes} min: no setpoint com o compressor no mínimo.` : 'Bomba: pedido para desligar enviado, a aguardar.';
         } else {
-          const e2 = await act(key, p.id, 'Bomba de calor', `desligar ${cfg.rest.minutes} min (no setpoint a ${p.hz} Hz — não deixa voltar a acelerar)`,
-            [{ code: 'switch', value: false }], false, periodKey, dry, t);
+          const rest = `no setpoint a ${p.hz} Hz — não deixa voltar a acelerar`;
+          const e2 = await act(key, p.id, 'Bomba de calor', `desligar ${cfg.rest.minutes} min (${rest})`,
+            [{ code: 'switch', value: false }], false, periodKey, dry, t, `descanso de ${cfg.rest.minutes} min: ${rest}`);
           if (!dry && e2.sent) ownRest = t + cfg.rest.minutes * MIN;
           doing = `${would('Desliga', 'Desligaria')} a bomba ${cfg.rest.minutes} min: no setpoint com o compressor no mínimo.`;
         }
@@ -1011,7 +1014,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
         } else if (recentlySwitched(false)) {
           doing = dry ? `Desligaria a bomba — ${why}.` : 'Bomba: pedido para desligar enviado, a aguardar.';
         } else {
-          await act(key, p.id, 'Bomba de calor', `desligar (${why})`, [{ code: 'switch', value: false }], false, periodKey, dry, t);
+          await act(key, p.id, 'Bomba de calor', `desligar (${why})`, [{ code: 'switch', value: false }], false, periodKey, dry, t, why);
           doing = `${would('Desliga', 'Desligaria')} a bomba — ${why}.`;
         }
       } else if (!wantOn) {
@@ -1029,7 +1032,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
         } else if (recentlySwitched(true)) {
           doing = dry ? `Ligaria a bomba — ${why}.` : 'Bomba: pedido para ligar enviado, a aguardar.';
         } else {
-          const e2 = await act(key, p.id, 'Bomba de calor', `ligar (${why})`, [{ code: 'switch', value: true }], true, periodKey, dry, t);
+          const e2 = await act(key, p.id, 'Bomba de calor', `ligar (${why})`, [{ code: 'switch', value: true }], true, periodKey, dry, t, why);
           if (!dry && e2.sent) ons = [...ons, t];
           doing = `${would('Liga', 'Ligaria')} a bomba — ${why}.`;
         }

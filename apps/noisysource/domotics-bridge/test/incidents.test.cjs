@@ -79,6 +79,21 @@ function recorder(origin = 'bridge') {
   assert.equal(docs.get('switch-2026-10-22T10-10-00Z-off').source, 'outside');
 }
 {
+  // The automation's reason on its own travels with its switch; nothing else gets the field.
+  const { rec, docs } = recorder();
+  rec.observe(pump, reading(0));
+  rec.noteCommand(false, 'automation', 'desligar (de dia só com sol)', T0 + 0.5 * MIN, 'de dia só com sol');
+  rec.observe(pump, reading(1, { on: false, hz: 0 }));
+  rec.noteCommand(true, 'guard', 'fim do descanso', T0 + 1.5 * MIN);
+  rec.observe(pump, reading(2));
+  rec.observe(pump, reading(3, { on: false, hz: 0 }));
+  const [autoOff, guardOn, outsideOff] = [...docs.values()].filter(d => d.kind === 'switch');
+  assert.equal(autoOff.why, 'de dia só com sol');
+  assert.equal(autoOff.reason, 'desligar (de dia só com sol)', 'reason stays as it was');
+  assert.ok(!('why' in guardOn), 'no empty field on a switch without one');
+  assert.ok(!('why' in outsideOff));
+}
+{
   // observe() says who caused the switch it saw; the raw datapoints either side go on the record.
   const { rec, docs } = recorder();
   assert.equal(rec.observe(pump, reading(0), { 1: true, mode: 'Heating' }), undefined);

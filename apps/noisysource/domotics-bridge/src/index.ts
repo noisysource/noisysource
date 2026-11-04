@@ -300,8 +300,8 @@ async function refreshAutomationSettings() {
 
 const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
 
-const automate = createAutomation(async (deviceId, commands, reason) => {
-  await runCommand(deviceId, commands, 'automation', reason ?? null);
+const automate = createAutomation(async (deviceId, commands, reason, why) => {
+  await runCommand(deviceId, commands, 'automation', reason ?? null, why);
 }, readJson<AutomationMemory>(AUTOMATION_MEMORY_FILE));
 let automating = false;
 let savedMemory = JSON.stringify(automate.memory());
@@ -868,6 +868,8 @@ async function runCommand(
   /** Who asked: the app (LAN or relay), the automation or the guard. Recorded with the switch it causes. */
   source: SwitchSource = 'app',
   reason: string | null = null,
+  /** The automation's reason alone, for the switch incident. */
+  why?: string,
 ) {
   const config = devices.find(d => d.id === deviceId);
   if (!config) throw new Error(`unknown device ${deviceId}`);
@@ -888,7 +890,7 @@ async function runCommand(
   console.log(`[command] ${config.name} <- ${JSON.stringify(dps)}${source === 'app' ? '' : ` (${source})`}`);
   const sw = dps[dpForCode(config.category, 'switch') ?? ''];
   if (config.category === PUMP_CATEGORY && typeof sw === 'boolean') {
-    recorder.noteCommand(sw, source, reason, Date.now());
+    recorder.noteCommand(sw, source, reason, Date.now(), why);
   }
   // A thermostat target, so the climate history can tell the bridge's own changes from a person's.
   const target = dps[dpForCode(config.category, 'temp_set') ?? ''];
