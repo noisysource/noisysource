@@ -4,9 +4,9 @@
 
 **Last updated:** 2026-11-04
 
-## ▶️ Now (4/11, evening): the heating card is a timeline (step 2 of 3), built and on its way to dev
+## ▶️ Now (4/11, evening): the heating card is a timeline (step 2 of 3), on dev, waiting for Renato's test
 **Why:** Renato asked "why was the pump on?" and the card's wall of text couldn't say. Looking at the card he should now see what it is doing, what's next and when, and why it did that.
-- **Branch `agent/domotics-heating-timeline`, PR → `staging`, stacked on #131** (it contains #131 on purpose: each PR into `staging` overwrites the dev site). Worktree `.claude/worktrees/domotics-heating-timeline`, left in place.
+- **Branch `agent/domotics-heating-timeline`, PR #132 → `staging`, stacked on #131** (it contains #131 on purpose: each PR into `staging` overwrites the dev site). Not merged. Its Deploy to Dev put it on `kidclub-dev-domotics.web.app`. Worktree `.claude/worktrees/domotics-heating-timeline`, left in place.
 - **What the card shows now** (`components/AutomationCard.tsx` → `components/HeatingTimeline.tsx`):
   - "Agora: …", the facts line, "A seguir: 16:30 — …", and in amber when the rooms won't make it in time, with the date ("Previsto só amanhã às 10:00").
   - Plano / Bomba / Temperatura on one Lisbon-time axis, Ontem / Hoje / Amanhã and further back. Tap a stretch for when, what, who and why (it starts on now); the day's events below.
