@@ -1,12 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { lisbonOffsetMs } from '@shared/lib/energyBill';
 import {
-  axisTicks, isLine, lineDomain, lineRuns, nearestPoint, pickSegment, segmentAt, stepLane, stepSelection,
-  type LineLane, type SegmentLane, type StripLane, type StripSelection, type StripTick, type StripTone,
+  STRIP_MARGINS, axisTicks, isLine, lineDomain, lineRuns, nearestPoint, pickSegment, segmentAt, stepLane, stepSelection, timeX,
+  type LineLane, type SegmentLane, type StripLane, type StripMargins, type StripSelection, type StripTick, type StripTone,
 } from './stripLogic';
 
 export type {
-  LineLane, LinePoint, SegmentLane, StripLane, StripSegment, StripSelection, StripTick, StripTone,
+  LineLane, LinePoint, SegmentLane, StripLane, StripMargins, StripSegment, StripSelection, StripTick, StripTone,
 } from './stripLogic';
 
 /**
@@ -36,9 +36,14 @@ export interface DayStripProps {
   ariaLabel: string;
   /** Instead of hour labels from the wall clock. */
   ticks?: StripTick[];
+  /** To line up with a chart above or below: the same margins put the same instant at the same x. */
+  margins?: StripMargins;
+  /** A stretch to pick out behind the lanes, e.g. what the chart above is pointing at. */
+  highlight?: { from: number; to: number } | null;
+  /** Hour lines but no hour labels, when the chart above already has them. */
+  hideAxisLabels?: boolean;
 }
 
-const M = { left: 8, right: 8 };
 const HEAD_H = 14;
 const LANE_GAP = 5;
 const SEGMENT_H = 24;
@@ -52,7 +57,7 @@ const SLOP_PX = 10;
 
 const clock = (t: number) => new Date(t + lisbonOffsetMs(t)).toISOString().slice(11, 16);
 
-function useWidth() {
+export function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(640);
   useEffect(() => {
@@ -87,14 +92,17 @@ function ToneDefs({ id, tone }: { id: string; tone: StripTone }) {
 
 const textured = (t: StripTone) => !!t.pattern && t.pattern !== 'solid';
 
-export default function DayStrip({ from, to, lanes, tones, now, nowLabel, selection, onSelect, ariaLabel, ticks }: DayStripProps) {
+export default function DayStrip({
+  from, to, lanes, tones, now, nowLabel, selection, onSelect, ariaLabel, ticks, margins, highlight, hideAxisLabels,
+}: DayStripProps) {
+  const M = margins ?? STRIP_MARGINS;
   const [ref, width] = useWidth();
   const uid = safeId(useId());
   const [hover, setHover] = useState<{ t: number; y: number } | null>(null);
   useEffect(() => setHover(null), [from, to]);
 
   const innerW = Math.max(1, width - M.left - M.right);
-  const x = (t: number) => M.left + ((t - from) / Math.max(1, to - from)) * innerW;
+  const x = (t: number) => timeX(t, from, to, width, M);
   const tAt = (px: number) => from + ((px - M.left) / innerW) * (to - from);
   const showNow = now !== undefined && now >= from && now <= to;
 
@@ -108,7 +116,8 @@ export default function DayStrip({ from, to, lanes, tones, now, nowLabel, select
     });
     return { rows, bottom: Math.max(0, y - LANE_GAP) };
   }, [lanes]);
-  const height = layout.bottom + AXIS_H + (showNow ? NOW_H : 0);
+  const axisH = hideAxisLabels ? 4 : AXIS_H;
+  const height = layout.bottom + axisH + (showNow ? NOW_H : 0);
   const marks = ticks ?? axisTicks(from, to, innerW);
   const usedTones = useMemo(() => {
     const keys = new Set<string>();
@@ -194,6 +203,16 @@ export default function DayStrip({ from, to, lanes, tones, now, nowLabel, select
         {showNow && now! < to && (
           <rect x={x(now!)} y={0} width={x(to) - x(now!)} height={layout.bottom} fill="var(--viz-ink)" opacity={0.03} />
         )}
+        {highlight && highlight.to > from && highlight.from < to && (
+          <rect
+            x={x(Math.max(from, highlight.from))}
+            y={0}
+            width={x(Math.min(to, highlight.to)) - x(Math.max(from, highlight.from))}
+            height={layout.bottom}
+            fill="var(--viz-ink)"
+            opacity={0.08}
+          />
+        )}
 
         {layout.rows.map(({ lane, head, top, h }) => (
           <g key={lane.id}>
@@ -208,7 +227,7 @@ export default function DayStrip({ from, to, lanes, tones, now, nowLabel, select
         ))}
 
         {/* Axis */}
-        {marks.map(m => (
+        {!hideAxisLabels && marks.map(m => (
           <text key={m.t} x={x(m.t)} y={layout.bottom + 12} textAnchor="middle" fontSize={10} fill="var(--viz-muted)" className="tabular-nums">
             {m.label}
           </text>
@@ -217,10 +236,10 @@ export default function DayStrip({ from, to, lanes, tones, now, nowLabel, select
         {showNow && (
           <g>
             <line x1={x(now!)} x2={x(now!)} y1={0} y2={layout.bottom + 2} stroke="var(--viz-ink)" strokeWidth={1.5} />
-            <path d={`M${x(now!)} ${layout.bottom + AXIS_H - 3} l-4 5 h8 Z`} fill="var(--viz-ink)" />
+            <path d={`M${x(now!)} ${layout.bottom + axisH - 3} l-4 5 h8 Z`} fill="var(--viz-ink)" />
             <text
               x={x(now!) + (x(now!) > width / 2 ? -7 : 7)}
-              y={layout.bottom + AXIS_H + 8}
+              y={layout.bottom + axisH + 8}
               textAnchor={x(now!) > width / 2 ? 'end' : 'start'}
               fontSize={10}
               fontWeight={600}
@@ -239,7 +258,7 @@ export default function DayStrip({ from, to, lanes, tones, now, nowLabel, select
           x={0}
           y={0}
           width={width}
-          height={layout.bottom + AXIS_H}
+          height={layout.bottom + axisH}
           fill="transparent"
           style={{ touchAction: 'pan-y', cursor: onSelect ? 'pointer' : undefined }}
           onPointerDown={e => setHover(pointerAt(e))}

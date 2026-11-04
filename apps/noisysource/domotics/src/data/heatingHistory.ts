@@ -1,9 +1,9 @@
-import { doc, getDoc } from 'firebase/firestore';
+import { collection, doc, documentId, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { addDays, dayStart, lisbonDate } from '@shared/lib/energyBill';
 import { db } from '../lib/firebase';
 import { loadAutomationConfig } from './automation';
 import { DEMO } from './demoData';
-import { parseClimateDay, type HeatingRecord } from './heatingTimeline';
+import { dateRuns, parseClimateDay, type ClimateDay, type HeatingRecord } from './heatingTimeline';
 import { loadIncidentsBetween, loadSwitchBefore, type Incident } from './incidents';
 
 /**
@@ -18,6 +18,11 @@ import { loadIncidentsBetween, loadSwitchBefore, type Incident } from './inciden
  * pump is seen to switch, and then only the incidents since the last one known.
  * Failures wait RETRY_MS, and MAX_FETCHES_PER_SESSION is the ceiling whatever
  * goes wrong: past it, the card shows what it already has.
+ *
+ * The Energia page's week and month views only want the pump's hours, so
+ * `loadClimateDays` reads just the climate documents. Those share one cache with
+ * `loadHeatingDay`, so neither reads what the other already has, and they count
+ * towards the same ceiling, one fetch per document.
  */
 
 const MIN = 60_000;
@@ -30,6 +35,10 @@ const MAX_FETCHES_PER_SESSION = 300;
 const cache = new Map<string, { record: HeatingRecord; at: number }>();
 const attempts = new Map<string, number>();
 const inFlight = new Map<string, Promise<HeatingRecord>>();
+/** Every climate document seen, however it was read; null: known not to exist. */
+const climates = new Map<string, { day: ClimateDay | null; at: number }>();
+const climateTried = new Map<string, number>();
+const climateInFlight = new Map<string, Promise<void>>();
 let fetches = 0;
 
 /** A day is settled once its last slot can no longer arrive. */
@@ -61,15 +70,21 @@ async function fetchDay(date: string, now: number): Promise<HeatingRecord> {
   const from = dayStart(date);
   const to = dayStart(addDays(date, 1));
   const prev = cache.get(date)?.record;
-  const [climate, fresh, before] = await Promise.all([
-    getDoc(doc(db, 'domotics_climate', date)),
+  // Read already, by the Energia page, and it won't change any more, or only just.
+  await climateInFlight.get(date)?.catch(() => { /* then it's read below */ });
+  const hit = climates.get(date);
+  const known = hit && (settled(date, lisbonDate(now)) || now - hit.at < FORCED_GAP_MS) ? hit : undefined;
+  const [snap, fresh, before] = await Promise.all([
+    known ? Promise.resolve(null) : getDoc(doc(db, 'domotics_climate', date)),
     loadIncidentsBetween(prev ? resumeFrom(prev.incidents, from) : from, to),
     prev ? Promise.resolve(prev.before) : loadSwitchBefore(from).then(s => s ?? null),
   ]);
+  const climate = known ? known.day : snap?.exists() ? parseClimateDay(date, snap.data()) : null;
+  if (!known) climates.set(date, { day: climate, at: now });
   const byId = new Map((prev?.incidents ?? []).map(i => [i.id, i] as const));
   for (const i of fresh) byId.set(i.id, i);
   const record: HeatingRecord = {
-    climate: climate.exists() ? parseClimateDay(date, climate.data()) : null,
+    climate,
     incidents: [...byId.values()].sort((a, b) => a.at - b.at),
     before,
   };
@@ -92,6 +107,67 @@ export async function loadHeatingDay(date: string, force = false): Promise<Heati
   const p = fetchDay(date, now).finally(() => inFlight.delete(date));
   inFlight.set(date, p);
   return p;
+}
+
+/** Whether `loadClimateDays` should go to Firestore for this day. */
+function climateDue(date: string, today: string, now: number): boolean {
+  const hit = climates.get(date);
+  if (hit && (settled(date, today) || now - hit.at < REFRESH_MS)) return false;
+  const tried = climateTried.get(date);
+  return tried === undefined || now - tried >= (hit ? REFRESH_MS : RETRY_MS);
+}
+
+async function fetchClimateRun(run: string[], now: number): Promise<void> {
+  fetches++;
+  for (const d of run) climateTried.set(d, now);
+  const snap = await getDocs(query(
+    collection(db, 'domotics_climate'),
+    where(documentId(), '>=', run[0]),
+    where(documentId(), '<=', run[run.length - 1]),
+  ));
+  fetches += Math.max(0, snap.size - 1);
+  const got = new Map(snap.docs.map(d => [d.id, d.data()] as const));
+  for (const d of run) {
+    const data = got.get(d);
+    climates.set(d, { day: data ? parseClimateDay(d, data) : null, at: now });
+  }
+}
+
+/**
+ * The climate documents of [from, to], only reading the days not already known:
+ * one query per unbroken run of them. A day missing from the result couldn't be
+ * read; a day that is there as null has no document. Never throws: the callers
+ * draw what they get.
+ */
+export async function loadClimateDays(from: string, to: string): Promise<Map<string, ClimateDay | null>> {
+  const now = Date.now();
+  const today = lisbonDate(now);
+  const last = to > today ? today : to;
+  const out = new Map<string, ClimateDay | null>();
+  if (DEMO) {
+    const { demoHeatingRecord } = await import('./heatingDemo');
+    for (let d = from; d <= last; d = addDays(d, 1)) out.set(d, demoHeatingRecord(d, now).climate);
+    return out;
+  }
+  const waits: Array<Promise<void>> = [];
+  const wanted: string[] = [];
+  for (let d = from; d <= last; d = addDays(d, 1)) {
+    const running = climateInFlight.get(d);
+    if (running) { if (!waits.includes(running)) waits.push(running); }
+    else if (climateDue(d, today, now)) wanted.push(d);
+  }
+  for (const run of dateRuns(wanted)) {
+    if (fetches >= MAX_FETCHES_PER_SESSION) break;
+    const p = fetchClimateRun(run, now).finally(() => { for (const d of run) climateInFlight.delete(d); });
+    for (const d of run) climateInFlight.set(d, p);
+    waits.push(p);
+  }
+  await Promise.allSettled(waits);
+  for (let d = from; d <= last; d = addDays(d, 1)) {
+    const hit = climates.get(d);
+    if (hit) out.set(d, hit.day);
+  }
+  return out;
 }
 
 let warmupMax: Promise<number | undefined> | null = null;

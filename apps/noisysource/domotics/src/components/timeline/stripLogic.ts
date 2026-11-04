@@ -70,6 +70,16 @@ export interface StripSelection {
 
 export interface StripTick { t: number; label: string }
 
+export interface StripMargins { left: number; right: number }
+export const STRIP_MARGINS: StripMargins = { left: 8, right: 8 };
+
+/**
+ * Where instant `t` falls across a chart `width` wide. One function so that
+ * anything lined up under or over a strip (the Energia page's bars) shares its axis.
+ */
+export const timeX = (t: number, from: number, to: number, width: number, m: StripMargins = STRIP_MARGINS) =>
+  m.left + ((t - from) / Math.max(1, to - from)) * Math.max(1, width - m.left - m.right);
+
 const HOUR = 3_600_000;
 const STEPS_H = [1, 2, 3, 4, 6, 12, 24];
 

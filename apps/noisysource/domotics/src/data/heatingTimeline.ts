@@ -126,6 +126,17 @@ export function parseClimateDay(date: string, data: Record<string, unknown>): Cl
   return { date, slots, events, zones };
 }
 
+/** Ascending dates → unbroken runs of consecutive days: what one range query can read without touching the days in between. */
+export function dateRuns(dates: string[]): string[][] {
+  const runs: string[][] = [];
+  for (const d of dates) {
+    const run = runs[runs.length - 1];
+    if (run && addDays(run[run.length - 1], 1) === d) run.push(d);
+    else runs.push([d]);
+  }
+  return runs;
+}
+
 // ---------------------------------------------------------------------------
 // Clock and words
 // ---------------------------------------------------------------------------
