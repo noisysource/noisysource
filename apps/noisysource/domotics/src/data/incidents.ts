@@ -26,6 +26,7 @@ export interface PumpSample {
   zones?: number;
 }
 
+/** 'guard' = the E13 protection, out of the app since 2026-11-04 and off on the Pi: past records keep it, so it keeps its labels. */
 export type SwitchSource = 'app' | 'automation' | 'guard' | 'outside' | 'unknown';
 /** 'notes' = written down by hand (STATUS.md, the first technician report), no readings. */
 export type IncidentOrigin = 'bridge' | 'log' | 'notes';
