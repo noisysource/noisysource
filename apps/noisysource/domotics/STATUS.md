@@ -4,7 +4,29 @@
 
 **Last updated:** 2026-11-04
 
-## ▶️ Now (4/11, evening): the heating card is a timeline (step 2 of 3), on dev, waiting for Renato's test
+## ▶️ Now (4/11, night): Energia has a cost timeline (step 3 of 3), on dev, waiting for Renato's test
+**Why:** Renato, 4/11: "in the energy, to see the costs, I also would like to have a timeline to see when we're spending and how much. Maybe that could also help to select the period that we want to see." The test: open Energia and see at a glance when money was spent, how much, and why that hour was dear; tap a bar to go into that period.
+- **One stack of three PRs, all into `staging`, none merged:** #131 (the guard out of the app), #132 (the heating timeline, step 2), and this one, branch `agent/domotics-cost-timeline`, PR #133. Each PR into `staging` overwrites the dev site, so this one contains the other two and has to be the last to deploy. Merge them in that order, or just this one. Worktree `.claude/worktrees/domotics-cost-timeline`, left in place.
+- **What the page has now:** a "Custos" card right under the Custo tiles (`components/energy/CostChart.tsx`, logic in `costTimeline.ts`, tests in `test/costTimeline.test.cjs`).
+  - "Mais caro: 08:00–09:00, 0,42 €" above € bars by hour, day or month, each split into vazio and fora de vazio per 15-min slot.
+  - A "Bomba" strip under the bars in the day view, on the same axis (step 2's lane and tones). A thin row of the pump's hours per day in week and month views (15 min × the `on` share); none for longer periods.
+  - Under the chart: "Energia X + potência e taxas Y (− excedente pago) = Custo do período Z".
+- **To click through on dev** (`kidclub-dev-domotics.web.app`, Energia):
+  1. Today: the dearest hour is picked by default, and its card says what was bought, what the house had from sun and battery, and what the pump was doing and why. Does the expensive hour line up with the pump in the strip?
+  2. Tap other hours, and the strip. Then Semana and Mês: tap a bar and it opens that day, with "Voltar a …" at the top of the card. Ano: tap a month.
+  3. Phone: swipe up and down over the chart (scrolls, doesn't open anything), slide sideways (crosshair, doesn't open anything), tap (opens).
+  4. Computer: drag across bars in Semana, Mês or Ano; it selects that period. No drag selection in the day view: a period is whole days.
+  5. A day with a gap (hatched), and today's last hour (dotted, "a chegar"): neither should read as 0 €.
+  6. The line under the chart against the "Custo do período" tile: always the same total.
+- **What's in the bars:** the kWh lines (energy vazio and fora, IEC) and the VAT on them. **Fixed:** power, CAV, DGEG and their VAT. Fixed is the same bill with no energy, and the bars share out the difference, so the sum is the tile to the cent, rounding included (tested against 400 random tariffs and periods). Export credit is its own term. Each bar's figure is rounded on screen, so adding up the labels by hand can be a few cents off.
+- **Open question for Renato, the reduced VAT:** it covers the first kWh of a *period*, at the period's average price, not any hour. So every slot carries the period's mix, and a dear day comes out differently in its own view than in the month's: on the default tariff a 30 kWh day is 5,15 € on its own and 4,83 € as a bar in a 300 kWh month. Both add up to their own tile, and the page's tile already behaved this way (a month's tile isn't the sum of its days'). When a tap lands on a different figure, the card says so in one line. An option if it bothers him: always price days at the month's mix, which would make a day's view disagree with its own bill maths. Check whether his contract has the reduced rate at all: the real tariff's `vatReducedKwh` decides how much of this matters.
+- **The strip isn't a measurement.** The inverter only sees the whole house, so "pump on in a dear hour" is a coincidence to look at, not the pump's kWh. The page says so in "Como é calculado". Nothing here estimates the pump's consumption.
+- **Reads:** no new paid API, no timers. The day view uses `loadHeatingDay` (already cached). Week and month use the new `loadClimateDays` in `data/heatingHistory.ts`: only the climate documents not already known, one query per unbroken run of days, sharing a cache and the 300-a-session ceiling with `loadHeatingDay`, so at most one read per day per session, plus today and yesterday every 10 minutes at most, only when the view is opened or refreshed.
+- **Small changes elsewhere:** `DayStrip` gained `margins`, `highlight` and `hideAxisLabels` (defaults unchanged), and `App.tsx` passes the automation status to `EnergyScreen`. `energyBill.ts`, `functions/`, `firestore.rules`, the bridge and the Pi: not touched.
+- **Not checked against real documents:** the gcloud login has expired; the layout was checked with a static render of `?demo`-style fixtures, so the first real look is Renato's.
+- **Next:** Renato tests on dev; then the stack goes `staging` → `main`. There's still no prod hosting for domotics.
+
+## Earlier on 4/11, evening: the heating card is a timeline (step 2 of 3), on dev, waiting for Renato's test
 **Why:** Renato asked "why was the pump on?" and the card's wall of text couldn't say. Looking at the card he should now see what it is doing, what's next and when, and why it did that.
 - **Branch `agent/domotics-heating-timeline`, PR #132 → `staging`, stacked on #131** (it contains #131 on purpose: each PR into `staging` overwrites the dev site). Not merged. Its Deploy to Dev put it on `kidclub-dev-domotics.web.app`. Worktree `.claude/worktrees/domotics-heating-timeline`, left in place.
 - **What the card shows now** (`components/AutomationCard.tsx` → `components/HeatingTimeline.tsx`):
@@ -21,7 +43,7 @@
 - **Not checked against real documents:** the gcloud login has expired, so the shapes come from the bridge's code. The first real look is Renato's, on dev.
 - **Next:**
   1. Renato tests it on dev (the acceptance test is the first line above).
-  2. Step 3, a cost timeline on the Energia page, stacks on this branch and reuses `DayStrip`.
+  2. ✅ Step 3, the cost timeline on the Energia page, is stacked on this branch (see above).
 
 ## Earlier on 4/11: the pump protection is out of the app; the automation is live
 - **The automation has run live (`dryRun` false) since 3/11 09:40.** It switches the pump and sets the thermostats by the schedule in the next section. Anything older in this file that says dry-run, simulation or "tap Ligar" describes the time it was written.
