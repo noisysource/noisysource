@@ -251,12 +251,9 @@ export default function DayStrip({ from, to, lanes, tones, now, nowLabel, select
       </svg>
 
       {hover && readings.length > 0 && (
+        // Against the strip's own edges, on the side away from the pointer: it must never widen the page on a phone.
         <div
-          className="pointer-events-none absolute z-10 bottom-full mb-1 max-w-[17rem] rounded-lg border border-zinc-700 bg-zinc-950/95 px-2.5 py-1.5 text-[11px] shadow-lg flex flex-col gap-0.5 tabular-nums"
-          style={{
-            left: `${(x(hover.t) / width) * 100}%`,
-            transform: x(hover.t) > width / 2 ? 'translateX(calc(-100% + 8px))' : 'translateX(-8px)',
-          }}
+          className={`pointer-events-none absolute z-10 bottom-full mb-1 max-w-full rounded-lg border border-zinc-700 bg-zinc-950/95 px-2.5 py-1.5 text-[11px] shadow-lg flex flex-col gap-0.5 tabular-nums ${x(hover.t) > width / 2 ? 'left-0' : 'right-0'}`}
         >
           <span className="text-zinc-400">{clock(hover.t)}</span>
           {readings.map(r => <span key={r} className="text-zinc-100">{r}</span>)}

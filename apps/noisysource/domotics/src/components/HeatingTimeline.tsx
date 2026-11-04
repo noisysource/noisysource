@@ -25,6 +25,8 @@ interface Props {
 
 const label = 'text-[10px] uppercase tracking-widest text-zinc-500';
 const iconBtn = 'shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 disabled:opacity-30';
+/** Beside three pills in a phone's width: still a full finger tall. */
+const dayBtn = iconBtn.replace('w-9', 'w-8');
 
 const dayLabel = (date: string) =>
   new Date(`${date}T12:00:00Z`).toLocaleDateString('pt-PT', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' });
@@ -119,14 +121,14 @@ export default function HeatingTimeline({ status, canRead, pumpOn, now }: Props)
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1.5">
-          <button type="button" className={iconBtn} aria-label="Dia anterior" disabled={!canRead && date <= today}
+          <button type="button" className={dayBtn} aria-label="Dia anterior" disabled={!canRead && date <= today}
             onClick={() => { const d = addDays(date, -1); setPicked(d === today ? null : d); }}>
             <ChevronLeft size={15} />
           </button>
           {pill('Ontem', yesterday, !canRead)}
           {pill('Hoje', today)}
           {pill('Amanhã', tomorrow)}
-          <button type="button" className={iconBtn} aria-label="Dia seguinte" disabled={date >= tomorrow}
+          <button type="button" className={dayBtn} aria-label="Dia seguinte" disabled={date >= tomorrow}
             onClick={() => { const d = addDays(date, 1); setPicked(d === today ? null : d); }}>
             <ChevronRight size={15} />
           </button>

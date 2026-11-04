@@ -171,7 +171,7 @@ const spans = list => list.map(p => `${hhmm(p.from)}-${hhmm(p.to)} ${p.kind ?? p
 
 // --- A slot with no pump reading, on a past day ----------------------------------
 {
-  const doc = climateDoc(at('24:00'.replace('24', '23')));
+  const doc = climateDoc(at('23:00'));
   delete doc.q40;
   doc.q41.pn = 0;
   const yesterday = '2026-11-04';
