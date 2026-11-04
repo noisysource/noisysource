@@ -6,7 +6,7 @@ import { cachedHeatingDay, loadClimateDays, loadHeatingDay } from '../../data/he
 import { HEATING_TONES, buildHeatingDay, type ClimateDay, type HeatingRecord } from '../../data/heatingTimeline';
 import DayStrip, { StripLegend, useWidth, type StripSelection } from '../timeline/DayStrip';
 import {
-  COST_MARGINS, boughtText, eurText, hourFacts, moneyLine, movedBeyondTap, niceEur, pressOutcome, pumpHoursByBucket, pumpInBucket,
+  COST_MARGINS, boughtText, eurText, hasPeak, hourFacts, moneyLine, movedBeyondTap, niceEur, pressOutcome, pumpHoursByBucket, pumpInBucket,
   pumpLaneOf, pumpText, rangePeriod, reconciliationText, vazioRuns, zoomPeriod, type CostBucket, type CostView, type PumpDayHours,
 } from './costTimeline';
 import { fmtDuration, periodLabel, type Period } from './view';
@@ -262,7 +262,7 @@ export default function CostChart({
         {badge}
         {backTo && (
           <button type="button" onClick={onBack}
-            className="ml-auto flex items-center gap-1.5 h-9 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 first-letter:uppercase">
+            className="ml-auto flex items-center gap-1.5 h-9 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200">
             <ArrowLeft size={14} className="shrink-0" />
             <span>Voltar a {periodLabel(backTo, today)}</span>
           </button>
@@ -271,7 +271,7 @@ export default function CostChart({
 
       <div className="flex flex-col gap-0.5" aria-live="polite">
         <p className="text-sm font-medium text-zinc-100 tabular-nums leading-snug">{money}</p>
-        {peak && split.energy >= 0.005 && (
+        {peak && hasPeak(cost) && (
           <p className="text-[11px] text-zinc-400 tabular-nums leading-snug first-letter:uppercase">
             {boughtText(peak)}{peakPump ? ` · ${peakPump.charAt(0).toLowerCase()}${peakPump.slice(1)}` : ''}
           </p>
@@ -361,7 +361,7 @@ export default function CostChart({
           })}
 
           {/* The figure on the bar that matters. */}
-          {labelBar?.eur != null && labelBar.eur > 0 && (
+          {labelBar?.eur != null && labelBar.eur >= 0.005 && (
             <text
               x={Math.min(width - M.right - 14, Math.max(M.left + 14, barX(labelled) + barW / 2))}
               y={Math.max(10, y(labelBar.eur) - 4)}
@@ -544,18 +544,17 @@ function PumpRow({ hours, left, top, height, step, barX, barW }: {
         if (h === null) {
           return <line key={i} x1={barX(i)} x2={barX(i) + barW} y1={bottom - 2} y2={bottom - 2} stroke="var(--viz-muted)" strokeWidth={1.5} strokeDasharray="2 2" />;
         }
-        const bar = Math.min(1, h.hours / 24) * height;
-        return (
-          <g key={i}>
-            {h.hours > 0 && <rect x={barX(i)} y={bottom - bar} width={barW} height={Math.max(1, bar)} fill="var(--viz-ink-2)" opacity={h.incomplete ? 0.5 : 0.8} />}
-            {step >= 26 && (
-              <text x={barX(i) + barW / 2} y={bottom - 3} textAnchor="middle" fontSize={10} fontWeight={600} fill="var(--viz-ink)" className="tabular-nums"
-                style={{ paintOrder: 'stroke', stroke: 'var(--viz-surface)', strokeWidth: 3 }}>
-                {Math.round(h.hours)} h
-              </text>
-            )}
-          </g>
-        );
+        // Room for the figure: the figure. A month on a phone: how much of the day, as a bar.
+        if (step >= 26) {
+          return (
+            <text key={i} x={barX(i) + barW / 2} y={bottom - 4} textAnchor="middle" fontSize={10} fontWeight={600}
+              fill={h.incomplete ? 'var(--viz-ink-2)' : 'var(--viz-ink)'} className="tabular-nums">
+              {h.incomplete ? '≥ ' : ''}{Math.round(h.hours)} h
+            </text>
+          );
+        }
+        const bar = Math.max(1, Math.min(1, h.hours / 24) * height);
+        return <rect key={i} x={barX(i)} y={bottom - bar} width={barW} height={bar} fill="var(--viz-ink-2)" opacity={h.incomplete ? 0.5 : 0.8} />;
       })}
     </g>
   );
@@ -582,7 +581,7 @@ function Tooltip({ b, pump, grain, flip, canOpen }: { b: CostBucket; pump?: stri
         </>
       )}
       {pump && <span className="mt-0.5 text-zinc-300">{pump}</span>}
-      {b.state === 'partial' && <span className="text-amber-300">Dados incompletos: o custo real é maior.</span>}
+      {b.state === 'partial' && <span className="text-amber-300">Dados incompletos: o custo real pode ser maior.</span>}
       {b.state === 'nodata' && <span className="text-zinc-500">Nada registado, o que não quer dizer 0 €.</span>}
       {b.state === 'pending' && <span className="text-zinc-500">A ponte envia de hora a hora.</span>}
       {b.until !== undefined && b.state !== 'partial' && <span className="text-zinc-500">Até agora.</span>}

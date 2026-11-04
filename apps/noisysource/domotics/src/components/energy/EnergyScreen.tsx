@@ -281,7 +281,7 @@ export default function EnergyScreen({ onBack, canRead, live, automation }: Prop
                   onBack={goBack}
                   onPeriod={openPeriod}
                   note={barDiffers
-                    ? `Na vista anterior esta barra somava ${fmtEur(crumb!.barEur!)}. O IVA reduzido reparte-se pelo período à vista, por isso o mesmo dia pode diferir uns cêntimos.`
+                    ? `Na vista anterior esta barra somava ${fmtEur(crumb!.barEur!)}. O IVA reduzido reparte-se pelo período à vista, por isso o mesmo dia pode dar valores diferentes na vista do dia e na do mês.`
                     : undefined}
                 />
               )}
@@ -532,7 +532,7 @@ function HowItWorks() {
             <b className="text-zinc-300">Custos</b>: as barras são a energia comprada à rede, período a período de 15 minutos, ao preço de
             vazio ou de fora de vazio, com o IEC e o IVA. Com potência e taxas (menos o excedente pago, se houver) somam exatamente o custo do
             período. O IVA reduzido cobre os primeiros kWh do período, ao preço médio, e não uma hora em particular, por isso cada hora leva a
-            média do período à vista e o mesmo dia pode diferir uns cêntimos entre a vista do mês e a do dia.
+            média do período à vista e o mesmo dia pode dar valores diferentes na vista do dia e na do mês.
           </li>
           <li>
             A faixa da <b className="text-zinc-300">bomba</b> diz quando esteve ligada e porquê, não quanto gastou: o inversor só mede a casa

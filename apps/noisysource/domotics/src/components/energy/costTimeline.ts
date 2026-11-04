@@ -18,8 +18,8 @@ import { coverageOf, fmtDuration, fmtEur, fmtHM, fmtKwh, fmtPct, grainOf, period
  *
  * The one thing that has no per-slot answer is the reduced VAT: it covers the
  * first kWh of the *period*, at the period's average price, not any hour in
- * particular. So every slot carries the period's mix, and the same day can
- * come out a few cents apart in the month's view and in its own.
+ * particular. So every slot carries the period's mix, and a dear day comes out
+ * higher in its own view than in the month's (tens of cents on a 30 kWh day).
  */
 
 /** Below this share of its time with readings, a bucket's figure is a lower bound. Same as EnergyChart's mark. */
@@ -215,13 +215,16 @@ export function eurText(b: CostBucket): string {
   }
 }
 
+/** Whether the dearest bucket comes to at least a cent, so there's something to name. */
+export const hasPeak = (c: Pick<CostView, 'peak'>) => (c.peak?.eur ?? 0) >= 0.005;
+
 /** Where the money went, in one line. */
 export function moneyLine(c: CostView): string {
   if (!c.covered) return 'Sem dados neste período.';
   const kwh = c.kwhVazio + c.kwhFora;
   if (kwh <= 0) return c.incomplete ? 'Sem compras à rede nas horas com dados.' : 'Sem compras à rede neste período.';
-  if (!c.peak || c.split.energy < 0.005) return `Quase nada comprado à rede neste período (${fmtKwh(kwh * 1000)}).`;
-  return `Mais caro: ${c.peak.title}, ${eurText(c.peak)}`;
+  if (!hasPeak(c)) return `Quase nada comprado à rede neste período (${fmtKwh(kwh * 1000)}).`;
+  return `Mais caro: ${c.peak!.title}, ${eurText(c.peak!)}`;
 }
 
 /** "2,1 kWh comprados, fora de vazio". */
@@ -250,9 +253,10 @@ export function hourFacts(b: CostBucket): string[] {
   const unit = kwh > 0 && b.eur ? `, a ${(b.eur / kwh).toFixed(2).replace('.', ',')} €/kWh com IVA e IEC` : '';
   out.push(`${bought.charAt(0).toUpperCase()}${bought.slice(1)}${unit}.`);
   const house = stacks(b.flows).house;
-  out.push(`A casa gastou ${fmtKwh(b.flows.load)}: sol ${fmtKwh(house.solar, false)}, bateria ${fmtKwh(house.battery, false)}, rede ${fmtKwh(house.grid, false)}.${b.socEnd !== undefined ? ` Bateria no fim: ${Math.round(b.socEnd)} %.` : ''}`);
+  const part = (wh: number) => (wh > 0 ? fmtKwh(wh, false) : '0');
+  out.push(`A casa gastou ${fmtKwh(b.flows.load)}: sol ${part(house.solar)}, bateria ${part(house.battery)}, rede ${part(house.grid)}.${b.socEnd !== undefined ? ` Bateria no fim: ${Math.round(b.socEnd)} %.` : ''}`);
   if (b.flows.gridBat > 0) out.push(`${fmtKwh(b.flows.gridBat)} da rede foram para a bateria.`);
-  if (b.state === 'partial') out.push(`Dados em ${fmtPct(coverageOf(b.coveredSec, b.expectedSec))} do tempo: o custo real é maior.`);
+  if (b.state === 'partial') out.push(`Dados em ${fmtPct(coverageOf(b.coveredSec, b.expectedSec))} do tempo: o custo real pode ser maior.`);
   if (b.until !== undefined) out.push(`Até às ${fmtHM(b.until)}.`);
   return out;
 }

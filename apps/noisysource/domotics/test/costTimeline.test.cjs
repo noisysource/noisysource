@@ -146,6 +146,27 @@ function assertAddsUp({ cost, scenarios, summary }) {
   }
 }
 
+// --- What has no per-slot answer: the reduced VAT belongs to the period ----------------------
+{
+  // A dear day in a quiet month: more of its kWh fall under the reduced rate in the month's sum than in its own.
+  const dear = '2026-10-14';
+  const days = [];
+  for (let d = '2026-10-01'; d <= '2026-10-31'; d = addDays(d, 1)) days.push(makeDay(d, () => slot(d === dear ? 400 : 50)));
+  const inMonth = compute(periodContaining('month', dear), days);
+  const onItsOwn = compute(periodContaining('day', dear), days.filter(d => d.date === dear));
+  assertAddsUp(inMonth);
+  assertAddsUp(onItsOwn);
+  const bar = inMonth.cost.buckets[13];
+  close(bar.kwhVazio + bar.kwhFora, 38.4);
+  // Each view adds up to its own tile, and they disagree on the day: that's the VAT, not a slip.
+  assert.ok(onItsOwn.cost.split.energy - bar.eur > 0.2, `${onItsOwn.cost.split.energy} against ${bar.eur}`);
+  // Without a reduced rate there's nothing to share out, and they agree to within the bill's rounding.
+  const flat = { ...CONFIRMED, vatReducedKwh: 0 };
+  const a = compute(periodContaining('month', dear), days, flat).cost.buckets[13].eur;
+  const b = compute(periodContaining('day', dear), days.filter(d => d.date === dear), flat).cost.split.energy;
+  close(a, b, 0.02);
+}
+
 // --- A bucket spanning both is split by slot, not by a flag on the bucket --------------------
 {
   // The week view's day buckets always span both: 00:00–08:00 and 22:00–24:00 are vazio.
