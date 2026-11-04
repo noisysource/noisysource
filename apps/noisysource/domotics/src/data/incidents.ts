@@ -1,5 +1,9 @@
-import { collection, getDocs, limit, orderBy, query, type Timestamp } from 'firebase/firestore';
+import { Timestamp, collection, getDocs, limit, orderBy, query, where, type QueryDocumentSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { LOG_ORIGIN, SOURCE_LABEL, type LogOrigin, type SwitchSource } from './incidentLabels';
+
+export { LOG_ORIGIN, SOURCE_LABEL };
+export type { LogOrigin, SwitchSource };
 
 /**
  * Heat pump incidents for the Reports page: faults and on/off transitions the
@@ -26,8 +30,6 @@ export interface PumpSample {
   zones?: number;
 }
 
-/** 'guard' = the E13 protection, out of the app since 2026-11-04 and off on the Pi: past records keep it, so it keeps its labels. */
-export type SwitchSource = 'app' | 'automation' | 'guard' | 'outside' | 'unknown';
 /** 'notes' = written down by hand (STATUS.md, the first technician report), no readings. */
 export type IncidentOrigin = 'bridge' | 'log' | 'notes';
 
@@ -63,7 +65,10 @@ export interface SwitchEvent {
   at: number;
   on: boolean;
   source: SwitchSource;
+  /** The whole decision, as the bridge sent it ("ligar (com o sol: …)"); the automation's from 26/10. */
   reason?: string;
+  /** The automation's reason on its own ("com o sol: …"). Only from a bridge with it. */
+  why?: string;
   faults: string[];
   before: PumpSample[];
   /** Every raw datapoint in the reading before the change and the one that showed it (bridge only, from 26/10). */
@@ -91,34 +96,62 @@ const MAX_INCIDENTS = 300;
 const ms = (v: unknown) => (v && typeof (v as Timestamp).toMillis === 'function' ? (v as Timestamp).toMillis() : undefined);
 const orUndef = <T,>(v: T | null | undefined) => (v === null ? undefined : v);
 
+function parseIncident(d: QueryDocumentSnapshot): Incident {
+  const x = d.data();
+  const base = { ...x, id: d.id, at: ms(x.at) ?? 0 };
+  if (x.kind === 'fault') {
+    return {
+      ...base,
+      lockoutAt: ms(x.lockoutAt),
+      endedAt: ms(x.endedAt),
+      restartedAt: ms(x.restartedAt),
+      lockoutWhy: orUndef(x.lockoutWhy),
+      endedHow: orUndef(x.endedHow),
+      previousId: orUndef(x.previousId),
+      minutesSincePrevious: orUndef(x.minutesSincePrevious),
+      note: orUndef(x.note),
+      before: x.before ?? [],
+      after: x.after ?? [],
+      actions: x.actions ?? [],
+      codes: x.codes ?? [x.code],
+    } as FaultIncident;
+  }
+  if (x.kind === 'switch') {
+    return { ...base, reason: orUndef(x.reason), note: orUndef(x.note), before: x.before ?? [], faults: x.faults ?? [] } as SwitchEvent;
+  }
+  return base as NoteEntry;
+}
+
 /** Newest first. */
 export async function loadIncidents(): Promise<Incident[]> {
   const snap = await getDocs(query(collection(db, 'domotics_incidents'), orderBy('at', 'desc'), limit(MAX_INCIDENTS)));
-  return snap.docs.map(d => {
-    const x = d.data();
-    const base = { ...x, id: d.id, at: ms(x.at) ?? 0 };
-    if (x.kind === 'fault') {
-      return {
-        ...base,
-        lockoutAt: ms(x.lockoutAt),
-        endedAt: ms(x.endedAt),
-        restartedAt: ms(x.restartedAt),
-        lockoutWhy: orUndef(x.lockoutWhy),
-        endedHow: orUndef(x.endedHow),
-        previousId: orUndef(x.previousId),
-        minutesSincePrevious: orUndef(x.minutesSincePrevious),
-        note: orUndef(x.note),
-        before: x.before ?? [],
-        after: x.after ?? [],
-        actions: x.actions ?? [],
-        codes: x.codes ?? [x.code],
-      } as FaultIncident;
-    }
-    if (x.kind === 'switch') {
-      return { ...base, reason: orUndef(x.reason), note: orUndef(x.note), before: x.before ?? [], faults: x.faults ?? [] } as SwitchEvent;
-    }
-    return base as NoteEntry;
-  });
+  return snap.docs.map(parseIncident);
+}
+
+/** A day's worth is a handful of switches; more than this means something is flapping, and the first ones tell the story. */
+const MAX_INCIDENTS_IN_RANGE = 200;
+
+/** The incidents starting in [from, to), oldest first. A read per document, so ask for one day, not for everything. */
+export async function loadIncidentsBetween(from: number, to: number): Promise<Incident[]> {
+  const snap = await getDocs(query(
+    collection(db, 'domotics_incidents'),
+    where('at', '>=', Timestamp.fromMillis(from)),
+    where('at', '<', Timestamp.fromMillis(to)),
+    orderBy('at'),
+    limit(MAX_INCIDENTS_IN_RANGE),
+  ));
+  return snap.docs.map(parseIncident);
+}
+
+/** The pump's last switch before `t`, within the last few incidents; undefined if a run of faults hides it. */
+export async function loadSwitchBefore(t: number): Promise<SwitchEvent | undefined> {
+  const snap = await getDocs(query(
+    collection(db, 'domotics_incidents'),
+    where('at', '<', Timestamp.fromMillis(t)),
+    orderBy('at', 'desc'),
+    limit(5),
+  ));
+  return snap.docs.map(parseIncident).find((i): i is SwitchEvent => i.kind === 'switch');
 }
 
 // ---------------------------------------------------------------------------
@@ -226,14 +259,6 @@ export function hourOfDay(t: number): number {
 export const num = (v: number | undefined, digits = 1) =>
   v === undefined ? '—' : v.toLocaleString('pt-PT', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
-export const SOURCE_LABEL: Record<SwitchSource, string> = {
-  app: 'pela app / ponte',
-  automation: 'pela automação',
-  guard: 'pela proteção E13',
-  outside: 'de fora (SmartLife, painel, técnicos ou temporizador)',
-  unknown: 'origem desconhecida',
-};
-
 // ---------------------------------------------------------------------------
 // The log: everything that happened to the pump, in order
 // ---------------------------------------------------------------------------
@@ -247,18 +272,6 @@ const PUMP_CLOCK_OFFSET = 60 * MIN;
 const DAY_MS = 24 * 60 * MIN;
 export const fmtPumpClock = (t: number) =>
   new Date(t + PUMP_CLOCK_OFFSET).toLocaleTimeString('pt-PT', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
-
-export type LogOrigin = SwitchSource | 'pump' | 'note';
-
-export const LOG_ORIGIN: Record<LogOrigin, string> = {
-  outside: 'De fora',
-  unknown: 'Desconhecida',
-  guard: 'Proteção E13',
-  automation: 'Automação',
-  app: 'App / ponte',
-  pump: 'Bomba (avaria)',
-  note: 'Nota',
-};
 
 export interface LogRow {
   id: string;
