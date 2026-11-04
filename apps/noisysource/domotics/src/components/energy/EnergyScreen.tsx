@@ -10,9 +10,11 @@ import {
 } from '@shared/lib/energyBill';
 import { loadEnergyDays, loadTariff } from '../../data/energyHistory';
 import { batteryFlow, formatWatts, gridFlow, liveSurplus, type EnergyReading } from '../../data/energy';
-import { DEFAULT_AUTOMATION, loadAutomationConfig } from '../../data/automation';
+import { DEFAULT_AUTOMATION, loadAutomationConfig, type AutomationStatus } from '../../data/automation';
 import { DEMO } from '../../data/demoData';
 import SurplusNow from '../SurplusNow';
+import CostChart from './CostChart';
+import { costView, type CostBucket } from './costTimeline';
 import EnergyChart from './EnergyChart';
 import TariffEditor from './TariffEditor';
 import {
@@ -37,6 +39,15 @@ interface Props {
   canRead: boolean;
   /** The live reading, for the strip at the top. */
   live: EnergyReading | null;
+  /** The automation's latest status: it says what the pump is doing past the last record. */
+  automation?: AutomationStatus;
+}
+
+/** A bar was opened: where to go back to, and what that bar said, to explain if the period's own figure differs. */
+interface Crumb {
+  from: Period;
+  to: Period;
+  barEur?: number | null;
 }
 
 const DAY = 86_400_000;
@@ -58,9 +69,11 @@ function EstimateBadge({ show }: { show: boolean }) {
   return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/70 text-amber-300 whitespace-nowrap">estimativa</span>;
 }
 
-export default function EnergyScreen({ onBack, canRead, live }: Props) {
+export default function EnergyScreen({ onBack, canRead, live, automation }: Props) {
   const today = lisbonDate(Date.now());
   const [period, setPeriod] = useState<Period>(() => periodContaining('day', today));
+  /** The bars opened to get here, for "voltar". The period bar's own choices start afresh. */
+  const [trail, setTrail] = useState<Crumb[]>([]);
   /** What was last loaded, and for which period: the page shows that until the next one arrives. */
   const [data, setData] = useState<{ period: Period; days: EnergyDay[] } | null>(null);
   const [tariff, setTariff] = useState<Tariff>(() => parseTariff({}));
@@ -125,12 +138,16 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
     const range = { from: dayStart(period.from), to: dayStart(addDays(period.to, 1)), now: dataNow };
     const summary = summarize(days, tariff, range);
     const billedDays = Math.max(0, Math.min(range.to, now) - range.from) / DAY;
+    const scenarios = computeScenarios(summary, billedDays, tariff);
+    const buckets = bucketize(period, days, tariff, dataNow);
     return {
       summary,
       billedDays,
-      scenarios: computeScenarios(summary, billedDays, tariff),
+      scenarios,
       surplus: surplusOf(days, tariff, range),
-      buckets: bucketize(period, days, tariff, dataNow),
+      buckets,
+      cost: costView({ period, days, tariff, buckets, range, actual: scenarios.actual, billedDays, now }),
+      now,
       soc: grainOf(period) === 'hour' ? socSeries(days, range.from, range.to) : undefined,
       last,
     };
@@ -144,6 +161,21 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
   const isCurrent = period.from <= today && today <= period.to;
   const shownCurrent = shown.from <= today && today <= shown.to;
   const estimate = !tariff.confirmed;
+
+  function openPeriod(next: Period, bar?: CostBucket) {
+    setTrail(t => [...t, { from: shown, to: next, barEur: bar?.eur }]);
+    setPeriod(next);
+  }
+  function goBack() {
+    const last = trail[trail.length - 1];
+    if (!last) return;
+    setTrail(trail.slice(0, -1));
+    setPeriod(last.from);
+  }
+  const crumb = trail[trail.length - 1];
+  // The reduced VAT is shared out over the period on screen, so an opened bar can come out differently on its own.
+  const barDiffers = !!view && !!crumb && crumb.to === data?.period && crumb.barEur != null
+    && Math.round(crumb.barEur * 100) !== Math.round(view.cost.split.energy * 100);
 
   function setKind(kind: PeriodKind) {
     if (kind === 'custom') setPeriod({ kind, from: period.from, to: period.to > today ? today : period.to });
@@ -199,10 +231,10 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
               today={today}
               canNext={next.from <= today}
               isCurrent={isCurrent}
-              onKind={setKind}
+              onKind={k => { setTrail([]); setKind(k); }}
               onShift={dir => setPeriod(shiftPeriod(period, dir))}
-              onToday={() => setPeriod(period.kind === 'custom' ? periodContaining('day', today) : periodContaining(period.kind, today))}
-              onCustom={(from, to) => setPeriod({ kind: 'custom', from, to })}
+              onToday={() => { setTrail([]); setPeriod(period.kind === 'custom' ? periodContaining('day', today) : periodContaining(period.kind, today)); }}
+              onCustom={(from, to) => { setTrail([]); setPeriod({ kind: 'custom', from, to }); }}
             />
           )}
 
@@ -232,6 +264,27 @@ export default function EnergyScreen({ onBack, canRead, live }: Props) {
                     hint={<>painéis {fmtEur(view.scenarios.savingPv)} · bateria {fmtEur(view.scenarios.savingBattery)}</>} />
                 </div>
               </section>
+
+              {view.summary.expectedSec > 0 && (
+                <CostChart
+                  period={shown}
+                  cost={view.cost}
+                  tariff={tariff}
+                  now={view.now}
+                  today={today}
+                  canRead={canRead}
+                  refresh={refresh}
+                  status={automation}
+                  interactive={!stale}
+                  badge={<EstimateBadge show={estimate} />}
+                  backTo={crumb?.from}
+                  onBack={goBack}
+                  onPeriod={openPeriod}
+                  note={barDiffers
+                    ? `Na vista anterior esta barra somava ${fmtEur(crumb!.barEur!)}. O IVA reduzido reparte-se pelo período à vista, por isso o mesmo dia pode diferir uns cêntimos.`
+                    : undefined}
+                />
+              )}
 
               <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 flex flex-col gap-2">
                 {view.summary.expectedSec === 0
@@ -475,6 +528,16 @@ function HowItWorks() {
             tarde, menos o que custou carregá-la).
           </li>
           <li>Potência, contribuição audiovisual e taxa DGEG contam pelos dias do período e são iguais nos três casos.</li>
+          <li>
+            <b className="text-zinc-300">Custos</b>: as barras são a energia comprada à rede, período a período de 15 minutos, ao preço de
+            vazio ou de fora de vazio, com o IEC e o IVA. Com potência e taxas (menos o excedente pago, se houver) somam exatamente o custo do
+            período. O IVA reduzido cobre os primeiros kWh do período, ao preço médio, e não uma hora em particular, por isso cada hora leva a
+            média do período à vista e o mesmo dia pode diferir uns cêntimos entre a vista do mês e a do dia.
+          </li>
+          <li>
+            A faixa da <b className="text-zinc-300">bomba</b> diz quando esteve ligada e porquê, não quanto gastou: o inversor só mede a casa
+            inteira, por isso uma hora cara com a bomba ligada é uma coincidência a investigar, não uma medição.
+          </li>
           <li>
             <b className="text-zinc-300">Excedente</b>: energia dos painéis que foi para a rede em períodos de 15 minutos com mais de{' '}
             {SURPLUS_MIN_W} W em média; abaixo disso é o inversor a regular e não conta. "Bateria cheia": {BATTERY_FULL_SOC} % ou mais no
