@@ -67,8 +67,6 @@ export interface SwitchEvent {
   source: SwitchSource;
   /** The whole decision, as the bridge sent it ("ligar (com o sol: …)"); the automation's from 26/10. */
   reason?: string;
-  /** The automation's reason on its own ("com o sol: …"). Only from a bridge with it. */
-  why?: string;
   faults: string[];
   before: PumpSample[];
   /** Every raw datapoint in the reading before the change and the one that showed it (bridge only, from 26/10). */

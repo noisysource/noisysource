@@ -89,8 +89,6 @@ export interface SwitchEvent {
   on: boolean;
   source: SwitchSource;
   reason: string | null;
-  /** The automation's reason on its own, without the verb `reason` starts with. Only on its switches. */
-  why?: string;
   /** Faults active at the time. */
   faults: string[];
   /** The last few minutes, ending with the reading that showed the change. */
@@ -154,7 +152,7 @@ export function createRecorder(
   const repeatMs = opts.repeatMs ?? 20 * MIN;
   const buffer: PumpSample[] = [];
   let lastDps: PumpDps | undefined;
-  const commands: Array<{ on: boolean; by: SwitchSource; reason: string | null; why?: string; t: number }> = [];
+  const commands: Array<{ on: boolean; by: SwitchSource; reason: string | null; t: number }> = [];
   let s: RecorderSnapshot = initial ?? { open: null, closing: null, lastTrip: null, lastOn: null };
 
   /** The bridge's own switch command, if this transition is it. Used up once matched. */
@@ -187,7 +185,6 @@ export function createRecorder(
         on: sample.on,
         source: by,
         reason: cmd?.reason ?? null,
-        ...(cmd?.why ? { why: cmd.why } : {}),
         faults: sample.faults,
         before: [...buffer.filter(x => x.t >= t - SWITCH_BEFORE_MS), sample],
         ...(dps && lastDps ? { dps: { before: lastDps, at: dps } } : {}),
@@ -295,8 +292,8 @@ export function createRecorder(
       if (s.open) s.open.doc.offlineDuring = true;
     },
     /** Called for every switch command the bridge sends to the pump, so the transition it causes is attributed. */
-    noteCommand(on: boolean, by: SwitchSource, reason: string | null, t: number, why?: string) {
-      commands.push({ on, by, reason, t, ...(why ? { why } : {}) });
+    noteCommand(on: boolean, by: SwitchSource, reason: string | null, t: number) {
+      commands.push({ on, by, reason, t });
       while (commands.length > 10) commands.shift();
     },
     snapshot: (): RecorderSnapshot => s,

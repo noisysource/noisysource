@@ -23,9 +23,9 @@ import { SITE } from './site';
  *   `domotics_incidents`, checked against the slots; slots only where a switch
  *   has no record. A slot with no pump reading is drawn as "Sem registo", never
  *   as off.
- * - Why: the automation's own words when there are any (`why`, then `reason`,
- *   then the status's recent actions), or worked out from the plan and said to
- *   be (`derived`).
+ * - Why: the automation's own words when there are any (`reason`, then the
+ *   status's recent actions), or worked out from the plan and said to be
+ *   (`derived`).
  *
  * Time is Lisbon's by the helpers in energyBill, like the bridge's, so clock
  * changes (92 or 100 slots) and the machine's time zone don't move anything.
@@ -449,7 +449,6 @@ export function reasonText(raw: string | undefined): string | undefined {
 
 /** Why, from the record, then the status's recent actions. Undefined: nobody wrote it down. */
 function reasonOf(e: SwitchEvent, status: AutomationStatus | undefined): string | undefined {
-  if (e.why) return e.why;
   const fromReason = reasonText(e.reason);
   if (fromReason) return fromReason;
   if (e.source !== 'automation') return undefined;

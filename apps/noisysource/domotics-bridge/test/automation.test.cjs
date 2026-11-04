@@ -393,21 +393,5 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     reset();
   }
 
-  // A pump switch hands over its reason twice: whole for `reason`, alone for `why`. A thermostat has no `why`.
-  {
-    const calls = [];
-    const tick = createAutomation(async (id, cmds, reason, why) => { calls.push({ id, cmds, reason, why }); }, { flow: { value: 42, at: 0 } });
-    const onDuty = at(20, 0);
-    await tick(cfg, { now: new Date(onDuty.getTime() - 60 * 60_000), zones: zones(23, { current: 22 }), pump: pump({ on: false, hz: 0 }) });
-    await tick(cfg, { now: onDuty, zones: zones(23, { current: 22 }), pump: pump({ on: false, hz: 0 }) });
-    const sw = calls.find(c => c.cmds[0].code === 'switch');
-    assert.equal(sw.reason, `ligar (${sw.why})`);
-    assert.match(sw.why, /horário quente/);
-    const zone = calls.find(c => c.cmds[0].code === 'temp_set');
-    assert.ok(zone.reason, 'the thermostat keeps its text');
-    assert.equal(zone.why, undefined);
-    reset();
-  }
-
   console.log('all automation scenarios pass');
 })().catch(e => { console.error(e); process.exit(1); });

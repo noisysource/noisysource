@@ -191,7 +191,7 @@ const spans = list => list.map(p => `${hhmm(p.from)}-${hhmm(p.to)} ${p.kind ?? p
   assert.equal(view.pump.at(-1).state, 'nodata');
 }
 
-// --- Why: `why`, then `reason`, then the status's actions, then worked out --------
+// --- Why: `reason`, then the status's actions, then worked out --------
 {
   const now = at('12:00');
   const viewWith = incidents => buildHeatingDay({
@@ -202,9 +202,7 @@ const spans = list => list.map(p => `${hhmm(p.from)}-${hhmm(p.to)} ${p.kind ?? p
   const sunAt = v => v.pump.find(s => s.from === at('11:31'));
   const textOf = v => v.describe({ lane: 'pump', id: `pump:${at('11:31')}`, t: at('11:31') });
 
-  let v = viewWith([sw('11:31', true, 'automation', 'ligar (com o sol: do reason)', { why: 'com o sol: do why' })]);
-  assert.match(textOf(v).text, /com o sol: do why/);
-  v = viewWith([sw('11:31', true, 'automation', 'ligar (com o sol: do reason)')]);
+  let v = viewWith([sw('11:31', true, 'automation', 'ligar (com o sol: do reason)')]);
   assert.match(textOf(v).text, /com o sol: do reason/);
   v = viewWith([sw('11:31', true, 'automation', undefined)]);
   assert.match(textOf(v).text, /com o sol: das ações/);
