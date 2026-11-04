@@ -277,7 +277,7 @@ stored, as an event.
   so the projected balance goes negative within months. The 3-month warning is already active.
 - Large real movements have no blueprint (transfers to NoisyPhocus, vehicle contracts, purchases,
   State payments other than IRS). Decide which should become blueprints.
-- Tolls, Tesla charging and Via Verde are still forecast every month, with no bank lines since August.
+- Tolls and Tesla charging are still forecast every month, with no bank lines since August.
 - Renato's childcare voucher estimate differs from April's payslip value. Not checked yet: a raise, or
   a wrong term?
 - Open questions from STATUS "A confirmar" now belong to the blueprint they affect.
