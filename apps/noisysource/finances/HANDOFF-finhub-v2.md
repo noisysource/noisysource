@@ -245,6 +245,43 @@ or passes once the suggestions are confirmed. For 3, real − planned is split i
 with/without a reason, lines not explained); it passes when the last two are empty. A re-import
 never overwrites: a changed input becomes a `reversal` + `-rN` (`packages/shared/finhub/importSync.ts`).
 
+## Order change (Renato, 2026-11-04): forecast first, then the bank
+
+**This overrides decision 4 above, the "done when" in § Acceptance, and rows 3–4 of § Steps.**
+
+The goal is a forecast for next year. The order is:
+
+1. Create the blueprints: contracts, credits, expenses, incomes, everything the plan derives from.
+2. Generate a year from them and check it by eye.
+3. Renato confirms it's right.
+4. Only then compare with the bank. From there on, every month: statement against forecast, what
+   failed, what we learned, and the fix goes into the blueprint.
+
+Replaying January–September 2026 is no longer the gate, and Renato doesn't need to click through it.
+Mês, matching and Aceitação stay: they become the monthly check of step 4.
+
+"Events generated" in Renato's sense are the planned items on screen. They stay computed, never
+stored (§ The model), so a blueprint change redoes every future month at once. His confirmation is
+stored, as an event.
+
+**Proposed build, awaiting Renato's OK:**
+
+| Step | Builds | Check on dev |
+|---|---|---|
+| A | **Plano**: every blueprint in one place, grouped (income / EC contracts, people / salaries, credits, expenses, payment days), with all its parameters and where each value came from; create and edit forms (a new event with an effective date; the old version stays) | every blueprint is there and correct; change one, see the forecast move |
+| B | **Ano**: months × blueprints from now to the end of next year, month-end balance per month; click a cell for how the amount was computed; confirm per blueprint | a whole year reads right; everything confirmed |
+| C | Monthly check against the **confirmed** forecast: import a statement; compare with the forecast as it stood when confirmed (`knownAt` in `envelope.ts` exists, not wired to a screen); record what was learned with the blueprint change | October's statement against the confirmed forecast |
+
+**Gaps seen in the 12-month Tesouraria on 2026-11-04** (these are what A and B must surface):
+- No income blueprint after the current EC contract's last day, while salaries and costs carry on,
+  so the projected balance goes negative within months. The 3-month warning is already active.
+- Large real movements have no blueprint (transfers to NoisyPhocus, vehicle contracts, purchases,
+  State payments other than IRS). Decide which should become blueprints.
+- Tolls, Tesla charging and Via Verde are still forecast every month, with no bank lines since August.
+- Renato's childcare voucher estimate differs from April's payslip value. Not checked yet: a raise, or
+  a wrong term?
+- Open questions from STATUS "A confirmar" now belong to the blueprint they affect.
+
 ## Steps: one night run each (Renato, 2026-10-28)
 
 Agents build overnight; Renato checks on dev in the morning. So every night ends with screens he

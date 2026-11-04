@@ -2,7 +2,14 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-03 (redeploy after staging merges; night 2 of FinHub v2 otherwise unchanged)
+**Last updated:** 2026-11-04 (order changed: forecast first)
+
+> **2026-11-04, read this first:** Renato changed the order. Blueprints first, then a year generated
+> and confirmed by him, and only then the bank, as a monthly check. See HANDOFF-finhub-v2.md § "Order
+> change". **The click-through below (Aceitação, Mês, April) is no longer asked of Renato.** The next
+> build is steps A and B there (Plano, Ano), once he OKs them and answers: income after the current
+> EC contract, what "credits" covers, how far the forecast runs. Night 3's forms are folded into A.
+> #125 stays open.
 
 > **2026-11-03:** #127/#129/#130 merged into `staging` and staging's deploy took v2 off dev (hosting and the
 > `finhub` rules block). Restored by merging `origin/staging` into the branch and pushing: Deploy to Dev
