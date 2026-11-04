@@ -270,13 +270,16 @@ function Collapsible({ title, defaultOpen = false, children }: { title: string; 
 
 function Details({ status }: { status: AutomationStatus }) {
   return (
-    <Collapsible title="Detalhes — zonas e como a casa aquece">
+    <Collapsible title="Detalhes — porquê, zonas e como a casa aquece">
       {status.pumpHold && <p className="text-xs text-amber-300 leading-snug">Bomba: {status.pumpHold}.</p>}
       {status.restUntil !== undefined && (
         <p className="text-xs text-sky-300 leading-snug">
           Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint).
         </p>
       )}
+      <ul className="flex flex-col gap-1">
+        {status.reasons.map((r, i) => <li key={i} className="text-xs text-zinc-400 leading-snug">{r}</li>)}
+      </ul>
       {status.zones.length > 0 && (
         <div className="flex flex-col gap-1">
           <span className={label}>Zonas</span>
