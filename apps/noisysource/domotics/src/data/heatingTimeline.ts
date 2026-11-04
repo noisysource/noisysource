@@ -173,11 +173,11 @@ export const HEATING_TONES: Record<string, StripTone> = {
   'pump-unknown': { label: 'Sem registo de quem', fill: 'var(--viz-muted)', pattern: 'dots', mark: '?' },
   // Off is a low stripe in the colour of who switched it off. Only this one goes in the legend.
   'pump-off': { label: 'Desligada (traço na cor de quem a desligou)', fill: 'var(--viz-muted)', thin: true },
-  'off-automation': { label: 'Desligada pela automação', fill: 'var(--viz-1)', thin: true },
-  'off-app': { label: 'Desligada à mão, na app', fill: 'var(--viz-hz)', thin: true },
-  'off-outside': { label: 'Desligada de fora da app', fill: 'var(--viz-2)', thin: true },
+  'off-automation': { label: 'Desligada pela automação', fill: 'var(--viz-1)', thin: true, mark: 'A' },
+  'off-app': { label: 'Desligada à mão, na app', fill: 'var(--viz-hz)', thin: true, mark: 'M' },
+  'off-outside': { label: 'Desligada de fora da app', fill: 'var(--viz-2)', thin: true, mark: 'F' },
   'off-timer': { label: 'Desligada pelo temporizador', fill: 'var(--viz-2)', thin: true, mark: 'T' },
-  'off-guard': { label: 'Desligada pela proteção E13', fill: 'var(--viz-muted)', thin: true },
+  'off-guard': { label: 'Desligada pela proteção E13', fill: 'var(--viz-muted)', thin: true, mark: 'E' },
   'off-unknown': { label: 'Desligada', fill: 'var(--viz-muted)', thin: true },
   fault: { label: 'Avaria', fill: 'var(--viz-critical)', mark: '!' },
   nodata: { label: 'Sem registo', fill: 'var(--viz-axis)', pattern: 'hatch' },
@@ -342,7 +342,8 @@ function futureOverlays(status: AutomationStatus, a: number, b: number): PlanPie
   if (r && r.phase !== 'done') {
     const from = Math.max(a, r.startAt);
     const to = Math.min(b, r.at + WARM_HOLD_MS);
-    if (to > from) out.push({ from, to, kind: 'request' });
+    // A pause holds over a request too (the bridge's `paused` comes first).
+    if (to > from) out.push(...cutOut<PlanPiece>([{ from, to, kind: 'request' }], [...out]));
   }
   return out;
 }
@@ -507,7 +508,7 @@ function pumpStretches(p: {
   // How the day began: before the first switch, the opposite of it; failing that, the last switch, the first reading, or now.
   const before = record.before;
   const firstReading = day?.slots.find(s => s && (s.pn ?? 0) > 0);
-  let startOn: boolean | undefined = transitions.length ? !transitions[0].on
+  const startOn: boolean | undefined = transitions.length ? !transitions[0].on
     : before ? before.on
     : firstReading ? (firstReading.on ?? 0) >= 0.5
     : phase === 'today' ? pumpOn
@@ -530,7 +531,8 @@ function pumpStretches(p: {
     if (!s || !s.pn) continue;
     const want = (s.on ?? 0) >= 0.5;
     if (want !== state) {
-      if (i === 0 || state === undefined) { startOn = want; start = { at: from, on: want, source: 'unknown' }; } else all.push({ at: a, on: want, source: 'unknown', synthetic: true });
+      if (i === 0 || state === undefined) start = { at: from, on: want, source: 'unknown' };
+      else all.push({ at: a, on: want, source: 'unknown', synthetic: true });
       state = want;
     }
   }
@@ -715,8 +717,10 @@ function stretchFacts(ctx: WordsContext, s: PumpStretch): string | undefined {
     .filter(x => x.slot && x.at + SLOT_MS > s.from && x.at < s.to);
   const temps = slots.map(x => slotMean(x.slot)).filter(isNum);
   const parts: string[] = [];
-  if (temps.length >= 2) parts.push(`Casa ${deg(temps[0])} → ${deg(temps[temps.length - 1])}`);
-  else if (temps.length === 1) parts.push(`Casa a ${deg(temps[0])}`);
+  if (temps.length) {
+    const [first, last] = [deg(temps[0]), deg(temps[temps.length - 1])];
+    parts.push(first === last ? `Casa a ${last}` : `Casa ${first} → ${last}`);
+  }
   if (s.state === 'on' && slots.length) {
     const runs = slots.map(x => x.slot!.run).filter(isNum);
     if (runs.length) parts.push(`compressor a trabalhar ${Math.round(mean(runs) * 100)} % do tempo`);
@@ -1219,7 +1223,7 @@ export function nextPlanStep(status: AutomationStatus | undefined, now: number, 
   if (!next) return null;
   if (first.kind === 'warmup' && pieces[1]?.kind === 'warm') return line(first.to, `começa o horário quente, até às ${hhmm(pieces[1].to)}`);
   if (heating) return line(next.from, first.kind === 'request' ? 'desliga, acaba o pedido pontual' : 'desliga, acaba o horário quente');
-  if (next.kind === 'warmup') return line(next.from, `liga e aquece para as ${hhmm(next.to)}`);
+  if (next.kind === 'warmup') return line(next.from, `começa a aquecer para as ${hhmm(next.to)}`);
   if (next.kind === 'request') return line(next.from, 'liga para o pedido pontual');
   return line(next.from, `começa o horário quente, até às ${hhmm(next.to)}`);
 }

@@ -374,6 +374,10 @@ for (const [date, slots, hours] of [['2026-10-25', 100, 25], ['2027-03-28', 92, 
   v = buildHeatingDay({ date: DATE, now, status: statusAt(now, { warmBy }), warmupMaxMin: 30 });
   assert.equal(`${hhmm(v.plan.find(p => p.kind === 'request').from)}-${hhmm(v.plan.find(p => p.kind === 'request').to)}`, '12:30-15:00');
   assert.ok(v.legend.includes('plan-request'));
+  // A pause holds over a request: the two never overlap.
+  v = buildHeatingDay({ date: DATE, now, status: statusAt(now, { warmBy, pausedUntil: at('13:00') }), warmupMaxMin: 30 });
+  assert.equal(`${hhmm(v.plan.find(p => p.kind === 'request').from)}-${hhmm(v.plan.find(p => p.kind === 'request').to)}`, '13:00-15:00');
+  assert.equal(v.plan.reduce((a, p) => a + (p.to - p.from), 0), v.to - v.from);
 
   v = buildHeatingDay({ date: DATE, now, status: statusAt(now, { state: 'off', enabled: false }), warmupMaxMin: 30 });
   assert.equal(v.plan.at(-1).kind, 'none');
@@ -432,11 +436,11 @@ for (const [date, slots, hours] of [['2026-10-25', 100, 25], ['2027-03-28', 92, 
     const now = at(time, date);
     return nextPlanStep(statusAt(now, { warm: { ...statusAt(now).warm, inWindow: false, nextStart: 0 }, ...over }), now, 30);
   };
-  assert.equal(step('12:07').text, '16:30 — liga e aquece para as 17:00');
+  assert.equal(step('12:07').text, '16:30 — começa a aquecer para as 17:00');
   assert.equal(step('16:40').text, '17:00 — começa o horário quente, até às 23:00');
   assert.equal(step('17:30').text, '23:00 — desliga, acaba o horário quente');
-  assert.equal(step('23:30').text, 'amanhã às 05:30 — liga e aquece para as 06:00');
-  assert.equal(step('03:00').text, '05:30 — liga e aquece para as 06:00');
+  assert.equal(step('23:30').text, 'amanhã às 05:30 — começa a aquecer para as 06:00');
+  assert.equal(step('03:00').text, '05:30 — começa a aquecer para as 06:00');
   assert.equal(step('07:00').text, '08:00 — desliga, acaba o horário quente');
 }
 
