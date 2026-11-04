@@ -4,18 +4,21 @@ import {
   DEFAULT_AUTOMATION, backToDryRun, clearWarmBy, goLive, loadAutomationConfig, saveAutomationConfig, setPause, setWarmBy,
   type AutomationConfig, type AutomationStatus, type WarmByStatus, type WarmupModel,
 } from '../data/automation';
+import { DEMO } from '../data/demoData';
 import { ago } from './HealthChips';
+import HeatingTimeline from './HeatingTimeline';
 
 /**
  * The heating automation in the app. On top, one unmistakable state with its
- * one action (Ligar / Pausar / Retomar); then today's plan and what it is doing
- * now; then the four settings that matter, everything else under "Avançado".
+ * one action (Ligar / Pausar / Retomar); then what it is doing now and the day
+ * as a timeline (HeatingTimeline: what's planned, what the pump did, who and
+ * why); then the four settings that matter, everything else under "Avançado".
  *
  * The automation runs on the Pi (domotics-bridge/src/automation.ts); this reads
  * its status from the bridge state and writes `domotics_config/automation`,
- * which the bridge picks up within two minutes. The plan (Renato, 2026-10-26):
- * a warm floor 19:00–09:00; by day the pump only on spare sun with the battery
- * ≥ 90 %, or below the day minimum.
+ * which the bridge picks up within two minutes. The plan: warm windows (now
+ * 17:00–23:00 and 06:00–08:00), the warm-up before them; in between the pump
+ * only on spare sun, or below the day minimum.
  */
 
 interface Props {
@@ -23,6 +26,8 @@ interface Props {
   status?: AutomationStatus;
   /** Settings are the owner's alone (firestore.rules): editable only signed in. */
   canEdit: boolean;
+  /** The pump as read just now; undefined if it isn't answering. */
+  pumpOn?: boolean;
 }
 
 /** Past this, the status shown is older than the bridge would ever leave it. */
@@ -74,7 +79,7 @@ function applied(p: Pending, s: AutomationStatus) {
   return !s.pausedUntil;
 }
 
-export default function AutomationCard({ status, canEdit }: Props) {
+export default function AutomationCard({ status, canEdit, pumpOn }: Props) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 15_000);
@@ -180,7 +185,10 @@ export default function AutomationCard({ status, canEdit }: Props) {
         )}
       </div>
 
-      {status && status.enabled && <Today status={status} />}
+      {status && status.enabled && <NowLine status={status} />}
+
+      {/* The history has the same owner as the settings; demo mode makes its own. */}
+      <HeatingTimeline status={status} canRead={canEdit || DEMO} pumpOn={pumpOn} now={now} />
 
       <Settings canEdit={canEdit} summary={status?.settings} />
 
@@ -219,10 +227,10 @@ function PauseChoices({ status, now, busy, onPick, onCancel }: {
 }
 
 // ---------------------------------------------------------------------------
-// Hoje: the plan and what it is doing now
+// What it is doing now
 // ---------------------------------------------------------------------------
 
-function Today({ status }: { status: AutomationStatus }) {
+function NowLine({ status }: { status: AutomationStatus }) {
   const facts: string[] = [];
   if (status.meanRoom !== undefined) facts.push(`casa ${deg(status.meanRoom)}`);
   if (status.solar?.soc !== null && status.solar?.soc !== undefined) facts.push(`bateria ${Math.round(status.solar.soc)} %`);
@@ -232,13 +240,9 @@ function Today({ status }: { status: AutomationStatus }) {
   else if (status.solar?.spareW !== null && status.solar?.spareW !== undefined && status.mode === 'day') facts.push(`sol a sobrar ${kw(status.solar.spareW)}`);
   if (status.flowTarget !== undefined) facts.push(`água ${status.flowTarget}°${status.flowManual ? ' (à mão)' : ''}`);
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className={label}>Hoje</span>
-      {status.plan
-        ? <p className="text-sm text-zinc-100 leading-snug">{status.plan}</p>
-        : <p className="text-xs text-zinc-500">A ponte ainda não tem o plano novo — precisa de ser atualizada.</p>}
+    <div className="flex flex-col gap-1">
       {status.doing && (
-        <p className="text-xs text-zinc-300 leading-snug">
+        <p className="text-xs text-zinc-200 leading-snug">
           <span className="text-zinc-500">Agora{status.state === 'dry-run' ? ' (simulação)' : ''}: </span>{status.doing}
         </p>
       )}
@@ -248,7 +252,7 @@ function Today({ status }: { status: AutomationStatus }) {
 }
 
 // ---------------------------------------------------------------------------
-// Details: reasons, zones, last actions — collapsed
+// Details: zones, holds and how the house warms up — collapsed
 // ---------------------------------------------------------------------------
 
 function Collapsible({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
@@ -266,16 +270,13 @@ function Collapsible({ title, defaultOpen = false, children }: { title: string; 
 
 function Details({ status }: { status: AutomationStatus }) {
   return (
-    <Collapsible title="Detalhes — porquê, zonas, últimas ações">
+    <Collapsible title="Detalhes — zonas e como a casa aquece">
       {status.pumpHold && <p className="text-xs text-amber-300 leading-snug">Bomba: {status.pumpHold}.</p>}
       {status.restUntil !== undefined && (
         <p className="text-xs text-sky-300 leading-snug">
           Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint).
         </p>
       )}
-      <ul className="flex flex-col gap-1">
-        {status.reasons.map((r, i) => <li key={i} className="text-xs text-zinc-400 leading-snug">{r}</li>)}
-      </ul>
       {status.zones.length > 0 && (
         <div className="flex flex-col gap-1">
           <span className={label}>Zonas</span>
@@ -283,21 +284,6 @@ function Details({ status }: { status: AutomationStatus }) {
             <div key={z.id} className="flex gap-2 text-xs">
               <span className="w-28 shrink-0 truncate text-zinc-300">{z.name}</span>
               <span className="text-zinc-500">{z.note}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {status.actions.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className={label}>Últimas ações</span>
-          {status.actions.slice(0, 8).map((a, i) => (
-            <div key={i} className="flex gap-2 text-xs tabular-nums">
-              <span className="text-zinc-500 shrink-0">{hhmm(a.at)}</span>
-              <span className="text-zinc-300 shrink-0 max-w-[7rem] truncate">{a.device}</span>
-              <span className="flex-1 min-w-0 text-zinc-400">{a.what}</span>
-              <span className={`shrink-0 ${a.error ? 'text-red-400' : a.sent ? 'text-emerald-400' : 'text-sky-400'}`}>
-                {a.error ? 'falhou' : a.sent ? 'enviado' : 'simulado'}
-              </span>
             </div>
           ))}
         </div>
