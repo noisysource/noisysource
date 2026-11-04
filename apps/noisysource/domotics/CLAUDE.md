@@ -43,10 +43,10 @@ Prefixed `domotics_`:
 - `domotics_config/guard` — E13 guard on/off (owner read/write, bridge read)
 - `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. automation and guard status)
 - `domotics_commands` — command queue the bridge drains when off-LAN
-- `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page (owner read, bridge create/update, no deletes)
+- `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page and the heating timeline (owner read, bridge create/update, no deletes)
 - `domotics_energy/{yyyy-mm-dd}` — kWh per 15-minute slot (`q00`…), written by the bridge, read by the Energia page (owner read, bridge create/update under date ids, no deletes)
 - `domotics_config/tariff` — electricity prices for the Energia page (owner read/write; the bridge never reads it)
-- `domotics_climate/{yyyy-mm-dd}` — room/pump temperatures per 15-minute slot (`q00`…, same slots as `domotics_energy`) and people's interventions (`x_…`), written by the bridge (`climate.ts`), for working out how the house cools and warms up (owner read, bridge create/update under date ids, no deletes). See `HANDOFF-comfort-experiment.md`
+- `domotics_climate/{yyyy-mm-dd}` — room/pump temperatures per 15-minute slot (`q00`…, same slots as `domotics_energy`) and people's interventions (`x_…`), written by the bridge (`climate.ts`), for working out how the house cools and warms up, and read by the heating timeline in the automation card (`src/data/heatingHistory.ts`, cached per day) (owner read, bridge create/update under date ids, no deletes). See `HANDOFF-comfort-experiment.md`
 
 ---
 
@@ -54,6 +54,7 @@ Prefixed `domotics_`:
 ```bash
 pnpm dev:domotics        # runs against kidclub-dev, http://localhost:5173
 pnpm dev:domotics:prod   # dev server against prod Firebase — see root CLAUDE.md, not a default debugging step
+pnpm --filter domotics test   # the heating timeline's logic against the real 2026-11-04, no browser or Firebase
 ```
 
 ## Deploy
