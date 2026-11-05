@@ -399,6 +399,7 @@ function Overview({
   onThermostatCommand: Props['onThermostatCommand'];
   onHeatPumpCommand: Props['onHeatPumpCommand'];
 }) {
+  const pump = devices.find((d): d is Extract<Device, { type: 'heatpump' }> => d.type === 'heatpump' && d.online !== false);
   const lit = devices.filter((d): d is LightDevice => d.type === 'light' && d.state.on);
   const roomName = (id: string) => plan.rooms.find(r => r.id === id)?.name ?? '—';
   const withDevices = new Set(devices.map(d => d.roomId));
@@ -472,7 +473,7 @@ function Overview({
     energy: energy?.online ? <EnergyCard energy={energy} onOpen={onOpenEnergy} /> : (
       <p id="energia" className="text-sm text-zinc-500">Inversor sem ligação — sem dados de energia.</p>
     ),
-    automation: <AutomationCard status={automation} canEdit={canEditAutomation} />,
+    automation: <AutomationCard status={automation} canEdit={canEditAutomation} pumpOn={pump?.state.on} />,
     climate: (
       <section className="flex flex-col gap-2">
         <h2 className={sectionTitle}>Clima</h2>

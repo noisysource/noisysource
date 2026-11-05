@@ -4,7 +4,26 @@
 
 **Last updated:** 2026-11-04
 
-## ▶️ Now (4/11): the pump protection is out of the app; the automation is live
+## ▶️ Now (4/11, evening): the heating card is a timeline (step 2 of 3), on dev, waiting for Renato's test
+**Why:** Renato asked "why was the pump on?" and the card's wall of text couldn't say. Looking at the card he should now see what it is doing, what's next and when, and why it did that.
+- **Branch `agent/domotics-heating-timeline`, PR #132 → `staging`, stacked on #131** (it contains #131 on purpose: each PR into `staging` overwrites the dev site). Not merged. Its Deploy to Dev put it on `kidclub-dev-domotics.web.app`. Worktree `.claude/worktrees/domotics-heating-timeline`, left in place.
+- **What the card shows now** (`components/AutomationCard.tsx` → `components/HeatingTimeline.tsx`):
+  - "Agora: …", the facts line, "A seguir: 16:30 — …", and in amber when the rooms won't make it in time, with the date ("Previsto só amanhã às 10:00").
+  - Plano / Bomba / Temperatura on one Lisbon-time axis, Ontem / Hoje / Amanhã and further back. Tap a stretch for when, what, who and why (it starts on now); the day's events below.
+  - The old paragraph and "Últimas ações" are gone. `reasons` (the only place the water and recovery explanations appear), zones, `pumpHold`, `restUntil` and the model note stay in "Detalhes", collapsed.
+  - Signed out on the LAN: the plan, now, the status's last actions and a hint that the rest needs sign-in.
+- **Where things are:** `components/timeline/DayStrip.tsx` (generic, step 3 reuses it), `data/heatingTimeline.ts` (pure logic), `data/heatingHistory.ts` (reads and cache), `test/heatingTimeline.test.cjs` (`pnpm --filter domotics test`, the real 4/11 and the clock-change days).
+- **Recorded vs worked out:**
+  - Recorded: the past plan per slot, the rooms, faults, and switches with who and the automation's `reason`.
+  - Worked out in the app: the future plan and the warm-up of every window but the next (at `warmupMaxMin`, assumed 30 min signed out), "Só com sol" vs "Desligada" (sunrise/sunset, `suncalc`), today's unwritten slots, and a reason only where none was written (the card says "deduzido").
+- **Reads:** one document per day plus that day's incidents, cached for the session; only today and yesterday refresh (at most every 10 min, sooner when the pump switches, and only the new incidents), capped at 300 fetches a session (`heatingHistory.ts`).
+- **No bridge change, no Pi deploy.** Past reasons were never lost: `reason` has carried the whole text ("ligar (com o sol: …)") on automation switches since 26/10, and the app reads it. A separate `why` field was built on the wrong premise and reverted on this branch.
+- **Not checked against real documents:** the gcloud login has expired, so the shapes come from the bridge's code. The first real look is Renato's, on dev.
+- **Next:**
+  1. Renato tests it on dev (the acceptance test is the first line above).
+  2. Step 3, a cost timeline on the Energia page, stacks on this branch and reuses `DayStrip`.
+
+## Earlier on 4/11: the pump protection is out of the app; the automation is live
 - **The automation has run live (`dryRun` false) since 3/11 09:40.** It switches the pump and sets the thermostats by the schedule in the next section. Anything older in this file that says dry-run, simulation or "tap Ligar" describes the time it was written.
 - **The E13 protection ("guard") is gone from the app** (Renato's decision, 4/11; branch `agent/domotics-remove-guard`, PR → `staging`, its dev deploy replaces the site):
   - **Gone:** the Proteção E13 card (Clima and Relatórios), the "Descanso no setpoint (E13)" settings, and the texts that promised it would act.
