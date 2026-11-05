@@ -4,11 +4,11 @@
 
 **Last updated:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
 
-## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR → `main` (NOT merged, NOT in prod)
+## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (NOT merged, NOT in prod); dev preview #136
 
-**State.** The fix is built and in review. Merging the `main` PR deploys it to prod (a hotfix PR doesn't deploy when
-opened). Branch protection isn't enforced, so check the merge run is green yourself. The dev preview is
-`sync/hotfix-study-enroll-to-staging` → `staging`. Merging that one after the hotfix also does the main→staging sync.
+**State.** The fix is built and in review. Merging #135 deploys it to prod (a hotfix PR doesn't deploy when opened).
+Branch protection isn't enforced, so check the merge run is green yourself. The dev preview is #136
+(`sync/hotfix-study-enroll-to-staging` → `staging`). Merging #136 after #135 also does the main→staging sync.
 
 **Cause.** Commit 2c28343 (2026-09-13) removed the links to `/client/enroll/study?childId=…`. Every "+ Inscrever" then
 went to `/client/enroll/transport?childId=…`, a page titled "Transporte Escolar". That page offers a Sala de Estudo
@@ -48,7 +48,7 @@ either, so a second problem is possible.
 **Next steps for Renato:**
 1. Contact the parents ("Mostrar famílias sem inscrições" in Famílias e inscrições).
 2. Test on dev: both links, then the message (pick a day on the transport form and switch transport off).
-3. Merge the `main` PR, check the run is green, then merge the dev preview PR to sync `staging`.
+3. Merge #135, check the run is green, then merge #136 to sync `staging`.
 4. On prod, test both paths with a real new parent account, since impersonation can't reproduce rule bugs. Tick "Não
    pretendo NIF" so no Vendus client is created, and remove the account's family afterwards with "Eliminar família".
 5. A follow-up PR into `staging` will add a weekly funnel email and form events.
