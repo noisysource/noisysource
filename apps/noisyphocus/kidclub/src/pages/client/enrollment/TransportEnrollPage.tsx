@@ -16,6 +16,7 @@ import { DiscountRule } from '@shared/models/Discount';
 import { getDiscountRules, resolveAutoDiscounts, applyDiscounts } from '../../../services/discountService';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
 import { calculateAge, normalizeEmail } from '../../../lib/utils';
+import { useEnrollFormEvents } from '../../../lib/useEnrollFormEvents';
 
 const SAVE_ERROR = 'Não foi possível enviar o pedido. Tente novamente; se o problema continuar, contacte-nos.';
 const LOAD_ERROR = 'Não foi possível carregar o formulário de inscrição.';
@@ -176,9 +177,17 @@ export default function TransportEnrollPage() {
       t => t.pickupAddress.trim() && t.dropoffAddress.trim()
     ));
 
+  const enrollEvents = useEnrollFormEvents({
+    service: 'transport', enabled: !editId, ready: !!childId && !isLoading && !loadError,
+    days: schedule.days, submitEnabled: isValid,
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !child || !familyId || !owner || !tConfig || !isValid) return;
+    if (!user || !child || !familyId || !owner || !tConfig || !isValid) {
+      enrollEvents.blocked('not_ready');
+      return;
+    }
     setSubmitError(null);
     setSubmitting(true);
     try {
@@ -191,10 +200,12 @@ export default function TransportEnrollPage() {
           data.status !== 'cancelled'
         );
         if (hasTransportDup) {
+          enrollEvents.blocked('duplicate_transport');
           setSubmitError('Já existe uma inscrição de transporte ativa para este aluno.');
           return;
         }
         if (hasStudyDup) {
+          enrollEvents.blocked('duplicate_study');
           setSubmitError('Já existe uma inscrição na Sala de Estudo para este aluno este ano letivo.');
           return;
         }
@@ -279,6 +290,7 @@ export default function TransportEnrollPage() {
         });
       }
 
+      enrollEvents.submitted();
       setSubmitted(true);
     } catch (err) {
       console.error('[enroll/transport] submit failed', err);
