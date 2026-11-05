@@ -324,12 +324,20 @@ export default function ChildDetailPage() {
           >
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Subscriptions</h2>
-              <Link
-                to={`/client/enroll/transport?childId=${childId}`}
-                className="text-blue-600 hover:underline text-sm"
-              >
-                + Add Subscription
-              </Link>
+              <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 ml-3">
+                <Link
+                  to={`/client/enroll/transport?childId=${childId}`}
+                  className="text-blue-600 hover:underline text-sm whitespace-nowrap"
+                >
+                  + Transporte
+                </Link>
+                <Link
+                  to={`/client/enroll/study?childId=${childId}`}
+                  className="text-blue-600 hover:underline text-sm whitespace-nowrap"
+                >
+                  + Sala de Estudo
+                </Link>
+              </div>
             </div>
 
             {studySubscriptions.length === 0 && transportSubscriptions.length === 0 ? (
