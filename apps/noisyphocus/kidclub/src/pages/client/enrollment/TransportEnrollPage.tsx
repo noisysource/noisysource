@@ -377,6 +377,15 @@ export default function TransportEnrollPage() {
           </p>
         )}
 
+        {!editId && studyDays.length > 0 && transportDays.length === 0 && (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-center">
+            Este formulário precisa de pelo menos uma viagem de transporte. Se pretende apenas a Sala de Estudo,{' '}
+            <Link to={`/client/enroll/study?childId=${childId}`} className="font-semibold underline">
+              faça a inscrição aqui
+            </Link>.
+          </p>
+        )}
+
         <button
           type="submit"
           disabled={submitting || !isValid}
