@@ -8,7 +8,7 @@ Home automation for Renato's house: lights, blinds, and climate control, plus a 
 - **Tuya/SmartLife** (thermostats, heat pump) — via the **Tuya Cloud API**, EU data centre (`functions/src/domotics/tuya.ts`)
   - The heat pump (Zantia Vancouver 13) is **dedicated to underfloor heating**. Domestic hot water (AQS) comes from a separate heat pump that is not integrated, so this pump's DHW tank reading and DHW setpoint mean nothing — mode "Heating" is correct, and a cold DHW tank is not a fault (Renato, 2026-10-19).
 
-There is no Shelly integration and no per-circuit (amps/watts) monitoring — despite earlier planning docs, those were never built. Energy comes from the RENAC inverter alone: the bridge reads it over local Modbus (read-only) for the live figures, and records kWh history in 15-minute slots for the **Energia** page (`src/components/energy/`, cost maths in `packages/shared/lib/energyBill.ts`, mirrored in `functions/src/domotics/energyBill.ts`). That history only exists from when a bridge with `src/energy.ts` runs on the Pi.
+There is no Shelly integration and no per-circuit (amps/watts) monitoring — despite earlier planning docs, those were never built. Energy comes from the RENAC inverter alone: the bridge reads it over local Modbus (read-only) for the live figures, and records kWh history in 15-minute slots for the **Energia** page (`src/components/energy/`, cost maths in `packages/shared/lib/energyBill.ts`, mirrored in `functions/src/domotics/energyBill.ts`). That history only exists from when a bridge with `src/energy.ts` runs on the Pi. The page's "Custos" chart (`components/energy/CostChart.tsx`, logic in `costTimeline.ts`) shows what varies with the energy bought as € bars, and adds up to the bill's total to the cent; the pump strip under it says when the pump ran, not what it used, since the inverter only measures the whole house.
 
 ## Visibility & Access
 - **Not behind GCP IAP** — no IAP setup exists for this app (unlike Finances/Tasks).
@@ -46,7 +46,7 @@ Prefixed `domotics_`:
 - `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page and the heating timeline (owner read, bridge create/update, no deletes)
 - `domotics_energy/{yyyy-mm-dd}` — kWh per 15-minute slot (`q00`…), written by the bridge, read by the Energia page (owner read, bridge create/update under date ids, no deletes)
 - `domotics_config/tariff` — electricity prices for the Energia page (owner read/write; the bridge never reads it)
-- `domotics_climate/{yyyy-mm-dd}` — room/pump temperatures per 15-minute slot (`q00`…, same slots as `domotics_energy`) and people's interventions (`x_…`), written by the bridge (`climate.ts`), for working out how the house cools and warms up, and read by the heating timeline in the automation card (`src/data/heatingHistory.ts`, cached per day) (owner read, bridge create/update under date ids, no deletes). See `HANDOFF-comfort-experiment.md`
+- `domotics_climate/{yyyy-mm-dd}` — room/pump temperatures per 15-minute slot (`q00`…, same slots as `domotics_energy`) and people's interventions (`x_…`), written by the bridge (`climate.ts`), for working out how the house cools and warms up, and read by the heating timeline in the automation card and the Energia page's pump strip and row (`src/data/heatingHistory.ts`, cached per day) (owner read, bridge create/update under date ids, no deletes). See `HANDOFF-comfort-experiment.md`
 
 ---
 
@@ -54,7 +54,7 @@ Prefixed `domotics_`:
 ```bash
 pnpm dev:domotics        # runs against kidclub-dev, http://localhost:5173
 pnpm dev:domotics:prod   # dev server against prod Firebase — see root CLAUDE.md, not a default debugging step
-pnpm --filter domotics test   # the heating timeline's logic against the real 2026-11-04, no browser or Firebase
+pnpm --filter domotics test   # the heating timeline and the Energia cost chart's logic, no browser or Firebase
 ```
 
 ## Deploy

@@ -660,6 +660,7 @@ export default function App() {
             // Owner-only data, like the reports; demo mode makes its own.
             canRead={DEMO || (!!user && !isLanOrigin())}
             live={energy}
+            automation={automation}
           />
         </Suspense>
       );
