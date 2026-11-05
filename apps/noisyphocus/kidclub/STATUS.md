@@ -2,9 +2,70 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
+**Last updated:** 2026-11-05 (the enroll funnel and study-enroll hotfix sections just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
 
 **Before that:** 2026-10-31 (the 🧾 hotfix section only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR into `staging` (`gh pr list --head agent/kidclub-enroll-funnel`). NOT merged, NOT in prod
+
+**Why.** For 7 weeks no parent created a subscription and nobody noticed. The submit button was disabled for study-only
+parents, and a disabled button throws nothing, so `clientErrors` and its digest had nothing to report. This makes that
+kind of drop-off visible. The cause itself is fixed by the hotfix in the next section, not here.
+
+**What was added.**
+- `enrollFunnelWeekly` (`functions/src/kidclub/enrollFunnelWeekly.ts`, pure part and tests in `...Logic.ts`): Mondays
+  08:00 Lisbon, europe-west3. Always emails ADMIN_EMAIL, even at all zeros, counts only. Top line: date of the last
+  request a parent created, with a warning past 14 days. Then the last 7 days (accounts, profiles, children, requests per
+  service), form activity, and families with a child from the last 30 days and no live subscription. A failed read
+  shows as "indisponível", never as 0, and the email still goes out.
+- `clientEvents` (`src/lib/clientEvents.ts`, hook `src/lib/useEnrollFormEvents.ts`): `enroll_form_opened`,
+  `enroll_days_chosen`, `enroll_blocked`, `enroll_submitted`, `enroll_left`, under `_apps/arcoiris/clientEvents`.
+  Signed-in only, nothing while editing, 90-day `expireAt`, counts/booleans only. `enroll_left` is the key one: it
+  records what state the form was in when the parent gave up. Closing the tab sends it by keepalive `fetch` to the
+  Firestore REST API, because the SDK's write can't complete during unload. In-app navigation uses the SDK.
+- `firestore.rules`: `clientEvents` is create-only with a shape that can't hold free text. Test:
+  `scripts/rules-tests/kidclub-client-events.rules-test.cjs`.
+- `PrivacyPolicyPage`: one line under "Interesse legítimo", and the "Última atualização" date. ❓ Renato: review the
+  wording. Section 9 of the policy says material changes are communicated by email or a prominent notice; decide whether
+  this counts. Nothing was sent. Sections 2 and 4 were not changed.
+
+**Test on dev (nobody has clicked through this yet).** Use a real test-parent account, not impersonation: impersonated
+events are left out of the email, and the admin token passes every rule.
+1. "+ Transporte" on a child, pick a day, switch transport off on it, then "← Voltar". `clientEvents` should get opened,
+   days_chosen and left, with `studyDays` above 0, `transportDays` 0 and `submitEnabled` false.
+2. Same, but close the tab instead of going back. This is the keepalive path, which hasn't run in a real browser yet.
+3. Submit a form: `enroll_submitted` and no `enroll_left`. Edit a pending request: nothing at all.
+4. `gcloud scheduler jobs run firebase-schedule-enrollFunnelWeekly-europe-west3 --location europe-west3 --project kidclub-dev`
+   sends the email. On dev it goes to admin@kidclub.pt like any other outbox email.
+
+**Before merging into `staging`.**
+- Revert the commit whose message starts with `DROP BEFORE MERGE`. It carries #125's FinHub v2 rules so this PR's deploy
+  doesn't remove them from dev. It's already a no-op if #125 merged first.
+- The PR's diff includes the hotfix preview #136 until that merges.
+- `test:rules:client-events` is NOT in the root `package.json` yet, on purpose: any change to that file makes
+  `deploy-parts.mjs` deploy everything, so this PR's push would put staging's FinHub over #125's FinHub v2 on dev. Add
+  the line once #125 has merged (the exact command is at the top of the rules test).
+
+**Dev races while #125 is open.** A later push to #125 redeploys dev's rules from its own file and drops `clientEvents`:
+form events then fail silently on dev until this PR is pushed again or merged. The same goes for any other PR with rule
+changes.
+
+**Before prod (Renato's call, not done).** Turn on TTL on prod for both collections. The privacy line promises 90 days,
+and `clientErrors` TTL is still not configured there:
+`gcloud firestore fields ttls update expireAt --collection-group=clientEvents --enable-ttl --project rainbow-prod-2454b`
+and the same with `--collection-group=clientErrors`. Then check the first Monday email arrives from prod, and that "Contas
+novas" isn't "indisponível": `listUsers` was only exercised on dev.
+
+**Left as is (reported, not fixed).**
+- A request an admin creates while acting for a family carries the parent's `userId` and no `source`, so it counts as a
+  parent's. Older ones were stamped with the admin's uid and are excluded as staff.
+- `source: 'web'` is what `ClaimSubscriptionsPage` writes when a parent claims an admin-created subscription, overwriting
+  `manual`. The email treats it as not created by a parent, so it doesn't give "last request" a false fresh date.
+- Families have no "profile completed" date, so that count is families created in the last 7 days that are complete.
+- A family with only cancelled subscriptions counts as "sem inscrição" in the email but isn't listed by "Mostrar famílias
+  sem inscrições", which only shows families with no subscription at all. The email says so.
+- A tab killed in the background sends nothing, so the email also shows "sem saída registada" (opened, no submit or leave).
+- Firebase Analytics still starts with no consent step (see the hotfix findings below). Out of scope here.
 
 ## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (NOT merged, NOT in prod); dev preview #136
 
