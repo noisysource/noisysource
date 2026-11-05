@@ -5,14 +5,14 @@
 **Last updated:** 2026-11-05
 
 ## ▶️ Now (5/11): all three steps are merged into `staging` and on dev
-Renato looked at them on dev and said "it looks good, we can merge them all" (5/11), without going through the list below item by item. #131, #132 and #133 are merged, in that order, and their worktrees removed. Nothing changed on the Pi.
+Renato looked at them on dev and said "it looks good, we can merge them all" (5/11); which items of the list below were tried wasn't recorded. #131, #132 and #133 are merged, in that order, and their worktrees removed. Nothing changed on the Pi.
 
 **Next:** nothing in progress on these. They reach `main` with the next `staging` → `main` promotion, which is Renato's call; there's still no prod hosting for domotics.
 
 **Still open for Renato:**
-- Who or what switched the pump at 12:27 (on) and 15:54 (off) on 4/11? Neither came from the bridge. If it wasn't him, something else switches the pump; a SmartLife timer already did on 31/10.
+- Who or what switched the pump at 12:27 (on) and 15:54 (off) on 4/11? Neither came from the bridge. If it wasn't Renato, something else switches the pump; a SmartLife timer already did on 31/10.
 - How many panels, and what rating? Recorded nowhere. The peak seen is 6,56 kW, and the inverter's maximum recommended array is 6500 Wp.
-- A phone alert when the pump locks out: proposed, not built. Nothing alerts him today (Open questions).
+- A phone alert when the pump locks out: proposed, not built. Nothing raises an alert today (Open questions).
 - Removing the guard code from the bridge: later, only if asked. It needs a Pi deploy, and `CLAUDE.md`'s `domotics_config/guard` entry goes with it.
 
 ## Earlier, 4/11 night: Energia has a cost timeline (step 3 of 3)
@@ -30,7 +30,7 @@ Renato looked at them on dev and said "it looks good, we can merge them all" (5/
   5. A day with a gap (hatched), and today's last hour (dotted, "a chegar"): neither should read as 0 €.
   6. The line under the chart against the "Custo do período" tile: always the same total.
 - **What's in the bars:** the kWh lines (energy vazio and fora, IEC) and the VAT on them. **Fixed:** power, CAV, DGEG and their VAT. Fixed is the same bill with no energy, and the bars share out the difference, so the sum is the tile to the cent, rounding included (tested against 400 random tariffs and periods). Export credit is its own term. Each bar's figure is rounded on screen, so adding up the labels by hand can be a few cents off.
-- **The reduced VAT, left as it is at merge (Renato asked for no change, but wasn't asked point-blank in his go-ahead):** it covers the first kWh of a *period*, at the period's average price, not any hour. So every slot carries the period's mix, and a dear day comes out differently in its own view than in the month's: on the default tariff a 30 kWh day is 5,15 € on its own and 4,83 € as a bar in a 300 kWh month. Both add up to their own tile, and the page's tile already behaved this way (a month's tile isn't the sum of its days'). When a tap lands on a different figure, the card says so in one line. An option if it bothers him: always price days at the month's mix, which would make a day's view disagree with its own bill maths. Check whether his contract has the reduced rate at all: the real tariff's `vatReducedKwh` decides how much of this matters.
+- **The reduced VAT, left as it is at merge (the choice was put to Renato on 5/11, and the go-ahead asked for no change):** it covers the first kWh of a *period*, at the period's average price, not any hour. So every slot carries the period's mix, and a dear day comes out differently in its own view than in the month's: on the default tariff a 30 kWh day is 5,15 € on its own and 4,83 € as a bar in a 300 kWh month. Both add up to their own tile, and the page's tile already behaved this way (a month's tile isn't the sum of its days'). When a tap lands on a different figure, the card says so in one line. An option if it bothers him: always price days at the month's mix, which would make a day's view disagree with its own bill maths. Check whether his contract has the reduced rate at all: the real tariff's `vatReducedKwh` decides how much of this matters.
 - **The strip isn't a measurement.** The inverter only sees the whole house, so "pump on in a dear hour" is a coincidence to look at, not the pump's kWh. The page says so in "Como é calculado". Nothing here estimates the pump's consumption.
 - **Reads:** no new paid API, no timers. The day view uses `loadHeatingDay` (already cached). Week and month use the new `loadClimateDays` in `data/heatingHistory.ts`: only the climate documents not already known, one query per unbroken run of days, sharing a cache and the 300-a-session ceiling with `loadHeatingDay`, so at most one read per day per session, plus today and yesterday every 10 minutes at most, only when the view is opened or refreshed.
 - **Small changes elsewhere:** `DayStrip` gained `margins`, `highlight` and `hideAxisLabels` (defaults unchanged), and `App.tsx` passes the automation status to `EnergyScreen`. `energyBill.ts`, `functions/`, `firestore.rules`, the bridge and the Pi: not touched.
