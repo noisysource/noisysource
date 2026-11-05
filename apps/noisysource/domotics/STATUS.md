@@ -9,10 +9,13 @@ Renato looked at them on dev and said "it looks good, we can merge them all" (5/
 
 **Next:** nothing in progress on these. They reach `main` with the next `staging` → `main` promotion, which is Renato's call; there's still no prod hosting for domotics.
 
-**Still open for Renato:**
-- Who or what switched the pump at 12:27 (on) and 15:54 (off) on 4/11? Neither came from the bridge. If it wasn't Renato, something else switches the pump; a SmartLife timer already did on 31/10.
-- How many panels, and what rating? Recorded nowhere. The peak seen is 6,56 kW, and the inverter's maximum recommended array is 6500 Wp.
-- A phone alert when the pump locks out: proposed, not built. Nothing raises an alert today (Open questions).
+**Answered by Renato, 5/11:**
+- The pump at 12:27 (on) and 15:54 (off) on 4/11 was Renato, by hand. Nothing unknown is switching the pump.
+- **14 panels.** Rating "I think it's 500", not confirmed.
+- **No phone alert when the pump locks out: "not needed". Don't propose it again.** A lockout stays silent until someone notices the cold or opens the app, and that's accepted.
+
+**Still open:**
+- Confirm the panel rating, from a panel's label or the installer's invoice. At 500 W the array is 7000 Wp, above the 6500 Wp maximum recommended array in the ESC5000-DS datasheet, so it's worth asking the installer if that's confirmed. The peak seen, 6,56 kW, works out at about 470 W a panel, which fits.
 - Removing the guard code from the bridge: later, only if asked. It needs a Pi deploy, and `CLAUDE.md`'s `domotics_config/guard` entry goes with it.
 
 ## Earlier, 4/11 night: Energia has a cost timeline (step 3 of 3)
@@ -59,7 +62,7 @@ Renato looked at them on dev and said "it looks good, we can merge them all" (5/
   - **Kept:** the fault badge, Registo, the technicians' report and every past record. Old switches still read "Proteção E13".
   - **The bridge still has the guard code, switched off** (`domotics_config/guard` `enabled: false`, cached in `guard-config.json` on the Pi, off since 28/10 11:19). A later cleanup removes it. The bridge still publishes a `guard` field, which the app ignores. There's no switch for it in the app any more, so older notes saying "switch Proteção E13 off in the app" no longer apply.
   - **`rest` stays in `domotics_config/automation`, off, with no control.** The bridge still acts on it, so "Repor predefinições" now keeps the stored value rather than resetting it to the default (on).
-- **Last E13 trip: 27/10 07:55.** It isn't proven fixed, and nothing alerts you if it locks out (Open questions).
+- **Last E13 trip: 27/10 07:55.** It isn't proven fixed, and nothing alerts you if it locks out (Renato's choice, 5/11; Open questions).
 - **Next:** the timelines, steps 2 and 3, stacked on this branch by their own agents.
 
 ## Where things stood on 2/11 22:45: new schedule + solar rule set (live since 3/11 09:40)
@@ -123,7 +126,7 @@ Renato, 28/10: keep the house at ~23 °C only from 19:00 to 23:00 and from 06:00
 ## ⚠️ The heat pump can't heat right now (2026-10-27)
 **Since 26/10 19:10, every start ends in E13 9–11 min later** (8 in a row, as of 07:55 on 27/10), with the water at 31–35 °C, far below the 44 °C setpoint, and all 6 zones open. That doesn't fit the earlier "idle at the setpoint / zones closing" cause. Before each trip, the discharge temperature jumps 41–44 → 71–78 °C, the coil (C00) falls to 0–4 °C and the water out falls. Rest length doesn't matter: it trips the same after 3 min or 4.8 h stopped. **Locked out twice:** 00:35 (Renato reset the breaker ~05:23, 4.8 h without heat) and 07:55 (reset ~17:14, 9.3 h). **After that reset it restarted at 17:15 and had not tripped by 19:35** (water at the 44 °C setpoint, 57 Hz, 17.5 °C outside). Still unknown: who reset it at 17:14, the technician or Renato, and whether anything was repaired. The bridge sent the pump nothing but on/off since 26/10 12:00 (checked in the journal), so it isn't a settings change. The last trip before this series was on 22/10 23:25; it ran normally 23–26/10. **This is for the technician, not software.** Renato was asked: who switched it on from outside at 00:01 and 00:26? Those two starts caused the 00:35 lockout. If it wasn't someone at home, it was the controller's own timer table.
 - The technicians' printout (Relatórios → technician report) now opens with a "Situação atual" box for this (branch `agent/domotics-tech-report`, stacked on #120, PR → `staging`). It adds the minutes run before each trip to the trip table, and computes "min depois do disparo anterior" for bridge-recorded faults, which the bridge leaves null.
-- Worth building in a fresh session: an alert to Renato's phone when the pump locks out. Nothing told him on the night of 26–27/10; he found out by being cold at 5 am.
+- Worth building in a fresh session: an alert to Renato's phone when the pump locks out. Nothing told him on the night of 26–27/10; he found out by being cold at 5 am. (5/11: Renato decided it's not needed.)
 - **27/10 evening:** it ran 17:15–20:03 without tripping (54–57 Hz, water at the 44 °C setpoint, discharge ~75 °C). At 20:03 the guard rested it 60 min for idling at the setpoint (28 Hz, water 45 °C), the old rule, as designed.
 - **Built tonight, NOT deployed: the guard switches the pump off just before an E13 and back on after 5 min (PR #123 → `staging`, stacked on #122; branch `agent/domotics-guard-preempt`, worktree `.claude/worktrees/domotics-guard-preempt`).** Renato asked for it after the cold night.
   - **What it watches** (`domotics-bridge/src/preempt.ts`): before every trip since 26/10 the discharge sat at 42–46 °C, then jumped ≥ 3 °C between two 30 s readings while the coil dropped, 1–2 min before the E13. A warning needs all of:
@@ -457,7 +460,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 7. **Stop the IPs moving**: reserve fixed DHCP leases on the MEO router for the 7 Tuya devices (IPs in "Last completed", 2026-10-16). The bridge survives restarts, but not a lease reshuffle — that still needs `sync-tuya-keys.js --write`.
 
 ## Open questions for Renato
-- **E13 isn't proven fixed, and a lockout would go unnoticed.** The last trip was 27/10 07:55, but the water setpoint is 40° now, against 44° when it was tripping. If it locks out, the house gets no heat until someone resets it, and nothing tells you: the protection is off, and a fault only shows while the app is open. **Proposed follow-up: a phone alert when the pump locks out. Your call.**
+- **E13 isn't proven fixed, and a lockout would go unnoticed (accepted).** The last trip was 27/10 07:55, but the water setpoint is 40° now, against 44° when it was tripping. If it locks out, the house gets no heat until someone resets it, and nothing tells you: the protection is off, and a fault only shows while the app is open. **A phone alert was proposed; Renato decided it's not needed (5/11).**
 - **E13 early warning (PR #123), my calls (moot while the guard stays off and out of the app):**
   - **The detector needs two conditions beyond the 3 °C rise:** discharge ≤ 50 °C before it, and the coil dropping ≥ 0.8 °C. Without them it would cut healthy runs every ~10 min.
   - **No coil reading, no warning.**
