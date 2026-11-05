@@ -29,6 +29,15 @@ kind of drop-off visible. The cause itself is fixed by the hotfix in the next se
   wording. Section 9 of the policy says material changes are communicated by email or a prominent notice; decide whether
   this counts. Nothing was sent. Sections 2 and 4 were not changed.
 
+**Checked.** Functions build OK, 482 tests pass (37 new). `pnpm --filter kidclub build` OK. The app's `tsc` has the same 11
+older errors, none in touched files. Emulator with the real rules: new rules test 39/39, `pnpm test:rules` 39/39,
+`test:rules:client-errors` 10/10. The hook passed an ad-hoc check under React.StrictMode in jsdom (no false `enroll_left`,
+one event of each kind, edit mode silent, throwing or rejected writes never reach the form), and the real keepalive body
+passed the real rules on the emulator; that check isn't in the repo, as the app has no DOM test setup. On dev: the deploy
+went green, the scheduler job ran once and wrote the outbox doc with no "indisponível", so `listUsers` works there, and TTL
+on `clientEvents` is ACTIVE. `clientErrors` still has no TTL on dev; left as is. **Not checked: the forms in a real browser,
+including the keepalive write on tab close, and anything on prod.**
+
 **Test on dev (nobody has clicked through this yet).** Use a real test-parent account, not impersonation: impersonated
 events are left out of the email, and the admin token passes every rule.
 1. "+ Transporte" on a child, pick a day, switch transport off on it, then "← Voltar". `clientEvents` should get opened,
@@ -36,7 +45,9 @@ events are left out of the email, and the admin token passes every rule.
 2. Same, but close the tab instead of going back. This is the keepalive path, which hasn't run in a real browser yet.
 3. Submit a form: `enroll_submitted` and no `enroll_left`. Edit a pending request: nothing at all.
 4. `gcloud scheduler jobs run firebase-schedule-enrollFunnelWeekly-europe-west3 --location europe-west3 --project kidclub-dev`
-   sends the email. On dev it goes to admin@kidclub.pt like any other outbox email.
+   writes the email to `emailOutbox`. Dev never sends it, since Gmail is prod-only (`externalGuard.ts`): the doc ends in
+   `status: error` with the guard's message, and the content is in its `subject` and `html` fields. So the first email
+   that actually reaches an inbox is prod's first Monday after this ships.
 
 **Before merging into `staging`.**
 - Revert the commit whose message starts with `DROP BEFORE MERGE`. It carries #125's FinHub v2 rules so this PR's deploy
