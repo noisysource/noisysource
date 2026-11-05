@@ -231,6 +231,40 @@ service cloud.firestore {
         allow read, delete: if isRainbowAdmin() || isOwner();
       }
 
+      // Steps of the enrollment forms (src/lib/clientEvents.ts), read by the weekly
+      // funnel email: a signed-in user may create one about themselves, in a fixed
+      // shape that can't hold free text (no names, emails, addresses or notes), at
+      // server time. Nobody but staff reads them; nobody edits them (TTL on expireAt deletes).
+      match /clientEvents/{doc} {
+        function validEventData(d) {
+          return d is map && d.size() <= 6
+            && d.keys().hasOnly(['studyDays', 'transportDays', 'tripsMissingAddress', 'submitEnabled', 'seconds', 'reason'])
+            && (!('studyDays' in d) || d.studyDays is int)
+            && (!('transportDays' in d) || d.transportDays is int)
+            && (!('tripsMissingAddress' in d) || d.tripsMissingAddress is int)
+            && (!('submitEnabled' in d) || d.submitEnabled is bool)
+            && (!('seconds' in d) || d.seconds is int)
+            && (!('reason' in d) || d.reason in ['not_ready', 'duplicate_study', 'duplicate_transport']);
+        }
+        allow create: if isAuthenticated()
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.keys().hasOnly(['userId', 'impersonatingFamilyId', 'event', 'service', 'data',
+               'route', 'mode', 'createdAt', 'expireAt'])
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expireAt is timestamp
+          && request.resource.data.event in ['enroll_form_opened', 'enroll_days_chosen', 'enroll_blocked',
+               'enroll_submitted', 'enroll_left']
+          // Bracket form: `service` is a keyword in the rules language.
+          && request.resource.data['service'] in ['study', 'transport']
+          && validEventData(request.resource.data.data)
+          // A path with no query string, an id and a build mode: nothing to write free text into.
+          && request.resource.data.route.matches('^/[A-Za-z0-9/_-]{0,119}$')
+          && request.resource.data.mode.matches('^[a-z-]{1,20}$')
+          && (request.resource.data.get('impersonatingFamilyId', null) == null
+              || request.resource.data.impersonatingFamilyId.matches('^[A-Za-z0-9_-]{1,128}$'));
+        allow read, delete: if isRainbowAdmin() || isOwner();
+      }
+
       // Financial events
       match /financialEvents/{doc} {
         allow read, write: if isRainbowAdmin() || isOwner();
