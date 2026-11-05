@@ -5,8 +5,6 @@ import {
   type FaultIncident, type Incident, type NoteEntry, type SwitchEvent, type SwitchSource,
 } from '../../data/incidents';
 import { faultGuide } from '../../data/heatpumpFaults';
-import type { GuardStatus } from '../../data/guard';
-import GuardCard from '../GuardCard';
 import EventLog from './EventLog';
 import PumpChart from './PumpChart';
 import { TimeStrip, TripTable } from './parts';
@@ -26,7 +24,6 @@ import TechnicianReport from './TechnicianReport';
 
 interface Props {
   onBack: () => void;
-  guard?: GuardStatus;
   /** Signed in off the LAN: the only way the rules let the incidents be read. */
   canRead: boolean;
 }
@@ -59,7 +56,7 @@ function Stat({ title, value, hint }: { title: string; value: ReactNode; hint?: 
 
 const ORIGIN: Record<string, string> = { bridge: 'registado pela ponte', log: 'do registo manual', notes: 'das notas, sem leituras' };
 
-export default function ReportsScreen({ onBack, guard, canRead }: Props) {
+export default function ReportsScreen({ onBack, canRead }: Props) {
   const [incidents, setIncidents] = useState<Incident[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -122,8 +119,6 @@ export default function ReportsScreen({ onBack, guard, canRead }: Props) {
 
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto px-4 py-4 flex flex-col gap-5" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}>
-          <GuardCard status={guard} canEdit={canRead} />
-
           {!canRead && (
             <p className="text-sm text-zinc-400 leading-relaxed">
               Os relatórios precisam de sessão iniciada. Na rede de casa não é possível entrar — abra

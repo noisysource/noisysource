@@ -122,14 +122,14 @@ export default function AutomationCard({ status, canEdit }: Props) {
   } else if (!status.enabled) {
     headline = 'Desligada';
     tone = 'idle';
-    sub = 'Não liga nem desliga nada. A proteção E13 continua por conta própria.';
+    sub = 'Não liga nem desliga nada.';
     primary = <button type="button" className={primaryBtn} disabled={busy} onClick={() => void run({ kind: 'live' }, goLive)}>Ligar</button>;
   } else if (paused) {
     headline = `Em pausa até às ${hhmm(paused)}`;
     tone = 'warn';
     sub = status.dryRun
-      ? 'Ninguém volta a ligar a bomba sozinho até lá — nem a proteção E13. (A automação só está a simular: não a desliga; desligue-a no painel ou na app se quiser.)'
-      : 'A bomba fica desligada e ninguém a volta a ligar sozinho até lá — nem a automação, nem a proteção E13.';
+      ? 'Ninguém volta a ligar a bomba sozinho até lá. (A automação só está a simular: não a desliga; desligue-a no painel ou na app se quiser.)'
+      : 'A bomba fica desligada e a automação não a volta a ligar até lá.';
     primary = <button type="button" className={primaryBtn} disabled={busy} onClick={() => void run({ kind: 'resume' }, () => setPause(null))}>Retomar</button>;
   } else if (status.state === 'dry-run') {
     headline = 'Só a simular';
@@ -205,8 +205,8 @@ function PauseChoices({ status, now, busy, onPick, onCancel }: {
   return (
     <div className="flex flex-col gap-2 border-t border-zinc-800 pt-2">
       <p className="text-xs text-zinc-300 leading-snug">
-        Pausar até quando? Até lá, ninguém liga a bomba sozinho (nem a automação, nem a proteção E13)
-        {status.state === 'running' ? ', e a automação desliga-a já.' : '.'}
+        Pausar até quando? Até lá, a automação não liga a bomba
+        {status.state === 'running' ? ' e desliga-a já.' : '.'}
       </p>
       <div className="flex flex-wrap gap-2">
         {opts.map(o => (
@@ -270,7 +270,7 @@ function Details({ status }: { status: AutomationStatus }) {
       {status.pumpHold && <p className="text-xs text-amber-300 leading-snug">Bomba: {status.pumpHold}.</p>}
       {status.restUntil !== undefined && (
         <p className="text-xs text-sky-300 leading-snug">
-          Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint — é aí que o E13 dispara).
+          Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint).
         </p>
       )}
       <ul className="flex flex-col gap-1">
@@ -631,13 +631,6 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
                 </Toggle>
               </Group>
 
-              <Group title="Descanso no setpoint (E13)">
-                <Toggle on={cfg.rest.enabled} onChange={v => patch('rest', { ...cfg.rest, enabled: v })} hint="Quando a água chega ao setpoint com o compressor no mínimo, desliga e descansa em vez de ficar parada e voltar a acelerar. Com a proteção E13 ligada é ela que desliga.">
-                  Desligar em vez de ficar parada
-                </Toggle>
-                <Stepper label="Descanso" value={cfg.rest.minutes} step={15} min={15} max={240} unit=" min" onChange={v => patch('rest', { ...cfg.rest, minutes: v })} />
-              </Group>
-
               <Group title="Bomba">
                 <Toggle on={cfg.pumpFollowsZones.enabled} onChange={v => patch('pumpFollowsZones', { ...cfg.pumpFollowsZones, enabled: v })} hint="No horário quente, desliga a bomba quando nenhuma zona pede calor e liga quando uma pede. Desligado: trabalha o horário quente todo.">
                   Seguir as zonas
@@ -654,7 +647,11 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
 
               <button
                 type="button"
-                onClick={() => setCfg(c => (c ? { ...DEFAULT_AUTOMATION, enabled: c.enabled, dryRun: c.dryRun, pauseUntil: c.pauseUntil } : c))}
+                onClick={() => setCfg(c => (c ? {
+                  ...DEFAULT_AUTOMATION, enabled: c.enabled, dryRun: c.dryRun, pauseUntil: c.pauseUntil,
+                  // No control for it here, and the default is on: live, the bridge would rest the pump 60 min at the setpoint, unseen.
+                  rest: c.rest,
+                } : c))}
                 className="self-start text-xs px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
               >
                 Repor predefinições
