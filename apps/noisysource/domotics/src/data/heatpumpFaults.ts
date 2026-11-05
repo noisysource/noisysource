@@ -141,7 +141,6 @@ const GUIDE: Readonly<Record<string, FaultGuide>> = {
       '(o módulo Wi-Fi/Tuya não tem rearme).',
     todo: [
       'Verificação no local pela assistência: carga de refrigerante, restrições, pressostato/sensor de alta pressão e caudal de água.',
-      'Até lá, a proteção E13 da ponte desliga a bomba quando fica parada no setpoint (60 min) e logo a seguir a um disparo (120 min), para não chegar ao bloqueio.',
     ],
   },
   E14: {

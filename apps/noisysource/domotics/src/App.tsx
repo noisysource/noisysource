@@ -9,7 +9,6 @@ import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
 import { DEMO, demoAutomation, demoClimate, demoEnergy, demoLegrand } from './data/demoData';
 import type { AutomationStatus } from './data/automation';
-import type { GuardStatus } from './data/guard';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
 import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
@@ -112,8 +111,6 @@ export default function App() {
   const [energy, setEnergy] = useState<EnergyReading | null>(null);
   /** The heating automation's latest decision, reported by the bridge with its state. */
   const [automation, setAutomation] = useState<AutomationStatus | undefined>();
-  /** The E13 guard's status, reported the same way. */
-  const [guard, setGuard] = useState<GuardStatus | undefined>();
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
@@ -317,7 +314,6 @@ export default function App() {
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
         setEnergy(state.inverter ?? null);
         setAutomation(state.automation);
-        setGuard(state.guard);
         setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
         void announceWatching();
@@ -649,7 +645,6 @@ export default function App() {
         <Suspense fallback={<div className="h-screen bg-zinc-950" />}>
           <ReportsScreen
             onBack={() => setShowReports(false)}
-            guard={guard}
             // Owner-only data; on the LAN nobody can sign in.
             canRead={!!user && !isLanOrigin()}
           />
@@ -665,6 +660,7 @@ export default function App() {
             // Owner-only data, like the reports; demo mode makes its own.
             canRead={DEMO || (!!user && !isLanOrigin())}
             live={energy}
+            automation={automation}
           />
         </Suspense>
       );
@@ -715,7 +711,6 @@ export default function App() {
           onThermostatCommand={handleThermostatCommand}
           onHeatPumpCommand={handleHeatPumpCommand}
           automation={automation}
-          guard={guard}
           // The settings document is the owner's alone; on the LAN nobody can sign in.
           canEditAutomation={!!user && !isLanOrigin()}
         />

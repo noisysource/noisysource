@@ -30,6 +30,8 @@ export interface AutomationConfig {
    * bridge then ignores `warm`. Not editable here yet: shown read-only.
    */
   windows?: Array<{ from: string; to: string }>;
+  /** The warm-up never starts earlier than this before a window, min. Not editable here. */
+  warmupMaxMin?: number;
   dayMin: number;
   solar: {
     enabled: boolean; socOn: number; pumpW: number; exportW: number;
@@ -42,6 +44,7 @@ export interface AutomationConfig {
   };
   flow: { enabled: boolean; at15: number; slope: number; min: number; max: number };
   recovery: { enabled: boolean };
+  /** No control in the app since 2026-11-04, but the bridge still acts on it: saved exactly as it was read. */
   rest: { enabled: boolean; minutes: number };
   pumpFollowsZones: { enabled: boolean; idleMin: number; minOnMin: number; minOffMin: number };
   limits: { roomMin: number; roomMax: number };

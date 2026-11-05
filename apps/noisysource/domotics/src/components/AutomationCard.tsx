@@ -4,18 +4,21 @@ import {
   DEFAULT_AUTOMATION, backToDryRun, clearWarmBy, goLive, loadAutomationConfig, saveAutomationConfig, setPause, setWarmBy,
   type AutomationConfig, type AutomationStatus, type WarmByStatus, type WarmupModel,
 } from '../data/automation';
+import { DEMO } from '../data/demoData';
 import { ago } from './HealthChips';
+import HeatingTimeline from './HeatingTimeline';
 
 /**
  * The heating automation in the app. On top, one unmistakable state with its
- * one action (Ligar / Pausar / Retomar); then today's plan and what it is doing
- * now; then the four settings that matter, everything else under "Avançado".
+ * one action (Ligar / Pausar / Retomar); then what it is doing now and the day
+ * as a timeline (HeatingTimeline: what's planned, what the pump did, who and
+ * why); then the four settings that matter, everything else under "Avançado".
  *
  * The automation runs on the Pi (domotics-bridge/src/automation.ts); this reads
  * its status from the bridge state and writes `domotics_config/automation`,
- * which the bridge picks up within two minutes. The plan (Renato, 2026-10-26):
- * a warm floor 19:00–09:00; by day the pump only on spare sun with the battery
- * ≥ 90 %, or below the day minimum.
+ * which the bridge picks up within two minutes. The plan: warm windows (now
+ * 17:00–23:00 and 06:00–08:00), the warm-up before them; in between the pump
+ * only on spare sun, or below the day minimum.
  */
 
 interface Props {
@@ -23,6 +26,8 @@ interface Props {
   status?: AutomationStatus;
   /** Settings are the owner's alone (firestore.rules): editable only signed in. */
   canEdit: boolean;
+  /** The pump as read just now; undefined if it isn't answering. */
+  pumpOn?: boolean;
 }
 
 /** Past this, the status shown is older than the bridge would ever leave it. */
@@ -74,7 +79,7 @@ function applied(p: Pending, s: AutomationStatus) {
   return !s.pausedUntil;
 }
 
-export default function AutomationCard({ status, canEdit }: Props) {
+export default function AutomationCard({ status, canEdit, pumpOn }: Props) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 15_000);
@@ -122,14 +127,14 @@ export default function AutomationCard({ status, canEdit }: Props) {
   } else if (!status.enabled) {
     headline = 'Desligada';
     tone = 'idle';
-    sub = 'Não liga nem desliga nada. A proteção E13 continua por conta própria.';
+    sub = 'Não liga nem desliga nada.';
     primary = <button type="button" className={primaryBtn} disabled={busy} onClick={() => void run({ kind: 'live' }, goLive)}>Ligar</button>;
   } else if (paused) {
     headline = `Em pausa até às ${hhmm(paused)}`;
     tone = 'warn';
     sub = status.dryRun
-      ? 'Ninguém volta a ligar a bomba sozinho até lá — nem a proteção E13. (A automação só está a simular: não a desliga; desligue-a no painel ou na app se quiser.)'
-      : 'A bomba fica desligada e ninguém a volta a ligar sozinho até lá — nem a automação, nem a proteção E13.';
+      ? 'Ninguém volta a ligar a bomba sozinho até lá. (A automação só está a simular: não a desliga; desligue-a no painel ou na app se quiser.)'
+      : 'A bomba fica desligada e a automação não a volta a ligar até lá.';
     primary = <button type="button" className={primaryBtn} disabled={busy} onClick={() => void run({ kind: 'resume' }, () => setPause(null))}>Retomar</button>;
   } else if (status.state === 'dry-run') {
     headline = 'Só a simular';
@@ -180,7 +185,10 @@ export default function AutomationCard({ status, canEdit }: Props) {
         )}
       </div>
 
-      {status && status.enabled && <Today status={status} />}
+      {status && status.enabled && <NowLine status={status} />}
+
+      {/* The history has the same owner as the settings; demo mode makes its own. */}
+      <HeatingTimeline status={status} canRead={canEdit || DEMO} pumpOn={pumpOn} now={now} />
 
       <Settings canEdit={canEdit} summary={status?.settings} />
 
@@ -205,8 +213,8 @@ function PauseChoices({ status, now, busy, onPick, onCancel }: {
   return (
     <div className="flex flex-col gap-2 border-t border-zinc-800 pt-2">
       <p className="text-xs text-zinc-300 leading-snug">
-        Pausar até quando? Até lá, ninguém liga a bomba sozinho (nem a automação, nem a proteção E13)
-        {status.state === 'running' ? ', e a automação desliga-a já.' : '.'}
+        Pausar até quando? Até lá, a automação não liga a bomba
+        {status.state === 'running' ? ' e desliga-a já.' : '.'}
       </p>
       <div className="flex flex-wrap gap-2">
         {opts.map(o => (
@@ -219,10 +227,10 @@ function PauseChoices({ status, now, busy, onPick, onCancel }: {
 }
 
 // ---------------------------------------------------------------------------
-// Hoje: the plan and what it is doing now
+// What it is doing now
 // ---------------------------------------------------------------------------
 
-function Today({ status }: { status: AutomationStatus }) {
+function NowLine({ status }: { status: AutomationStatus }) {
   const facts: string[] = [];
   if (status.meanRoom !== undefined) facts.push(`casa ${deg(status.meanRoom)}`);
   if (status.solar?.soc !== null && status.solar?.soc !== undefined) facts.push(`bateria ${Math.round(status.solar.soc)} %`);
@@ -232,13 +240,9 @@ function Today({ status }: { status: AutomationStatus }) {
   else if (status.solar?.spareW !== null && status.solar?.spareW !== undefined && status.mode === 'day') facts.push(`sol a sobrar ${kw(status.solar.spareW)}`);
   if (status.flowTarget !== undefined) facts.push(`água ${status.flowTarget}°${status.flowManual ? ' (à mão)' : ''}`);
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className={label}>Hoje</span>
-      {status.plan
-        ? <p className="text-sm text-zinc-100 leading-snug">{status.plan}</p>
-        : <p className="text-xs text-zinc-500">A ponte ainda não tem o plano novo — precisa de ser atualizada.</p>}
+    <div className="flex flex-col gap-1">
       {status.doing && (
-        <p className="text-xs text-zinc-300 leading-snug">
+        <p className="text-xs text-zinc-200 leading-snug">
           <span className="text-zinc-500">Agora{status.state === 'dry-run' ? ' (simulação)' : ''}: </span>{status.doing}
         </p>
       )}
@@ -248,7 +252,7 @@ function Today({ status }: { status: AutomationStatus }) {
 }
 
 // ---------------------------------------------------------------------------
-// Details: reasons, zones, last actions — collapsed
+// Details: zones, holds and how the house warms up — collapsed
 // ---------------------------------------------------------------------------
 
 function Collapsible({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
@@ -266,11 +270,11 @@ function Collapsible({ title, defaultOpen = false, children }: { title: string; 
 
 function Details({ status }: { status: AutomationStatus }) {
   return (
-    <Collapsible title="Detalhes — porquê, zonas, últimas ações">
+    <Collapsible title="Detalhes — porquê, zonas e como a casa aquece">
       {status.pumpHold && <p className="text-xs text-amber-300 leading-snug">Bomba: {status.pumpHold}.</p>}
       {status.restUntil !== undefined && (
         <p className="text-xs text-sky-300 leading-snug">
-          Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint — é aí que o E13 dispara).
+          Bomba em descanso até às {hhmm(status.restUntil)} (não fica parada no setpoint).
         </p>
       )}
       <ul className="flex flex-col gap-1">
@@ -283,21 +287,6 @@ function Details({ status }: { status: AutomationStatus }) {
             <div key={z.id} className="flex gap-2 text-xs">
               <span className="w-28 shrink-0 truncate text-zinc-300">{z.name}</span>
               <span className="text-zinc-500">{z.note}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {status.actions.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className={label}>Últimas ações</span>
-          {status.actions.slice(0, 8).map((a, i) => (
-            <div key={i} className="flex gap-2 text-xs tabular-nums">
-              <span className="text-zinc-500 shrink-0">{hhmm(a.at)}</span>
-              <span className="text-zinc-300 shrink-0 max-w-[7rem] truncate">{a.device}</span>
-              <span className="flex-1 min-w-0 text-zinc-400">{a.what}</span>
-              <span className={`shrink-0 ${a.error ? 'text-red-400' : a.sent ? 'text-emerald-400' : 'text-sky-400'}`}>
-                {a.error ? 'falhou' : a.sent ? 'enviado' : 'simulado'}
-              </span>
             </div>
           ))}
         </div>
@@ -631,13 +620,6 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
                 </Toggle>
               </Group>
 
-              <Group title="Descanso no setpoint (E13)">
-                <Toggle on={cfg.rest.enabled} onChange={v => patch('rest', { ...cfg.rest, enabled: v })} hint="Quando a água chega ao setpoint com o compressor no mínimo, desliga e descansa em vez de ficar parada e voltar a acelerar. Com a proteção E13 ligada é ela que desliga.">
-                  Desligar em vez de ficar parada
-                </Toggle>
-                <Stepper label="Descanso" value={cfg.rest.minutes} step={15} min={15} max={240} unit=" min" onChange={v => patch('rest', { ...cfg.rest, minutes: v })} />
-              </Group>
-
               <Group title="Bomba">
                 <Toggle on={cfg.pumpFollowsZones.enabled} onChange={v => patch('pumpFollowsZones', { ...cfg.pumpFollowsZones, enabled: v })} hint="No horário quente, desliga a bomba quando nenhuma zona pede calor e liga quando uma pede. Desligado: trabalha o horário quente todo.">
                   Seguir as zonas
@@ -654,7 +636,11 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
 
               <button
                 type="button"
-                onClick={() => setCfg(c => (c ? { ...DEFAULT_AUTOMATION, enabled: c.enabled, dryRun: c.dryRun, pauseUntil: c.pauseUntil } : c))}
+                onClick={() => setCfg(c => (c ? {
+                  ...DEFAULT_AUTOMATION, enabled: c.enabled, dryRun: c.dryRun, pauseUntil: c.pauseUntil,
+                  // No control for it here, and the default is on: live, the bridge would rest the pump 60 min at the setpoint, unseen.
+                  rest: c.rest,
+                } : c))}
                 className="self-start text-xs px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
               >
                 Repor predefinições
