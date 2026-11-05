@@ -2,19 +2,61 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-04 (order changed: forecast first)
+**Last updated:** 2026-11-05 (Plano and Ano built: forecast first)
 
-> **2026-11-04, read this first:** Renato changed the order. Blueprints first, then a year generated
-> and confirmed by him, and only then the bank, as a monthly check. See HANDOFF-finhub-v2.md § "Order
-> change". **The click-through below (Aceitação, Mês, April) is no longer asked of Renato.** The next
-> build is steps A and B there (Plano, Ano), once he OKs them and answers: income after the current
-> EC contract, what "credits" covers, how far the forecast runs. Night 3's forms are folded into A.
-> #125 stays open.
+## FinHub v2 — forecast first (2026-11-05)
 
-> **2026-11-03:** #127/#129/#130 merged into `staging` and staging's deploy took v2 off dev (hosting and the
-> `finhub` rules block). Restored by merging `origin/staging` into the branch and pushing: Deploy to Dev
-> run 41617673929 green (Rules + indexes, Hosting: FinHub). The deployed `firestore.rules` = staging's
-> (domotics_energy / domotics_climate included) + the v2 block. Renato's morning check and answers are still open.
+Renato changed the order on 2026-11-04: blueprints first, then a year generated and confirmed by
+him, and only then the bank, as a monthly check. See HANDOFF-finhub-v2.md § "Order change", which
+also has his answers. **The night-2 click-through below (Aceitação, Mês, April) is no longer asked
+of him.**
+
+**Open on dev:** https://kidclub-dev-finhub.web.app/v2/noisysource/plano (first two sidebar items:
+**Plano**, **Ano**). Same PR **#125** into `staging`.
+
+**Built:**
+- **Plano**: every blueprint with all its values, its origin, "Confirmar", and a form to add or
+  change it. A new contract's form shows what it will generate before saving.
+- **Ano**: one row per blueprint, one column per month, through December of next year, with the
+  month-end balance. Click a value for how it was calculated.
+- **Money between companies**: new blueprint, moved by the bank lines naming the company.
+- **Confirmations**: per blueprint, tied to the version seen; a later version goes back to "por
+  confirmar".
+
+**Next step, Renato's:** in Plano, in this order:
+1. **Dinheiro entre empresas → "Criar a partir das linhas"** for NoisyPhocus. Is there a balance from
+   before 2026? The statements only start in 2026, so the form opens at 0, "por confirmar".
+2. **Créditos → Empréstimo BPI → Alterar.** The loan's principal and rate came from the seed and don't
+   match the 2026 statements, which show a larger amount drawn in March and interest on actual days /
+   360. With the statements' values, May–September match the bank to the cent (checked locally, not
+   on dev). April doesn't: it's the first period, and it doesn't change the forecast. No amounts here:
+   derive them from the statements, or see `prodata/`.
+3. **Calendário:** the client's 2027 calendar is almost empty. A new contract running through 2027
+   needs the Commission's list, or it counts those days as worked.
+4. Go through the rest, then **Ano**, and confirm what's right. Night 1's and night 2's "A confirmar"
+   below now belong to the blueprint they affect.
+
+**Open questions for Renato:**
+- Are the other 2026 transfers money to be returned (two with other companies or people in May, and
+  those with the two partners in January–February)? If so, each gets a "Nova empresa" entry.
+- Will NoisySource lend NoisyPhocus more? Only repayments can be planned today, not new lending.
+- Tolls and Tesla charging have no bank lines since August but are still forecast. End them?
+- Renato's childcare voucher is forecast above April's payslip value. A raise, or a wrong term? Not
+  checked.
+
+**Self-check:** domain + form tests pass with made-up values (blueprints: 22 new). On the real events,
+locally and written nowhere: the year's month-ends add up, and a made-up new contract at another rate
+generated its months and removed the "no income" warning. Not clicked through on dev: Renato tests
+the screens.
+
+**Risky / left in flight:**
+- `gcloud` needs `gcloud auth login`, so the importer can't run against dev until then. Plano's forms
+  don't need it.
+- Any push to `staging` takes v2 off dev until #125 deploys again: merge `origin/staging` into the
+  branch and push, **not** `gh run rerun` (a re-run reuses its old merge commit and would put older
+  KidClub, functions and rules back on dev).
+- `scripts/finhub-v2/` not changed since night 2, still flagged for review.
+- Next build: step C (Importar extrato, Folha de horas, Recibo, compare with the confirmed forecast).
 
 ## FinHub v2 — night 2 morning report (2026-10-29)
 

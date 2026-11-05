@@ -264,13 +264,32 @@ Mês, matching and Aceitação stay: they become the monthly check of step 4.
 stored (§ The model), so a blueprint change redoes every future month at once. His confirmation is
 stored, as an event.
 
-**Proposed build, awaiting Renato's OK:**
+**Renato's answers (2026-11-05):**
+- **New EC contract:** there will be one, not signed yet, at a different rate. No placeholder: the
+  forecast shows no income after the current contract until it's added in Plano, and adding it
+  generates its months with nothing else to enter.
+- **Credits:** only the BPI loan for now.
+- **Money between companies** is its own blueprint, because it has to be returned. What's owed is
+  an opening amount plus the bank lines naming the company. With no repayment plan it stays out of
+  the forecast, and the screens say how much is owed.
+- **Horizon:** a year is enough for now; built through December of next year.
 
 | Step | Builds | Check on dev |
 |---|---|---|
-| A | **Plano**: every blueprint in one place, grouped (income / EC contracts, people / salaries, credits, expenses, payment days), with all its parameters and where each value came from; create and edit forms (a new event with an effective date; the old version stays) | every blueprint is there and correct; change one, see the forecast move |
-| B | **Ano**: months × blueprints from now to the end of next year, month-end balance per month; click a cell for how the amount was computed; confirm per blueprint | a whole year reads right; everything confirmed |
+| A ✅ | **Plano**: every blueprint in one place, grouped (income / EC contracts, people / salaries, credits, money between companies, expenses, payment days, calendar), with all its values and where they came from; create and edit forms (a new event with an effective date; the old version stays) | every blueprint is there and correct; change one, see the forecast move |
+| B ✅ | **Ano**: one row per blueprint, one column per month the money moves, month-end balance per month; click a cell for how the amount was computed; confirm per blueprint | a whole year reads right; everything confirmed |
 | C | Monthly check against the **confirmed** forecast: import a statement; compare with the forecast as it stood when confirmed (`knownAt` in `envelope.ts` exists, not wired to a screen); record what was learned with the blueprint change | October's statement against the confirmed forecast |
+
+**How it's built:** `blueprints.ts` lists the blueprints and builds the year on top of
+`projectTreasury` (same numbers as Tesouraria). `intercompany.ts` works out what's owed. New events:
+`intercompany.plan.set`, and `plan.blueprint.confirmed`, which names the versions confirmed, so a
+later version goes back to "por confirmar" on its own, and a confirmed version stops showing "a
+confirmar". A loan can count interest on actual days over 360 (`loan.dayCount`). SS and IRS rows have
+no confirmation of their own: they follow from everyone's terms. A correction of a contract reverses
+the old event, because contracts are keyed by number and ordered by start date.
+
+**Step C still open:** Importar extrato, Folha de horas, Recibo, and comparing with the forecast as
+confirmed.
 
 **Gaps seen in the 12-month Tesouraria on 2026-11-04** (these are what A and B must surface):
 - No income blueprint after the current EC contract's last day, while salaries and costs carry on,
