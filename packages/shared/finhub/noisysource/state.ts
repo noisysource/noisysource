@@ -9,7 +9,7 @@
 import { liveEvents, sortEvents } from '../envelope';
 import type { ExtraHolidays } from '../holidays';
 import type {
-  BankMovement, CalendarEntry, CostPlan, EcContractSigned, EmploymentTerms, MatchItem, MatchTarget, NsEvent,
+  BankMovement, CalendarEntry, CostPlan, EcContractSigned, EmploymentTerms, IntercompanyPlan, MatchItem, MatchTarget, NsEvent,
   NsEventOf, NsEventType, NsPayload, PaymentRule, PaymentRuleWhat, Payslip,
 } from './events';
 
@@ -19,6 +19,7 @@ export interface EcContractState extends WithId<EcContractSigned> {
   /** Set by `ec.contract.ended` (early end); otherwise the last day is computed. */
   endedLastDay?: string;
   endReason?: string;
+  endEventId?: string;
 }
 
 export interface MovementState extends BankMovement {
@@ -29,6 +30,7 @@ export interface HolidayMeta {
   toConfirm: boolean;
   names: Record<string, string>;
   note?: string;
+  eventId: string;
 }
 
 export interface NsState {
@@ -43,6 +45,12 @@ export interface NsState {
   holidayMeta: Record<string, HolidayMeta>;
   rules: WithId<PaymentRule>[];
   costPlans: WithId<CostPlan>[];
+  /** Money between companies: the latest version of each key. */
+  intercompany: WithId<IntercompanyPlan>[];
+  /** Blueprint id → its latest confirmation. */
+  confirmations: Record<string, WithId<NsPayload<'plan.blueprint.confirmed'>>>;
+  /** Every version named by a confirmation still in force. */
+  confirmedEventIds: Set<string>;
   /** `${contractNumber}|${yyyy-mm}` → timesheet. */
   timesheets: Record<string, WithId<NsPayload<'ec.timesheet.submitted'>>>;
   invoices: WithId<NsPayload<'ec.invoice.issued'>>[];
@@ -64,13 +72,17 @@ function of<T extends NsEventType>(events: readonly NsEvent[], type: T): NsEvent
 export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
   const events = sortEvents(liveEvents(allEvents));
 
-  const ended = new Map<string, NsPayload<'ec.contract.ended'>>();
-  for (const e of of(events, 'ec.contract.ended')) ended.set(e.payload.number, e.payload);
+  const confirmations: NsState['confirmations'] = {};
+  for (const e of of(events, 'plan.blueprint.confirmed')) confirmations[e.payload.blueprintId] = { ...e.payload, eventId: e.id };
+  const confirmedEventIds = new Set(Object.values(confirmations).flatMap(c => c.eventIds));
+
+  const ended = new Map<string, NsPayload<'ec.contract.ended'> & { id: string }>();
+  for (const e of of(events, 'ec.contract.ended')) ended.set(e.payload.number, { ...e.payload, id: e.id });
   const contractsByNumber = new Map<string, EcContractState>();
   for (const e of of(events, 'ec.contract.signed')) {
     const end = ended.get(e.payload.number);
     contractsByNumber.set(e.payload.number, {
-      ...e.payload, eventId: e.id, endedLastDay: end?.lastDay, endReason: end?.reason,
+      ...e.payload, eventId: e.id, endedLastDay: end?.lastDay, endReason: end?.reason, endEventId: end?.id,
     });
   }
   const contracts = [...contractsByNumber.values()].sort((a, b) =>
@@ -81,7 +93,7 @@ export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
   for (const e of of(events, 'employment.terms.set')) {
     const list = (terms[e.payload.personId] ??= []);
     const same = list.findIndex(v => v.from === e.payload.from);
-    const v = { ...e.payload, eventId: e.id };
+    const v = { ...e.payload, eventId: e.id, ...(confirmedEventIds.has(e.id) ? { toConfirm: [] } : {}) };
     if (same >= 0) list[same] = v; else list.push(v);
     names.set(e.payload.personId, e.payload.personName);
   }
@@ -95,7 +107,7 @@ export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
   for (const e of of(events, 'holidays.set')) {
     const p = e.payload;
     (extraHolidays[p.calendarId] ??= {})[p.year] = [...p.dates].sort();
-    holidayMeta[`${p.calendarId}:${p.year}`] = { toConfirm: !!p.toConfirm, names: p.names ?? {}, note: p.note };
+    holidayMeta[`${p.calendarId}:${p.year}`] = { toConfirm: !!p.toConfirm && !confirmedEventIds.has(e.id), names: p.names ?? {}, note: p.note, eventId: e.id };
   }
 
   const timesheets: NsState['timesheets'] = {};
@@ -117,6 +129,10 @@ export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
   for (const e of of(events, 'bank.movement.matched')) matches[e.payload.movementId] = { ...e.payload, eventId: e.id };
   const classifications: NsState['classifications'] = {};
   for (const e of of(events, 'bank.movement.classified')) classifications[e.payload.movementId] = { ...e.payload, eventId: e.id };
+  const intercompanyByKey = new Map<string, WithId<IntercompanyPlan>>();
+  for (const e of of(events, 'intercompany.plan.set')) {
+    intercompanyByKey.set(e.payload.key, { ...e.payload, eventId: e.id, toConfirm: !!e.payload.toConfirm && !confirmedEventIds.has(e.id) });
+  }
   const explained: NsState['explained'] = {};
   for (const e of of(events, 'plan.item.explained')) explained[e.payload.itemId] = { ...e.payload, eventId: e.id };
 
@@ -128,8 +144,11 @@ export function rebuildNsState(allEvents: readonly NsEvent[]): NsState {
     calendar: of(events, 'calendar.entry.set').map(e => ({ ...e.payload, eventId: e.id })),
     extraHolidays,
     holidayMeta,
-    rules: of(events, 'payment.rule.set').map(e => ({ ...e.payload, eventId: e.id })),
-    costPlans: of(events, 'cost.plan.set').map(e => ({ ...e.payload, eventId: e.id })),
+    rules: of(events, 'payment.rule.set').map(e => ({ ...e.payload, eventId: e.id, toConfirm: !!e.payload.toConfirm && !confirmedEventIds.has(e.id) })),
+    costPlans: of(events, 'cost.plan.set').map(e => ({ ...e.payload, eventId: e.id, toConfirm: !!e.payload.toConfirm && !confirmedEventIds.has(e.id) })),
+    intercompany: [...intercompanyByKey.values()].sort((a, b) => a.counterparty.localeCompare(b.counterparty)),
+    confirmations,
+    confirmedEventIds,
     timesheets,
     invoices: of(events, 'ec.invoice.issued').map(e => ({ ...e.payload, eventId: e.id })),
     payslips,
@@ -176,7 +195,7 @@ export function calendarOf(state: NsState, personId: string): WithId<CalendarEnt
 
 /** Planned item kind (plan.ts) for each match target, and back. */
 export const TARGET_KIND: Record<MatchTarget, string> = {
-  'ec-fatura': 'ec', salario: 'salario', refeicao: 'refeicao', vales: 'vales', ss: 'ss', irs: 'irs', custo: 'custo',
+  'ec-fatura': 'ec', salario: 'salario', refeicao: 'refeicao', vales: 'vales', ss: 'ss', irs: 'irs', custo: 'custo', entre: 'entre',
 };
 
 /** The planned item id a match points at (`kind:ref:month`, as plan.ts builds them). */

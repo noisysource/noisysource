@@ -11,18 +11,20 @@
 //   per card, sometimes several cards in one payment); a recorded payslip replaces the estimate.
 // - SS (employee + employer) and IRS withheld for M, all workers together ('ss', 'irs').
 // - Fixed costs from the cost plans (direct debits move to the next business day).
+// - Money between companies: the repayments, when there's a plan for them (intercompany.ts).
 
 import { formatEUR } from '../../lib/money';
 import {
-  addDays, addMonths, daysInMonth, isoFromParts, monthOf, monthsBetween, yearOf, type IsoDate, type YearMonth,
+  addDays, addMonths, daysBetween, daysInMonth, firstDay, isoFromParts, monthOf, monthsBetween, yearOf, type IsoDate, type YearMonth,
 } from '../dates';
 import { adjustToBusinessDay, holidayDates } from '../holidays';
 import { ecRunway } from './ec';
-import type { PaymentFee, PaymentRuleWhat, Payslip } from './events';
+import type { Loan, PaymentFee, PaymentRuleWhat, Payslip } from './events';
+import { intercompanyPosition, lastLineMonth } from './intercompany';
 import { estimatePayslip, recordedAmounts, type PayslipEstimate } from './payslip';
 import { costPlanVersions, ruleAt, type NsState } from './state';
 
-export type PlanKind = 'ec' | 'salario' | 'refeicao' | 'vales' | 'ss' | 'irs' | 'custo';
+export type PlanKind = 'ec' | 'salario' | 'refeicao' | 'vales' | 'ss' | 'irs' | 'custo' | 'entre';
 
 export const PLAN_KIND_LABEL: Record<PlanKind, string> = {
   ec: 'Fatura EC',
@@ -32,6 +34,7 @@ export const PLAN_KIND_LABEL: Record<PlanKind, string> = {
   ss: 'Segurança Social',
   irs: 'IRS retido',
   custo: 'Custo fixo',
+  entre: 'Entre empresas',
 };
 
 export interface PlannedItem {
@@ -69,6 +72,38 @@ export function monthLabelPt(m: YearMonth): string {
 function dayInMonth(month: YearMonth, day: number): IsoDate {
   const [y, m] = month.split('-').map(Number);
   return isoFromParts(y, m, Math.min(day, daysInMonth(month)));
+}
+
+/** '2026-03-05' → '5 mar 2026' */
+export function dateLabelPt(iso: IsoDate): string {
+  return `${Number(iso.slice(8, 10))} ${monthLabelPt(iso.slice(0, 7))}`;
+}
+
+export interface LoanInstalment {
+  capitalCents: number;
+  interestCents: number;
+  stampCents: number;
+  /** Capital owed before this instalment. */
+  balanceCents: number;
+  /** Interest days, when they're the actual days. */
+  days?: number;
+}
+
+/** A loan's instalment in `month`, or null before the first payment or once it's paid off. */
+export function loanInstalment(loan: Loan, day: number, month: YearMonth): LoanInstalment | null {
+  const k = monthsBetween(loan.firstPaymentMonth, month).length - 1;
+  if (k < 0) return null;
+  const balanceCents = loan.principalCents - loan.capitalPerMonthCents * k;
+  if (balanceCents <= 0) return null;
+  const days = loan.dayCount === 'dias-reais' ? daysBetween(dayInMonth(addMonths(month, -1), day), dayInMonth(month, day)) : undefined;
+  const interestCents = Math.round(days ? (balanceCents * loan.annualRatePct * days) / 100 / 360 : (balanceCents * loan.annualRatePct) / 100 / 12);
+  return {
+    capitalCents: Math.min(loan.capitalPerMonthCents, balanceCents),
+    interestCents,
+    stampCents: Math.round((interestCents * loan.stampDutyPct) / 100),
+    balanceCents,
+    days,
+  };
 }
 
 /** A provider's fee on `baseCents` (positive): pct of it, plus VAT on the fee, each rounded to the cent. */
@@ -263,14 +298,11 @@ export function plannedItems(state: NsState, opts: PlanOptions): PlannedItem[] {
           : v.frequency === 'annual' ? `anual (${(v.months ?? []).map(n => MONTHS_PT[n - 1]).join(', ')}), dia ${v.day}`
           : `uma vez, ${v.from}`;
         if (v.loan) {
-          const k = monthsBetween(v.loan.firstPaymentMonth, month).length - 1;
-          if (k < 0) continue;
-          const balance = v.loan.principalCents - v.loan.capitalPerMonthCents * k;
-          if (balance <= 0) continue;
-          const interest = Math.round((balance * v.loan.annualRatePct) / 100 / 12);
-          const stamp = Math.round((interest * v.loan.stampDutyPct) / 100);
-          amount = Math.min(v.loan.capitalPerMonthCents, balance) + interest + stamp;
-          inputs = `capital ${formatEUR(Math.min(v.loan.capitalPerMonthCents, balance))} + juros ${formatEUR(interest)} sobre ${formatEUR(balance)} + selo ${formatEUR(stamp)}`;
+          const inst = loanInstalment(v.loan, v.day, month);
+          if (!inst) continue;
+          amount = inst.capitalCents + inst.interestCents + inst.stampCents;
+          inputs = `capital ${formatEUR(inst.capitalCents)} + juros ${formatEUR(inst.interestCents)} sobre ${formatEUR(inst.balanceCents)}`
+            + `${inst.days ? ` (${inst.days} dias a ${v.loan.annualRatePct}%)` : ''} + selo ${formatEUR(inst.stampCents)}`;
         }
         items.push({
           id: `custo:${key}:${month}`, ref: key, date, nominalDate: nominal, kind: 'custo',
@@ -278,6 +310,28 @@ export function plannedItems(state: NsState, opts: PlanOptions): PlannedItem[] {
           inputs, source: 'plano', toConfirm: !!v.toConfirm, account: v.account, costKey: key,
         });
       }
+    }
+  }
+
+  // ── Money between companies: repayments until nothing is owed ──
+  const lastLine = lastLineMonth(state, opts.mainAccount);
+  for (const ic of state.intercompany) {
+    if (!ic.repayment) continue;
+    let owed = intercompanyPosition(state, ic, opts.mainAccount, firstDay(ic.repayment.firstMonth)).balanceCents;
+    for (const month of monthsBetween(ic.repayment.firstMonth, monthOf(to))) {
+      // Up to the month after the last statement what's owed is known; after that, the plan says.
+      if (!lastLine || month <= addMonths(lastLine, 1)) owed = intercompanyPosition(state, ic, opts.mainAccount, firstDay(month)).balanceCents;
+      if (!owed) continue;
+      const amount = Math.min(ic.repayment.amountCents, Math.abs(owed));
+      const signed = owed > 0 ? amount : -amount;
+      const nominal = dayInMonth(month, ic.repayment.day);
+      items.push({
+        id: `entre:${ic.key}:${month}`, ref: ic.key, date: adjustToBusinessDay(nominal, 'after', national), nominalDate: nominal, kind: 'entre',
+        label: `${ic.counterparty} — devolução`, amountCents: signed, month,
+        inputs: `${owed > 0 ? `${ic.counterparty} deve` : `devemos a ${ic.counterparty}`} ${formatEUR(Math.abs(owed))}; devolução de ${formatEUR(ic.repayment.amountCents)} por mês`,
+        source: 'plano', toConfirm: !!ic.toConfirm, account: opts.mainAccount,
+      });
+      owed -= signed;
     }
   }
 

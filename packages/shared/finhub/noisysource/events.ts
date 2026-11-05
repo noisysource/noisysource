@@ -17,6 +17,10 @@
 //   for three workers, the accountant's lump payment), and `basis` says how the match was found;
 // - `plan.item.explained`: the written reason a planned item has no bank line (§ Acceptance 2);
 // - `payment.rule.set.fee`: a provider's fee on the payment (the voucher top-ups), plus VAT.
+// Forecast first (HANDOFF § "Order change"):
+// - `intercompany.plan.set`: money between companies, what's owed and when it comes back;
+// - `plan.blueprint.confirmed`: Renato confirmed a blueprint, naming the versions he saw;
+// - `cost.plan.set.loan.dayCount`: interest on the actual days, as the bank counts it.
 
 import { z } from 'zod';
 import { isVatCode, type VatCode } from '../../lib/vat';
@@ -161,6 +165,8 @@ export const loanSchema = z.object({
   annualRatePct: pct,
   firstPaymentMonth: yearMonthSchema,
   stampDutyPct: pct,
+  /** 'dias-reais': interest on the days between due dates over 360, as the bank counts it. Default 1/12 of the rate. */
+  dayCount: z.enum(['mensal', 'dias-reais']).optional(),
 });
 
 export const costPlanSetSchema = z.object({
@@ -180,6 +186,25 @@ export const costPlanSetSchema = z.object({
   category: z.string().optional(),
   toConfirm: z.boolean().optional(),
   loan: loanSchema.optional(),
+});
+
+/** Money lent to or borrowed from another company. The bank lines naming it move what's owed. */
+export const intercompanyPlanSetSchema = z.object({
+  key: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
+  counterparty: text,
+  /** Words naming it on a bank line (case, accents and spaces don't matter). */
+  matchWords: z.array(text).min(1),
+  from: isoDateSchema,
+  /** Owed before `openingAsOf`: + they owe us, − we owe them. */
+  openingCents: cents,
+  openingAsOf: isoDateSchema,
+  /** How it comes back: this much a month until nothing is owed. No repayment = no date yet. */
+  repayment: z.object({
+    amountCents: z.number().int().positive(),
+    firstMonth: yearMonthSchema,
+    day: dayOfMonth,
+  }).optional(),
+  toConfirm: z.boolean().optional(),
 });
 
 // ── Facts ────────────────────────────────────────────────────────────────────
@@ -245,7 +270,7 @@ export const bankMovementImportedSchema = z.object({
   seq: z.number().int().min(0),
 });
 
-export const MATCH_TARGETS = ['ec-fatura', 'salario', 'refeicao', 'vales', 'ss', 'irs', 'custo'] as const;
+export const MATCH_TARGETS = ['ec-fatura', 'salario', 'refeicao', 'vales', 'ss', 'irs', 'custo', 'entre'] as const;
 export type MatchTarget = (typeof MATCH_TARGETS)[number];
 
 /** A planned item, by what it is, its ref (contract, worker, cost key…) and the month it belongs to. */
@@ -276,6 +301,13 @@ export const planItemExplainedSchema = z.object({
   reason: text,
 });
 
+export const planBlueprintConfirmedSchema = z.object({
+  /** See blueprints.ts: `ec:…`, `pessoa:…`, `custo:…`, `entre:…`, `regra:…`, `feriados:…`, `ausencias:…`. */
+  blueprintId: text,
+  /** The versions confirmed: a later version of the blueprint isn't covered. */
+  eventIds: z.array(text).min(1),
+});
+
 export const reversalPayloadSchema = z.object({});
 
 export const NS_PAYLOAD_SCHEMAS = {
@@ -287,6 +319,7 @@ export const NS_PAYLOAD_SCHEMAS = {
   'holidays.set': holidaysSetSchema,
   'payment.rule.set': paymentRuleSetSchema,
   'cost.plan.set': costPlanSetSchema,
+  'intercompany.plan.set': intercompanyPlanSetSchema,
   'ec.timesheet.submitted': ecTimesheetSubmittedSchema,
   'ec.invoice.issued': ecInvoiceIssuedSchema,
   'payroll.payslip.recorded': payslipRecordedSchema,
@@ -294,6 +327,7 @@ export const NS_PAYLOAD_SCHEMAS = {
   'bank.movement.matched': bankMovementMatchedSchema,
   'bank.movement.classified': bankMovementClassifiedSchema,
   'plan.item.explained': planItemExplainedSchema,
+  'plan.blueprint.confirmed': planBlueprintConfirmedSchema,
   [REVERSAL]: reversalPayloadSchema,
 } as const;
 
@@ -308,6 +342,8 @@ export type EmploymentTerms = NsPayload<'employment.terms.set'>;
 export type CalendarEntry = NsPayload<'calendar.entry.set'>;
 export type PaymentRule = NsPayload<'payment.rule.set'>;
 export type CostPlan = NsPayload<'cost.plan.set'>;
+export type Loan = z.output<typeof loanSchema>;
+export type IntercompanyPlan = NsPayload<'intercompany.plan.set'>;
 export type Payslip = NsPayload<'payroll.payslip.recorded'>;
 export type PayslipLine = z.output<typeof payslipLineSchema>;
 export type BankMovement = NsPayload<'bank.movement.imported'>;
@@ -339,7 +375,7 @@ export function parseNsEvent(raw: unknown): ParseResult {
 
 // ── Ids (deterministic when the source has a natural key) ────────────────────
 
-const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 export const nsIds = {
   ecContract: (number: string) => `ec-${slug(number)}`,
@@ -350,6 +386,8 @@ export const nsIds = {
   holidays: (calendarId: string, year: number) => `hol-${slug(calendarId)}-${year}`,
   rule: (what: PaymentRuleWhat, from: string) => `rule-${what}-${from}`,
   cost: (key: string, from: string) => `cost-${slug(key)}-${from}`,
+  intercompany: (key: string, from: string) => `ic-${slug(key)}-${from}`,
+  confirmed: (blueprintId: string) => `conf-${slug(blueprintId)}`,
   timesheet: (number: string, month: string) => `ts-${slug(number)}-${month}`,
   invoice: (invoiceNumber: string) => `inv-${slug(invoiceNumber)}`,
   payslip: (personId: string, month: string) => `ps-${slug(personId)}-${month}`,
@@ -381,6 +419,7 @@ export function defaultEffectiveDate<T extends NsEventType>(type: T, payload: Ns
     case 'holidays.set': return `${p.year}-01-01`;
     case 'payment.rule.set': return p.from as string;
     case 'cost.plan.set': return p.from as string;
+    case 'intercompany.plan.set': return p.from as string;
     case 'ec.timesheet.submitted': return lastDay(p.month as string);
     case 'ec.invoice.issued': return p.issueDate as string;
     case 'payroll.payslip.recorded': return (p.payDate as string | undefined) ?? lastDay(p.month as string);

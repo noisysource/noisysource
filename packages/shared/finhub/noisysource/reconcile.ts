@@ -19,12 +19,13 @@
 
 import { addDays, daysBetween, firstDay, lastDay, monthOf, type IsoDate, type YearMonth } from '../dates';
 import type { MatchItem, MatchTarget } from './events';
+import { namesCounterparty } from './intercompany';
 import { plannedItems, providerFeeCents, type PlanKind, type PlannedItem } from './plan';
 import { matchItemId, ruleAt, type MovementState, type NsState } from './state';
 import { accountMovements, realBalanceAt } from './treasury';
 
 export const KIND_TARGET: Record<PlanKind, MatchTarget> = {
-  ec: 'ec-fatura', salario: 'salario', refeicao: 'refeicao', vales: 'vales', ss: 'ss', irs: 'irs', custo: 'custo',
+  ec: 'ec-fatura', salario: 'salario', refeicao: 'refeicao', vales: 'vales', ss: 'ss', irs: 'irs', custo: 'custo', entre: 'entre',
 };
 
 /** The match payload entry for a planned item. */
@@ -301,6 +302,9 @@ export function reconcile(state: NsState, opts: { accountId: string }): Reconcil
         if (p.words.length && overlap(lw, p.words) > 0) out.push({ family: { kind: 'salario', ref: p.id }, basis: `nome (${p.name})`, score: 10 });
       }
     }
+    for (const ic of state.intercompany) {
+      if (namesCounterparty(ic, m.description)) out.push({ family: { kind: 'entre', ref: ic.key }, basis: `nome (${ic.counterparty})`, score: 10 });
+    }
     for (const r of ruleWords) {
       const n = overlap(lw, r.words);
       if (n > 0 && (r.kind === 'ec') === (m.amountCents > 0)) out.push({ family: { kind: r.kind }, basis: `palavras da regra "${r.label}"`, score: n });
@@ -450,7 +454,7 @@ export function reconcile(state: NsState, opts: { accountId: string }): Reconcil
       lines.set(m.id, { movement: m, state: 'sugerido', itemIds: s.itemIds, basis: s.basis, exact: s.exact });
       continue;
     }
-    const cat = categorize(m, learnedCategory, personWords);
+    const cat = categorize(m, learnedCategory, personWords, state.intercompany);
     lines.set(m.id, cat
       ? { movement: m, state: 'classificacao-sugerida', itemIds: [], category: cat.id, description: m.description, basis: cat.basis }
       : { movement: m, state: 'por-explicar', itemIds: [] });
@@ -512,10 +516,13 @@ function categorize(
   m: MovementState,
   learnedCategory: Map<string, string>,
   people: { id: string; name: string; words: string[] }[],
+  intercompany: NsState['intercompany'],
 ): { id: string; basis: string } | null {
   const key = descriptionKey(m.description);
   const learned = learnedCategory.get(key);
   if (learned) return { id: learned, basis: 'como linhas iguais já classificadas' };
+  const ic = intercompany.find(p => namesCounterparty(p, m.description));
+  if (ic) return { id: 'intragrupo', basis: `nome (${ic.counterparty})` };
   const d = norm(m.description);
   for (const [id, re] of CATEGORY_WORDS) if (re.test(d)) return { id, basis: 'palavras da linha' };
   const lw = words(m.description);
