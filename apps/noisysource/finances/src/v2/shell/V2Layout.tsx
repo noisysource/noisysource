@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { ArrowLeft, CalendarCheck, ClipboardCheck, FileSignature, ScrollText, Wallet } from 'lucide-react';
+import { ArrowLeft, CalendarCheck, CalendarRange, ClipboardCheck, FileSignature, ListChecks, ScrollText, Wallet } from 'lucide-react';
 
 const COMPANIES = [
   { id: 'noisysource', label: 'NoisySource', ready: true },
@@ -8,6 +8,8 @@ const COMPANIES = [
 ] as const;
 
 const NS_NAV = [
+  { to: '/v2/noisysource/plano', label: 'Plano', icon: ListChecks, end: false },
+  { to: '/v2/noisysource/ano', label: 'Ano', icon: CalendarRange, end: false },
   { to: '/v2/noisysource', label: 'Tesouraria', icon: Wallet, end: true },
   { to: '/v2/noisysource/contratos', label: 'Contratos EC', icon: FileSignature, end: false },
   { to: '/v2/noisysource/mes', label: 'Mês', icon: CalendarCheck, end: false },

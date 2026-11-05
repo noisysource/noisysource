@@ -80,6 +80,7 @@ export interface NewEvent<T extends NsEventType = NsEventType> {
   id: string;
   note?: string;
   effectiveDate?: string;
+  reverses?: string;
 }
 
 /**
@@ -92,7 +93,7 @@ export async function appendNsEvents(list: NewEvent[]): Promise<void> {
   if (list.length > 400) throw new Error('Demasiados eventos de uma vez (máx. 400).');
   const now = new Date().toISOString();
   const events = list.map(e => buildNsEvent(e.type, e.payload as never, {
-    id: e.id, source: 'manual', recordedBy: uid, recordedAt: now, effectiveDate: e.effectiveDate, note: e.note,
+    id: e.id, source: 'manual', recordedBy: uid, recordedAt: now, effectiveDate: e.effectiveDate, note: e.note, reverses: e.reverses,
   }));
   await runTransaction(db, async tx => {
     const refs = events.map(e => doc(eventsCol(), e.id));

@@ -42,6 +42,8 @@ import NoisySourceModule from './v2/noisysource/NoisySourceModule';
 import TesourariaPage from './v2/noisysource/TesourariaPage';
 import ContratosEcPage from './v2/noisysource/ContratosEcPage';
 import MesPage from './v2/noisysource/MesPage';
+import PlanoPage from './v2/noisysource/PlanoPage';
+import AnoPage from './v2/noisysource/AnoPage';
 import AceitacaoPage from './v2/noisysource/AceitacaoPage';
 import DiarioPage from './v2/noisysource/DiarioPage';
 
@@ -73,6 +75,8 @@ export default function App() {
             <Route index element={<Navigate to="noisysource" replace />} />
             <Route path="noisysource" element={<NoisySourceModule />}>
               <Route index element={<TesourariaPage />} />
+              <Route path="plano" element={<PlanoPage />} />
+              <Route path="ano" element={<AnoPage />} />
               <Route path="contratos" element={<ContratosEcPage />} />
               <Route path="mes" element={<MesPage />} />
               <Route path="mes/:month" element={<MesPage />} />

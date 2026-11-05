@@ -32,3 +32,18 @@ export function fmtDays(n: number): string {
 }
 
 export const amountClass = (cents: number) => (cents < 0 ? 'text-red-300' : cents > 0 ? 'text-emerald-300' : 'text-zinc-400');
+
+/** '1 234,56' or '1234.5' → cents. Throws with the text it couldn't read. */
+export function parseCents(text: string): number {
+  return Math.round(parseNumber(text) * 100);
+}
+
+/** A decimal typed the Portuguese way ('1,375') or with a point. Throws with the text it couldn't read. */
+export function parseNumber(text: string): number {
+  const t = text.replace(/[\s€%]/g, '').replace(/\.(?=\d{3}(,|$))/g, '').replace(',', '.');
+  if (!/^-?\d+(\.\d+)?$/.test(t)) throw new Error(`Número inválido: "${text}"`);
+  return Number(t);
+}
+
+/** Cents as a form shows them: 123456 → '1234,56'. */
+export const centsInput = (cents: number) => (cents / 100).toFixed(2).replace('.', ',');

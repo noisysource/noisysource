@@ -15,6 +15,8 @@ const TYPE_LABEL: Record<NsEventType, string> = {
   'holidays.set': 'Feriados',
   'payment.rule.set': 'Regra de pagamento',
   'cost.plan.set': 'Custo planeado',
+  'intercompany.plan.set': 'Dinheiro entre empresas',
+  'plan.blueprint.confirmed': 'Plano confirmado',
   'ec.timesheet.submitted': 'Folha de horas',
   'ec.invoice.issued': 'Fatura EC',
   'payroll.payslip.recorded': 'Recibo de vencimento',
@@ -167,6 +169,7 @@ function summary(e: NsEvent, lineText: Map<string, string>): string {
     case 'holidays.set': return `${e.payload.calendarId} ${e.payload.year}: ${e.payload.dates.length} feriados${e.payload.toConfirm ? ' (a confirmar)' : ''}`;
     case 'payment.rule.set': return `${e.payload.label}: dia ${e.payload.day}${e.payload.monthOffset ? ` do mês +${e.payload.monthOffset}` : ''}${e.payload.fee ? `, ${e.payload.fee.label} ${e.payload.fee.pct}% + IVA ${e.payload.fee.vatPct}%` : ''}`;
     case 'cost.plan.set': return `${e.payload.description}: ${e.payload.loan ? 'empréstimo' : eur(e.payload.amountCents)} (${e.payload.frequency === 'monthly' ? 'mensal' : e.payload.frequency === 'annual' ? 'anual' : 'uma vez'}) desde ${fmtDate(e.payload.from)}`;
+    case 'intercompany.plan.set': return `${e.payload.counterparty}: saldo inicial ${eur(e.payload.openingCents)} em ${fmtDate(e.payload.openingAsOf)}${e.payload.repayment ? `, devolução ${eur(e.payload.repayment.amountCents)}/mês desde ${fmtMonth(e.payload.repayment.firstMonth)}` : ', sem data de devolução'}`;
     case 'ec.timesheet.submitted': return `Contrato ${e.payload.contractNumber}, ${fmtMonth(e.payload.month)}: ${days(e.payload.days)}`;
     case 'ec.invoice.issued': return `Fatura ${e.payload.invoiceNumber} (contrato ${e.payload.contractNumber}, ${fmtMonth(e.payload.month)}): ${eur(e.payload.amountCents)}`;
     case 'payroll.payslip.recorded': return `${e.payload.personId}, ${fmtMonth(e.payload.month)}: líquido ${eur(e.payload.netCents)}`;
@@ -174,6 +177,7 @@ function summary(e: NsEvent, lineText: Map<string, string>): string {
     case 'bank.movement.matched': return `${lineText.get(e.payload.movementId) ?? e.payload.movementId} → ${e.payload.items.map(i => `${i.to} ${i.ref} ${i.month}`).join(' + ')}`;
     case 'bank.movement.classified': return `${lineText.get(e.payload.movementId) ?? e.payload.movementId} → ${categoryLabel(e.payload.category)}: ${e.payload.description}`;
     case 'plan.item.explained': return `${e.payload.itemId}: ${e.payload.reason}`;
+    case 'plan.blueprint.confirmed': return `Confirmado: ${e.payload.blueprintId}`;
     case 'reversal': return `Anula ${e.reverses}`;
   }
 }
