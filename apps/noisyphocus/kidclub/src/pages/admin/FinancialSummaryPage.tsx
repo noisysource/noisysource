@@ -1076,7 +1076,7 @@ export default function FinancialSummaryPage() {
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700">🚌 Transporte</h2>
-            <Link to="/admin/transport-planner" className="text-xs text-indigo-600 hover:underline">Ver planeador →</Link>
+            <Link to="/admin/transportes" className="text-xs text-indigo-600 hover:underline">Ver quadro →</Link>
           </div>
           <div className="px-5 py-4 space-y-3">
             <div>

@@ -279,8 +279,13 @@ service cloud.firestore {
         allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
       }
 
-      // Transport planner versions (route snapshots saved by admin)
+      // Transport planner versions (route snapshots saved by the old planner, kept as history)
       match /transportRoutes/{doc} {
+        allow read, write: if isRainbowAdmin() || isOwner();
+      }
+
+      // Transport board runs (/admin/transportes): children's names and home addresses, admins only
+      match /transportRuns/{runId} {
         allow read, write: if isRainbowAdmin() || isOwner();
       }
 

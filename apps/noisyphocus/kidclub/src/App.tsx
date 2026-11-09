@@ -24,7 +24,7 @@ import TimesheetsPage from './pages/admin/TimesheetsPage';
 import DataManagementPage from './pages/admin/DataManagementPage';
 import HRPage from './pages/admin/HRPage';
 import SubscriptionsAdminPage from './pages/admin/SubscriptionsAdminPage';
-import TransportPlannerPage from './pages/admin/TransportPlannerPage';
+import TransportBoardPage from './pages/admin/transportBoard/TransportBoardPage';
 import StudyRoomPlannerPage from './pages/admin/StudyRoomPlannerPage';
 import BillingAdminPage from './pages/admin/BillingAdminPage';
 import DiscountsAdminPage from './pages/admin/DiscountsAdminPage';
@@ -88,7 +88,8 @@ export default function App() {
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="email-center" element={<EmailCenterPage />} />
           <Route path="transport-config" element={<TransportationConfigPage />} />
-          <Route path="transport-planner" element={<TransportPlannerPage />} />
+          <Route path="transportes" element={<TransportBoardPage />} />
+          <Route path="transport-planner" element={<Navigate to="/admin/transportes" replace />} />
           <Route path="camp" element={<CampAdminPage />} />
           <Route path="camps" element={<CampsAdminPage />} />
           <Route path="eventos" element={<AdhocEventsAdminPage />} />
