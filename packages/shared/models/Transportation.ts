@@ -38,8 +38,11 @@ export interface TransportationConfig {
    * docs saved before 2026-11-09: read through vehiclesOf(), never directly.
    */
   vehicles?: TransportVehicle[];
-  /** @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). */
-  vanMonthlyCost?: number;
+  /**
+   * @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). Still
+   * required here only because the old Transport Planner edits it (that page is deleted by #138).
+   */
+  vanMonthlyCost: number;
   /** @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). */
   driverMonthlyCost?: number;
   /** @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). */
