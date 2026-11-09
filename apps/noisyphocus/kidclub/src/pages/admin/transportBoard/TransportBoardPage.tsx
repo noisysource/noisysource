@@ -6,7 +6,7 @@ import { normalizeSubStatus } from '../../../lib/utils';
 import TransportBoard from './TransportBoard';
 import RunEditor from './RunEditor';
 import {
-  DAYS, DAYS_SHORT, RUNS_COLLECTION, VEHICLES, VEHICLE_IDS, buildRuns, moveBox, storedOf,
+  DAYS, DAYS_SHORT, DEFAULT_VEHICLE, RUNS_COLLECTION, VEHICLES, VEHICLE_IDS, buildRuns, moveBox, storedOf,
   type Part, type StoredRun, type SubInput, type TransportRun, type VehicleId,
 } from './logic';
 
@@ -31,8 +31,10 @@ function readFilter(): Filter {
 const withoutStamp = ({ updatedAt: _a, updatedBy: _b, ...rest }: StoredRun) => rest;
 const asString = (v: unknown) => (typeof v === 'string' ? v : undefined);
 
-const btn = 'rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white';
-const pressed = 'border-gray-900 bg-gray-900 text-white hover:bg-gray-800';
+// Idle and pressed colours are separate strings: mixing bg-white with bg-gray-900 on one element lets
+// Tailwind's CSS order pick the winner, which left pressed buttons white on white.
+const btnBase = 'rounded-md border px-3 py-1.5 text-sm font-semibold disabled:opacity-40';
+const btn = (on = false) => `${btnBase} ${on ? 'border-gray-900 bg-gray-900 text-white hover:bg-gray-800' : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50'}`;
 
 /**
  * Transportes: the dispatcher board for the van and the car. Admin-only (route and Firestore rules).
@@ -158,6 +160,10 @@ export default function TransportBoardPage() {
   const minWidth = 52 + days.length * lanes.length * LANE_MIN;
   const fits = width >= minWidth;
   const editingRun: TransportRun | null = editing?.id ? runs.find(r => r.id === editing.id) ?? null : null;
+  const shown = runs.filter(r => lanes.includes(r.vehicle) && days.includes(r.day)).length;
+  const hiddenHint = runs.length && !shown && filter !== 'both'
+    ? `Nada na ${VEHICLES[filter].label}${narrow ? ' neste dia' : ''}. As inscrições começam todas na ${VEHICLES[DEFAULT_VEHICLE].label}: escolha Ambas e arraste para aqui.`
+    : '';
 
   return (
     <div className="space-y-4">
@@ -190,28 +196,28 @@ export default function TransportBoardPage() {
                 type="button"
                 aria-pressed={filter === f}
                 onClick={() => chooseFilter(f)}
-                className={`${btn} ${filter === f ? pressed : ''} ${i === 0 ? 'rounded-r-none' : i === all.length - 1 ? '-ml-px rounded-l-none' : '-ml-px rounded-none'}`}
+                className={`${btn(filter === f)} ${i === 0 ? 'rounded-r-none' : i === all.length - 1 ? '-ml-px rounded-l-none' : '-ml-px rounded-none'}`}
               >
                 {f === 'both' ? 'Ambas' : VEHICLES[f].label}
               </button>
             ))}
           </div>
-          <button type="button" aria-pressed={onlyNew} className={`${btn} ${onlyNew ? pressed : ''}`} onClick={() => setOnlyNew(v => !v)}>Destacar novos</button>
+          <button type="button" aria-pressed={onlyNew} className={btn(onlyNew)} onClick={() => setOnlyNew(v => !v)}>Destacar novos</button>
           {!readOnly && (
             <>
-              <button type="button" className={btn} disabled={!undoStack.length} onClick={undo}>Desfazer</button>
-              <button type="button" className={`${btn} ${pressed}`} onClick={() => setEditing({ key: Date.now(), id: null })}>Adicionar só no quadro</button>
+              <button type="button" className={btn()} disabled={!undoStack.length} onClick={undo}>Desfazer</button>
+              <button type="button" className={btn(true)} onClick={() => setEditing({ key: Date.now(), id: null })}>Adicionar só no quadro</button>
             </>
           )}
         </div>
       </div>
-      <p className="min-h-[1.25rem] text-sm text-gray-600" aria-live="polite">{status}</p>
+      <p className="min-h-[1.25rem] text-sm text-gray-600" aria-live="polite">{status || hiddenHint}</p>
 
       <div ref={wrapRef} className="min-w-0 space-y-2">
         {narrow && (
           <div className="grid grid-cols-5 gap-1">
             {DAYS_SHORT.map((d, i) => (
-              <button key={d} type="button" aria-label={DAYS[i]} aria-pressed={day === i} onClick={() => setDay(i)} className={`${btn} px-0.5 py-2.5 ${day === i ? pressed : ''}`}>{d}</button>
+              <button key={d} type="button" aria-label={DAYS[i]} aria-pressed={day === i} onClick={() => setDay(i)} className={`${btn(day === i)} !px-0.5 !py-2.5`}>{d}</button>
             ))}
           </div>
         )}

@@ -1,9 +1,10 @@
 import { DAYS, VEHICLES, dropOf, legNotes, toMin, warnings, type Part, type TransportRun } from './logic';
 
 // A pick-up is filled with its vehicle's colour, a drop-off only outlined, so the two read apart at a glance.
+// The edge colour is chosen apart from the flag's amber edge: both on one element would let CSS order decide.
 const COLOURS = {
-  van: { pick: 'bg-blue-100 text-blue-900 border-blue-500', drop: 'bg-white text-blue-900 border-blue-500' },
-  car: { pick: 'bg-orange-100 text-orange-900 border-orange-500', drop: 'bg-white text-orange-900 border-orange-500' },
+  van: { pick: 'bg-blue-100 text-blue-900', drop: 'bg-white text-blue-900', edge: 'border-blue-500' },
+  car: { pick: 'bg-orange-100 text-orange-900', drop: 'bg-white text-orange-900', edge: 'border-orange-500' },
 };
 
 /** PENDENTE: the subscription isn't approved yet. PLANO: only on the board, no subscription. */
@@ -24,7 +25,7 @@ export default function RunCard({ run, part, dimmed, readOnly }: { run: Transpor
   const badge = badgeOf(run);
   const border = warn.length || run.flag
     ? 'border-2 border-dashed border-amber-600 px-1 py-px'
-    : `border ${tilde ? 'border-dotted' : 'border-solid'} px-[5px] py-[2px]`;
+    : `border ${COLOURS[run.vehicle].edge} ${tilde ? 'border-dotted' : 'border-solid'} px-[5px] py-[2px]`;
   const label = [
     pick ? 'Recolha' : 'Entrega', badge?.text.toLowerCase() ?? '', run.name, `${DAYS[run.day]} ${time}`,
     VEHICLES[run.vehicle].label, place, ...notes, ...warn,
