@@ -15,26 +15,34 @@ prototype board instead (a Claude artifact, private to him) and asked for it in 
 **What's in the branch.**
 - `/admin/transportes` (sidebar "🚐 Transportes"; `/admin/transport-planner` redirects there): a week of
   van and car lanes in 5-minute rows. Each run is a solid pick-up box and an outlined drop-off box;
-  a pick-up drags its drop-off along, a drop-off moves alone; another day or vehicle takes the whole
-  run. On-board strip, "N de M lugares" overload, must-arrive-by warning, undo, "Destacar novos",
+  a pick-up drags its drop-off along, a drop-off moves alone; another vehicle takes the whole run.
+  On-board strip, "N de M lugares" overload, must-arrive-by warning, undo, "Destacar novos",
   vehicle filter, phone day tabs. Code: `src/pages/admin/transportBoard/` (pure logic + vitest tests
   in `logic.ts` / `logic.test.ts`; `pnpm --filter kidclub test`). Vehicles live in `VEHICLES` there.
-- Data: `_apps/arcoiris/transportRuns`, one doc per run, admin-only rule. **Separate from
-  subscriptions**: a new, changed or cancelled subscription doesn't change the board, and the board
-  never touches subscriptions or billing.
+- **Runs come live from the DB** (Renato, 2026-11-09: "the data should come from the DB"). Every leg of
+  every active or pending, not-ended transport subscription is a run: child, day, places and the
+  requested time come from the subscription (PENDENTE badge when pending). It starts in the van.
+  The board stores only its plan for that leg in `_apps/arcoiris/transportRuns/{subId}_{day}_{leg}`:
+  vehicle, planned pick-up (only if it differs; the box then says "Pedido às …"), drop-off, must
+  arrive by, note, flag. `leg` = position among that day's legs by requested time, so a time change
+  keeps the plan, but adding or removing a leg the same day can shift it. A subscription leg's day
+  can't be dragged: that's a subscription change. "Repor plano" deletes the stored plan.
+- **Planning-only runs** (PLANO badge, "Adicionar só no quadro"): a child who isn't in the DB yet,
+  stored whole in the same collection with no `subId`. Delete it once the real subscription exists,
+  or the child counts twice. The board never writes to subscriptions or billing; admin-only rule.
 - Removed: `TransportPlannerPage.tsx` and `lib/routeSolver.ts` (the Routes API caller). Gone with
   them: the planner's settings "apply to subscriptions" button, which rewrote every active
   subscription's `monthlyFee` with its own discount maths (ignoring `discountOverrides`). Transport
   prices are still edited at `/admin/transport-config`; "rota atribuída / sem rota" is still the
   manual toggle on the subscriptions page. Old `transportRoutes` versions stay in Firestore, unread.
-- Seed: `scripts/seed-transport-runs.mjs <runs.json> --project=<id>` (ADC, idempotent, refuses prod
-  without `--prod`). The 106-run export from the prototype is **not in git** (children's names and
-  addresses); it was in the session scratchpad. Re-export from the prototype if it's gone.
+- No seed: nothing to import for the subscriptions. The prototype's own plan (car assignments,
+  drop-off times, Lara / Filipa's children / Patrícia's child, who have no subscription) is not
+  carried over; re-plan on the board, or ask for a one-off import if that's quicker.
 
-**Next step.** Renato clicks through it on dev. Then, for prod: promote `staging` → `main` as usual,
-then seed prod once with `--prod` from a fresh export (the prototype keeps changing until then).
-**Follow-ups, not built:** generate or check runs against active transport subscriptions; costs per
-vehicle on the Resumo Financeiro (it still has one van and one driver); live car position.
+**Next step.** Renato clicks through it on dev (it shows dev's own subscriptions). Then promote
+`staging` → `main` as usual; no data step for prod.
+**Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
+driver); a warning when a PLANO run's child now has a subscription; live car position.
 
 ## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (NOT merged, NOT in prod); dev preview #129
 
