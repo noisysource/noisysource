@@ -284,7 +284,8 @@ service cloud.firestore {
         allow read, write: if isRainbowAdmin() || isOwner();
       }
 
-      // Transport board runs (/admin/transportes): children's names and home addresses, admins only
+      // Transport board (/admin/transportes): the plan for each subscription leg (vehicle, times, notes)
+      // and planning-only runs with children's names and home addresses. Admins only.
       match /transportRuns/{runId} {
         allow read, write: if isRainbowAdmin() || isOwner();
       }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import RunCard from './RunCard';
 import {
-  DAYS, STEP, VEHICLES, buildGrid, cellKey, dropOf, laneKey, peakAfterPickups, seatsDuring, slotOf, toMin, toTime,
+  DAYS, STEP, VEHICLES, buildGrid, cellKey, dropOf, isNewRun, laneKey, peakAfterPickups, seatsDuring, slotOf, toMin, toTime,
   type Part, type TransportRun, type VehicleId,
 } from './logic';
 
@@ -235,7 +235,7 @@ export default function TransportBoard(props: Props) {
           {boxes.length > 0 && (
             <div className="grid gap-0.5 py-0.5">
               {boxes.map(b => (
-                <RunCard key={`${b.run.id}-${b.part}`} run={b.run} part={b.part} dimmed={onlyNew && !b.run.isNew} readOnly={readOnly} />
+                <RunCard key={`${b.run.id}-${b.part}`} run={b.run} part={b.part} dimmed={onlyNew && !isNewRun(b.run)} readOnly={readOnly} />
               ))}
               {over && <span className="text-[0.7rem] font-bold text-red-600">{peak} de {cap} lugares</span>}
             </div>
