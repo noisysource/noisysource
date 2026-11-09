@@ -126,6 +126,10 @@ importers:
       tailwind-merge:
         specifier: ^3.3.1
         version: 3.5.0
+    devDependencies:
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.19.17)
 
   apps/noisysource/domotics:
     dependencies:
