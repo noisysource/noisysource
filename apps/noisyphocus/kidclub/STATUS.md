@@ -2,7 +2,39 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-31 (the 🧾 hotfix section just below only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-11-09 (the 🚐 transport board section just below only. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
+
+**Why.** KidClub is getting a second vehicle (the owned electric Model X, 5 children, a new driver at
+€6/hour; decided by Renato 2026-11-09). The old planner put every child of a period into one run for
+one van, and its "optimise" called Google's Routes API from the browser, the API behind the €500
+charge (disabled by hand, see `infra/gcp/terraform/project.tf`). Renato planned the two vehicles on a
+prototype board instead (a Claude artifact, private to him) and asked for it in the app.
+
+**What's in the branch.**
+- `/admin/transportes` (sidebar "🚐 Transportes"; `/admin/transport-planner` redirects there): a week of
+  van and car lanes in 5-minute rows. Each run is a solid pick-up box and an outlined drop-off box;
+  a pick-up drags its drop-off along, a drop-off moves alone; another day or vehicle takes the whole
+  run. On-board strip, "N de M lugares" overload, must-arrive-by warning, undo, "Destacar novos",
+  vehicle filter, phone day tabs. Code: `src/pages/admin/transportBoard/` (pure logic + vitest tests
+  in `logic.ts` / `logic.test.ts`; `pnpm --filter kidclub test`). Vehicles live in `VEHICLES` there.
+- Data: `_apps/arcoiris/transportRuns`, one doc per run, admin-only rule. **Separate from
+  subscriptions**: a new, changed or cancelled subscription doesn't change the board, and the board
+  never touches subscriptions or billing.
+- Removed: `TransportPlannerPage.tsx` and `lib/routeSolver.ts` (the Routes API caller). Gone with
+  them: the planner's settings "apply to subscriptions" button, which rewrote every active
+  subscription's `monthlyFee` with its own discount maths (ignoring `discountOverrides`). Transport
+  prices are still edited at `/admin/transport-config`; "rota atribuída / sem rota" is still the
+  manual toggle on the subscriptions page. Old `transportRoutes` versions stay in Firestore, unread.
+- Seed: `scripts/seed-transport-runs.mjs <runs.json> --project=<id>` (ADC, idempotent, refuses prod
+  without `--prod`). The 106-run export from the prototype is **not in git** (children's names and
+  addresses); it was in the session scratchpad. Re-export from the prototype if it's gone.
+
+**Next step.** Renato clicks through it on dev. Then, for prod: promote `staging` → `main` as usual,
+then seed prod once with `--prod` from a fresh export (the prototype keeps changing until then).
+**Follow-ups, not built:** generate or check runs against active transport subscriptions; costs per
+vehicle on the Resumo Financeiro (it still has one van and one driver); live car position.
 
 ## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (NOT merged, NOT in prod); dev preview #129
 
