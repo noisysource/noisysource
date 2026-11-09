@@ -102,7 +102,7 @@ child page links straight to the family calendar.
 with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
 `pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
 
-## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs` → `staging` (NOT merged, NOT in prod)
+## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (NOT merged, NOT in prod)
 
 (Placed here, not at the top, so it doesn't conflict with #138's STATUS edit. The "Last updated" line above
 doesn't mention it for the same reason.)
