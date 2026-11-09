@@ -33,9 +33,70 @@ export interface TransportationConfig {
   // Fixed monthly costs — direct inputs, edited on the Financial Summary
   // page itself. Deliberately NOT derived from a planned-route snapshot, so
   // the P&L stays correct even if no route has ever been planned/saved.
-  vanMonthlyCost: number;
+  /**
+   * The vehicles and their fixed monthly costs, edited on the Resumo Financeiro. Absent on
+   * docs saved before 2026-11-09: read through vehiclesOf(), never directly.
+   */
+  vehicles?: TransportVehicle[];
+  /** @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). */
+  vanMonthlyCost?: number;
+  /** @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). */
   driverMonthlyCost?: number;
+  /** @deprecated Single-van cost from before `vehicles`. Read through vehiclesOf(). */
   electricityMonthlyCost?: number;
+}
+
+/**
+ * One vehicle and its fixed monthly costs, as entered on the Resumo Financeiro. Costs are
+ * the euros per month as typed there (no VAT handling, same as the old single-van fields).
+ */
+export interface TransportVehicle {
+  id: string;
+  label: string;
+  /** Children it carries, driver not counted. For the van from the old fields: `vanCapacity`. */
+  seats: number;
+  vehicleMonthlyCost: number;
+  /** What the driver costs per month, fully loaded. Entered by hand, never derived. */
+  driverMonthlyCost: number;
+  electricityMonthlyCost: number;
+}
+
+/** Id of the vehicle vehiclesOf() builds from the old single-van fields. */
+export const LEGACY_VAN_ID = 'van';
+
+/** Seats of the van built from an old doc with no usable `vanCapacity` (the planner's default). */
+const LEGACY_VAN_DEFAULT_SEATS = 8;
+
+const nonNegative = (x: unknown): number =>
+  typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : 0;
+
+/**
+ * The config's vehicles. A config with no `vehicles` (or an empty list) is one van built
+ * from the old fields, so docs from before the list keep their numbers with no migration,
+ * and the first save of the list writes that van exactly as it was. Values are sanitised
+ * (missing or bad numbers → 0) but never invented, except a van's seats (see above).
+ */
+export function vehiclesOf(config: Partial<TransportationConfig> | null | undefined): TransportVehicle[] {
+  const list = config?.vehicles;
+  if (Array.isArray(list) && list.length > 0) {
+    return list.map((v, i) => ({
+      id: typeof v?.id === 'string' && v.id ? v.id : `vehicle-${i + 1}`,
+      label: typeof v?.label === 'string' && v.label.trim() ? v.label : `Viatura ${i + 1}`,
+      seats: nonNegative(v?.seats),
+      vehicleMonthlyCost: nonNegative(v?.vehicleMonthlyCost),
+      driverMonthlyCost: nonNegative(v?.driverMonthlyCost),
+      electricityMonthlyCost: nonNegative(v?.electricityMonthlyCost),
+    }));
+  }
+  const capacity = nonNegative(config?.vanCapacity);
+  return [{
+    id: LEGACY_VAN_ID,
+    label: 'Carrinha',
+    seats: capacity > 0 ? capacity : LEGACY_VAN_DEFAULT_SEATS,
+    vehicleMonthlyCost: nonNegative(config?.vanMonthlyCost),
+    driverMonthlyCost: nonNegative(config?.driverMonthlyCost),
+    electricityMonthlyCost: nonNegative(config?.electricityMonthlyCost),
+  }];
 }
 
 export interface Location {
