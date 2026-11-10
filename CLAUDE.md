@@ -51,9 +51,15 @@
 | **prod** | Live production | Public / IAP depending on app |
 | **dev** | Development & internal testing | IAP-protected or local only |
 
-Firebase/GCP projects (display names: "NoisySource Dev" / "NoisySource Prod"):
-- prod: `rainbow-prod-2454b` (display: NoisySource Prod)
-- dev: `kidclub-dev` (display: NoisySource Dev)
+Google Cloud layout (reorganised 2026-11-10; org `kidclub.pt`; every billed project is on **NoisySource Central Billing** `01B2DE-83C5F5-B12BC9`, because NoisySource pays for everything):
+- Folder **Noisy Phocus** — KidClub's projects, for good (project IDs can't be renamed):
+  - prod: `rainbow-prod-2454b` (display: KidClub Prod)
+  - dev: `kidclub-dev` (display: KidClub Dev)
+- Folder **NoisySource** — the IT company's own projects:
+  - `noisysource-prod` / `noisysource-dev` (NoisySource Prod / Dev): billed, still empty. FinHub and Domotics move here from the KidClub projects; until they do, they still run in `rainbow-prod-2454b` / `kidclub-dev` as described below.
+  - `noisysource-agent` (display: Jarvis): Renato's NoisySource agent. No billing, Workspace APIs only, keyless service account.
+
+The plan and what's left: `infra/gcp/HANDOFF-gcp-reorg.md`.
 
 GitHub: `github.com/noisysource/noisysource`
 
