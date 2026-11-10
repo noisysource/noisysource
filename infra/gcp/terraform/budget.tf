@@ -22,9 +22,18 @@
 # manage_combined_budget: true only in env/kidclub-dev.tfvars.
 #
 # var.billing_account_id comes from the BILLING_ACCOUNT_ID repo secret in
-# CI. The dev CI SA (gmail-sender-kidclub-dev) manages this budget with
-# roles/billing.costsManager on the billing account, granted by hand (see
-# the note at the end of iam.tf). Local apply:
+# CI. The dev CI SA (gmail-sender-kidclub-dev) holds
+# roles/billing.costsManager on the billing account (granted by hand, see
+# the end of iam.tf), which is enough to read this budget on every apply.
+# It was NOT enough to create it: CI's create got a 403 (2026-11-10, PR
+# #140), most likely because linking the Pub/Sub topic needs
+# pubsub.topics.setIamPolicy, which the CI SA doesn't have. So the budget
+# was created by hand (gcloud, as a kidclub-dev owner) and imported:
+#   terraform import -var-file=env/kidclub-dev.tfvars -var=billing_account_id=01B2DE-83C5F5-B12BC9 \
+#     'google_billing_budget.combined_budget[0]' \
+#     billingAccounts/01B2DE-83C5F5-B12BC9/budgets/7b8bb0dc-7204-4c51-afce-f3005747a471
+# To change it (amount, thresholds), apply locally as an owner rather than
+# through CI:
 #   terraform apply -var-file="env/kidclub-dev.tfvars" -var="billing_account_id=01B2DE-83C5F5-B12BC9"
 
 variable "billing_account_id" {

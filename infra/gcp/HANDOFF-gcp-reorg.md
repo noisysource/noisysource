@@ -31,8 +31,16 @@ projects and its own database.
 - The projects had moved from "My Billing Account" (`012710-30B4D5-DCC57E`) to Central
   Billing that day, around 12:00–13:00 UTC. That left every budget watching nothing.
   Re-created by hand on Central: KidClub Prod €20 (50/90/100%) and KidClub Dev €10 (80%).
-  The €50 cap is moved by the PR that adds this file (`budget.tf`, now covering the whole
-  account).
+  The €50 cap (`budget.tf`) now covers the whole account and feeds the cutoff topic. CI's
+  create got a 403, so it was created by hand and imported into the dev state (details in
+  `budget.tf`). Budget id: `7b8bb0dc-7204-4c51-afce-f3005747a471`.
+- **Found along the way:** `functions.tf` / `billing-cutoff.tf` let Terraform own each
+  function's runtime settings, which `firebase deploy` also sets. Since the per-part dev
+  deploys (2026-10-18), a Terraform-only PR no longer runs Functions afterwards. So PR #140's
+  first run stripped the secrets off 20 dev functions, switched their service account, and
+  raised max instances to 20. Fixed in the same PR (`ignore_changes` now includes
+  `service_config`), and dev functions redeployed from `staging`. Prod wasn't affected,
+  because prod doesn't run Terraform.
 - Dev CI SA `gmail-sender-kidclub-dev` granted `roles/billing.costsManager` on Central (by
   Renato). The `billing.admin` grant left Terraform (see the end of `iam.tf`).
 - `noisysource-agent` ("Jarvis") created in the NoisySource folder, with no billing. It has the
@@ -42,7 +50,7 @@ projects and its own database.
   `roles/iam.serviceAccountTokenCreator` on it.
 
 ## Next steps, in order
-1. **Verify the €50 cap after this PR deploys to dev.** Run
+1. **Check after merge:** run
    `gcloud billing budgets list --billing-account=01B2DE-83C5F5-B12BC9 --billing-project=kidclub-dev`.
    It should show three budgets, with the €50 one publishing to
    `projects/kidclub-dev/topics/billing-budget-cutoff-trigger`.
