@@ -200,14 +200,18 @@ resource "google_project_iam_member" "gmail_sender_project_iam_admin_prod" {
 
 # google_billing_budget (budget.tf) lives on the billing ACCOUNT, a
 # separate IAM resource from any project - project-level roles (including
-# projectIamAdmin above) don't cover it. roles/billing.admin is the
-# standard predefined role for Terraform-managed budgets; there's no
-# narrower predefined role that covers budget create/get/update/delete.
-resource "google_billing_account_iam_member" "gmail_sender_billing_admin" {
-  billing_account_id = var.billing_account_id
-  role               = "roles/billing.admin"
-  member             = "serviceAccount:${google_service_account.gmail_sender.email}"
-}
+# projectIamAdmin above) don't cover it.
+#
+# NOT managed here (since 2026-11-10): the dev CI SA holds
+# roles/billing.costsManager on NoisySource Central Billing, granted by hand:
+#   gcloud billing accounts add-iam-policy-binding 01B2DE-83C5F5-B12BC9 \
+#     --member=serviceAccount:gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com \
+#     --role=roles/billing.costsManager
+# costsManager covers budget create/get/update/delete and cost data, but not
+# linking projects or granting billing access. That also means CI can't
+# manage its own grant (that needs billing.admin), so it stays out of
+# Terraform. It used to be a google_billing_account_iam_member granting
+# roles/billing.admin on the old "My Billing Account".
 
 # Prod's CI deploy identity, github-action-1020915538@rainbow-prod-2454b -
 # NOT managed by Terraform at all (created out-of-band, predates this repo's
