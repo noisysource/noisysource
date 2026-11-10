@@ -39,13 +39,14 @@ projects and its own database.
   deploys (2026-10-18), a Terraform-only PR no longer runs Functions afterwards. So PR #140's
   first run stripped the secrets off 20 dev functions, switched their service account, and
   raised max instances to 20. Fixed in the same PR (`ignore_changes` now includes
-  `service_config`). Prod wasn't affected, because prod doesn't run Terraform. **The 20 dev
-  functions still need a forced redeploy.** Firebase skips functions whose code hasn't
-  changed and doesn't notice their settings were overwritten, so a normal deploy doesn't
-  restore them. Run `FUNCTIONS_DEPLOY_UNCHANGED=true firebase deploy --only functions:<the 20> --project kidclub-dev`.
-  While fixing this, re-running PR #137's dev deploy also redeployed #137's Firestore rules
-  over #138's on dev. Restore with #138's `firestore.rules`
-  (`firebase deploy --only firestore:rules`).
+  `service_config`). Prod wasn't affected, because prod doesn't run Terraform. **Restored
+  on 2026-11-10 at 17:26 UTC** with
+  `FUNCTIONS_DEPLOY_UNCHANGED=true firebase deploy --only functions:<the 20> --project kidclub-dev`.
+  A plain deploy doesn't fix this: Firebase skips functions whose code hasn't changed and
+  doesn't notice their settings were overwritten. While fixing this, re-running PR #137's dev
+  deploy (re-running one job of a reusable workflow re-runs all of it) also put #137's
+  Firestore rules over #138's on dev. Those were restored at 17:24 from #138's
+  `firestore.rules`.
 - Dev CI SA `gmail-sender-kidclub-dev` granted `roles/billing.costsManager` on Central (by
   Renato). The `billing.admin` grant left Terraform (see the end of `iam.tf`).
 - `noisysource-agent` ("Jarvis") created in the NoisySource folder, with no billing. It has the
