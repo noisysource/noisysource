@@ -322,6 +322,27 @@ service cloud.firestore {
       allow read, write: if isFinhubAdmin();
     }
 
+    // FinHub v2: one append-only event log per company (apps/noisysource/finances/
+    // HANDOFF-finhub-v2.md, "Storage and rules"). A new root on purpose: the
+    // finances_entities wildcard above allows writes, and rules are OR. Writing an
+    // existing id is an update, so it's denied: a re-import with deterministic ids
+    // can't overwrite anything. Corrections are new `reversal` events. The dev-only
+    // import/wipe scripts (scripts/finhub-v2/) use IAM credentials, not these rules.
+    match /finhub/{company}/events/{eventId} {
+      allow read: if isFinhubAdmin();
+      allow create: if isFinhubAdmin()
+        && company in ['noisysource', 'noisyphocus', 'casa']
+        && request.resource.data.id == eventId
+        && request.resource.data.company == company
+        && request.resource.data.recordedBy == request.auth.uid
+        && request.resource.data.recordedAt == request.time
+        && request.resource.data.type is string
+        && request.resource.data.effectiveDate is string
+        && request.resource.data.source in ['manual', 'system']
+        && request.resource.data.payload is map;
+      allow update, delete: if false;
+    }
+
     // ── Domotics app ──────────────────────────────────────────────────────────
     // The app has no Firebase Auth, so the client is unauthenticated here. It
     // only ever touches `customization` (room/device display names — harmless).

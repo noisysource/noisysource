@@ -36,6 +36,17 @@ import AdminUsersPage from './pages/admin/Users';
 import DevToolsPage from './pages/admin/DevtoolsPage';
 import VaultPage from './pages/VaultPage';
 
+// FinHub v2 (HANDOFF-finhub-v2.md): one module per company, events as the record
+import V2Layout from './v2/shell/V2Layout';
+import NoisySourceModule from './v2/noisysource/NoisySourceModule';
+import TesourariaPage from './v2/noisysource/TesourariaPage';
+import ContratosEcPage from './v2/noisysource/ContratosEcPage';
+import MesPage from './v2/noisysource/MesPage';
+import PlanoPage from './v2/noisysource/PlanoPage';
+import AnoPage from './v2/noisysource/AnoPage';
+import AceitacaoPage from './v2/noisysource/AceitacaoPage';
+import DiarioPage from './v2/noisysource/DiarioPage';
+
 
 export default function App() {
   return (
@@ -51,6 +62,28 @@ export default function App() {
               </div>
             </div>
           } />
+
+          {/* FinHub v2: its own shell, next to the old app (old routes untouched) */}
+          <Route
+            path="/v2"
+            element={
+              <ProtectRoute requiredRole={Role.FinhubAdmin}>
+                <V2Layout />
+              </ProtectRoute>
+            }
+          >
+            <Route index element={<Navigate to="noisysource" replace />} />
+            <Route path="noisysource" element={<NoisySourceModule />}>
+              <Route index element={<TesourariaPage />} />
+              <Route path="plano" element={<PlanoPage />} />
+              <Route path="ano" element={<AnoPage />} />
+              <Route path="contratos" element={<ContratosEcPage />} />
+              <Route path="mes" element={<MesPage />} />
+              <Route path="mes/:month" element={<MesPage />} />
+              <Route path="aceitacao" element={<AceitacaoPage />} />
+              <Route path="diario" element={<DiarioPage />} />
+            </Route>
+          </Route>
 
           <Route
             path="/"
