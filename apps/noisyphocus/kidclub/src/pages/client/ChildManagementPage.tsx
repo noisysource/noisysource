@@ -663,10 +663,16 @@ export default function ChildManagementPage() {
                         {child.schoolYear ? ` · ${child.schoolYear}` : ''}
                       </p>
                     </div>
-                    <Link to={`/client/enroll/transport?childId=${child.id}`}
-                      className="text-xs bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium">
-                      + Inscrever
-                    </Link>
+                    <div className="flex flex-wrap justify-end gap-2 ml-3">
+                      <Link to={`/client/enroll/transport?childId=${child.id}`}
+                        className="text-xs bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium whitespace-nowrap">
+                        + Transporte
+                      </Link>
+                      <Link to={`/client/enroll/study?childId=${child.id}`}
+                        className="text-xs bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium whitespace-nowrap">
+                        + Sala de Estudo
+                      </Link>
+                    </div>
                   </div>
 
                   <div className="divide-y divide-gray-100">

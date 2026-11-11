@@ -3,17 +3,29 @@
 > **Context**: See root `../CLAUDE.md` for full group architecture overview.
 
 ## Overview
-All infrastructure is owned and managed by **NoisySource** across two active GCP projects.
+All infrastructure is owned and managed by **NoisySource**, and NoisySource pays for all of it.
+Reorganised on 2026-11-10 into one folder per company; the plan and what's left are in
+`gcp/HANDOFF-gcp-reorg.md`.
 
 ---
 
-## GCP Projects (actual IDs)
-| Project ID | Environment | Purpose |
-|---|---|---|
-| `rainbow-prod-2454b` | Production | All live apps |
-| `kidclub-dev` | Development | All dev/test apps |
+## GCP layout (org `kidclub.pt`)
+| Folder | Project ID | Display name | Purpose |
+|---|---|---|---|
+| Noisy Phocus | `rainbow-prod-2454b` | KidClub Prod | KidClub live. **Still also hosts FinHub prod** until it moves |
+| Noisy Phocus | `kidclub-dev` | KidClub Dev | KidClub dev. Still also hosts FinHub/Domotics dev, the Terraform state bucket, the GitHub WIF pool and the billing cutoff |
+| NoisySource | `noisysource-prod` | NoisySource Prod | Future home of FinHub, Domotics, Tasks (prod). Empty |
+| NoisySource | `noisysource-dev` | NoisySource Dev | Same, dev. Empty |
+| NoisySource | `noisysource-agent` | Jarvis | Renato's NoisySource agent: Workspace APIs, SA `noisysource-agent@noisysource-agent.iam.gserviceaccount.com`, **no billing** |
 
-> Project IDs retain legacy names from before the monorepo migration. Rename is planned as part of future infra cleanup.
+> Project IDs can't be renamed; KidClub keeps `kidclub-dev` / `rainbow-prod-2454b` for good (display names say what they are).
+
+### Billing
+Every billed project is linked to **NoisySource Central Billing** (`01B2DE-83C5F5-B12BC9`, EUR).
+Budgets on it: the €50 whole-account cap that feeds the automated cutoff (Terraform, `budget.tf`),
+plus two email-only alerts created by hand: KidClub Prod €20 (50/90/100%) and KidClub Dev €10 (80%).
+A budget only sees spend on its own billing account; check it whenever a project changes billing.
+The old "My Billing Account" (`012710-30B4D5-DCC57E`) has no projects any more.
 
 ### Terraform state
 Stored in GCS bucket `kidclub-terraform-state` (in `kidclub-dev` project), prefix per environment (`kidclub-dev`, `rainbow-prod-2454b`).
@@ -58,7 +70,8 @@ this table is just the file map.
 WIF pool lives in `kidclub-dev` project (`projects/245453200769/locations/global/workloadIdentityPools/github-pool`). Both dev and prod SAs are bound to `noisysource/noisysource`.
 
 `terraform apply` in CI needs a `BILLING_ACCOUNT_ID` repository secret (no default in `budget.tf`,
-required on every apply regardless of environment) — set once in GitHub repo Settings → Secrets.
+required on every apply regardless of environment): `01B2DE-83C5F5-B12BC9`, NoisySource Central Billing.
+The dev CI SA holds `roles/billing.costsManager` on that account, granted by hand (see the end of `iam.tf`).
 
 ---
 

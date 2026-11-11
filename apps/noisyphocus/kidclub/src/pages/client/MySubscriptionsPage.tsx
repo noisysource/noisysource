@@ -268,12 +268,18 @@ export default function MySubscriptionsPage() {
                       <p className="text-sm text-gray-500">{child.schoolName} · {child.schoolYear}</p>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap justify-end gap-2 ml-3">
                     <Link
                       to={`/client/enroll/transport?childId=${child.id}`}
-                      className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-blue-700"
+                      className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-blue-700 whitespace-nowrap"
                     >
-                      + Inscrever
+                      + Transporte
+                    </Link>
+                    <Link
+                      to={`/client/enroll/study?childId=${child.id}`}
+                      className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-blue-700 whitespace-nowrap"
+                    >
+                      + Sala de Estudo
                     </Link>
                   </div>
                 </div>

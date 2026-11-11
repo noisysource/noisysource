@@ -95,7 +95,8 @@ resource "google_cloudfunctions2_function" "billing_cutoff" {
 
   # Source code is managed by the CI/CD pipeline (firebase deploy), not Terraform.
   lifecycle {
-    ignore_changes = [build_config]
+    # Runtime settings too: firebase deploy sets them (see functions.tf).
+    ignore_changes = [build_config, service_config]
   }
 }
 
