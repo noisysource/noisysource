@@ -202,6 +202,59 @@ child page links straight to the family calendar.
 with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
 `pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
 
+## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (NOT merged, NOT in prod)
+
+(Placed here, not at the top, so it doesn't conflict with #138's STATUS edit. The "Last updated" line above
+doesn't mention it for the same reason.)
+
+**Why.** Renato decided on 2026-11-09 that KidClub runs a second vehicle: the electric Tesla Model X it already
+owns (vehicle €0/month, 5 children), with a new driver paid €6/hour. The Resumo Financeiro costed transport as
+one van and one driver.
+
+**What changed.**
+- **Model** (`packages/shared/models/Transportation.ts`): `TransportationConfig.vehicles?: TransportVehicle[]`
+  (`id`, `label`, `seats` = children carried, `vehicleMonthlyCost`, `driverMonthlyCost`,
+  `electricityMonthlyCost`). Read only through `vehiclesOf(config)`. A doc with no list (prod and dev today) is one
+  van, "Carrinha" (id `van`), built from `vanCapacity` / `vanMonthlyCost` / `driverMonthlyCost` /
+  `electricityMonthlyCost`. No migration. The old fields stay in the doc; once a list is saved, nothing reads them.
+- **Resumo Financeiro** (`/admin/financial-summary`): transport cost = each vehicle's three costs × months, summed
+  (`transportCosts`, `src/lib/transportCosts.ts`, with tests). Margin, the discount scenario and break-even all use
+  it. The Transporte card shows the costs per vehicle. Custos Fixos → 🚌 Transporte edits each vehicle's name,
+  lugares, Viatura / Motorista / Eletricidade, has "+ Adicionar viatura", and × removes one (never the last).
+  Any edit writes the whole list to `config/transportation.vehicles`. On an old doc the first edit writes the van
+  from the old fields, plus the change, so the van's numbers don't move. "Motorista à hora? Calcular" is a hint
+  only: hours a week × €6 × 4,33, never saved (open by default on a vehicle whose driver cost is 0).
+- `saveTransportationConfig` (planner ⚙ settings, `/admin/transport-config`) no longer writes `vehicles`: both send
+  the whole doc back as loaded and would overwrite the list with a stale copy.
+- VAT: these inputs had no VAT label and still don't; amounts are stored as typed, as before.
+- Tests: `pnpm --filter kidclub test` (vitest, added exactly as #138 adds it). Build OK; `tsc` has the same 11 old
+  errors, none in touched files.
+
+**Next step: Renato on dev, then the same on prod after promotion.** The agent wrote no config values anywhere.
+1. Resumo Financeiro → Custos Fixos → 🚌 Transporte: the Carrinha shows the same three values as before, and the
+   Custos fixos / Lucro figures haven't moved.
+2. "+ Adicionar viatura" → rename "Viatura 2" (e.g. Tesla Model X), lugares 5, Viatura blank (€0), Motorista from
+   the hint (hours a week × €6 × 4,33), Eletricidade.
+3. ❓ The old single electricity figure now sits on the Carrinha. If it covered charging both cars, move the Tesla's
+   share to the Tesla.
+4. On prod, after the `staging` → `main` promotion: steps 1–3 with prod's own values (they differ from dev's).
+
+**Still reads the old fields, on purpose:** the old Transport Planner (`TransportPlannerPage.tsx`) uses
+`vanMonthlyCost` for its own estimate and edits it in ⚙ "€/mês fixo". Not touched, because #138 deletes that page.
+Until #138 merges: once a vehicle list is saved, the planner's "€/mês fixo" moves only the planner's own estimate,
+not the Resumo. The planner's `vanCapacity` (route solver) is also separate from the Carrinha's lugares here.
+Nothing in `functions/`, FinHub or the rest of `packages/shared` reads these fields.
+
+**Follow-ups:**
+- The transport board (#138) could read `vehiclesOf(config)` for labels and seats instead of its `VEHICLES`
+  constant, once both merge. The van from the old fields is id `van`, like the board's; a vehicle added on the
+  Resumo gets a generated `v-…` id, not the board's `car`, so map it or rename it.
+- After #138 merges (planner gone): make `vanMonthlyCost` optional in the model.
+- Out of scope, unchanged: `services/eventService.ts` "Driver Wage" events (first driver found; planned rebuild).
+
+**Risk:** nothing prod-touching, no external API calls. The only new write is `config/transportation.vehicles`,
+and only when someone edits a vehicle on the Resumo.
+
 ## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 
 **What it is.** Anyone can sign children up for a one-off event, with or without a KidClub account.

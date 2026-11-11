@@ -14,9 +14,16 @@ export const getTransportationConfig = async (): Promise<TransportationConfig | 
   return null;
 };
 
+/**
+ * Never writes `vehicles`: only the Resumo Financeiro edits that list, and it saves it itself.
+ * Callers here (the planner's settings, /admin/transport-config) hand back the whole doc as they
+ * loaded it, so writing the list would put a stale copy over what was entered there since.
+ */
 export const saveTransportationConfig = async (config: TransportationConfig): Promise<void> => {
   const configRef = docRef('config', CONFIG_ID);
-  await setDoc(configRef, config, { merge: true });
+  const data: Partial<TransportationConfig> = { ...config };
+  delete data.vehicles;
+  await setDoc(configRef, data, { merge: true });
 };
 
 export const getActiveTransportationSubscriptions = async (): Promise<TransportationSubscription[]> => {
