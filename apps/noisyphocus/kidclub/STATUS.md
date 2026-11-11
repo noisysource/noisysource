@@ -2,9 +2,38 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-11-11, after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
 
-## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
+## 🚀 2026-11-11: everything on `staging` is in prod (promotion #141). `main` = `staging`, no open PRs
+
+**What happened.** #135 (study-enroll hotfix) merged into `main` at ~11:20 UTC. Then #136, #138, #139, #125 (FinHub v2)
+and #137 merged into `staging`, and #141 promoted `staging` → `main`: prod deploy green before the merge (12:54 UTC) and
+again after it; `sync-staging` fast-forwarded `staging`. All worktrees were removed.
+
+**In prod for the first time with #141:** one-off events (#110), the Vendus listing fix (#116), the transport board
+(#138), vehicle costs (#139), the enroll funnel (#137), FinHub v2 (#125). Domotics code is on `main` but doesn't deploy
+to prod (`deploy_domotics: false`).
+
+**Checked on prod, read-only (2026-11-11 ~13:00 UTC):** all 15 composite indexes READY; scheduler jobs
+`expireAdhocHolds` (every 10 min) and `enrollFunnelWeekly` (Mondays 08:00) ENABLED; the 11 new functions ACTIVE;
+kidclub.pt, kidclub.pt/eventos and the FinHub site answer 200 with the new build. TTL on `expireAt` is ACTIVE on prod
+for `clientEvents` and `clientErrors` (Renato ran it before the promotion).
+
+**NOT done: nobody has clicked through any of it on prod.** Renato's list:
+1. The study-room links from the hotfix ("+ Transporte" / "+ Sala de Estudo" on a child).
+2. `/admin/transportes` (the board shows prod's real subscriptions; it stores only its own plan).
+3. Vehicle costs on the Resumo Financeiro: enter prod's values (steps 1–3 in the 🚐 transport costs section). Until
+   then the page shows the old single-van figures.
+4. `/eventos` and one event end to end. The Vendus invoice for an event bill can only be verified in prod.
+5. Monday 2026-11-16, 08:00: the first enrollment funnel email from prod. Check "Contas novas" isn't "indisponível".
+6. The IVA page: KidClub rows should be there (#116).
+
+**Next for the repo:** restructure of the monorepo along the Google Cloud project pairs (KidClub vs NoisySource), see
+`infra/gcp/HANDOFF-gcp-reorg.md`. `test:rules:client-events` is still missing from the root `package.json`; add it then.
+
+**Before that:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (#138). **IN PROD since 2026-11-11** (promotion #141)
 
 **Why.** KidClub is getting a second vehicle (the owned electric Model X, 5 children, a new driver at
 €6/hour; decided by Renato 2026-11-09). The old planner put every child of a period into one run for
@@ -44,7 +73,7 @@ prototype board instead (a Claude artifact, private to him) and asked for it in 
 **Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
 driver); a warning when a PLANO run's child now has a subscription; live car position.
 
-## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (**merged 2026-11-11**, on dev). NOT in prod
+## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (merged 2026-11-11). **IN PROD since 2026-11-11** (promotion #141)
 
 **Why.** For 7 weeks no parent created a subscription and nobody noticed. The submit button was disabled for study-only
 parents, and a disabled button throws nothing, so `clientErrors` and its digest had nothing to report. This makes that
@@ -171,7 +200,7 @@ either, so a second problem is possible.
   both unless they switch study off. Possibly part of the second problem above.
 - The study form link doesn't carry over the days already picked on the transport form.
 
-## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (NOT merged, NOT in prod); dev preview #129
+## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (**merged 2026-11-02, in prod**); dev preview #129
 
 Three fixes, all decided by Renato (A on 2026-10-30, B and C on 2026-10-31), shipped as a hotfix off `main`
 ("today's fixes only", not a staging→main promotion). It replaces PR #126 (closed). The dev preview is
@@ -269,7 +298,7 @@ child page links straight to the family calendar.
 with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
 `pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
 
-## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (NOT merged, NOT in prod)
+## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (merged 2026-11-11). **IN PROD since 2026-11-11** (promotion #141); prod's cost values NOT entered yet
 
 (Placed here, not at the top, so it doesn't conflict with #138's STATUS edit. The "Last updated" line above
 doesn't mention it for the same reason.)
@@ -322,7 +351,7 @@ Nothing in `functions/`, FinHub or the rest of `packages/shared` reads these fie
 **Risk:** nothing prod-touching, no external API calls. The only new write is `config/transportation.vehicles`,
 and only when someone edits a vehicle on the Resumo.
 
-## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
+## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: on dev since 2026-10-21. **IN PROD since 2026-11-11** (promotion #141); not clicked through on prod yet
 
 **What it is.** Anyone can sign children up for a one-off event, with or without a KidClub account.
 Events have their own prices and per-day capacity. Public pages: `/eventos` (list),
@@ -429,7 +458,7 @@ after the first real deploy.
 
 ## ▶️ Start here (left 2026-10-21)
 
-**🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`, NOT in prod.** `listDocuments` (`vendus.ts`) filtered
+**🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`. IN PROD since 2026-11-11 (promotion #141); the IVA page check on prod is still to do.** `listDocuments` (`vendus.ts`) filtered
 with `date_from`/`date_to`, which live Vendus rejects with 403 `P001`, so `getKidclubVatSummary` (FinHub → IVA,
 NoisyPhocus) failed. #116 switches it to `since`/`until` with `per_page=50` and a 40-page cap, and treats Vendus's
 empty-page answer (404 `A001` "No data", verified live 2026-10-25) as the end of the list. It reaches prod only via
