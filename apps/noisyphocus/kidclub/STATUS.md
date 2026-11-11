@@ -2,7 +2,63 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-31 (the 🧾 hotfix section just below only; nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
+
+## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (NOT merged, NOT in prod); dev preview #136
+
+**State.** The fix is built and in review. Merging #135 deploys it to prod (a hotfix PR doesn't deploy when opened).
+Branch protection isn't enforced, so check the merge run is green yourself. The dev preview is #136
+(`sync/hotfix-study-enroll-to-staging` → `staging`). Merging #136 after #135 also does the main→staging sync.
+
+**Cause.** Commit 2c28343 (2026-09-13) removed the links to `/client/enroll/study?childId=…`. Every "+ Inscrever" then
+went to `/client/enroll/transport?childId=…`, a page titled "Transporte Escolar". That page offers a Sala de Estudo
+toggle, but `TransportEnrollPage` requires a transport day (`isValid`) and disables the submit button without one. A
+parent who picked only study days got a grey button and no message: the red hint only shows once a transport day is
+selected. `StudyRoomEnrollPage` is routed and unchanged, but it had no way in for a new subscription.
+
+**The fix (frontend only: no rules, functions or data).**
+- `ChildManagementPage`, `MySubscriptionsPage`: "+ Inscrever" on each child is now two links, "+ Transporte" and
+  "+ Sala de Estudo". `ChildDetailPage`: the same two replace "+ Add Subscription". The rest of that page stays in
+  English. The camps "+ Inscrever" links are unrelated and unchanged.
+- `TransportEnrollPage`: when creating a request (not editing) with study days and no trips, an amber message above
+  the button says the form needs at least one trip and links to the study form. The button stays disabled.
+
+**Checked:** `pnpm --filter kidclub build` OK. The app's `tsc` has the same 11 older errors, none in touched files.
+`pnpm test:rules` passes on the emulator; it covers the query shapes and the parent's study create, not the form
+itself. **Nobody has clicked through the new links or message yet.**
+
+**Findings, read-only prod check 2026-11-05** (run just before this hotfix, by the session that asked for it):
+- The last parent-created subscription is still 2026-09-18. Since then: one admin manual sub (10-01) and the two
+  Renato submitted while impersonating (10-16).
+- 6 accounts were created since the 17 Oct fix (10-18, 10-26 x2, 10-29, 10-30, 10-31). 5 completed their profile and
+  added a child; none has a subscription. One of the 5 has a party booking. The sixth stopped before completing the
+  profile. Three older families also have a child and no subscription (created 09-14 x2, 09-30). Only one admin
+  account was excluded, so some could be Renato's tests.
+- `clientErrors` holds 6 reports, 5 parent-facing, none on the enroll pages: 4 "Este mês já está pago" on the calendar
+  and 1 permission-denied on the per-child calendar (10-20). The digest works (5 emails, 10-21 to 11-03). It couldn't
+  catch this bug because a disabled button throws nothing.
+- Firebase Analytics IS linked on prod (property 497904998, G-9HM8YLSTEE) and starts with no consent step; the privacy
+  policy doesn't mention analytics. ❓ Renato: add consent or remove it. GA data wasn't read (the gcloud token lacks the
+  analytics scope).
+- `clientErrors` TTL is still not configured on prod.
+
+**Not proven:** what those parents actually wanted. No real parent has completed the transport path since 09-18
+either, so a second problem is possible.
+
+**Next steps for Renato:**
+1. Contact the parents ("Mostrar famílias sem inscrições" in Famílias e inscrições).
+2. Test on dev: both links, then the message (pick a day on the transport form and switch transport off).
+3. Merge #135, check the run is green, then merge #136 to sync `staging`.
+4. On prod, test both paths with a real new parent account, since impersonation can't reproduce rule bugs. Tick "Não
+   pretendo NIF" so no Vendus client is created, and remove the account's family afterwards with "Eliminar família".
+5. A follow-up PR into `staging` will add a weekly funnel email and form events.
+
+**Left as is (reported, not fixed):**
+- On the transport form, ticking a day turns on both Sala de Estudo and one trip (`toggleWeekday` in
+  `WeekSchedulePicker`). So the new message only appears after transport is switched off on every selected day; until
+  then the parent sees the red "Preenche a origem e o destino" hint. And a parent who only wants transport requests
+  both unless they switch study off. Possibly part of the second problem above.
+- The study form link doesn't carry over the days already picked on the transport form.
 
 ## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (NOT merged, NOT in prod); dev preview #129
 
