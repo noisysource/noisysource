@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-09 (the 🚐 transport board section just below only. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
 
 ## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
 
@@ -43,6 +43,73 @@ prototype board instead (a Claude artifact, private to him) and asked for it in 
 `staging` → `main` as usual; no data step for prod.
 **Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
 driver); a warning when a PLANO run's child now has a subscription; live car position.
+
+## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (**merged 2026-11-11**, on dev). NOT in prod
+
+**Why.** For 7 weeks no parent created a subscription and nobody noticed. The submit button was disabled for study-only
+parents, and a disabled button throws nothing, so `clientErrors` and its digest had nothing to report. This makes that
+kind of drop-off visible. The cause itself is fixed by the hotfix in the next section, not here.
+
+**What was added.**
+- `enrollFunnelWeekly` (`functions/src/kidclub/enrollFunnelWeekly.ts`, pure part and tests in `...Logic.ts`): Mondays
+  08:00 Lisbon, europe-west3. Always emails ADMIN_EMAIL, even at all zeros, counts only. Top line: date of the last
+  request a parent created, with a warning past 14 days. Then the last 7 days (accounts, profiles, children, requests per
+  service), form activity, and families with a child from the last 30 days and no live subscription. A failed read
+  shows as "indisponível", never as 0, and the email still goes out.
+- `clientEvents` (`src/lib/clientEvents.ts`, hook `src/lib/useEnrollFormEvents.ts`): `enroll_form_opened`,
+  `enroll_days_chosen`, `enroll_blocked`, `enroll_submitted`, `enroll_left`, under `_apps/arcoiris/clientEvents`.
+  Signed-in only, nothing while editing, 90-day `expireAt`, counts/booleans only. `enroll_left` is the key one: it
+  records what state the form was in when the parent gave up. Closing the tab sends it by keepalive `fetch` to the
+  Firestore REST API, because the SDK's write can't complete during unload. In-app navigation uses the SDK.
+- `firestore.rules`: `clientEvents` is create-only with a shape that can't hold free text. Test:
+  `scripts/rules-tests/kidclub-client-events.rules-test.cjs`.
+- `PrivacyPolicyPage`: one line under "Interesse legítimo", and the "Última atualização" date. ❓ Renato: review the
+  wording. Section 9 of the policy says material changes are communicated by email or a prominent notice; decide whether
+  this counts. Nothing was sent. Sections 2 and 4 were not changed.
+
+**Checked.** Functions build OK, 482 tests pass (37 new). `pnpm --filter kidclub build` OK. The app's `tsc` has the same 11
+older errors, none in touched files. Emulator with the real rules: new rules test 39/39, `pnpm test:rules` 39/39,
+`test:rules:client-errors` 10/10. The hook passed an ad-hoc check under React.StrictMode in jsdom (no false `enroll_left`,
+one event of each kind, edit mode silent, throwing or rejected writes never reach the form), and the real keepalive body
+passed the real rules on the emulator; that check isn't in the repo, as the app has no DOM test setup. On dev: the deploy
+went green, the scheduler job ran once and wrote the outbox doc with no "indisponível", so `listUsers` works there, and TTL
+on `clientEvents` is ACTIVE. `clientErrors` still has no TTL on dev; left as is. **Not checked: the forms in a real browser,
+including the keepalive write on tab close, and anything on prod.**
+
+**Test on dev (nobody has clicked through this yet).** Use a real test-parent account, not impersonation: impersonated
+events are left out of the email, and the admin token passes every rule.
+1. "+ Transporte" on a child, pick a day, switch transport off on it, then "← Voltar". `clientEvents` should get opened,
+   days_chosen and left, with `studyDays` above 0, `transportDays` 0 and `submitEnabled` false.
+2. Same, but close the tab instead of going back. This is the keepalive path, which hasn't run in a real browser yet.
+3. Submit a form: `enroll_submitted` and no `enroll_left`. Edit a pending request: nothing at all.
+4. `gcloud scheduler jobs run firebase-schedule-enrollFunnelWeekly-europe-west3 --location europe-west3 --project kidclub-dev`
+   writes the email to `emailOutbox`. Dev never sends it, since Gmail is prod-only (`externalGuard.ts`): the doc ends in
+   `status: error` with the guard's message, and the content is in its `subject` and `html` fields. So the first email
+   that actually reaches an inbox is prod's first Monday after this ships.
+
+**Merged into `staging` 2026-11-11**, after #125 (FinHub v2), #136, #138 and #139. The `DROP BEFORE MERGE` commit
+(#125's rules carried along) is in the history but changes nothing: with #125 merged first, this PR's only rules
+difference against `staging` was its own `clientEvents` block (checked before merging).
+**Still to do:** `test:rules:client-events` is not in the root `package.json`. It was left out because any change to that
+file makes `deploy-parts.mjs` deploy everything on dev. Add it with the next change that touches that file (the exact
+command is at the top of `scripts/rules-tests/kidclub-client-events.rules-test.cjs`).
+
+**Before prod (Renato's call, not done).** Turn on TTL on prod for both collections. The privacy line promises 90 days,
+and `clientErrors` TTL is still not configured there:
+`gcloud firestore fields ttls update expireAt --collection-group=clientEvents --enable-ttl --project rainbow-prod-2454b`
+and the same with `--collection-group=clientErrors`. Then check the first Monday email arrives from prod, and that "Contas
+novas" isn't "indisponível": `listUsers` was only exercised on dev.
+
+**Left as is (reported, not fixed).**
+- A request an admin creates while acting for a family carries the parent's `userId` and no `source`, so it counts as a
+  parent's. Older ones were stamped with the admin's uid and are excluded as staff.
+- `source: 'web'` is what `ClaimSubscriptionsPage` writes when a parent claims an admin-created subscription, overwriting
+  `manual`. The email treats it as not created by a parent, so it doesn't give "last request" a false fresh date.
+- Families have no "profile completed" date, so that count is families created in the last 7 days that are complete.
+- A family with only cancelled subscriptions counts as "sem inscrição" in the email but isn't listed by "Mostrar famílias
+  sem inscrições", which only shows families with no subscription at all. The email says so.
+- A tab killed in the background sends nothing, so the email also shows "sem saída registada" (opened, no submit or leave).
+- Firebase Analytics still starts with no consent step (see the hotfix findings below). Out of scope here.
 
 **Before that:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
 

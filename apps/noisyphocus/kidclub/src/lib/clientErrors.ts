@@ -29,7 +29,7 @@ const lastSentAt = new Map<string, number>();
 
 const clip = (s: unknown, max: number) => String(s ?? '').slice(0, max);
 
-function impersonatingFamilyId(): string | null {
+export function impersonatingFamilyId(): string | null {
   try {
     const raw = sessionStorage.getItem(IMPERSONATION_KEY);
     return raw ? (JSON.parse(raw).familyId ?? null) : null;

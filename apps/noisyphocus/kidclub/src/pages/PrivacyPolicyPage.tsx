@@ -5,7 +5,7 @@ export default function PrivacyPolicyPage() {
         <a href="/" className="text-sm text-blue-600 hover:underline mb-8 inline-block">← Voltar</a>
 
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Política de Privacidade</h1>
-        <p className="text-sm text-gray-400 mb-10">Última atualização: julho de 2025</p>
+        <p className="text-sm text-gray-400 mb-10">Última atualização: novembro de 2026</p>
 
         <div className="prose prose-gray max-w-none space-y-8 text-sm text-gray-700 leading-relaxed">
 
@@ -48,6 +48,9 @@ export default function PrivacyPolicyPage() {
               <li>
                 <strong>Interesse legítimo</strong> (art. 6.º, n.º 1, al. f) RGPD): comunicações sobre o estado
                 das inscrições e pagamentos.
+                <br />
+                O portal regista também os passos do formulário de inscrição, sem cookies, durante 90 dias, para
+                detetar problemas e melhorar o formulário.
               </li>
               <li>
                 <strong>Consentimento</strong> (art. 6.º, n.º 1, al. a) RGPD): envio de comunicações de marketing,

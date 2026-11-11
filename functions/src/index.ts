@@ -23,6 +23,7 @@ export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/
 export { onStudyroomReservationEventsSync, onTransportReservationEventsSync, setReservationEventStatus, backfillReservationEvents } from "./kidclub/reservationEvents";
 export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
 export { clientErrorsDigest } from "./kidclub/clientErrorsDigest";
+export { enrollFunnelWeekly } from "./kidclub/enrollFunnelWeekly";
 export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
 export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
 export { domoticsWarmBy } from "./domotics/warmBy";

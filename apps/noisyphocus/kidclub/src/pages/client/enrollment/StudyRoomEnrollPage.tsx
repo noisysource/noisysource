@@ -14,6 +14,7 @@ import { activeWeeksInPattern } from '@shared/models/weekPattern';
 import WeekSchedulePicker, { WeekScheduleValue, DayConfig } from '../../../components/WeekSchedulePicker';
 import EnrollmentDetailsForm, { EnrollmentDetailsValue, EMPTY_ENROLLMENT_DETAILS, validateEnrollmentDetails } from '../../../components/EnrollmentDetailsForm';
 import { calculateAge, normalizeEmail } from '../../../lib/utils';
+import { useEnrollFormEvents } from '../../../lib/useEnrollFormEvents';
 
 
 function buildTransportCoverage(subs: any[]) {
@@ -159,9 +160,17 @@ export default function StudyRoomEnrollPage() {
   const monthlyFee = config ? computeStudyFee(schedule.days, config, schedule.weekPattern) : 0;
   const uncoveredDays = studyDays.filter(d => !transportCoverage.some(c => c.weekday === d.weekday));
 
+  const enrollEvents = useEnrollFormEvents({
+    service: 'study', enabled: !editId, ready: !!childId && !isLoading && !loadError,
+    days: schedule.days, submitEnabled: studyDays.length > 0,
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !child || !familyId || !owner || !config || studyDays.length === 0) return;
+    if (!user || !child || !familyId || !owner || !config || studyDays.length === 0) {
+      enrollEvents.blocked('not_ready');
+      return;
+    }
     setSubmitError(null);
     setSubmitting(true);
     try {
@@ -173,6 +182,7 @@ export default function StudyRoomEnrollPage() {
           data.status !== 'cancelled'
         );
         if (hasDup) {
+          enrollEvents.blocked('duplicate_study');
           setSubmitError('Já existe uma inscrição na Sala de Estudo para este aluno este ano letivo.');
           return;
         }
@@ -231,6 +241,7 @@ export default function StudyRoomEnrollPage() {
         updatedAt: new Date(),
       });
 
+      enrollEvents.submitted();
       setSubmitted(true);
     } catch (err) {
       console.error('[enroll/study] submit failed', err);
