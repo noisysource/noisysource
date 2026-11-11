@@ -130,7 +130,9 @@ if you are handing this to one, re-auth first.
 1. **Re-enter dev's own transport costs.** The import overwrites `config/transportation`
    wholesale with prod's doc, which has no `driverMonthlyCost` / `electricityMonthlyCost`.
    Re-enter €1400 / €300 in the Financial Summary "Custos Fixos" panel if dev testing still
-   wants them.
+   wants them. Since 2026-11-09 those costs are per vehicle (`config/transportation.vehicles`,
+   read through `vehiclesOf`): the import brings prod's list, or prod's old single-van fields if
+   prod has no list yet; edit them per vehicle in the same panel.
 2. **Point one family at a real dev Auth UID.** Firebase Auth is per-project and a Firestore
    wipe does not touch it, so every imported `primaryContact.userId` is a *prod* UID matching
    no dev account. Pick a test family and set `primaryContact.userId` to a real `kidclub-dev`

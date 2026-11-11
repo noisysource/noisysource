@@ -2,11 +2,49 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-05 (the enroll funnel and study-enroll hotfix sections just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
+**Last updated:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
 
-**Before that:** 2026-10-31 (the 🧾 hotfix section only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
 
-## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR into `staging` (`gh pr list --head agent/kidclub-enroll-funnel`). NOT merged, NOT in prod
+**Why.** KidClub is getting a second vehicle (the owned electric Model X, 5 children, a new driver at
+€6/hour; decided by Renato 2026-11-09). The old planner put every child of a period into one run for
+one van, and its "optimise" called Google's Routes API from the browser, the API behind the €500
+charge (disabled by hand, see `infra/gcp/terraform/project.tf`). Renato planned the two vehicles on a
+prototype board instead (a Claude artifact, private to him) and asked for it in the app.
+
+**What's in the branch.**
+- `/admin/transportes` (sidebar "🚐 Transportes"; `/admin/transport-planner` redirects there): a week of
+  van and car lanes in 5-minute rows. Each run is a solid pick-up box and an outlined drop-off box;
+  a pick-up drags its drop-off along, a drop-off moves alone; another vehicle takes the whole run.
+  On-board strip, "N de M lugares" overload, must-arrive-by warning, undo, "Destacar novos",
+  vehicle filter, phone day tabs. Code: `src/pages/admin/transportBoard/` (pure logic + vitest tests
+  in `logic.ts` / `logic.test.ts`; `pnpm --filter kidclub test`). Vehicles live in `VEHICLES` there.
+- **Runs come live from the DB** (Renato, 2026-11-09: "the data should come from the DB"). Every leg of
+  every active or pending, not-ended transport subscription is a run: child, day, places and the
+  requested time come from the subscription (PENDENTE badge when pending). It starts in the van.
+  The board stores only its plan for that leg in `_apps/arcoiris/transportRuns/{subId}_{day}_{leg}`:
+  vehicle, planned pick-up (only if it differs; the box then says "Pedido às …"), drop-off, must
+  arrive by, note, flag. `leg` = position among that day's legs by requested time, so a time change
+  keeps the plan, but adding or removing a leg the same day can shift it. A subscription leg's day
+  can't be dragged: that's a subscription change. "Repor plano" deletes the stored plan.
+- **Planning-only runs** (PLANO badge, "Adicionar só no quadro"): a child who isn't in the DB yet,
+  stored whole in the same collection with no `subId`. Delete it once the real subscription exists,
+  or the child counts twice. The board never writes to subscriptions or billing; admin-only rule.
+- Removed: `TransportPlannerPage.tsx` and `lib/routeSolver.ts` (the Routes API caller). Gone with
+  them: the planner's settings "apply to subscriptions" button, which rewrote every active
+  subscription's `monthlyFee` with its own discount maths (ignoring `discountOverrides`). Transport
+  prices are still edited at `/admin/transport-config`; "rota atribuída / sem rota" is still the
+  manual toggle on the subscriptions page. Old `transportRoutes` versions stay in Firestore, unread.
+- No seed: nothing to import for the subscriptions. The prototype's own plan (car assignments,
+  drop-off times, Lara / Filipa's children / Patrícia's child, who have no subscription) is not
+  carried over; re-plan on the board, or ask for a one-off import if that's quicker.
+
+**Next step.** Renato clicks through it on dev (it shows dev's own subscriptions). Then promote
+`staging` → `main` as usual; no data step for prod.
+**Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
+driver); a warning when a PLANO run's child now has a subscription; live car position.
+
+## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (**merged 2026-11-11**, on dev). NOT in prod
 
 **Why.** For 7 weeks no parent created a subscription and nobody noticed. The submit button was disabled for study-only
 parents, and a disabled button throws nothing, so `clientErrors` and its digest had nothing to report. This makes that
@@ -49,17 +87,12 @@ events are left out of the email, and the admin token passes every rule.
    `status: error` with the guard's message, and the content is in its `subject` and `html` fields. So the first email
    that actually reaches an inbox is prod's first Monday after this ships.
 
-**Before merging into `staging`.**
-- Revert the commit whose message starts with `DROP BEFORE MERGE`. It carries #125's FinHub v2 rules so this PR's deploy
-  doesn't remove them from dev. It's already a no-op if #125 merged first.
-- The PR's diff includes the hotfix preview #136 until that merges.
-- `test:rules:client-events` is NOT in the root `package.json` yet, on purpose: any change to that file makes
-  `deploy-parts.mjs` deploy everything, so this PR's push would put staging's FinHub over #125's FinHub v2 on dev. Add
-  the line once #125 has merged (the exact command is at the top of the rules test).
-
-**Dev races while #125 is open.** A later push to #125 redeploys dev's rules from its own file and drops `clientEvents`:
-form events then fail silently on dev until this PR is pushed again or merged. The same goes for any other PR with rule
-changes.
+**Merged into `staging` 2026-11-11**, after #125 (FinHub v2), #136, #138 and #139. The `DROP BEFORE MERGE` commit
+(#125's rules carried along) is in the history but changes nothing: with #125 merged first, this PR's only rules
+difference against `staging` was its own `clientEvents` block (checked before merging).
+**Still to do:** `test:rules:client-events` is not in the root `package.json`. It was left out because any change to that
+file makes `deploy-parts.mjs` deploy everything on dev. Add it with the next change that touches that file (the exact
+command is at the top of `scripts/rules-tests/kidclub-client-events.rules-test.cjs`).
 
 **Before prod (Renato's call, not done).** Turn on TTL on prod for both collections. The privacy line promises 90 days,
 and `clientErrors` TTL is still not configured there:
@@ -78,9 +111,13 @@ novas" isn't "indisponível": `listUsers` was only exercised on dev.
 - A tab killed in the background sends nothing, so the email also shows "sem saída registada" (opened, no submit or leave).
 - Firebase Analytics still starts with no consent step (see the hotfix findings below). Out of scope here.
 
-## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (NOT merged, NOT in prod); dev preview #136
+**Before that:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
 
-**State.** The fix is built and in review. Merging #135 deploys it to prod (a hotfix PR doesn't deploy when opened).
+**Before that:** 2026-10-31 (the 🧾 hotfix section only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (**merged and deployed to prod 2026-11-11**); #136 merged into `staging` the same day
+
+**State (2026-11-11).** #135 merged; the prod deploy was green (kidclub.pt served the new build at 11:24 UTC). Nobody has clicked through the new links on prod yet. What follows in this paragraph is the pre-merge note.
 Branch protection isn't enforced, so check the merge run is green yourself. The dev preview is #136
 (`sync/hotfix-study-enroll-to-staging` → `staging`). Merging #136 after #135 also does the main→staging sync.
 
@@ -231,6 +268,59 @@ child page links straight to the family calendar.
 `reservationEventsTrigger.test.ts` (A's recompute, B's lock removed), `absenceCarryOver.test.ts` (ledger, parity
 with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
 `pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
+
+## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (NOT merged, NOT in prod)
+
+(Placed here, not at the top, so it doesn't conflict with #138's STATUS edit. The "Last updated" line above
+doesn't mention it for the same reason.)
+
+**Why.** Renato decided on 2026-11-09 that KidClub runs a second vehicle: the electric Tesla Model X it already
+owns (vehicle €0/month, 5 children), with a new driver paid €6/hour. The Resumo Financeiro costed transport as
+one van and one driver.
+
+**What changed.**
+- **Model** (`packages/shared/models/Transportation.ts`): `TransportationConfig.vehicles?: TransportVehicle[]`
+  (`id`, `label`, `seats` = children carried, `vehicleMonthlyCost`, `driverMonthlyCost`,
+  `electricityMonthlyCost`). Read only through `vehiclesOf(config)`. A doc with no list (prod and dev today) is one
+  van, "Carrinha" (id `van`), built from `vanCapacity` / `vanMonthlyCost` / `driverMonthlyCost` /
+  `electricityMonthlyCost`. No migration. The old fields stay in the doc; once a list is saved, nothing reads them.
+- **Resumo Financeiro** (`/admin/financial-summary`): transport cost = each vehicle's three costs × months, summed
+  (`transportCosts`, `src/lib/transportCosts.ts`, with tests). Margin, the discount scenario and break-even all use
+  it. The Transporte card shows the costs per vehicle. Custos Fixos → 🚌 Transporte edits each vehicle's name,
+  lugares, Viatura / Motorista / Eletricidade, has "+ Adicionar viatura", and × removes one (never the last).
+  Any edit writes the whole list to `config/transportation.vehicles`. On an old doc the first edit writes the van
+  from the old fields, plus the change, so the van's numbers don't move. "Motorista à hora? Calcular" is a hint
+  only: hours a week × €6 × 4,33, never saved (open by default on a vehicle whose driver cost is 0).
+- `saveTransportationConfig` (planner ⚙ settings, `/admin/transport-config`) no longer writes `vehicles`: both send
+  the whole doc back as loaded and would overwrite the list with a stale copy.
+- VAT: these inputs had no VAT label and still don't; amounts are stored as typed, as before.
+- Tests: `pnpm --filter kidclub test` (vitest, added exactly as #138 adds it). Build OK; `tsc` has the same 11 old
+  errors, none in touched files.
+
+**Next step: Renato on dev, then the same on prod after promotion.** The agent wrote no config values anywhere.
+1. Resumo Financeiro → Custos Fixos → 🚌 Transporte: the Carrinha shows the same three values as before, and the
+   Custos fixos / Lucro figures haven't moved.
+2. "+ Adicionar viatura" → rename "Viatura 2" (e.g. Tesla Model X), lugares 5, Viatura blank (€0), Motorista from
+   the hint (hours a week × €6 × 4,33), Eletricidade.
+3. ❓ The old single electricity figure now sits on the Carrinha. If it covered charging both cars, move the Tesla's
+   share to the Tesla.
+4. On prod, after the `staging` → `main` promotion: steps 1–3 with prod's own values (they differ from dev's).
+
+**Still reads the old fields, on purpose:** the old Transport Planner (`TransportPlannerPage.tsx`) uses
+`vanMonthlyCost` for its own estimate and edits it in ⚙ "€/mês fixo". Not touched, because #138 deletes that page.
+Until #138 merges: once a vehicle list is saved, the planner's "€/mês fixo" moves only the planner's own estimate,
+not the Resumo. The planner's `vanCapacity` (route solver) is also separate from the Carrinha's lugares here.
+Nothing in `functions/`, FinHub or the rest of `packages/shared` reads these fields.
+
+**Follow-ups:**
+- The transport board (#138) could read `vehiclesOf(config)` for labels and seats instead of its `VEHICLES`
+  constant, once both merge. The van from the old fields is id `van`, like the board's; a vehicle added on the
+  Resumo gets a generated `v-…` id, not the board's `car`, so map it or rename it.
+- After #138 merges (planner gone): make `vanMonthlyCost` optional in the model.
+- Out of scope, unchanged: `services/eventService.ts` "Driver Wage" events (first driver found; planned rebuild).
+
+**Risk:** nothing prod-touching, no external API calls. The only new write is `config/transportation.vehicles`,
+and only when someone edits a vehicle on the Resumo.
 
 ## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
 

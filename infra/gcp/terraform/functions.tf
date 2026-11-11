@@ -82,7 +82,12 @@ resource "google_cloudfunctions2_function" "send_email" {
   # Ignore changes to the build_config, as the source code is managed
   # by the CI/CD pipeline, not by Terraform.
   lifecycle {
-    ignore_changes = [build_config]
+    # build_config: the code is deployed by `firebase deploy`, not Terraform.
+    # service_config: so are the runtime settings (service account, secrets,
+    # max instances, memory, timeout), set from each function's own options
+    # on every deploy. When Terraform owned them too, a Terraform-only dev
+    # deploy stripped the secrets off 20 functions (PR #140, 2026-11-10).
+    ignore_changes = [build_config, service_config]
   }
 }
 
@@ -168,6 +173,11 @@ resource "google_cloudfunctions2_function" "callable_functions" {
   ]
 
   lifecycle {
-    ignore_changes = [build_config]
+    # build_config: the code is deployed by `firebase deploy`, not Terraform.
+    # service_config: so are the runtime settings (service account, secrets,
+    # max instances, memory, timeout), set from each function's own options
+    # on every deploy. When Terraform owned them too, a Terraform-only dev
+    # deploy stripped the secrets off 20 functions (PR #140, 2026-11-10).
+    ignore_changes = [build_config, service_config]
   }
 }
