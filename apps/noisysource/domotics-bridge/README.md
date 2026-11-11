@@ -125,7 +125,117 @@ same. ×10 = tenths of a degree.
 | 123 | `bcu_com_state` | fault bitmap (IPM sub-codes E20_x) |
 
 The bit → E-code tables for the bitmaps, and what each code means, live in the
-app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts`.
+app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts` (a copy of the bit
+tables is in `src/faults.ts`, for the incidents).
+
+### Incidents and the E13 guard
+
+- **The pump is read every 30 s even when nobody is watching** (`PUMP_POLL_MS`;
+  the thermostats keep the 5-min idle rate). Unwatched, the state is still only
+  published every 5 min, unless the pump switches, faults or the guard changes mode.
+- **Incidents** (`src/incidents.ts`) go to `domotics_incidents/{id}` for the app's
+  Reports page: a fault with 30 min of readings before it and 5 min after, how it
+  ended (`self` / `reset`, lockout = second trip within 20 min or still faulted
+  after 10 min), the restart time; and every on/off with who caused it (`app`,
+  `automation`, `guard`, `outside` = not through this bridge) and, since 26/10, every
+  raw datapoint in the reading before and the one that showed it (`dps.before` /
+  `dps.at`), so anything else an outside off changes is on record. Writes are queued
+  in `incidents-pending.json` and retried with backoff, so a network gap or a
+  missing rule loses nothing. Ids are stable (`fault-<UTC start>-<code>`).
+- **E13 guard** (`src/guard.ts`, was `deploy/e13-guard.py`): with
+  `domotics_config/guard` `{enabled: true}` (app: Relatórios or Clima → "Proteção
+  E13"), switches the pump off for 60 min when it idles at the setpoint (≤ 45 Hz,
+  water ≥ setpoint − 1.5) and for 120 min straight after a trip; still faulted
+  within 3 min of a switch-on = lockout, and it stops acting until the fault
+  clears. **Switched off from outside** (not through this bridge: the panel,
+  SmartLife, a timer — the nightly 23:54 UTC off since 21/10 comes from the pump
+  itself, Tuya `event_from` 1, no cloud timer/scene), it switches the pump back on
+  after 5 min (`REON_AFTER_MS`) **only while the heating automation is off or in
+  dry-run**: running live, the automation owns on/off and undoes the off itself
+  (`automationOwns`, from index.ts). Offs through the app or the automation are
+  respected, and so is a pump found off at start-up. Off from outside again within
+  60 min of that switch-on, or after 6 switch-ons in 24 h, it leaves the pump off
+  until someone switches it on (someone means it; no fighting a timer).
+  **Paused** (the automation card's "Pausar", `domotics_config/automation`
+  `pauseUntil`), it switches nothing on: no re-on after an outside off (not even
+  after the pause), and a rest that ends meanwhile carries on until the pause does;
+  the protective offs still happen. Switched off in the app while resting, it
+  switches the pump back on (unless paused). State in `guard-state.json`, so a rest
+  survives a restart. Log lines: `[guard]`, `[incident]`. With the heating
+  automation running live, a rest that is due to end carries on while the
+  automation's plan has the pump off (`holdRest`) and ends as soon as it wants heat.
+  **E13 early warning** (`src/preempt.ts`, since 2026-10-27; on unless
+  `domotics_config/guard` has `preempt: false`, app: "Antecipar o E13"): since 26/10
+  every run trips 9–11 min in, far below the setpoint, and each time the discharge
+  first sat low (42–46 °C), then jumped ≥ 3 °C between two 30 s readings while the
+  coil (C00) dropped, 1–2 min before the trip. So, with the run ≥ 5 min old, a
+  discharge rise ≥ 3 °C per 30 s **from ≤ 50 °C with the coil down ≥ 0.8 °C** switches
+  the pump off for 5 min (`REST_PREEMPT_MS`); the rest then ends like any other (back
+  on; held by the live automation's `holdRest`; not during a pause). A rise alone is
+  normal in a healthy run (60–100 °C, 281 such rises in the 21–24/10 logs). Fires on
+  all 13 recorded trips with a coil reading, 31–121 s ahead, and never in the logs'
+  healthy runs (`test/preempt.test.cjs`, fixtures in `test/fixtures/`). Caps: after 5
+  stops in an hour, the next rests 30 min; a trip anyway (also during the 5-min rest)
+  gets the 120-min rest; two trips within 6 h with it on switch it off for 24 h
+  ("Antecipação desligada até …: dois E13 mesmo assim" in the guard's note).
+  Switching it (or the guard) off in the app forgets that. The idle rule comes first
+  when both apply. Its status is `guard.preempt` in `domotics_state/tuya`
+  (`stopsToday`, `lastStop`, `offUntil`, `note`); the stops are switch incidents
+  with source `guard` and a reason like "descarga a subir 44 → 50,5 °C em 30 s aos
+  9 min — desligada antes do E13, volta a ligar às 20:43".
+- **Heating automation** (`src/automation.ts`, `src/warmby.ts`; design and
+  Renato's decisions in `apps/noisysource/domotics/HANDOFF-heating-automation.md`,
+  reworked 2026-10-26): a warm floor in the warm window (19:00–09:00 Lisbon), with
+  a warm-up that starts early enough from the learned model (at most 6 h before);
+  by day the pump is off unless the battery is ≥ 90 % and the sun covers the house
+  plus the pump's ~3.3 kW (its own draw is taken out of the house load while it
+  runs, so it doesn't switch itself off), or the rooms' mean is below 21 °C. Live,
+  it owns on/off whoever switched the pump (minimum on 30 / off 15 min, at most 12
+  of its own switch-ons a day); `pauseUntil` stops it. The guard comes first.
+  Settings in `domotics_config/automation`, the one-off "warm by HH:MM" in
+  `domotics_config/warm_by` (both read every 2 min, cached in
+  `automation-config.json` / `warm-by.json`). The warm-up model it learns, the last
+  water setpoint it sent, the warm-up in progress and its switch-ons are in
+  `automation-state.json`. Its status (`mode`, `doing`, `plan`, `solar`, …) goes
+  out with the bridge state. Log lines: `[automation]`.
+- **History**: `deploy/backfill-incidents.cjs` replays the hand-run logger's
+  files through the same recorder (see its header). Tests: `pnpm test`.
+
+## Energy history (kWh)
+
+For the app's Energia page. The inverter (RENAC N1HL, `src/inverter.ts`, local
+Modbus TCP, read-only) is read every poll (~30 s) anyway; `src/energy.ts`
+integrates those power readings into **15-minute slots** and
+`src/energy-store.ts` writes them to `domotics_energy/{yyyy-mm-dd}` (Lisbon
+date), one field per slot: `q00`…`q95` (`q99` on the October clock change, `q91`
+in March). Each slot holds Wh for `pv`, `load`, `imp`, `exp`, `chg`, `dis`, plus
+which source fed the house (`pvLoad`, `batLoad`) and the battery (`gridBat`),
+`sec` = seconds of the slot covered by readings, and `soc` at its end. Also
+`acLoad` / `invOut`: registers 50 and 3 integrated, unconfirmed and unused (on
+25/10 at night reg 50 was exactly reg 3 + grid import, ~10 % below `load`,
+which carries the inverter's losses): recorded so the page can switch to an
+AC figure later with its history intact.
+
+- **Integrated, not the inverter's counters.** Its kWh registers aren't
+  confirmed yet (below). Two readings more than 3 min apart aren't joined: that
+  time is a gap, and `sec` says so. House consumption is derived (pv − battery −
+  grid, like the vendor app), so it includes the inverter's own losses.
+- **Writes**: closed slots wait on the Pi (in `energy-state.json`) and go out
+  together at most once an hour: one PATCH per day document, ~24 a day, each with
+  only the waiting slots' fields (so a lost state file can't overwrite a written
+  slot). The Energia page is therefore up to an hour behind.
+  Failures back off 30 s → 30 min; hard cap 300 writes a UTC day. The bridge never
+  reads these documents back. Rules: bridge create/update under date ids only.
+- **State**: `energy-state.json` (open slot, last reading, unconfirmed writes),
+  saved when a slot closes, every 5 min and on exit. A restart under 3 min is
+  bridged; a longer one is a gap.
+- **Counter candidates**: `energy-registers.jsonl` gets one line per closed slot
+  with the integrated Wh and 14 input registers that count up in 0.1 kWh steps
+  (`COUNTER_CANDIDATES` in `inverter.ts`). Compare a few sunny days of it with the
+  slots to tell which register is which flow; then the counters can fill gaps.
+  Capped at 5 MB. Log lines: `[energy]`.
+- Tests: `test/energy.test.cjs` (Lisbon days and the clock changes, the flow
+  split, gaps, slot boundaries, restarts, write backoff and cap).
 
 ## Moving to the Raspberry Pi
 

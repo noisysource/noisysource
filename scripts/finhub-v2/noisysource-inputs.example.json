@@ -1,0 +1,47 @@
+{
+ "comment": "Shape of prodata/finhub-v2-noisysource.json (the real file is local only). MADE-UP VALUES. Read by scripts/finhub-v2/lib/buildNoisySource.ts together with prodata/finhub-seed.json, the payslip PDFs and the BPI statements.",
+ "accountId": "noisysource-bpi",
+ "employeeNumbers": { "00001": "ana", "00002": "rui" },
+ "ecContracts": [
+  {
+   "number": "C-100", "client": "Plataforma X", "endClient": "Cliente Y", "title": "Consultoria",
+   "personId": "ana", "dailyRateCents": 40000, "totalDays": 100, "startDate": "2029-10-01", "clientEstimatedEnd": "2030-03-01",
+   "holidayCalendar": "client-x", "daysToPayment": 10, "vatCode": "isento",
+   "opening": { "asOf": "2029-12-31", "daysUsed": 60 },
+   "comment": "opening: days used before the history starts"
+  }
+ ],
+ "holidays": [
+  { "calendarId": "client-x", "year": 2030, "dates": ["2030-01-01", "2030-02-14"], "names": { "2030-02-14": "Dia do cliente" }, "toConfirm": true, "note": "where the dates come from" },
+  { "calendarId": "empresa-noisysource", "year": 2030, "dates": ["2030-03-05"], "names": { "2030-03-05": "Carnaval" }, "toConfirm": true }
+ ],
+ "calendar": [
+  { "personId": "ana", "kind": "ferias", "dates": ["2030-08-05", "2030-08-06"], "label": "Férias" },
+  { "personId": "ana", "kind": "licenca", "dates": ["2030-01-02", "2030-01-03"], "label": "Licença", "datesToConfirm": true }
+ ],
+ "perDiemCents": { "ana": 5000, "rui": 4000 },
+ "perDiemNote": "how the daily values were read",
+ "perDiemToConfirm": ["rui"],
+ "holidaySubsidyMonth": { "ana": 6, "rui": 6 },
+ "christmasSubsidyMonth": { "ana": 11, "rui": 11 },
+ "christmasSubsidyToConfirm": true,
+ "employerSsExemption": { "from": "2030-02-01", "to": "2030-03-31", "note": "Isenção da TSU da empresa" },
+ "salaryPayDay": 25,
+ "rebuiltPayslipLines": [
+  { "personId": "rui", "month": "2030-06", "kind": "subsidio-ferias", "label": "Subsídio de férias (reconstruído)", "amountCents": 100000, "irsCents": 1000, "ssEmpCents": 11000, "note": "why it was rebuilt" }
+ ],
+ "paymentRules": [
+  { "what": "salarios", "label": "Salários líquidos", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": false, "evidence": "where the day comes from" },
+  { "what": "refeicao", "label": "Cartão refeição", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true },
+  { "what": "vales", "label": "Vales", "day": 25, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true, "fee": { "label": "comissão do fornecedor", "pct": 5, "vatPct": 20 } },
+  { "what": "ss", "label": "Segurança Social", "day": 20, "monthOffset": 1, "nonBusinessDay": "after", "toConfirm": false },
+  { "what": "irs", "label": "IRS retido", "day": 20, "monthOffset": 1, "nonBusinessDay": "after", "toConfirm": false },
+  { "what": "ec-fatura", "label": "Fatura EC", "day": 31, "monthOffset": 0, "nonBusinessDay": "before", "toConfirm": true }
+ ],
+ "insurancePlans": { "seguro-saude": { "frequency": "monthly", "day": 15 } },
+ "extraCostPlans": [
+  { "key": "banco-manutencao", "description": "Banco — manutenção", "amountCents": 500, "direction": "saida", "vatCode": "isento", "frequency": "monthly", "day": 8, "from": "2030-01-01", "toConfirm": true },
+  { "key": "irc-pagamento-por-conta", "description": "IRC — pagamento por conta", "amountCents": 10000, "direction": "saida", "vatCode": "isento", "frequency": "annual", "months": [7, 9, 12], "day": 22, "from": "2030-07-01", "toConfirm": true }
+ ],
+ "loan": { "key": "emprestimo", "description": "Empréstimo", "capitalPerMonthCents": 50000, "stampDutyPct": 4, "day": 20, "toConfirm": true }
+}

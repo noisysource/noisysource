@@ -2,11 +2,122 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
+**Last updated:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
 
-## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (NOT merged, NOT in prod); dev preview #136
+## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
 
-**State.** The fix is built and in review. Merging #135 deploys it to prod (a hotfix PR doesn't deploy when opened).
+**Why.** KidClub is getting a second vehicle (the owned electric Model X, 5 children, a new driver at
+€6/hour; decided by Renato 2026-11-09). The old planner put every child of a period into one run for
+one van, and its "optimise" called Google's Routes API from the browser, the API behind the €500
+charge (disabled by hand, see `infra/gcp/terraform/project.tf`). Renato planned the two vehicles on a
+prototype board instead (a Claude artifact, private to him) and asked for it in the app.
+
+**What's in the branch.**
+- `/admin/transportes` (sidebar "🚐 Transportes"; `/admin/transport-planner` redirects there): a week of
+  van and car lanes in 5-minute rows. Each run is a solid pick-up box and an outlined drop-off box;
+  a pick-up drags its drop-off along, a drop-off moves alone; another vehicle takes the whole run.
+  On-board strip, "N de M lugares" overload, must-arrive-by warning, undo, "Destacar novos",
+  vehicle filter, phone day tabs. Code: `src/pages/admin/transportBoard/` (pure logic + vitest tests
+  in `logic.ts` / `logic.test.ts`; `pnpm --filter kidclub test`). Vehicles live in `VEHICLES` there.
+- **Runs come live from the DB** (Renato, 2026-11-09: "the data should come from the DB"). Every leg of
+  every active or pending, not-ended transport subscription is a run: child, day, places and the
+  requested time come from the subscription (PENDENTE badge when pending). It starts in the van.
+  The board stores only its plan for that leg in `_apps/arcoiris/transportRuns/{subId}_{day}_{leg}`:
+  vehicle, planned pick-up (only if it differs; the box then says "Pedido às …"), drop-off, must
+  arrive by, note, flag. `leg` = position among that day's legs by requested time, so a time change
+  keeps the plan, but adding or removing a leg the same day can shift it. A subscription leg's day
+  can't be dragged: that's a subscription change. "Repor plano" deletes the stored plan.
+- **Planning-only runs** (PLANO badge, "Adicionar só no quadro"): a child who isn't in the DB yet,
+  stored whole in the same collection with no `subId`. Delete it once the real subscription exists,
+  or the child counts twice. The board never writes to subscriptions or billing; admin-only rule.
+- Removed: `TransportPlannerPage.tsx` and `lib/routeSolver.ts` (the Routes API caller). Gone with
+  them: the planner's settings "apply to subscriptions" button, which rewrote every active
+  subscription's `monthlyFee` with its own discount maths (ignoring `discountOverrides`). Transport
+  prices are still edited at `/admin/transport-config`; "rota atribuída / sem rota" is still the
+  manual toggle on the subscriptions page. Old `transportRoutes` versions stay in Firestore, unread.
+- No seed: nothing to import for the subscriptions. The prototype's own plan (car assignments,
+  drop-off times, Lara / Filipa's children / Patrícia's child, who have no subscription) is not
+  carried over; re-plan on the board, or ask for a one-off import if that's quicker.
+
+**Next step.** Renato clicks through it on dev (it shows dev's own subscriptions). Then promote
+`staging` → `main` as usual; no data step for prod.
+**Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
+driver); a warning when a PLANO run's child now has a subscription; live car position.
+
+## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (**merged 2026-11-11**, on dev). NOT in prod
+
+**Why.** For 7 weeks no parent created a subscription and nobody noticed. The submit button was disabled for study-only
+parents, and a disabled button throws nothing, so `clientErrors` and its digest had nothing to report. This makes that
+kind of drop-off visible. The cause itself is fixed by the hotfix in the next section, not here.
+
+**What was added.**
+- `enrollFunnelWeekly` (`functions/src/kidclub/enrollFunnelWeekly.ts`, pure part and tests in `...Logic.ts`): Mondays
+  08:00 Lisbon, europe-west3. Always emails ADMIN_EMAIL, even at all zeros, counts only. Top line: date of the last
+  request a parent created, with a warning past 14 days. Then the last 7 days (accounts, profiles, children, requests per
+  service), form activity, and families with a child from the last 30 days and no live subscription. A failed read
+  shows as "indisponível", never as 0, and the email still goes out.
+- `clientEvents` (`src/lib/clientEvents.ts`, hook `src/lib/useEnrollFormEvents.ts`): `enroll_form_opened`,
+  `enroll_days_chosen`, `enroll_blocked`, `enroll_submitted`, `enroll_left`, under `_apps/arcoiris/clientEvents`.
+  Signed-in only, nothing while editing, 90-day `expireAt`, counts/booleans only. `enroll_left` is the key one: it
+  records what state the form was in when the parent gave up. Closing the tab sends it by keepalive `fetch` to the
+  Firestore REST API, because the SDK's write can't complete during unload. In-app navigation uses the SDK.
+- `firestore.rules`: `clientEvents` is create-only with a shape that can't hold free text. Test:
+  `scripts/rules-tests/kidclub-client-events.rules-test.cjs`.
+- `PrivacyPolicyPage`: one line under "Interesse legítimo", and the "Última atualização" date. ❓ Renato: review the
+  wording. Section 9 of the policy says material changes are communicated by email or a prominent notice; decide whether
+  this counts. Nothing was sent. Sections 2 and 4 were not changed.
+
+**Checked.** Functions build OK, 482 tests pass (37 new). `pnpm --filter kidclub build` OK. The app's `tsc` has the same 11
+older errors, none in touched files. Emulator with the real rules: new rules test 39/39, `pnpm test:rules` 39/39,
+`test:rules:client-errors` 10/10. The hook passed an ad-hoc check under React.StrictMode in jsdom (no false `enroll_left`,
+one event of each kind, edit mode silent, throwing or rejected writes never reach the form), and the real keepalive body
+passed the real rules on the emulator; that check isn't in the repo, as the app has no DOM test setup. On dev: the deploy
+went green, the scheduler job ran once and wrote the outbox doc with no "indisponível", so `listUsers` works there, and TTL
+on `clientEvents` is ACTIVE. `clientErrors` still has no TTL on dev; left as is. **Not checked: the forms in a real browser,
+including the keepalive write on tab close, and anything on prod.**
+
+**Test on dev (nobody has clicked through this yet).** Use a real test-parent account, not impersonation: impersonated
+events are left out of the email, and the admin token passes every rule.
+1. "+ Transporte" on a child, pick a day, switch transport off on it, then "← Voltar". `clientEvents` should get opened,
+   days_chosen and left, with `studyDays` above 0, `transportDays` 0 and `submitEnabled` false.
+2. Same, but close the tab instead of going back. This is the keepalive path, which hasn't run in a real browser yet.
+3. Submit a form: `enroll_submitted` and no `enroll_left`. Edit a pending request: nothing at all.
+4. `gcloud scheduler jobs run firebase-schedule-enrollFunnelWeekly-europe-west3 --location europe-west3 --project kidclub-dev`
+   writes the email to `emailOutbox`. Dev never sends it, since Gmail is prod-only (`externalGuard.ts`): the doc ends in
+   `status: error` with the guard's message, and the content is in its `subject` and `html` fields. So the first email
+   that actually reaches an inbox is prod's first Monday after this ships.
+
+**Merged into `staging` 2026-11-11**, after #125 (FinHub v2), #136, #138 and #139. The `DROP BEFORE MERGE` commit
+(#125's rules carried along) is in the history but changes nothing: with #125 merged first, this PR's only rules
+difference against `staging` was its own `clientEvents` block (checked before merging).
+**Still to do:** `test:rules:client-events` is not in the root `package.json`. It was left out because any change to that
+file makes `deploy-parts.mjs` deploy everything on dev. Add it with the next change that touches that file (the exact
+command is at the top of `scripts/rules-tests/kidclub-client-events.rules-test.cjs`).
+
+**Before prod (Renato's call, not done).** Turn on TTL on prod for both collections. The privacy line promises 90 days,
+and `clientErrors` TTL is still not configured there:
+`gcloud firestore fields ttls update expireAt --collection-group=clientEvents --enable-ttl --project rainbow-prod-2454b`
+and the same with `--collection-group=clientErrors`. Then check the first Monday email arrives from prod, and that "Contas
+novas" isn't "indisponível": `listUsers` was only exercised on dev.
+
+**Left as is (reported, not fixed).**
+- A request an admin creates while acting for a family carries the parent's `userId` and no `source`, so it counts as a
+  parent's. Older ones were stamped with the admin's uid and are excluded as staff.
+- `source: 'web'` is what `ClaimSubscriptionsPage` writes when a parent claims an admin-created subscription, overwriting
+  `manual`. The email treats it as not created by a parent, so it doesn't give "last request" a false fresh date.
+- Families have no "profile completed" date, so that count is families created in the last 7 days that are complete.
+- A family with only cancelled subscriptions counts as "sem inscrição" in the email but isn't listed by "Mostrar famílias
+  sem inscrições", which only shows families with no subscription at all. The email says so.
+- A tab killed in the background sends nothing, so the email also shows "sem saída registada" (opened, no submit or leave).
+- Firebase Analytics still starts with no consent step (see the hotfix findings below). Out of scope here.
+
+**Before that:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
+
+**Before that:** 2026-10-31 (the 🧾 hotfix section only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (**merged and deployed to prod 2026-11-11**); #136 merged into `staging` the same day
+
+**State (2026-11-11).** #135 merged; the prod deploy was green (kidclub.pt served the new build at 11:24 UTC). Nobody has clicked through the new links on prod yet. What follows in this paragraph is the pre-merge note.
 Branch protection isn't enforced, so check the merge run is green yourself. The dev preview is #136
 (`sync/hotfix-study-enroll-to-staging` → `staging`). Merging #136 after #135 also does the main→staging sync.
 
@@ -158,11 +269,184 @@ child page links straight to the family calendar.
 with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
 `pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
 
-## ▶️ Start here (left 2026-10-17, end of session)
+## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (NOT merged, NOT in prod)
 
-Both changes below are **live on prod** (#96, plus #98 shipped with the `staging` → `main` promotion #99,
-2026-10-17 ~09:05 UTC). Nothing is in flight: all PRs are merged and the worktrees are removed.
-Next, in order:
+(Placed here, not at the top, so it doesn't conflict with #138's STATUS edit. The "Last updated" line above
+doesn't mention it for the same reason.)
+
+**Why.** Renato decided on 2026-11-09 that KidClub runs a second vehicle: the electric Tesla Model X it already
+owns (vehicle €0/month, 5 children), with a new driver paid €6/hour. The Resumo Financeiro costed transport as
+one van and one driver.
+
+**What changed.**
+- **Model** (`packages/shared/models/Transportation.ts`): `TransportationConfig.vehicles?: TransportVehicle[]`
+  (`id`, `label`, `seats` = children carried, `vehicleMonthlyCost`, `driverMonthlyCost`,
+  `electricityMonthlyCost`). Read only through `vehiclesOf(config)`. A doc with no list (prod and dev today) is one
+  van, "Carrinha" (id `van`), built from `vanCapacity` / `vanMonthlyCost` / `driverMonthlyCost` /
+  `electricityMonthlyCost`. No migration. The old fields stay in the doc; once a list is saved, nothing reads them.
+- **Resumo Financeiro** (`/admin/financial-summary`): transport cost = each vehicle's three costs × months, summed
+  (`transportCosts`, `src/lib/transportCosts.ts`, with tests). Margin, the discount scenario and break-even all use
+  it. The Transporte card shows the costs per vehicle. Custos Fixos → 🚌 Transporte edits each vehicle's name,
+  lugares, Viatura / Motorista / Eletricidade, has "+ Adicionar viatura", and × removes one (never the last).
+  Any edit writes the whole list to `config/transportation.vehicles`. On an old doc the first edit writes the van
+  from the old fields, plus the change, so the van's numbers don't move. "Motorista à hora? Calcular" is a hint
+  only: hours a week × €6 × 4,33, never saved (open by default on a vehicle whose driver cost is 0).
+- `saveTransportationConfig` (planner ⚙ settings, `/admin/transport-config`) no longer writes `vehicles`: both send
+  the whole doc back as loaded and would overwrite the list with a stale copy.
+- VAT: these inputs had no VAT label and still don't; amounts are stored as typed, as before.
+- Tests: `pnpm --filter kidclub test` (vitest, added exactly as #138 adds it). Build OK; `tsc` has the same 11 old
+  errors, none in touched files.
+
+**Next step: Renato on dev, then the same on prod after promotion.** The agent wrote no config values anywhere.
+1. Resumo Financeiro → Custos Fixos → 🚌 Transporte: the Carrinha shows the same three values as before, and the
+   Custos fixos / Lucro figures haven't moved.
+2. "+ Adicionar viatura" → rename "Viatura 2" (e.g. Tesla Model X), lugares 5, Viatura blank (€0), Motorista from
+   the hint (hours a week × €6 × 4,33), Eletricidade.
+3. ❓ The old single electricity figure now sits on the Carrinha. If it covered charging both cars, move the Tesla's
+   share to the Tesla.
+4. On prod, after the `staging` → `main` promotion: steps 1–3 with prod's own values (they differ from dev's).
+
+**Still reads the old fields, on purpose:** the old Transport Planner (`TransportPlannerPage.tsx`) uses
+`vanMonthlyCost` for its own estimate and edits it in ⚙ "€/mês fixo". Not touched, because #138 deletes that page.
+Until #138 merges: once a vehicle list is saved, the planner's "€/mês fixo" moves only the planner's own estimate,
+not the Resumo. The planner's `vanCapacity` (route solver) is also separate from the Carrinha's lugares here.
+Nothing in `functions/`, FinHub or the rest of `packages/shared` reads these fields.
+
+**Follow-ups:**
+- The transport board (#138) could read `vehiclesOf(config)` for labels and seats instead of its `VEHICLES`
+  constant, once both merge. The van from the old fields is id `van`, like the board's; a vehicle added on the
+  Resumo gets a generated `v-…` id, not the board's `car`, so map it or rename it.
+- After #138 merges (planner gone): make `vanMonthlyCost` optional in the model.
+- Out of scope, unchanged: `services/eventService.ts` "Driver Wage" events (first driver found; planned rebuild).
+
+**Risk:** nothing prod-touching, no external API calls. The only new write is `config/transportation.vehicles`,
+and only when someone edits a vehicle on the Resumo.
+
+## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
+
+**What it is.** Anyone can sign children up for a one-off event, with or without a KidClub account.
+Events have their own prices and per-day capacity. Public pages: `/eventos` (list),
+`/eventos/:eventId` (signup), `/eventos/inscricao/:id?t=<token>` (the registration's own page: pay,
+status, invoice). Admin: **Campos e eventos → 🎃 Eventos pontuais** (`/admin/eventos`). The landing page
+shows a "Próximos eventos" strip while something is published.
+
+**Renato's decisions (2026-10-20):**
+1. Public price, plus an optional lower **member price** per day for KidClub families.
+2. An event can have **several days**, each with its own capacity and price; parents pick the days.
+3. **Guests pay right away by MB WAY.** Their seats are held 30 min, then released. Anyone paying another
+   way is added by an admin as a walk-in and marked paid by transfer.
+4. **Only an admin cancels.** A paid registration is flagged `refundPending`; the refund or credit note is
+   done by hand.
+
+**How it works (code: `functions/src/kidclub/adhocEvents.ts`, pure logic + tests in `adhocEventLogic.ts`).**
+- Collections: `_apps/arcoiris/adhocEvents` and `adhocEventRegistrations`. Not `events`, which belongs to
+  the calendar. Model: `packages/shared/models/AdhocEvent.ts`.
+- **Seats:** `days[].taken` (held + confirmed) changes only inside transactions. The rules allow no client
+  writes at all, and admins edit through `saveAdhocEvent`, which keeps the server's counts.
+- **Guest:** `registerForAdhocEvent` → `held` + its own bill (`billing.type: "event"`, `familyId: ""`,
+  `userId: ""`, `guestNif` if given). `payAdhocRegistration` (by link token) → MB WAY. The code is
+  shared with `initiateMbwayPayment` through the new `startMbwayPayment`; `initiateMbwayPayment` behaves
+  the same. Once paid (webhook or `markBillingPaid`), `onAdhocBillingPaid` confirms it and emails
+  "Inscrição confirmada". `expireAdhocHolds` (every 10 min) releases unpaid holds, but never while MB WAY
+  is `processing`. Paid after expiry: confirmed anyway, seats taken again, and if the day is over capacity
+  it's flagged `overCapacity` for the admin.
+- **Family:** member price. **Pay now** works the same way, and the bill also shows on their Pagamentos
+  page. **Monthly bill** is confirmed at once and gets a `billingPeriod`: the event's month, or the next
+  month whose bill is still `pending`/doesn't exist yet. `computeLineItems` (`fetchEventLines` in
+  `billing.ts`) adds one `type: "event"` line per child, and `onAdhocRegistrationBillingSync` recomputes
+  the family on confirm/cancel.
+- **Invoices:** event lines are `PRODUCT_STUDY` (23%), like camps. A guest without a NIF gets Consumidor
+  final. A guest with a NIF gets that NIF's existing Vendus client, used as-is and never renamed (new
+  `findOrCreateClientByNif`). A guest's "Fatura disponível" email links to the registration page, which
+  downloads the PDF by token (`getInvoicePdf` accepts `registrationId` + `token`).
+- **Caps (public endpoints that reach EasyPay):** 100 guest signups and 150 token MB WAY starts per Lisbon
+  day (`rateLimits/adhoc*`), 3 MB WAY attempts per registration, 4 children per registration. No email goes
+  to a guest before they've paid.
+
+**Tested.** After merging `staging` (#109 parties, #108 pnpm 10) on 2026-10-21: 356 functions unit tests
+pass. The new ones are `adhocEventLogic.test.ts` and `adhocEventParity.test.ts`, plus guest invoicing and the
+monthly-bill trigger in `billing.test.ts`. `pnpm test:rules` and `pnpm test:rules:adhoc-events` (18/18) pass.
+`pnpm test:emulator:adhoc-events` passes 29/29 end to end on the Firestore, Auth and Functions emulators. The
+monthly-bill recompute can't run in the emulator: firebase-tools 14's admin proxy drops
+`admin.firestore.FieldValue`, and `sendEmailFromOutbox` crashes there the same way. It's unit-tested instead.
+
+**On dev (2026-10-21, deploy run 39629573346, all green).** Checked by hand: the 9 functions are ACTIVE,
+including `expireAdhocHolds` with its scheduler job ENABLED (every 10 min). The 4 indexes are READY.
+`getAdhocRegistration` answers, and a signed-out visitor can list published events but not all of them
+(403). `/eventos` and `/admin/eventos` are served. No errors in the new functions' logs.
+
+**Next step: Renato's click-through on dev** (https://kidclub-dev-arcoiris.web.app). Gmail and Vendus are
+blocked on dev by design: no emails go out, and a paid bill shows `invoiceError` instead of an invoice.
+That's expected.
+- *Setup:* `/admin/eventos` → + Novo: 2 days. Day 1: 3 seats, €25, member €20. Day 2: 2 seats, €30, no
+  member price. Tick Publicado and Inscrições abertas.
+- *Guest (incognito):* landing strip → event → 2 kids on day 1 → registration page shows €50 and a 30:00
+  countdown → MB WAY → approve in the EasyPay sandbox → turns "Inscrição confirmada" by itself. Same
+  email+child+day again → "já está inscrito(a)". 2 more kids on day 1 → "Sem vagas"; 1 kid → OK, day now
+  Esgotado. Leave one unpaid ~40 min → "A reserva expirou", seat back. Decline an MB WAY → retry offered
+  (3 max).
+- *Family (sign in, or 👁 Ver como cliente, then 🎃 Eventos):* "preço de cliente", €25 struck → €20, own
+  children as checkboxes. "Juntar à mensalidade" → confirmed, and a line appears on that month's bill in
+  Faturação (the next month's if that one is paid). "Pagar agora" → MB WAY → confirmed; the bill is also in
+  Pagamentos. "As minhas inscrições" on `/eventos`.
+- *Admin:* cancel the monthly one (line leaves the bill, seat back). Cancel a paid one → ⚠️ refund flag.
+  Inscrição presencial → doesn't expire → Marcar como pago (transferência). Copiar link → pay from incognito.
+  📋 Lista → print. Edit capacity and price (existing signups keep their price); removing a day with signups
+  is refused. Untick Inscrições abertas / Publicado. Apagar only works with no signups.
+
+**Only verifiable in prod:** the Vendus invoice for event bills (guest Consumidor final, guest with NIF,
+family pay-now, family monthly line) and the emails ("Inscrição confirmada", a guest's "Fatura disponível"
+with the registration link). All are unit-tested and the outbox content is emulator-tested; none has reached
+Vendus or Gmail.
+
+**Prod path:** Renato OKs dev → merge #110 into `staging` → open the `staging` → `main` promotion (it deploys prod
+pre-merge) → check it's green → merge. Then in prod: indexes READY, `expireAdhocHolds` job ENABLED, `/eventos`
+loads. Watch the first real event's first paid signup (invoice + emails). If anything else merges into
+`staging` first (e.g. #106 domotics, open), it ships in the same promotion.
+
+**Different from parties (#109), on purpose:** a public party request matches or creates a `families` doc by
+email. An event guest gets no family; their NIF rides on the bill. Matching a typed email can't safely grant
+the member price, and one-off guests would crowd Famílias e inscrições. Align later if wanted.
+
+**Open questions for Renato:**
+- Vendus product: event lines are invoiced as "Serviço de apoio ao ensino" (PRODUCT_STUDY, 23%), like
+  camps and party deposits. Should there be a dedicated Vendus product such as "Atividades / Eventos"?
+  Changing it means a new id in `vendus.ts` and `KIDCLUB_VAT.event` together.
+- `/terms` and `/privacy`: the signup form makes parents accept them. Do they cover events (photos, health
+  data, cancellations and refunds)? Health notes of guests' children are kept indefinitely. Should they be
+  deleted N months after the event?
+- Should the admin get an email for each new registration? There's none now; the admin page shows everything.
+- FinHub / Resumo Financeiro don't count event revenue yet (see the root CLAUDE.md data contract).
+- Camps (`/admin/camps`) overlap with this: two legacy models, account-only, and capacity that can
+  overbook. Fold them into events later?
+
+**Risky / in flight:** new **unauthenticated** callables (`registerForAdhocEvent`, `getAdhocRegistration`,
+`payAdhocRegistration`, `getInvoicePdf` by token) are capped as above. `onAdhocBillingPaid` runs on every
+billing doc update; it exits at once unless `type === "event"`. `expireAdhocHolds` is one more Cloud
+Scheduler job (8 scheduled functions now; ~$0.10/month past the 3 free). The new callables are deliberately
+**not** in Terraform's `callable_functions` yet (see the note in `functions.tf`): add them in a follow-up,
+after the first real deploy.
+
+## ▶️ Start here (left 2026-10-21)
+
+**🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`, NOT in prod.** `listDocuments` (`vendus.ts`) filtered
+with `date_from`/`date_to`, which live Vendus rejects with 403 `P001`, so `getKidclubVatSummary` (FinHub → IVA,
+NoisyPhocus) failed. #116 switches it to `since`/`until` with `per_page=50` and a 40-page cap, and treats Vendus's
+empty-page answer (404 `A001` "No data", verified live 2026-10-25) as the end of the list. It reaches prod only via
+the next `staging` → `main` promotion. After that, check the IVA page on prod: the KidClub rows should be there with no
+"Erro Vendus" banner.
+
+**Parties are live in prod** (#109 promoted with #111, merged 2026-10-21 15:32 UTC). That covers the deposit bill
+and emails at confirmation, and booking without an account at `kidclub.pt/festas`. Section 🎈 below has the details.
+Next for parties:
+- **Ana Ferreira's deposit (€162.98) is waiting for her to pay.** Re-confirmed 2026-10-21: the bill
+  `partyDeposit_aZPID1Hp3TnTUMjR0L0I` exists and her confirmation email was sent, with the payment link (checked
+  in prod: the link opens her booking). If it's still `pending` in a few days, give her a call.
+- **The first real public request** will be the first time `requestPartyBooking` runs in prod. When it arrives,
+  check the booking (`source: public`), its family, and that both emails went out (`party_request_` / `party_received_`).
+- Follow-ups, none urgent: see "Open" and "Open (public parties)" in the 🎈 section.
+
+**Carried over from 2026-10-17. Not re-checked on 2026-10-21, so confirm before relying on it:**
 1. **Confirm a real parent enrollment landed** after 2026-10-17 09:00 UTC. Look for a new `pending` sub on
    Famílias e inscrições that a parent created, not an admin. As of 09:20 UTC there were none yet, which was
    expected that soon. If none appear within a few days, check "🚨 Erros dos clientes" before assuming
@@ -178,14 +462,18 @@ Next, in order:
 6. Follow-ups, none urgent: per-child calendar still broken for parents; `clientErrors` TTL not enabled;
    rules tests not in CI. Details in the two sections below.
 
-**Branch state:** `main` and `staging` match in content. The automatic staging sync worked after #99.
-Dev's last deploy (the merge of #100) was cancelled by a newer push and never re-ran. Merging this STATUS
-PR redeploys dev and brings it up to date.
+**Parked 2026-10-25: shared custody** (divorced parents, one child, alternating weeks, separate bills and
+invoices). The design is agreed in outline, with 4 open decisions; nothing is built. Read the first Backlog entry
+before picking it up. The entry after it (the quinzenal pattern isn't calendar weeks) may affect current
+customers, so it's worth a prod check on its own.
 
-## 🎈 Parties: deposit bill + emails at confirmation, and booking without an account (2026-10-20/21): PR #109 → `staging`, NOT in prod
+**Branch state (2026-10-21, after #111):** `main` and `staging` match in content.
 
-Renato wants this promoted to prod as soon as it's checked on dev. The second half ("Parties without an
-account", below) was added on 2026-10-21 to the same PR.
+## 🎈 Parties: deposit bill + emails at confirmation, and booking without an account (2026-10-20/21): IN PROD
+
+PR #109 → `staging`, then promoted with #111 (prod deploy green, merged 2026-10-21 15:32 UTC). Renato tested it on dev
+first. The second half ("Parties without an account", below) was added on 2026-10-21 to the same PR. Checked in prod
+after the deploy, without logging in: `config/party` is readable, `config/billing` and `partyLinks` are refused.
 
 **Why.** Confirming a party did nothing else. The 50% deposit bill only existed after the parent opened the party
 page and tapped "Pagar sinal", so nothing showed under Pagamentos. There were no party emails at all. While
@@ -231,14 +519,15 @@ content):
 7. Fallback: delete `billing/partyDeposit_<id>` in the console → party page shows "Pagar sinal" → tapping it recreates
    the same id.
 
-**Bookings confirmed before this deploys get no automatic bill or email** (e.g. Ana Ferreira's, confirmed on prod
-2026-10-20). For those, the parent still uses "Pagar sinal" on the party page, which now creates the same deterministic
-bill. To give one the email anyway: set it back to `pending` in the console, then confirm it again in Festas.
+**Bookings confirmed before the deploy** get no automatic bill or email. There was exactly one in prod, Ana Ferreira's
+(`aZPID1Hp3TnTUMjR0L0I`). Renato set it back to `pending` and confirmed it again on 2026-10-21, which created the bill
+and sent the email (see Start here). Same recipe if one ever turns up again.
+
+**Prod check (2026-10-21, read-only):** `bookings` held exactly one document, Ana's, owned by her own account
+(`userId` = her family's `primaryContact.userId`, her email, family has a NIF). No booking carried an admin's identity,
+so nothing needed fixing.
 
 **Open:**
-- Prod bookings made by an admin while impersonating (before this fix) carry the admin's `userId`/email. The parent
-  can't see them, and their emails would go to the admin. Worth a read-only check on prod before promoting: `bookings`
-  where `userId` is an admin uid.
 - Not done: a deposit bill isn't cancelled if a confirmed booking is later rejected (the UI only offers
   Confirmar/Rejeitar on pending bookings). Editing a confirmed booking's price doesn't change its deposit bill.
 - Party deposits are still invoiced under the study-room Vendus product (23%, same rate), as before.
@@ -3087,6 +3376,86 @@ than another one-off patch.
   *historical data* question, not a live one — relevant to the data pass.
 
 ## Backlog — bigger features surfaced but not started
+- **Shared custody: one child, two parents, alternating weeks** (surfaced 2026-10-17, parked by Renato
+  2026-10-25). Design only: no code, no branch, nothing in prod.
+
+  **The case.** One child so far (Renato knows which family; not recorded here). The parents are divorced and
+  have the child on alternating weeks. On their own weeks each parent manages everything (absences, the
+  schedule) and pays for those days. **The admin decides who gets each week, not the parents.** Each parent
+  wants their own bill, an invoice with their own NIF, and to pay separately. The enrollment fee and insurance
+  are split between them.
+
+  **Why the platform can't do it today.** Everything assumes one owner per family:
+  - `Family.primaryContact` is one login, one email, one NIF (`packages/shared/models/Family.ts`).
+  - Billing writes one bill per family per month, `billing/{familyId}_{yyyy-mm}`, addressed to that contact
+    (`buildBillingRecord`, `autoCreateBillingSchedule` in `functions/src/kidclub/billing.ts`). The Vendus
+    invoice uses the family's NIF.
+  - Rules, the Pagamentos page and the payment callables only let `billing.userId` see and pay a bill.
+    Children, subscriptions and `reservationEvents` are readable by that one owner only.
+  - `setReservationEventStatus` (`functions/src/kidclub/reservationEvents.ts`) lets only the family owner
+    change a day.
+
+  **Direction agreed (Renato's model, 2026-10-17):** keep one child with one normal weekly subscription, link a
+  second parent, and assign each week to a parent. Considered and dropped: two families with the child
+  duplicated (fee and insurance charged twice, two child records, and it relies on the quinzenal pattern, see
+  the next entry); one family with a percentage co-payer (doesn't capture who manages which week).
+  - **Custody calendar on the child, admin-only:** which parent has the first week, a starting date, the
+    weekday the week switches on, and exceptions (holidays, swaps). Parents can see it but not change it.
+    Count weeks from the starting date, not by ISO week number: 2026 has 53 ISO weeks, so parity would give one
+    parent two weeks in a row at New Year.
+  - **Stamp each `reservationEvents` doc with the parent who owns that day** when the server generates it, and
+    re-stamp future days when the admin changes the calendar. That one field drives the rest:
+    - `setReservationEventStatus` checks "is this your day" instead of "is this your family".
+    - Billing: each parent's bill = the child's monthly price × their share of that month's days. Absence
+      credits go to whoever's day it was. Enrollment fee and insurance 50/50 (today they're charged once per
+      child record, in `computeLineItems`).
+    - Calendar: each parent manages their own days and can see whose week it is.
+  - **The second parent's own account and family doc is their billing profile** (name, NIF, address, payment
+    method). They get that doc at first sign-in, and it already syncs to Vendus. Their share is billed to that
+    family, so every bill still has one owner and one NIF. The invoice NIF, payment method, Pagamentos,
+    MB WAY/Multibanco/card, months paid in order, and the "Fatura disponível" email then work unchanged.
+  - **What has to change:**
+    1. Billing builds each parent's share, which means pulling the shared child's subscriptions into the second
+       parent's family. The "month already paid → days locked" check in `setReservationEventStatus` must look
+       at the bill of the parent who owns the day, not `{event.familyId}_{yyyy-mm}`.
+    2. The second parent needs read access to the child, the subscription and their own days, but every rule
+       today allows one owner. **This is the risky part:** it's the same class of bug as the 2026-10-16
+       enrollment outage. Since #96, parent reads go through `familyService`, and `pnpm test:rules` can cover the
+       new query shapes.
+    3. Whole-schedule actions affect both parents' weeks: changing the weekly days, cancelling, a new
+       enrollment. Today parents edit the subscription directly (`updateDoc` on `studyroom` in
+       `StudySubscriptionDetailPage.tsx`). Proposed: admin-only for shared children.
+    4. An admin screen on the child: link the second parent by email, set the weeks and exceptions, and preview
+       the coming months.
+    5. FinHub: a family's monthly bill can then carry a share of another family's child. Add a Cross-App Data
+       Contracts entry to the root `CLAUDE.md` when this ships.
+  - **Suggested PRs into `staging`:** (1) custody calendar, day stamping and the admin screen, with nothing
+    parents can see; (2) split billing, which is what the parents are asking for; (3) the second parent manages
+    their own days.
+
+  **Open decisions for Renato (not answered when parked):**
+  - Which weekday does the custody week switch on? Often Friday or Sunday, not Monday.
+  - Should whole-schedule changes be admin-only for shared children? (Proposed: yes.)
+  - The absence credit starts at 3 absences in a month. Count per parent, or for the child as a whole?
+    (Proposed: per parent, since they pay separately.)
+  - Does the child use transport, and does each home have a different address? One subscription holds one set
+    of addresses.
+  - Not checked: whether the second parent already has an account. If they've signed in, they have an empty
+    family of their own and may have added the child to it. A read-only prod check answers this.
+  - Worth asking the accountant: if the reason for separate invoices is the IRS deduction, is invoicing to the
+    child's NIF enough? (Unverified understanding: with joint custody and alternating residence, the tax
+    authority splits a dependent's expenses between both parents.) That would cover the invoices, not the
+    separate payments.
+- **The "quinzenal" week pattern doesn't follow calendar weeks** (found 2026-10-17 while looking at shared
+  custody; not checked against prod data, not acted on). `odd`/`even` count the 1st/3rd vs 2nd/4th
+  *occurrence of each weekday in the month* (`packages/shared/models/weekPattern.ts`, copied in
+  `functions/src/kidclub/reservationEvents.ts` and `StudyRoomPlannerPage.tsx`). The client pages call it
+  "1.ª e 3.ª semanas do mês". Run on October 2026: Mon 5–Wed 7 are `odd` and Thu 8–Fri 9 are `even`, so one
+  calendar week is split between the two patterns, and Thu 29–Fri 30 are neither (a 5th occurrence belongs to
+  nobody). The count restarts every month. Whether this is a bug depends on what quinzenal parents expect: if
+  they read it as "every other week", any quinzenal subscription with days on both sides of the month's first
+  weekday gets split weeks. Next step: check prod for subscriptions with `weekPattern` `odd`/`even`, then
+  decide whether to change the rule.
 - **Billing page refactor — stop clients paying the wrong period** (surfaced 2026-09-24,
   confirmed by Renato as a real incident, not a data glitch): a parent can pay *any* period
   offered to them, including one eleven months out. Mary Pratas (Manuel Oliveira's family)

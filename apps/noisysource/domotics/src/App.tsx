@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type {
   Device, DevicePlacement, LightCommand, BlindCommand,
@@ -7,17 +7,30 @@ import type {
 import type { FloorPlan, InfraItem, PlanRoom, Room, Wall } from '@shared/models/Room';
 import type { EditTarget } from './components/FloorPlan';
 import { buildDevices } from './data/legrandData';
+import { DEMO, demoAutomation, demoClimate, demoEnergy, demoLegrand } from './data/demoData';
+import type { AutomationStatus } from './data/automation';
 import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
-import { fetchBridgeState, sendBridgeCommand } from './lib/bridge';
+import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
 import { db, getStatusFn, setStateFn } from './lib/firebase';
-import { watchAuth, signIn, signOutUser, requiresSignIn } from './lib/auth';
+import {
+  watchAuth, signIn, signOutUser, requiresSignIn, redirectSignInError, describeSignInError,
+  LAN_NO_SIGN_IN,
+} from './lib/auth';
+import { isLanOrigin } from './lib/origin';
+import NoticeToast, { type Notice } from './components/NoticeToast';
 import { SignInScreen } from './components/SignInScreen';
 import { AdminScreen } from './components/AdminScreen';
 import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
+import HouseScreen from './components/HouseScreen';
 import RoomDetail from './components/RoomDetail';
+
+/** Opened rarely, and its charts and printout shouldn't weigh on the everyday screen. */
+const ReportsScreen = lazy(() => import('./components/reports/ReportsScreen'));
+/** Same for the kWh history and the bill. */
+const EnergyScreen = lazy(() => import('./components/energy/EnergyScreen'));
 
 /**
  * Per-device overrides. Room names used to live here too; they now belong to
@@ -64,6 +77,20 @@ export type DeviceStatus = 'loading' | 'ok' | 'offline' | 'signin';
 const BRIDGE_RETRY_MS = 4000;
 const BRIDGE_FAILS_BEFORE_OFFLINE = 2;
 
+/** Lights and blinds are re-read on return to the app, but no more often than this. */
+const LEGRAND_REFRESH_MIN_MS = 60_000;
+
+const VIEW_PREF = 'domotics.view';
+type View = '3d' | '2d';
+
+function initialView(): View {
+  try {
+    return localStorage.getItem(VIEW_PREF) === '2d' ? '2d' : '3d';
+  } catch {
+    return '3d';
+  }
+}
+
 const EMPTY: Customization = { deviceNames: {}, deviceRooms: {}, devicePositions: {} };
 const CONFIG_REF = () => doc(db, 'domotics_config', 'customization');
 const PLAN_REF = () => doc(db, 'domotics_config', 'floorplan');
@@ -79,10 +106,16 @@ export default function App() {
   /** When the bridge last published, so the admin screen can flag it offline. */
   const [bridgeUpdatedAt, setBridgeUpdatedAt] = useState<number | undefined>();
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showReports, setShowReports] = useState(false);
+  const [showEnergy, setShowEnergy] = useState(false);
   const [energy, setEnergy] = useState<EnergyReading | null>(null);
+  /** The heating automation's latest decision, reported by the bridge with its state. */
+  const [automation, setAutomation] = useState<AutomationStatus | undefined>();
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
+  /** The 3D house for everyday use; the 2D plan for editing and the detailed layers. */
+  const [view, setView] = useState<View>(initialView);
   /**
    * Only needed for the relay — the LAN path works signed out, and being
    * unable to sign in should never stop you controlling the house from inside
@@ -98,6 +131,49 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => watchAuth(u => { setUser(u); setAuthReady(true); }), []);
+
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const notify = (text: string) => setNotice({ id: Date.now(), text });
+  const clearNotice = useCallback(() => setNotice(null), []);
+
+  // Back from a redirect sign-in (the installed app): success arrives through
+  // watchAuth; a failure only shows up here, so it has to be asked for.
+  useEffect(() => {
+    void redirectSignInError().then(err => { if (err) notify(describeSignInError(err)); });
+  }, []);
+
+  /** Sign-in from the header and chips. Says why instead of failing silently. */
+  async function requestSignIn() {
+    if (isLanOrigin()) {
+      notify(LAN_NO_SIGN_IN);
+      return;
+    }
+    try {
+      await signIn();
+    } catch (err) {
+      notify(describeSignInError(err));
+    }
+  }
+
+  /** Every Legrand write goes through here, so demo mode can keep it on screen. */
+  async function legrandSet(payload: Parameters<typeof setStateFn>[0]) {
+    if (DEMO) return;
+    await setStateFn(payload);
+  }
+
+  function legrandFailed(err: unknown) {
+    console.error('Legrand setstate failed:', err);
+    const code = (err as { code?: string })?.code;
+    notify(
+      code === 'functions/unauthenticated'
+        ? isLanOrigin()
+          ? `As luzes e estores precisam de sessão iniciada. ${LAN_NO_SIGN_IN}`
+          : 'Inicie sessão para controlar as luzes e estores.'
+        : code === 'functions/permission-denied'
+        ? 'Esta conta não tem acesso às luzes e estores.'
+        : 'As luzes e estores não responderam. Tente de novo.',
+    );
+  }
 
   /**
    * Gated pages must not do any work.
@@ -118,29 +194,67 @@ export default function App() {
   const uid = user?.uid;
   useEffect(() => {
     if (gated) return;
+    if (DEMO) {
+      setDevices(demoLegrand());
+      setDeviceStatus('ok');
+      return;
+    }
+    let cancelled = false;
+    let loadedAt = 0;
+
     // Nothing here blocks the first paint: the plan comes from local seed data
     // and renders immediately, so a slow or unreachable gateway costs device
     // state but never the whole UI.
-    getStatusFn()
-      .then(r => {
-        const data = r.data as {
-          body?: { home?: { modules?: any[]; errors?: Array<{ code: number; id: string }> } };
-        };
-        const modules = data?.body?.home?.modules;
-        setDevices(buildDevices(modules));
-        // Netatmo reports an unreachable gateway as status "ok" with an errors
-        // array and no modules — absence of modules is the real signal.
-        setDeviceStatus(modules && modules.length > 0 ? 'ok' : 'offline');
-      })
-      .catch(err => {
-        setDevices(buildDevices());
-        if ((err as { code?: string })?.code === 'functions/unauthenticated') {
-          setDeviceStatus('signin');
-          return;
-        }
-        console.error('Failed to load devices:', err);
-        setDeviceStatus('offline');
-      });
+    function load() {
+      const first = loadedAt === 0;
+      loadedAt = Date.now();
+      getStatusFn()
+        .then(r => {
+          if (cancelled) return;
+          const data = r.data as {
+            body?: { home?: { modules?: any[]; errors?: Array<{ code: number; id: string }> } };
+          };
+          const modules = data?.body?.home?.modules;
+          // Netatmo reports an unreachable gateway as status "ok" with an errors
+          // array and no modules — absence of modules is the real signal.
+          if (modules && modules.length > 0) {
+            setDevices(buildDevices(modules));
+            setDeviceStatus('ok');
+          } else if (first) {
+            setDevices(buildDevices(modules));
+            setDeviceStatus('offline');
+          }
+        })
+        .catch(err => {
+          if (cancelled) return;
+          // A failed refresh keeps what was already on screen; only the first
+          // load falls back to the seed list, so there is something to draw.
+          if (first) setDevices(buildDevices());
+          if ((err as { code?: string })?.code === 'functions/unauthenticated') {
+            setDeviceStatus('signin');
+            return;
+          }
+          console.error('Failed to load devices:', err);
+          if (first) setDeviceStatus('offline');
+        });
+    }
+
+    /**
+     * Re-read when the app comes back to the foreground. An installed phone app
+     * is resumed, not reloaded, so without this it would show the lights as
+     * they were hours ago. Only on return and at most once a minute — Netatmo
+     * is a metered, rate-limited API, so this is deliberately not a poll.
+     */
+    function onVisible() {
+      if (!document.hidden && Date.now() - loadedAt > LEGRAND_REFRESH_MIN_MS) load();
+    }
+
+    load();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [gated, uid]);
 
   useEffect(() => {
@@ -178,6 +292,14 @@ export default function App() {
    */
   useEffect(() => {
     if (gated) return;
+    if (DEMO) {
+      setTuyaDevices(demoClimate());
+      setEnergy(demoEnergy());
+      setAutomation(demoAutomation());
+      setBridgeUpdatedAt(Date.now());
+      setBridgeStatus('ok');
+      return;
+    }
     let cancelled = false;
     let failures = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -191,8 +313,10 @@ export default function App() {
         failures = 0;
         setTuyaDevices(buildTuyaDevices(state.devices ?? []));
         setEnergy(state.inverter ?? null);
+        setAutomation(state.automation);
         setBridgeUpdatedAt(state.updatedAt);
         setBridgeStatus('ok');
+        void announceWatching();
       } catch {
         if (cancelled) return;
         failures++;
@@ -254,6 +378,7 @@ export default function App() {
       setCustomization(draft.customization);
     } catch (err) {
       console.error('Failed to save config:', err);
+      notify('Não foi possível guardar a planta.');
     }
     setDraft(null);
     setPlanSelectedId(null);
@@ -313,6 +438,18 @@ export default function App() {
     } : d);
   }
 
+  /**
+   * Undo an optimistic update after a Legrand command fails. Without this the
+   * screen showed the light on even when the call was refused (signed out,
+   * gateway down) — tolerable on a desk, misleading on a phone away from home,
+   * where the screen is the only way of knowing what the house is doing.
+   * `devices` here is the state from before the optimistic update.
+   */
+  function restoreDevices(deviceIds: string[]) {
+    const before = new Map(devices.filter(d => deviceIds.includes(d.id)).map(d => [d.id, d]));
+    setDevices(prev => prev.map(d => before.get(d.id) ?? d));
+  }
+
   async function handleLightCommand(deviceId: string, command: LightCommand) {
     const current = devices.find(d => d.id === deviceId && d.type === 'light');
     const currentOn = current?.type === 'light' ? current.state.on : false;
@@ -321,16 +458,28 @@ export default function App() {
       : command.action === 'setOn'
       ? command.on
       : command.brightness > 0;
+    // Only dimmers take a level; zero means off, and the last level is kept so
+    // switching back on doesn't jump to full.
+    const dimmable = current?.type === 'light' && current.state.dimmable;
+    const brightness = command.action === 'setBrightness' && dimmable && command.brightness > 0
+      ? Math.round(Math.min(100, command.brightness))
+      : undefined;
 
     setDevices(prev => prev.map(d =>
       d.id !== deviceId || d.type !== 'light' ? d
-        : { ...d, state: { ...d.state, on } }
+        : { ...d, state: { ...d.state, on, ...(brightness !== undefined ? { brightness } : {}) } }
     ));
 
     try {
-      await setStateFn({ modules: [{ id: deviceId, bridge: current?.bridge, on }] });
+      await legrandSet({
+        modules: [{
+          id: deviceId, bridge: current?.bridge, on,
+          ...(brightness !== undefined ? { brightness } : {}),
+        }],
+      });
     } catch (err) {
-      console.error('Legrand setstate failed:', err);
+      legrandFailed(err);
+      restoreDevices([deviceId]);
     }
   }
 
@@ -362,12 +511,51 @@ export default function App() {
 
     if (target_position !== undefined) {
       try {
-        await setStateFn({
+        await legrandSet({
           modules: [{ id: deviceId, bridge: blindDev?.bridge, target_position }],
         });
       } catch (err) {
-        console.error('Legrand setstate failed:', err);
+        legrandFailed(err);
+        restoreDevices([deviceId]);
       }
+    }
+  }
+
+  /**
+   * Several lights at once ("Apagar todas"). One setstate call carrying every
+   * module, not one call per light: Netatmo is rate-limited per user, and a
+   * whole-house switch-off should cost the same as switching one light.
+   */
+  async function handleLightsSet(deviceIds: string[], on: boolean) {
+    const ids = new Set(deviceIds);
+    const targets = devices.filter(d => d.type === 'light' && ids.has(d.id));
+    if (targets.length === 0) return;
+    setDevices(prev => prev.map(d =>
+      d.type !== 'light' || !ids.has(d.id) ? d : { ...d, state: { ...d.state, on } }
+    ));
+    try {
+      await legrandSet({ modules: targets.map(d => ({ id: d.id, bridge: d.bridge, on })) });
+    } catch (err) {
+      legrandFailed(err);
+      restoreDevices(deviceIds);
+    }
+  }
+
+  /** Several blinds to one position, in a single call — same reasoning as lights. */
+  async function handleBlindsSet(deviceIds: string[], position: number) {
+    const ids = new Set(deviceIds);
+    const targets = devices.filter(d => d.type === 'blind' && ids.has(d.id));
+    if (targets.length === 0) return;
+    setDevices(prev => prev.map(d =>
+      d.type !== 'blind' || !ids.has(d.id) ? d : { ...d, state: { ...d.state, position } }
+    ));
+    try {
+      await legrandSet({
+        modules: targets.map(d => ({ id: d.id, bridge: d.bridge, target_position: position })),
+      });
+    } catch (err) {
+      legrandFailed(err);
+      restoreDevices(deviceIds);
     }
   }
 
@@ -389,10 +577,11 @@ export default function App() {
     try {
       // The bridge answers with freshly read state, so the optimistic guess is
       // replaced by the truth immediately rather than at the next poll.
-      const state = await sendBridgeCommand(deviceId, commands);
+      const state = DEMO ? null : await sendBridgeCommand(deviceId, commands);
       if (state) setTuyaDevices(buildTuyaDevices(state.devices));
     } catch (err) {
       console.error('Bridge command failed:', err);
+      notify('O comando de clima não chegou à casa. Tente de novo.');
     }
   }
 
@@ -403,10 +592,11 @@ export default function App() {
     ));
 
     try {
-      const state = await sendBridgeCommand(deviceId, [{ code: 'switch', value: command.on }]);
+      const state = DEMO ? null : await sendBridgeCommand(deviceId, [{ code: 'switch', value: command.on }]);
       if (state) setTuyaDevices(buildTuyaDevices(state.devices));
     } catch (err) {
       console.error('Bridge command failed:', err);
+      notify('O comando de clima não chegou à casa. Tente de novo.');
     }
   }
 
@@ -425,67 +615,143 @@ export default function App() {
     ? (activePlan.rooms.find(r => r.id === openRoomId) ?? null)
     : null;
 
-  // Served from the public internet, the house is not shown to anyone who has
-  // not signed in. On the LAN this is skipped entirely — see requiresSignIn.
-  if (gated) {
-    return authReady
-      ? <SignInScreen onSignIn={signIn} />
-      : <div className="h-screen bg-zinc-950" />;
-  }
+  return (
+    <>
+      {renderScreen()}
+      {notice && <NoticeToast notice={notice} onClose={clearNotice} />}
+    </>
+  );
 
-  if (showAdmin) {
+  function renderScreen() {
+    // Served from the public internet, the house is not shown to anyone who has
+    // not signed in. On the LAN this is skipped entirely — see requiresSignIn.
+    if (gated) {
+      return authReady
+        ? <SignInScreen onSignIn={signIn} />
+        : <div className="h-screen bg-zinc-950" />;
+    }
+
+    if (showAdmin) {
+      return (
+        <AdminScreen
+          onBack={() => setShowAdmin(false)}
+          bridgeUpdatedAt={bridgeUpdatedAt}
+        />
+      );
+    }
+
+    if (showReports) {
+      return (
+        <Suspense fallback={<div className="h-screen bg-zinc-950" />}>
+          <ReportsScreen
+            onBack={() => setShowReports(false)}
+            // Owner-only data; on the LAN nobody can sign in.
+            canRead={!!user && !isLanOrigin()}
+          />
+        </Suspense>
+      );
+    }
+
+    if (showEnergy) {
+      return (
+        <Suspense fallback={<div className="h-screen bg-zinc-950" />}>
+          <EnergyScreen
+            onBack={() => setShowEnergy(false)}
+            // Owner-only data, like the reports; demo mode makes its own.
+            canRead={DEMO || (!!user && !isLanOrigin())}
+            live={energy}
+            automation={automation}
+          />
+        </Suspense>
+      );
+    }
+
+    if (openRoom) {
+      return (
+        <RoomDetail
+          room={openRoom}
+          devices={effectiveDevices.filter(d => d.roomId === openRoom.id)}
+          onBack={() => setOpenRoomId(null)}
+          onLightCommand={handleLightCommand}
+          onBlindCommand={handleBlindCommand}
+          {...editProps}
+        />
+      );
+    }
+
+    function showView(next: View) {
+      setView(next);
+      try { localStorage.setItem(VIEW_PREF, next); } catch { /* not persisted */ }
+    }
+
+    // Editing always happens on the 2D plan; when it ends, whichever view was
+    // in use comes back.
+    if (view === '3d' && !editMode) {
+      return (
+        <HouseScreen
+          plan={activePlan}
+          devices={effectiveDevices}
+          placements={activeCustom.devicePositions}
+          deviceStatus={deviceStatus}
+          bridgeStatus={bridgeStatus}
+          bridgeUpdatedAt={bridgeUpdatedAt}
+          energy={energy}
+          user={user}
+          onSignIn={requestSignIn}
+          onSignOut={signOutUser}
+          onOpenAdmin={() => setShowAdmin(true)}
+          onOpenReports={() => setShowReports(true)}
+          onOpenEnergy={user || DEMO ? () => setShowEnergy(true) : undefined}
+          onShow2D={() => showView('2d')}
+          onStartEdit={startEdit}
+          onLightCommand={handleLightCommand}
+          onLightsSet={handleLightsSet}
+          onBlindCommand={handleBlindCommand}
+          onBlindsSet={handleBlindsSet}
+          onThermostatCommand={handleThermostatCommand}
+          onHeatPumpCommand={handleHeatPumpCommand}
+          automation={automation}
+          // The settings document is the owner's alone; on the LAN nobody can sign in.
+          canEditAutomation={!!user && !isLanOrigin()}
+        />
+      );
+    }
+
     return (
-      <AdminScreen
-        onBack={() => setShowAdmin(false)}
+      <PlanScreen
+        plan={activePlan}
+        devices={effectiveDevices}
+        placements={activeCustom.devicePositions}
+        deviceStatus={deviceStatus}
+        bridgeStatus={bridgeStatus}
         bridgeUpdatedAt={bridgeUpdatedAt}
-      />
-    );
-  }
-
-  if (openRoom) {
-    return (
-      <RoomDetail
-        room={openRoom}
-        devices={effectiveDevices.filter(d => d.roomId === openRoom.id)}
-        onBack={() => setOpenRoomId(null)}
+        energy={energy}
+        user={user}
+        onSignIn={requestSignIn}
+        onSignOut={signOutUser}
+        onOpenAdmin={() => setShowAdmin(true)}
+        onOpenReports={() => setShowReports(true)}
+        onOpenEnergy={user || DEMO ? () => setShowEnergy(true) : undefined}
+        onShow3D={() => showView('3d')}
+        editMode={editMode}
+        editTarget={editTarget}
+        selectedId={planSelectedId}
+        onEditTargetChange={setEditTarget}
+        onSelect={setPlanSelectedId}
+        onOpenRoom={setOpenRoomId}
+        onChangeRooms={changeRooms}
+        onChangeInfra={changeInfra}
+        onChangeWalls={changeWalls}
+        onPlaceDevice={placeDevice}
+        onDeviceNameChange={updateDeviceName}
         onLightCommand={handleLightCommand}
         onBlindCommand={handleBlindCommand}
-        {...editProps}
+        onThermostatCommand={handleThermostatCommand}
+        onHeatPumpCommand={handleHeatPumpCommand}
+        onStartEdit={startEdit}
+        onCancelEdit={cancelEdit}
+        onSaveEdit={saveEdit}
       />
     );
   }
-
-  return (
-    <PlanScreen
-      plan={activePlan}
-      devices={effectiveDevices}
-      placements={activeCustom.devicePositions}
-      deviceStatus={deviceStatus}
-      bridgeStatus={bridgeStatus}
-      bridgeUpdatedAt={bridgeUpdatedAt}
-      energy={energy}
-      user={user}
-      onSignIn={signIn}
-      onSignOut={signOutUser}
-      onOpenAdmin={() => setShowAdmin(true)}
-      editMode={editMode}
-      editTarget={editTarget}
-      selectedId={planSelectedId}
-      onEditTargetChange={setEditTarget}
-      onSelect={setPlanSelectedId}
-      onOpenRoom={setOpenRoomId}
-      onChangeRooms={changeRooms}
-      onChangeInfra={changeInfra}
-      onChangeWalls={changeWalls}
-      onPlaceDevice={placeDevice}
-      onDeviceNameChange={updateDeviceName}
-      onLightCommand={handleLightCommand}
-      onBlindCommand={handleBlindCommand}
-      onThermostatCommand={handleThermostatCommand}
-      onHeatPumpCommand={handleHeatPumpCommand}
-      onStartEdit={startEdit}
-      onCancelEdit={cancelEdit}
-      onSaveEdit={saveEdit}
-    />
-  );
 }

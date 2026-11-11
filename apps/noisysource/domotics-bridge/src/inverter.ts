@@ -38,7 +38,7 @@ const TIMEOUT_MS = 5000;
  */
 const REG = {
   acVoltage: 1,     // ×0.1 V — moves with the mains, unlike reg 42
-  subLoad: 3,       // W — a subset of house load, ~25% low. NOT the total.
+  subLoad: 3,       // W — a subset of house load, ~25% low. NOT the total. (25/10 night: integrates to counters 30/52/82.)
   pv1Voltage: 5,    // ×0.1 V
   pv2Voltage: 6,    // ×0.1 V
   pv1Current: 7,    // ×0.1 A — 0.1 A resolution, so V×I lands a few % low
@@ -46,7 +46,7 @@ const REG = {
   pv1Power: 11,     // W
   pv2Power: 12,     // W
   gridPower: 22,    // signed W — near zero off-grid
-  subLoadVa: 50,    // VA — tracks reg 3 closely; same subset, different unit
+  subLoadVa: 50,    // VA — tracks reg 3 closely; same subset, different unit. 25/10 at night it was exactly reg 3 + grid import (4317 = 2814 + 1503): maybe the house's AC load. Unconfirmed (energy.ts records it beside the derived load).
   batteryPower: 72, // signed W, negative = discharging
   soc: 80,          // %
 } as const;
@@ -121,12 +121,33 @@ function readInputRegisters(start: number, count: number): Promise<number[]> {
   });
 }
 
+/**
+ * Registers that count up in 0.1 kWh steps — probably the inverter's own
+ * energy counters (today's and lifetime), but which flow each one is has not
+ * been confirmed. Watched on 25/10 17:45–18:25 (dark: the house on the battery,
+ * nothing from or to the grid): 28, 51, 90 rose together by 0.1 kWh per
+ * ~100 Wh, and so did 30, 52, 82; 29, 54, 59, 91 (today?) and 56, 88, 111, 113
+ * (lifetime?) stood still. Telling them apart needs a day with sun, export and
+ * charging, so the energy recorder logs them on the Pi next to its own
+ * integrated slots (energy-store.ts) until someone compares the two. Not
+ * reported anywhere until then.
+ */
+export const COUNTER_CANDIDATES = [28, 29, 30, 51, 52, 54, 56, 59, 82, 88, 90, 91, 111, 113] as const;
+let lastCounters: { t: number; values: Record<number, number> } | undefined;
+/** The candidate counters as of the last successful read (see above). */
+export const lastCounterCandidates = () => lastCounters;
+
 export async function readInverter(): Promise<InverterReading> {
   try {
     // One block covering every register of interest — a single round trip is
-    // both faster and kinder to the datalogger than six.
-    const regs = await readInputRegisters(0, 90);
+    // both faster and kinder to the datalogger than six. To 119 for the
+    // counter candidates above; still one request (the limit is 125).
+    const regs = await readInputRegisters(0, 120);
     const at = (i: number) => regs[i];
+    lastCounters = {
+      t: Date.now(),
+      values: Object.fromEntries(COUNTER_CANDIDATES.map(r => [r, regs[r]])),
+    };
 
     const gridPowerW = signed16(at(REG.gridPower));
     const batteryPowerW = signed16(at(REG.batteryPower));

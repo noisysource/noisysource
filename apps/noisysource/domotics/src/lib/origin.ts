@@ -15,3 +15,21 @@ export function isLanOrigin(): boolean {
     /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
   );
 }
+
+/**
+ * Running as an app added to the home screen, rather than in a browser tab.
+ * iOS reports it through `navigator.standalone`; everything else through the
+ * display-mode media query.
+ */
+export function isInstalledApp(): boolean {
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches === true ||
+    (navigator as { standalone?: boolean }).standalone === true
+  );
+}
+
+/** Served over HTTPS from one of the project's own Firebase Hosting domains. */
+export function isFirebaseHosting(): boolean {
+  const { protocol, hostname } = window.location;
+  return protocol === 'https:' && (hostname.endsWith('.web.app') || hostname.endsWith('.firebaseapp.com'));
+}

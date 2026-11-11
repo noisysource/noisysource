@@ -78,6 +78,7 @@ const SERVICE_META = {
   study:      { label: 'Sala de Estudo',       icon: '📚', accent: 'indigo' as const },
   transport:  { label: 'Transporte Escolar',   icon: '🚐', accent: 'violet' as const },
   enrollment: { label: 'Taxa de Inscrição e Seguro', icon: '🧾', accent: 'indigo' as const },
+  event:      { label: 'Evento',               icon: '🎃', accent: 'violet' as const },
 };
 
 // Read-only summary of a line item, including the discount/absence

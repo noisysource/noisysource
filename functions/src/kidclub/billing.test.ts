@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const fake = vi.hoisted(() => {
   const state = {
     docs: {} as Record<string, Record<string, any>>, // "collection/id" -> data
-    log: [] as { op: "update" | "create" | "add"; path: string; data: Record<string, any> }[],
+    log: [] as { op: "update" | "create" | "add" | "set"; path: string; data: Record<string, any> }[],
     failCreate: null as Error | null,                // makes the next outbox create() throw
   };
   const DELETE = "<DELETE>";
@@ -30,6 +30,11 @@ const fake = vi.hoisted(() => {
       update: async (data: Record<string, any>) => {
         if (!state.docs[path]) throw new Error(`NOT_FOUND ${path}`);
         state.log.push({ op: "update", path, data });
+        write(path, data);
+      },
+      set: async (data: Record<string, any>) => {
+        state.log.push({ op: "set", path, data });
+        state.docs[path] = {};
         write(path, data);
       },
       create: async (data: Record<string, any>) => {
@@ -92,10 +97,11 @@ vi.mock("./vendus", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./vendus")>()),
   createInvoice: vi.fn(),
   createOrUpdateClient: vi.fn(),
+  findOrCreateClientByNif: vi.fn(),
 }));
 
-import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId } from "./billing";
-import { createInvoice, createOrUpdateClient } from "./vendus";
+import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId, onAdhocRegistrationBillingSync } from "./billing";
+import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, PRODUCT_STUDY } from "./vendus";
 
 const { state } = fake;
 
@@ -133,6 +139,7 @@ beforeEach(() => {
   vi.mocked(createInvoice).mockReset();
   invoiceReplies();
   vi.mocked(createOrUpdateClient).mockReset();
+  vi.mocked(findOrCreateClientByNif).mockReset();
   vi.stubEnv("GCLOUD_PROJECT", "test-project");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
@@ -204,6 +211,59 @@ describe("issueVendusInvoice — who the invoice goes to", () => {
     vi.stubEnv("GCLOUD_PROJECT", "kidclub-dev");
     await expect(issueVendusInvoice(bill())).rejects.toThrow(/disabled on kidclub-dev/);
     expect(createInvoice).not.toHaveBeenCalled();
+  });
+});
+
+describe("issueVendusInvoice — one-off event bills (adhocEvents.ts)", () => {
+  const guestBill = (overrides: Record<string, any> = {}) => bill({
+    type: "event", familyId: "", userId: "", eventRegistrationId: "reg1",
+    lineItems: [{ title: "Halloween — Rita (31/10)", amount: 25, type: "event" }], total: 25, periodLabel: "Halloween — 31/10",
+    ...overrides,
+  });
+
+  it("guest without a NIF: Consumidor final, no family read, no client found or created", async () => {
+    const res = await issueVendusInvoice(guestBill());
+
+    expect(res.consumidorFinal).toBe(true);
+    expect(vi.mocked(createInvoice).mock.calls[0][0]).toBeNull();
+    expect(createOrUpdateClient).not.toHaveBeenCalled();
+    expect(findOrCreateClientByNif).not.toHaveBeenCalled();
+    expect(state.log).toEqual([]);
+  });
+
+  it("guest with a NIF: the client for that NIF (found or created, never updated), nothing written", async () => {
+    vi.mocked(findOrCreateClientByNif).mockResolvedValue(888);
+
+    const res = await issueVendusInvoice(guestBill({ guestNif: "123 456 789" }));
+
+    expect(res.consumidorFinal).toBe(false);
+    expect(findOrCreateClientByNif).toHaveBeenCalledWith({ name: "Ana Silva", email: "ana@example.com", fiscal_id: "123456789" }, "event-guest:reg1");
+    expect(createOrUpdateClient).not.toHaveBeenCalled();
+    expect(vi.mocked(createInvoice).mock.calls[0][0]).toEqual({ id: 888 });
+    expect(state.log).toEqual([]);
+  });
+
+  it("event lines are PRODUCT_STUDY (23%) whatever the event is called, also on a monthly bill", async () => {
+    state.docs["families/fam1"] = NIF_FAMILY;
+    await issueVendusInvoice(bill({
+      lineItems: [{ title: "Transporte Escolar — Rita (2ª) — Outubro 2026", amount: 40, type: "transport" }, { title: "Transporte ao museu — Rita (31/10)", amount: 25, type: "event" }],
+      total: 65,
+    }));
+    const items = vi.mocked(createInvoice).mock.calls[0][1];
+    expect(items[0].id).not.toBe(PRODUCT_STUDY);
+    expect(items[1].id).toBe(PRODUCT_STUDY);
+  });
+
+  it("guest's 'Fatura disponível' email links to the registration page, not the client area", async () => {
+    state.docs["billing/b1"] = guestBill();
+    state.docs["adhocEventRegistrations/reg1"] = { accessToken: "tok_123" };
+
+    await createVendusInvoiceForBilling("b1");
+
+    const html = outbox()[0].html;
+    expect(html).toContain("https://kidclub.pt/eventos/inscricao/reg1?t=tok_123");
+    expect(html).not.toContain("/client/payments");
+    expect(html).not.toContain("/client/account");
   });
 });
 
@@ -411,5 +471,69 @@ describe("retryVendusInvoice — never a second invoice for a bill that already 
 
     expect(state.docs["billing/b4"]).toMatchObject({ status: "invoiced", invoiceNumber: "FR 01P2026/1", vendusId: 5550001 });
     expect(state.docs["billing/b4"]).not.toHaveProperty("invoiceError");
+  });
+});
+
+describe("one-off events on the monthly bill (onAdhocRegistrationBillingSync → fetchEventLines)", () => {
+  // A family with no subscriptions at all, so the recompute skips every
+  // ReservationEvent/children query the fake can't run.
+  const now = new Date();
+  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const billId = `billing/famE_${period}`;
+  const reg = (o: Record<string, any> = {}) => ({
+    familyId: "famE", payment: "monthly", status: "confirmed", billingPeriod: period, createdAt: { toMillis: () => 1 },
+    lines: [{ title: "Halloween — Rita (31/10)", amount: 20 }, { title: "Halloween — Tomás (31/10)", amount: 20 }],
+    ...o,
+  });
+  const run = (before: any, after: any) => (onAdhocRegistrationBillingSync as any).run({
+    data: { before: { data: () => before }, after: { data: () => after } },
+  });
+
+  beforeEach(() => {
+    state.docs["families/famE"] = { primaryContact: { userId: "uE", name: "Eva", email: "eva@example.com" }, paymentMethod: "mbway" };
+  });
+
+  it("a confirmed monthly registration creates that month's bill with one line per child", async () => {
+    state.docs["adhocEventRegistrations/r1"] = reg();
+    await run(undefined, reg());
+    const bill = state.docs[billId];
+    expect(bill).toMatchObject({ familyId: "famE", userId: "uE", status: "pending", total: 40, billingEmail: "eva@example.com" });
+    expect(bill.lineItems).toEqual([
+      { title: "Halloween — Rita (31/10)", amount: 20, grossAmount: 20, subscriptionId: "event:r1:0", type: "event", appliedDiscounts: [] },
+      { title: "Halloween — Tomás (31/10)", amount: 20, grossAmount: 20, subscriptionId: "event:r1:1", type: "event", appliedDiscounts: [] },
+    ]);
+    // No payment notice is emailed for a bill created by the sync.
+    expect(Object.keys(state.docs).some(p => p.startsWith("emailOutbox/"))).toBe(false);
+  });
+
+  it("adds to an existing pending bill; cancelling takes it off again (auto-cancelled when nothing is left)", async () => {
+    state.docs["adhocEventRegistrations/r1"] = reg();
+    await run(undefined, reg());
+    state.docs["adhocEventRegistrations/r2"] = reg({ lines: [{ title: "Greve — Rita (14/11)", amount: 15.5 }], createdAt: { toMillis: () => 2 } });
+    await run(undefined, state.docs["adhocEventRegistrations/r2"]);
+    expect(state.docs[billId].total).toBe(55.5);
+    expect(state.docs[billId].lineItems.map((l: any) => l.subscriptionId)).toEqual(["event:r1:0", "event:r1:1", "event:r2:0"]);
+
+    state.docs["adhocEventRegistrations/r1"] = reg({ status: "cancelled" });
+    await run(reg(), reg({ status: "cancelled" }));
+    expect(state.docs[billId].total).toBe(15.5);
+
+    state.docs["adhocEventRegistrations/r2"] = { ...state.docs["adhocEventRegistrations/r2"], status: "cancelled" };
+    await run(reg(), reg({ status: "cancelled" }));
+    expect(state.docs[billId]).toMatchObject({ status: "cancelled", autoCancelled: true });
+  });
+
+  it("never touches a bill that's already paid", async () => {
+    state.docs[billId] = { familyId: "famE", status: "paid", total: 99, lineItems: [{ title: "x", amount: 99 }] };
+    state.docs["adhocEventRegistrations/r1"] = reg();
+    await run(undefined, reg());
+    expect(state.docs[billId]).toEqual({ familyId: "famE", status: "paid", total: 99, lineItems: [{ title: "x", amount: 99 }] });
+  });
+
+  it("ignores pay-now registrations and edits that change neither status nor month", async () => {
+    state.docs["adhocEventRegistrations/r1"] = reg({ payment: "now" });
+    await run(undefined, reg({ payment: "now" }));
+    await run(reg(), reg({ pickupNotes: "Avó" }));
+    expect(state.docs[billId]).toBeUndefined();
   });
 });

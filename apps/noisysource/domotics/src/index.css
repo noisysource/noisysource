@@ -85,3 +85,70 @@ input[type='range'].slider-blind::-moz-range-thumb {
   background: #3b82f6;
   box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
 }
+
+/*
+ * Chart colours for the Reports page (components/reports/PumpChart.tsx).
+ * Categorical slots in fixed order, validated with the dataviz skill's
+ * validator: dark against zinc-900 (the cards) — all checks pass; light against
+ * white (the technicians' printout) — passes, with slot 3 under 3:1, which
+ * is why the printout carries direct labels and a table under every chart.
+ * Critical is the status colour for a fault, never a series.
+ */
+:root {
+  --viz-surface: #18181b;
+  --viz-ink: #f4f4f5;
+  --viz-ink-2: #a1a1aa;
+  --viz-muted: #71717a;
+  --viz-grid: #27272a;
+  --viz-axis: #3f3f46;
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  /* The compressor, in its own panel: violet (the palette's slot 7), which
+     reads apart from the discharge's orange where slot 4's yellow did not. */
+  --viz-hz: #9085e9;
+  --viz-critical: #d03b3b;
+  /* Energia page (components/energy/EnergyChart.tsx): one colour per
+     counterpart, the same in both panels, so "battery" is green whether energy
+     went into it or came out of it. Amber matches the sun in the live strip;
+     the battery and grid reuse slots 3 and 1. */
+  --viz-solar: #e2a32b;
+  --viz-battery: #199e70;
+  --viz-net: #3987e5;
+  --viz-soc: #9085e9;
+  /* Surplus with the battery full: a marker, not a series. A pale amber that
+     reads as "the sun's" but stands apart from the solar bars. */
+  --viz-surplus: #fde68a;
+}
+
+.viz-light {
+  --viz-surface: #ffffff;
+  --viz-ink: #0b0b0b;
+  --viz-ink-2: #52514e;
+  --viz-muted: #898781;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-hz: #6250d6;
+}
+
+/* The technicians' report prints as a document, not a screen: whole height, white page. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm 12mm;
+  }
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #0b0b0b !important;
+  }
+  .print-avoid-break {
+    break-inside: avoid;
+  }
+}

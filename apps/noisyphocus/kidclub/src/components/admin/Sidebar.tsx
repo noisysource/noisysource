@@ -36,15 +36,16 @@ export default function Sidebar() {
           <SidebarNavLink to="/admin/party-config">🛠️ Configuração</SidebarNavLink>
         </SidebarSection>
 
-        <SidebarSection title="🏕️ Campos">
+        <SidebarSection title="🏕️ Campos e eventos">
           <SidebarNavLink to="/admin/camps">🏕️ Campos</SidebarNavLink>
+          <SidebarNavLink to="/admin/eventos">🎃 Eventos pontuais</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="⚙️ Configuração">
           <SidebarNavLink to="/admin/financial-summary">📊 Resumo Financeiro</SidebarNavLink>
           <SidebarNavLink to="/admin/config/descontos">🏷️ Descontos</SidebarNavLink>
           <SidebarNavLink to="/admin/study-room-planner">📖 Planeador — Sala de Estudo</SidebarNavLink>
-          <SidebarNavLink to="/admin/transport-planner">🗓️ Planeador — Transporte</SidebarNavLink>
+          <SidebarNavLink to="/admin/transportes">🚐 Transportes</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="⚙️ Operações">

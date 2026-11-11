@@ -66,6 +66,8 @@ export const legrandSetState = onCall<{
   // array is forwarded verbatim, so the caller supplies `bridge`.
   modules: Array<{
     id: string; bridge?: string; on?: boolean; target_position?: number;
+    /** Dimmers (NLFN) only, 0–100. */
+    brightness?: number;
   }>;
 }>({ region: "europe-west3" }, async (request) => {
   requireOwner(request.auth);

@@ -1,7 +1,19 @@
 lib/
 node_modules/
 device-cache.json
+automation-config.json
 
 # Holds the bridge account's password.
 bridge.env
 *.env
+# E13 guard and incident recorder state (see src/guard.ts, src/incidents.ts).
+guard-config.json
+guard-state.json
+incidents-state.json
+incidents-pending.json
+# Heating automation state (see src/automation.ts, src/warmby.ts).
+warm-by.json
+automation-state.json
+# kWh history recorder state (see src/energy.ts, src/energy-store.ts).
+energy-state.json
+energy-registers.jsonl

@@ -8,9 +8,18 @@
     "build": "vite build",
     "build:staging": "vite build --mode staging",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "esbuild src/data/heatingTimeline.ts src/components/timeline/stripLogic.ts src/components/energy/costTimeline.ts src/components/energy/view.ts ../../../packages/shared/lib/energyBill.ts --bundle --platform=node --format=cjs --out-extension:.js=.cjs --tsconfig=tsconfig.app.json --entry-names=[name] --outdir=node_modules/.tmp/test --log-level=warning && node test/heatingTimeline.test.cjs && TZ=Pacific/Auckland node test/heatingTimeline.test.cjs && node test/costTimeline.test.cjs && TZ=Pacific/Auckland node test/costTimeline.test.cjs"
   },
   "dependencies": {
-    "firebase": "^10.14.1"
+    "@react-three/drei": "9.122.0",
+    "@react-three/fiber": "8.18.0",
+    "firebase": "^10.14.1",
+    "suncalc": "1.9.0",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/suncalc": "1.9.2",
+    "@types/three": "0.170.0"
   }
 }

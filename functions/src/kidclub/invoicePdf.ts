@@ -3,6 +3,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { appCol } from "./db";
 import { getDocumentPdf } from "./vendus";
 import { canAccessBilling, invoicePdfFilename, dayKey, DAILY_VENDUS_PDF_CAP, MAX_CACHEABLE_PDF_BYTES } from "./invoicePdfLogic";
+import { tokenMatches } from "./adhocEventLogic";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -36,22 +37,29 @@ async function reserveVendusCall(): Promise<void> {
 export const getInvoicePdf = onCall(
   { region: "europe-west3", invoker: "public", secrets: ["VENDUS_API_KEY"] },
   async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Unauthenticated");
-
-    const { billingId } = (request.data ?? {}) as { billingId?: string };
+    const uid = request.auth?.uid ?? "";
+    const { billingId, registrationId, token } = (request.data ?? {}) as { billingId?: string; registrationId?: string; token?: string };
+    // A one-off event's guest has no account: the registration's link token is
+    // their only key, and it opens that registration's own bill only.
+    const viaToken = !!registrationId && !!token;
+    if (!uid && !viaToken) throw new HttpsError("unauthenticated", "Unauthenticated");
     if (!billingId || typeof billingId !== "string") throw new HttpsError("invalid-argument", "billingId required");
 
     const billing = (await appCol("billing").doc(billingId).get()).data();
     if (!billing) throw new HttpsError("not-found", "Mensalidade não encontrada.");
 
+    let allowed = false;
+    if (viaToken) {
+      const reg = (await appCol("adhocEventRegistrations").doc(String(registrationId)).get()).data();
+      allowed = !!reg && reg.billingId === billingId && billing.eventRegistrationId === registrationId && tokenMatches(reg.accessToken, token);
+    }
     // Cheapest checks first: only read the family / user docs when needed.
-    let allowed = canAccessBilling({ uid, billingUserId: billing.userId });
-    if (!allowed && billing.familyId) {
+    if (!allowed && uid) allowed = canAccessBilling({ uid, billingUserId: billing.userId });
+    if (!allowed && uid && billing.familyId) {
       const fam = (await appCol("families").doc(billing.familyId).get()).data();
       allowed = canAccessBilling({ uid, familyPrimaryUserId: fam?.primaryContact?.userId });
     }
-    if (!allowed) {
+    if (!allowed && uid) {
       const roles = (await db.collection("users").doc(uid).get()).data()?.roles;
       allowed = canAccessBilling({ uid, roles });
     }

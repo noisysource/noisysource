@@ -1,13 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { getDocs, getDoc, setDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import { col, docRef } from '../../lib/db';
-import { TransportationConfig } from '@shared/models/Transportation';
+import { TransportationConfig, TransportVehicle, vehiclesOf } from '@shared/models/Transportation';
 import { StudyCenterConfig } from '@shared/models/StudyCenterConfig';
 import { DiscountRule } from '@shared/models/Discount';
 import { normalizeSubStatus, SubStatus } from '../../lib/utils';
 import { getDiscountRules } from '../../services/discountService';
 import { BillLine, toBillLines, lineNet, billPeriodKey, indexLinesBySub, standardLine, monthKey } from '../../lib/billingLines';
+import {
+  transportCosts, parseVehicleField, updateVehicle, addVehicle, removeVehicle, hourlyDriverMonthlyCost,
+  HOURLY_DRIVER_RATE, HINT_WEEKS_PER_MONTH, VehicleField,
+} from '../../lib/transportCosts';
 
 interface AppliedDiscountLite { ruleId: string; name: string; percentage: number }
 
@@ -73,20 +77,31 @@ const SERVICE_LABEL: Record<EntryKind, string> = {
   enrollment: 'Inscrição',
 };
 
+// Study room fixed costs, one config field each. Transport costs are per vehicle
+// (config/transportation → vehicles, see vehiclesOf) and have their own inputs below.
 type CostFieldKey =
-  | 'transport.vanMonthlyCost'
-  | 'transport.driverMonthlyCost'
-  | 'transport.electricityMonthlyCost'
   | 'study.teacherMonthlyCost'
   | 'study.rentMonthlyCost';
 
-const COST_FIELD_META: Record<CostFieldKey, { configDoc: 'transportation' | 'studyCenter'; field: string }> = {
-  'transport.vanMonthlyCost': { configDoc: 'transportation', field: 'vanMonthlyCost' },
-  'transport.driverMonthlyCost': { configDoc: 'transportation', field: 'driverMonthlyCost' },
-  'transport.electricityMonthlyCost': { configDoc: 'transportation', field: 'electricityMonthlyCost' },
-  'study.teacherMonthlyCost': { configDoc: 'studyCenter', field: 'teacherMonthlyCost' },
-  'study.rentMonthlyCost': { configDoc: 'studyCenter', field: 'rentMonthlyCost' },
+const COST_FIELD_META: Record<CostFieldKey, { field: 'teacherMonthlyCost' | 'rentMonthlyCost' }> = {
+  'study.teacherMonthlyCost': { field: 'teacherMonthlyCost' },
+  'study.rentMonthlyCost': { field: 'rentMonthlyCost' },
 };
+
+/** A vehicle's inputs as typed, so a half-typed value isn't lost on re-render. */
+type VehicleInputs = Record<VehicleField, string>;
+
+// 0 shows as an empty input (blank saves as 0), so typing into a new vehicle doesn't give "0260".
+const numInput = (n: number) => (n ? String(n) : '');
+const toVehicleInputs = (v: TransportVehicle): VehicleInputs => ({
+  label: v.label,
+  seats: numInput(v.seats),
+  vehicleMonthlyCost: numInput(v.vehicleMonthlyCost),
+  driverMonthlyCost: numInput(v.driverMonthlyCost),
+  electricityMonthlyCost: numInput(v.electricityMonthlyCost),
+});
+
+const newVehicleId = () => `v-${Date.now().toString(36)}`;
 
 const ALL_STATUSES: SubStatus[] = ['active', 'pending', 'cancelled'];
 
@@ -201,6 +216,84 @@ function EditableCostRow({ label, value, saving, onChange, onSave }: {
   );
 }
 
+/** A vehicle's name and seats, saved on blur like the cost inputs. */
+function VehicleHeaderRow({ label, seats, saving, onLabelChange, onLabelSave, onSeatsChange, onSeatsSave, onRemove }: {
+  label: string; seats: string; saving: boolean;
+  onLabelChange: (v: string) => void; onLabelSave: () => void;
+  onSeatsChange: (v: string) => void; onSeatsSave: () => void;
+  /** Absent for the last vehicle, which can't be removed. */
+  onRemove?: () => void;
+}) {
+  const blurOnEnter = (e: ReactKeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') e.currentTarget.blur(); };
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <input
+        type="text"
+        value={label}
+        aria-label="Nome da viatura"
+        onChange={e => onLabelChange(e.target.value)}
+        onBlur={onLabelSave}
+        onKeyDown={blurOnEnter}
+        className="min-w-0 flex-1 px-2 py-1 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-indigo-400"
+      />
+      <div className="flex items-center gap-1.5">
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={seats}
+          aria-label="Lugares para crianças"
+          onChange={e => onSeatsChange(e.target.value)}
+          onBlur={onSeatsSave}
+          onKeyDown={blurOnEnter}
+          className="w-14 px-2 py-1 text-sm border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        <span className="text-xs text-gray-400" title="Crianças que leva, sem contar o motorista">lugares</span>
+        {saving && <span className="text-xs text-gray-400">…</span>}
+        {onRemove && (
+          <button type="button" onClick={onRemove} title="Remover viatura" className="text-gray-300 hover:text-red-500 text-base leading-none px-1">×</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * For a driver paid by the hour: hours a week × €6 × 4,33. A hint only: it never saves,
+ * and it uses nothing but the hours typed into it.
+ */
+function HourlyDriverHint({ initiallyOpen }: { initiallyOpen: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
+  const [hours, setHours] = useState('');
+  const monthly = hourlyDriverMonthlyCost(hours);
+  const fmt = (n: number) => n.toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="text-[11px] text-indigo-600 hover:underline pb-1">
+        Motorista à hora? Calcular
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1 pb-1.5 text-[11px] text-gray-500">
+      <span>Motorista à hora:</span>
+      <input
+        type="number"
+        min="0"
+        step="0.5"
+        value={hours}
+        aria-label="Horas por semana"
+        onChange={e => setHours(e.target.value)}
+        className="w-14 px-1.5 py-0.5 text-[11px] border border-gray-200 rounded outline-none focus:ring-1 focus:ring-indigo-400"
+      />
+      <span>
+        h/semana × €{HOURLY_DRIVER_RATE} × {HINT_WEEKS_PER_MONTH.toLocaleString('pt-PT')} ={' '}
+        <span className="font-mono font-semibold text-gray-700">{monthly != null ? `€${fmt(monthly)}` : '—'}</span>/mês
+      </span>
+    </div>
+  );
+}
+
 export default function FinancialSummaryPage() {
   const [tConfig, setTConfig] = useState<TransportationConfig | null>(null);
   const [sConfig, setSConfig] = useState<StudyCenterConfig | null>(null);
@@ -212,15 +305,19 @@ export default function FinancialSummaryPage() {
   const [loading, setLoading] = useState(true);
   // Fixed-cost inputs — edited directly here, not derived from a planned
   // route snapshot. Keyed the same as CostFieldKey so one generic save
-  // handler covers all five fields.
+  // handler covers the study room's fields.
   const [costInputs, setCostInputs] = useState<Record<CostFieldKey, string>>({
-    'transport.vanMonthlyCost': '',
-    'transport.driverMonthlyCost': '',
-    'transport.electricityMonthlyCost': '',
     'study.teacherMonthlyCost': '',
     'study.rentMonthlyCost': '',
   });
   const [savingCostField, setSavingCostField] = useState<CostFieldKey | null>(null);
+  // Transport fixed costs, per vehicle: inputs as typed, by vehicle id.
+  const [vehicleInputs, setVehicleInputs] = useState<Record<string, VehicleInputs>>({});
+  const [savingVehicle, setSavingVehicle] = useState<string | null>(null);
+  const [vehicleError, setVehicleError] = useState<string | null>(null);
+  // The list as last saved (or being saved). Every save starts from here rather than from
+  // React state, so two quick edits in a row can't write over each other.
+  const vehiclesRef = useRef<TransportVehicle[]>([]);
 
   // Filters — drive every revenue/count figure on the page. Default mirrors
   // the old "Receita Estimada" scenario (active + pending).
@@ -267,10 +364,10 @@ export default function FinancialSummaryPage() {
         sCfg = sCfgSnap.data() as StudyCenterConfig;
         setSConfig(sCfg);
       }
+      const vehicles = vehiclesOf(cfg);
+      vehiclesRef.current = vehicles;
+      setVehicleInputs(Object.fromEntries(vehicles.map(v => [v.id, toVehicleInputs(v)])));
       setCostInputs({
-        'transport.vanMonthlyCost': cfg?.vanMonthlyCost != null ? String(cfg.vanMonthlyCost) : '',
-        'transport.driverMonthlyCost': cfg?.driverMonthlyCost != null ? String(cfg.driverMonthlyCost) : '',
-        'transport.electricityMonthlyCost': cfg?.electricityMonthlyCost != null ? String(cfg.electricityMonthlyCost) : '',
         'study.teacherMonthlyCost': sCfg?.teacherMonthlyCost != null ? String(sCfg.teacherMonthlyCost) : '',
         'study.rentMonthlyCost': sCfg?.rentMonthlyCost != null ? String(sCfg.rentMonthlyCost) : '',
       });
@@ -520,10 +617,10 @@ export default function FinancialSummaryPage() {
   const activeOnlyRevenue = sumOf(activeEntries);
   const subsCounted = (kind: EntryKind) => new Set(entries.filter(e => counts(e) && e.kind === kind).map(e => e.subId)).size;
 
-  const vanCost = (tConfig?.vanMonthlyCost ?? 0) * monthsCount;
-  const driverCost = (tConfig?.driverMonthlyCost ?? 0) * monthsCount;
-  const electricityCost = (tConfig?.electricityMonthlyCost ?? 0) * monthsCount;
-  const tCost = vanCost + driverCost + electricityCost;
+  // Each vehicle's cost + driver + electricity, × months. An old doc with no vehicle list
+  // is one van built from its single-van fields (vehiclesOf), so its figure is unchanged.
+  const tCosts = transportCosts(tConfig, monthsCount);
+  const tCost = tCosts.total;
   const teacherCost = (sConfig?.teacherMonthlyCost ?? 0) * monthsCount;
   const rentCost = (sConfig?.rentMonthlyCost ?? 0) * monthsCount;
   const sCost = teacherCost + rentCost;
@@ -551,8 +648,8 @@ export default function FinancialSummaryPage() {
   const scenarioOn = rulesInUse.some(r => rateOf(r) !== r.percentage);
   const totalCost = (showTransport ? tCost : 0) + (showStudy ? sCost : 0);
   const totalProfit = totalRevenue - totalCost;
-  // Costs are fixed monthly inputs — van, driver, electricity, teacher, rent —
-  // and none of them move with a discount. So every euro given away in
+  // Costs are fixed monthly inputs — each vehicle's cost, driver and
+  // electricity, teacher, rent — and none of them move with a discount. So every euro given away in
   // discounts is a euro straight off profit, and the margin swing is the whole
   // point of simulating a rate rather than just the revenue line.
   const scenarioProfit = Math.round((scenarioRevenue - totalCost) * 100) / 100;
@@ -631,19 +728,67 @@ export default function FinancialSummaryPage() {
     const raw = costInputs[key].trim();
     const value = raw === '' ? 0 : parseFloat(raw);
     if (isNaN(value) || value < 0) return;
-    const { configDoc, field } = COST_FIELD_META[key];
+    const { field } = COST_FIELD_META[key];
     setSavingCostField(key);
     try {
-      await setDoc(docRef('config', configDoc), { [field]: value }, { merge: true });
-      if (configDoc === 'transportation') {
-        setTConfig(prev => prev ? { ...prev, [field]: value } : prev);
-      } else {
-        setSConfig(prev => prev ? { ...prev, [field]: value } : prev);
-      }
+      await setDoc(docRef('config', 'studyCenter'), { [field]: value }, { merge: true });
+      setSConfig(prev => prev ? { ...prev, [field]: value } : prev);
       setCostInputs(prev => ({ ...prev, [key]: String(value) }));
     } finally {
       setSavingCostField(null);
     }
+  }
+
+  // ── Vehicles ──────────────────────────────────────────────────────────────
+  // Any change writes the whole list to config/transportation → vehicles. On a doc
+  // from before the list, the first write creates the van from the old fields as it
+  // was (vehiclesOf), plus the change. The old fields stay in the doc, unread.
+  async function writeVehicles(next: TransportVehicle[], key: string) {
+    const prev = vehiclesRef.current;
+    vehiclesRef.current = next;
+    setTConfig(c => ({ ...(c ?? {}), vehicles: next }) as TransportationConfig);
+    setSavingVehicle(key);
+    setVehicleError(null);
+    try {
+      await setDoc(docRef('config', 'transportation'), { vehicles: next }, { merge: true });
+    } catch (err) {
+      console.error('[financial-summary] saving vehicles failed', err);
+      // Back to what's stored, unless a later save has started since.
+      if (vehiclesRef.current === next) {
+        vehiclesRef.current = prev;
+        setTConfig(c => ({ ...(c ?? {}), vehicles: prev }) as TransportationConfig);
+        setVehicleInputs(Object.fromEntries(prev.map(v => [v.id, toVehicleInputs(v)])));
+      }
+      setVehicleError('Não foi possível guardar as viaturas. Tente novamente.');
+    } finally {
+      setSavingVehicle(s => (s === key ? null : s));
+    }
+  }
+
+  async function saveVehicleField(id: string, field: VehicleField) {
+    const current = vehiclesRef.current.find(v => v.id === id);
+    if (!current) return;
+    const value = parseVehicleField(field, vehicleInputs[id]?.[field] ?? '');
+    const showStored = (v: TransportVehicle) =>
+      setVehicleInputs(prev => ({ ...prev, [id]: { ...(prev[id] ?? toVehicleInputs(v)), [field]: toVehicleInputs(v)[field] } }));
+    // Invalid or unchanged: show the stored value again, write nothing.
+    if (value === null || value === current[field]) { showStored(current); return; }
+    const next = updateVehicle(vehiclesRef.current, id, field, value);
+    showStored(next.find(v => v.id === id) ?? current);
+    await writeVehicles(next, `${id}.${field}`);
+  }
+
+  async function handleAddVehicle() {
+    const next = addVehicle(vehiclesRef.current, newVehicleId());
+    const added = next[next.length - 1];
+    setVehicleInputs(prev => ({ ...prev, [added.id]: toVehicleInputs(added) }));
+    await writeVehicles(next, 'add');
+  }
+
+  async function handleRemoveVehicle(v: TransportVehicle) {
+    if (vehiclesRef.current.length <= 1) return;
+    if (!window.confirm(`Remover "${v.label}" e os seus custos do Resumo Financeiro?`)) return;
+    await writeVehicles(removeVehicle(vehiclesRef.current, v.id), `remove:${v.id}`);
   }
 
   if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">A carregar…</div>;
@@ -783,7 +928,7 @@ export default function FinancialSummaryPage() {
         <KPI
           label="Custos fixos"
           value={eur(totalCost)}
-          sub={monthsCount > 1 ? `${eur(totalCost / monthsCount)}/mês × ${monthsCount} meses` : 'van + motorista + eletricidade + professora + renda'}
+          sub={monthsCount > 1 ? `${eur(totalCost / monthsCount)}/mês × ${monthsCount} meses` : 'viaturas + motoristas + eletricidade + professora + renda'}
           color="text-red-600"
         />
         <KPI
@@ -1076,7 +1221,7 @@ export default function FinancialSummaryPage() {
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700">🚌 Transporte</h2>
-            <Link to="/admin/transport-planner" className="text-xs text-indigo-600 hover:underline">Ver planeador →</Link>
+            <Link to="/admin/transportes" className="text-xs text-indigo-600 hover:underline">Ver quadro →</Link>
           </div>
           <div className="px-5 py-4 space-y-3">
             <div>
@@ -1094,22 +1239,30 @@ export default function FinancialSummaryPage() {
               ))}
             </div>
 
-            {/* Costs — read-only here; edited in the "Custos Fixos" panel above */}
+            {/* Costs per vehicle — read-only here; edited in the "Custos Fixos" panel below */}
             <div className="pt-2 border-t border-gray-100 text-xs text-gray-500 space-y-1">
-              <div className="flex justify-between">
-                <span>Van</span>
-                <span className="font-mono text-red-500">{eur(vanCost)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Motorista</span>
-                <span className="font-mono text-red-500">{eur(driverCost)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Eletricidade</span>
-                <span className="font-mono text-red-500">{eur(electricityCost)}</span>
-              </div>
+              {tCosts.perVehicle.map(c => (
+                <div key={c.vehicle.id} className="space-y-1">
+                  <div className="flex justify-between font-medium text-gray-600">
+                    <span>{c.vehicle.label} <span className="font-normal text-gray-400">· {c.vehicle.seats} lugares</span></span>
+                    <span className="font-mono text-red-500">{eur(c.total)}</span>
+                  </div>
+                  <div className="flex justify-between pl-3">
+                    <span>Viatura</span>
+                    <span className="font-mono text-red-500">{eur(c.vehicleCost)}</span>
+                  </div>
+                  <div className="flex justify-between pl-3">
+                    <span>Motorista</span>
+                    <span className="font-mono text-red-500">{eur(c.driverCost)}</span>
+                  </div>
+                  <div className="flex justify-between pl-3">
+                    <span>Eletricidade</span>
+                    <span className="font-mono text-red-500">{eur(c.electricityCost)}</span>
+                  </div>
+                </div>
+              ))}
               <div className="flex justify-between font-semibold border-t border-gray-100 pt-1 mt-1">
-                <span>Total transporte</span>
+                <span>Total transporte{tCosts.perVehicle.length > 1 ? ` (${tCosts.perVehicle.length} viaturas)` : ''}</span>
                 <span className="font-mono text-red-500">{eur(tCost)}</span>
               </div>
             </div>
@@ -1182,27 +1335,52 @@ export default function FinancialSummaryPage() {
         <div className="px-5 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y sm:divide-y-0 divide-gray-100">
           <div className="divide-y divide-gray-100">
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">🚌 Transporte</div>
-            <EditableCostRow
-              label="Van"
-              value={costInputs['transport.vanMonthlyCost']}
-              saving={savingCostField === 'transport.vanMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.vanMonthlyCost': v }))}
-              onSave={() => saveCostField('transport.vanMonthlyCost')}
-            />
-            <EditableCostRow
-              label="Motorista"
-              value={costInputs['transport.driverMonthlyCost']}
-              saving={savingCostField === 'transport.driverMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.driverMonthlyCost': v }))}
-              onSave={() => saveCostField('transport.driverMonthlyCost')}
-            />
-            <EditableCostRow
-              label="Eletricidade"
-              value={costInputs['transport.electricityMonthlyCost']}
-              saving={savingCostField === 'transport.electricityMonthlyCost'}
-              onChange={v => setCostInputs(prev => ({ ...prev, 'transport.electricityMonthlyCost': v }))}
-              onSave={() => saveCostField('transport.electricityMonthlyCost')}
-            />
+            {vehiclesOf(tConfig).map(v => {
+              const inputs = vehicleInputs[v.id] ?? toVehicleInputs(v);
+              const setInput = (field: VehicleField, value: string) =>
+                setVehicleInputs(prev => ({ ...prev, [v.id]: { ...(prev[v.id] ?? toVehicleInputs(v)), [field]: value } }));
+              const costRow = (field: 'vehicleMonthlyCost' | 'driverMonthlyCost' | 'electricityMonthlyCost', label: string) => (
+                <EditableCostRow
+                  label={label}
+                  value={inputs[field]}
+                  saving={savingVehicle === `${v.id}.${field}`}
+                  onChange={value => setInput(field, value)}
+                  onSave={() => saveVehicleField(v.id, field)}
+                />
+              );
+              return (
+                <div key={v.id} className="py-1">
+                  <VehicleHeaderRow
+                    label={inputs.label}
+                    seats={inputs.seats}
+                    saving={savingVehicle === `${v.id}.label` || savingVehicle === `${v.id}.seats` || savingVehicle === `remove:${v.id}`}
+                    onLabelChange={value => setInput('label', value)}
+                    onLabelSave={() => saveVehicleField(v.id, 'label')}
+                    onSeatsChange={value => setInput('seats', value)}
+                    onSeatsSave={() => saveVehicleField(v.id, 'seats')}
+                    onRemove={vehiclesOf(tConfig).length > 1 ? () => handleRemoveVehicle(v) : undefined}
+                  />
+                  <div className="pl-3">
+                    {costRow('vehicleMonthlyCost', 'Viatura')}
+                    {costRow('driverMonthlyCost', 'Motorista')}
+                    <HourlyDriverHint initiallyOpen={v.driverMonthlyCost === 0} />
+                    {costRow('electricityMonthlyCost', 'Eletricidade')}
+                  </div>
+                </div>
+              );
+            })}
+            <div className="py-2 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleAddVehicle}
+                disabled={savingVehicle === 'add'}
+                className="text-xs text-indigo-600 hover:underline disabled:text-gray-400"
+              >
+                + Adicionar viatura
+              </button>
+              {savingVehicle === 'add' && <span className="text-xs text-gray-400">…</span>}
+              {vehicleError && <span className="text-xs text-red-600">{vehicleError}</span>}
+            </div>
           </div>
           <div className="divide-y divide-gray-100">
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide pt-2 pb-1">📚 Sala de Estudo</div>

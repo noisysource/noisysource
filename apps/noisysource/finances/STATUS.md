@@ -2,7 +2,286 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-11-05 (Plano and Ano built: forecast first)
+
+## FinHub v2 — forecast first (2026-11-05)
+
+Renato changed the order on 2026-11-04: blueprints first, then a year generated and confirmed by
+him, and only then the bank, as a monthly check. See HANDOFF-finhub-v2.md § "Order change", which
+also has his answers. **The night-2 click-through below (Aceitação, Mês, April) is no longer asked
+of him.**
+
+**Open on dev:** https://kidclub-dev-finhub.web.app/v2/noisysource/plano (first two sidebar items:
+**Plano**, **Ano**). Same PR **#125** into `staging`.
+
+**Built:**
+- **Plano**: every blueprint with all its values, its origin, "Confirmar", and a form to add or
+  change it. A new contract's form shows what it will generate before saving.
+- **Ano**: one row per blueprint, one column per month, through December of next year, with the
+  month-end balance. Click a value for how it was calculated.
+- **Money between companies**: new blueprint, moved by the bank lines naming the company.
+- **Confirmations**: per blueprint, tied to the version seen; a later version goes back to "por
+  confirmar".
+
+**Next step, Renato's:** in Plano, in this order:
+1. **Dinheiro entre empresas → "Criar a partir das linhas"** for NoisyPhocus. Is there a balance from
+   before 2026? The statements only start in 2026, so the form opens at 0, "por confirmar".
+2. **Créditos → Empréstimo BPI → Alterar.** The loan's principal and rate came from the seed and don't
+   match the 2026 statements, which show a larger amount drawn in March and interest on actual days /
+   360. With the statements' values, May–September match the bank to the cent (checked locally, not
+   on dev). April doesn't: it's the first period, and it doesn't change the forecast. No amounts here:
+   derive them from the statements, or see `prodata/`.
+3. **Calendário:** the client's 2027 calendar is almost empty. A new contract running through 2027
+   needs the Commission's list, or it counts those days as worked.
+4. Go through the rest, then **Ano**, and confirm what's right. Night 1's and night 2's "A confirmar"
+   below now belong to the blueprint they affect.
+
+**Open questions for Renato:**
+- Are the other 2026 transfers money to be returned (two with other companies or people in May, and
+  those with the two partners in January–February)? If so, each gets a "Nova empresa" entry.
+- Will NoisySource lend NoisyPhocus more? Only repayments can be planned today, not new lending.
+- Tolls and Tesla charging have no bank lines since August but are still forecast. End them?
+- Renato's childcare voucher is forecast above April's payslip value. A raise, or a wrong term? Not
+  checked.
+
+**Self-check:** domain + form tests pass with made-up values (blueprints: 22 new). On the real events,
+locally and written nowhere: the year's month-ends add up, and a made-up new contract at another rate
+generated its months and removed the "no income" warning. Not clicked through on dev: Renato tests
+the screens.
+
+**Risky / left in flight:**
+- `gcloud` needs `gcloud auth login`, so the importer can't run against dev until then. Plano's forms
+  don't need it.
+- Any push to `staging` takes v2 off dev until #125 deploys again: merge `origin/staging` into the
+  branch and push, **not** `gh run rerun` (a re-run reuses its old merge commit and would put older
+  KidClub, functions and rules back on dev).
+- `scripts/finhub-v2/` not changed since night 2, still flagged for review.
+- Next build: step C (Importar extrato, Folha de horas, Recibo, compare with the confirmed forecast).
+
+## FinHub v2 — night 2 morning report (2026-10-29)
+
+**Open on dev:** https://kidclub-dev-finhub.web.app/v2/noisysource → new sidebar items **Mês**,
+**Aceitação 2026**, **Diário**. Same PR **#125** → `staging` (more commits, no new PR). Dev deploy:
+see "Deploy" below.
+
+**What's new**
+- **Matching** (`packages/shared/finhub/noisysource/reconcile.ts`): every bank line gets a
+  suggestion, computed on load and never stored: SS lines by the month they name; the client's and
+  workers' names; the words of a payment rule or cost plan; the same IBAN as a hinted line; then the
+  same amount (oldest open item first; direct debits to their own month); one payment for several
+  items (voucher cards incl. the provider's fee, the accountant's lump payments); several lines for
+  one item (a salary paid in two, an insurance in two debits); costs that vary (tolls, charging,
+  phone) as an amount difference; and what's left gets an ad hoc category from keywords (travel,
+  credit card, State, insurance payouts…). Once you confirm lines, lines with the same description
+  follow your choice.
+- **Mês** (`/v2/noisysource/mes/2026-03`): the month's checklist (timesheet, invoice, payslips,
+  SS and IRS paid), planned vs real, and **real − planned split into named buckets** (ad hoc lines,
+  amount differences, paid in another month, planned items without a line with/without a reason,
+  lines not explained). Every bank line: **Confirmar** a suggestion, **Ligar a…** a planned item
+  by hand, **Ocasional…** with a category, **Desfazer**. Every planned item without a line: write
+  the reason. Buttons confirm all exact matches / all suggested categories of the month at once.
+- **Aceitação 2026**: § Acceptance 1–5 per month + the EC contract chain; click a month for why.
+- **Diário**: every event newest first, filter by type, who (app/importer), month, text; reversed
+  events struck through; click a row for the full payload.
+- Every click is an event (`bank.movement.matched`, `bank.movement.classified`,
+  `plan.item.explained`); undo is a `reversal`. Nothing is overwritten.
+- **Voucher provider's fee** is now in the plan (a confirmar #8 below): the voucher payments are
+  the cards + 4.5% + 23% VAT on the fee, **to the cent on every 2026 payment**. Put on the voucher
+  payment rule; vouchers are now one planned item per card.
+- **The importer now writes corrections**: when an input changes, it reverses the version in force
+  and adds a `-r2` (it never overwrites, and never replaces a version recorded in the app). Tonight
+  it wrote exactly one: the voucher rule with the fee (`rev-rule-vales-2026-01-01` +
+  `rule-vales-2026-01-01-r2`, visible in Diário). Dev now holds 414 events; a second run writes 0.
+
+**Acceptance per month** (with the suggestions; nothing is confirmed yet, that's your click):
+
+| Month | 1 lines | 2 planned | 4 payslips | 5 EC days | What's left |
+|---|---|---|---|---|---|
+| Jan | 31/31 suggested | 1 without line | 3/3 | 20 = 20 | Edenred fee debit absent this month |
+| Feb | 31/31 | 1 | 2/3 | 20 = 20 | same; Renato's IRS rate; his transfer ≠ payslip net (shown as a difference) |
+| Mar | 49/50 | 1 | 2/3 | 18+4 = 18+4 | an occupational-health payment; Feb's IRS paid with another amount |
+| **Apr** | 50/50 | all | 3/3 | 19 = 19 | **passes once you confirm** |
+| May | 34/35 | all | 3/3 | 17 = 17 | one vehicle-contract payment with no description |
+| Jun | 36/36 | 1 | 2/3 | 19 = 19 | May's IRS paid with another amount; per diem line |
+| Jul | 40/40 | 2 | 2/3 | 21 = 21 | June's IRS; Renato's meal card top-up for July |
+| Aug | 35/36 | 4 | 2/3 | 11 = 11 | an equipment-rental direct debit; Edenred fee, tolls, charging, Via Verde planned, none (car change?) |
+| Sep | 26/26 | 3 | 2/3 | payment in Oct | tolls/charging planned, none; Renato's meal card for September |
+
+So 3 of 335 bank lines have no suggestion, and 13 planned items have no line: those are yours (a
+reason, a link by hand, or a plan to change). Criterion 3 passes when every euro of real − planned
+sits in a named bucket; amount differences and payments in another month are named, not hidden.
+The 6 payslip differences are the same as night 1 and wait for the answers below.
+
+**What to click:**
+1. **Aceitação 2026**: the table, then a month (e.g. April, then March).
+2. **Mês → abril 2026**: read the suggestions, "Confirmar N correspondências exatas", then
+   "Classificar N como sugerido". Those two buttons cover 30 of the 50 lines; the other 20 (costs
+   whose amount differs from the plan, or several lines for one item: Tesla, tolls, MEO, loan, Via
+   Verde, Edenred, BPI fees) need their own "Confirmar" (filter "Por confirmar"). Then Aceitação
+   says April **passa**.
+3. **Mês → março 2026**: "Ligar a…" the State payment of 23 Mar to "IRS retido — fev" if that's
+   what it is, or write a reason; classify the occupational-health payment.
+4. **Diário**: your clicks appear at the top; the voucher-rule correction is there too.
+5. Try **Desfazer** on one confirmation: the suggestion comes back, Diário shows the reversal.
+
+**A confirmar** (night 1's list below still open; new ones):
+10. The voucher provider's fee (4.5% + 23% VAT on the fee), read from the statements.
+11. The State payments that don't equal a month's IRS (Jan ×2, Feb, Mar, Apr, Jun, Jul, Aug): IRS
+    plus withholding on suppliers? IRC? IVA? They're classified "Estado (a identificar)" until you
+    say; link them to the IRS month by hand where that's what they are.
+12. Two vehicle contracts paid monthly Jan–May, then paid off in May: should they be planned costs?
+    (Classified as ad hoc "viaturas" for now; they don't affect the months ahead.)
+13. Tolls and Tesla charging are planned every month but have no lines since August, and Via Verde
+    none in August (a new Via Verde id from September): end or change those cost plans (from when?).
+14. Renato's meal card top-ups for July and September have no bank line: paid another way?
+
+**Self-check (no amounts):** 100 tests pass (16 new: matching, fee, buckets add up to real −
+planned, confirmations and undo, acceptance, import corrections), 1 skipped (real-PDF test).
+finances `tsc`: 22 = `staging` baseline. ESLint `src/v2`: clean. `build:staging`: OK. The five v2
+pages and Mês for Mar/Sep/Dec server-rendered locally with the real events: no errors, no NaN; on
+every month the buckets add up to real − planned to the cent. EC chain: both PASS. Rules unchanged
+since night 1 (no rules test re-run).
+
+**Deploy:** **green** (Deploy to Dev, 2026-10-29 16:25 UTC: FinHub hosting + rules + indexes). Checked
+live afterwards: dev's ruleset holds the `finhub/{company}/events` block **and** `domotics_energy` /
+`domotics_climate` (the Pi's history; the comfort experiment runs 29–31/10); the hosted bundle has
+the new screens and the dev Firebase config. No other open PR touches rules or FinHub (checked
+before pushing).
+
+**Risky / left in flight:**
+- Merged `origin/staging` into the branch (59 commits: domotics #118–#124, docs). The "carry
+  #124's rules — DROP BEFORE MERGE" commit is now a no-op: `git diff origin/staging...HEAD --
+  firestore.rules` shows only the v2 block. Left in history (branch is pushed).
+- Any push to `staging` (any merge) removes v2 from dev until #125 deploys again. Restore it by
+  merging `origin/staging` into the branch and pushing, **not** `gh run rerun`: a re-run reuses its
+  old merge commit and would also put an older KidClub, functions and rules back on dev.
+- `scripts/finhub-v2/` changed (import corrections, full read of dev's events): flagged for your
+  review, like night 1's scripts.
+- Night 3 (HANDOFF § Steps): forms (Folha de horas, Recibo, Calendário, Importar extrato) + Equipa,
+  and whatever your answers change (they go through the importer as corrections).
+
+## FinHub v2 — night 1 morning report (2026-10-29)
+
+**Open on dev:** https://kidclub-dev-finhub.web.app/v2/noisysource (or the "FinHub v2 · NoisySource"
+link at the top of the old sidebar). PR **#125** → `staging`. Dev deploy: **green** (2026-10-29 10:35 UTC run: Firestore rules + FinHub hosting; nothing else deployed). Checked after it: dev's live rules hold the v2 block and still hold #124's domotics blocks; the hosted bundle has both screens and the dev config.
+
+**Built** (branch `agent/finhub-v2-noisysource`, worktree `.claude/worktrees/finhub-v2-noisysource`):
+- **Domain** `packages/shared/finhub/`, pure, 39 tests with made-up values: event envelope
+  (append-only, reversals), NoisySource event types + zod, holiday calendars (`pt`, `pt-coimbra`
+  computed incl. Easter-based ones and 4 July; client and company calendars from events), days
+  engine (EC days, meal days, per diems, leave), EC runway (opening position, timesheets, early
+  end, gaps, 3-month warning), payslip estimate + comparison, expected movements, Tesouraria
+  projection and past-month checks.
+- **Storage:** rules for `finhub/{company}/events/{eventId}` (read/create for FinHub admins, no
+  update/delete, honest `recordedBy`/`recordedAt`/`company`/`id`; emulator test 15/15). Event
+  store in the app (`src/v2/noisysource/eventStore.ts`: read, append in a transaction, reverse).
+- **Scripts (flagged for human review), dev only:** `scripts/finhub-v2/import-noisysource-dev.ts`
+  (seed part + the two 2026 Malt contracts + payslip PDFs as recorded facts + BPI statements via
+  `bpiPdf.ts`; dry run by default; deterministic ids + create-only precondition; refuses any
+  project but `kidclub-dev`, checked before any call) and `wipe-noisysource-dev.ts` (only
+  `finhub/noisysource/events`). Run: `node scripts/finhub-v2/run.mjs scripts/finhub-v2/<script>.ts [--write]`.
+  Their real inputs: `prodata/finhub-v2-noisysource.json` (new, local only: transcribed Malt
+  contracts, calendars, per diem values, payment days); shape in `scripts/finhub-v2/noisysource-inputs.example.json`.
+- **On dev:** 412 events in `finhub/noisysource/events` (335 bank lines Jan–Sep, 27 payslips,
+  15 calendar entries, 14 cost plans, 10 terms versions, 6 payment rules, 3 holiday calendars,
+  2 EC contracts). Second run: 0 new (idempotent). `finances_entities` (#94's data) not touched.
+- **Screens** under `/v2/noisysource` (own shell; NoisyPhocus/Casa shown as "em breve"):
+  **Tesouraria** and **Contratos EC**. ESLint `no-restricted-imports` for `src/v2/**`.
+
+**What to click:**
+1. **Tesouraria:** the three cards (real balance from the 30 Sep statement, projected balance,
+   lowest point); **Dias de pagamento** (the proposal below, "a confirmar" badges); **Próximos
+   movimentos** (90 days / 6 / 12 months; each line says why: days × rate, gross − IRS − SS,
+   meal days; October's lines are greyed "sem extrato" until October's statement is imported);
+   **Meses passados**: planned vs real month-end for Jan–Sep, click a month for plan vs bank side
+   by side (✓ = a bank line with the same amount within ±10 days, a hint only).
+2. **Contratos EC:** the two Malt contracts in order, "segue-se diretamente", used/planned/left,
+   last day vs Malt's estimate, the **warning is active** (3 months before the current contract's
+   last day: prepare the next one), months with "No banco ✓", and the calendars used (client
+   holidays, Renato's absences and trips).
+
+**Self-check (no amounts):**
+- `pnpm --filter finances test`: 84 passed (39 new shared + 45 existing), 1 skipped (real-PDF test).
+  finances `tsc`: 22 errors = `staging` baseline (none new). `build:staging`: OK. ESLint on
+  `src/v2`: clean, and a probe confirmed it flags old pages/api/contractSync/other companies.
+- EC: the older contract runs out on **2026-03-25** (the day before the next one starts); the
+  current one's projected last day = **2027-01-26** (Malt's estimate). Both PASS.
+- EC days Jan–Aug: planned = days Malt paid, **9/9 contract-months** (March split 18 + 4).
+- Payslips Jan–Sep: **21/27 equal the estimate** (Marisa 9/9, Bernardo 9/9, Renato 3/9). Renato's
+  differences by cause: **IRS rate** of the month differs from the terms (Feb); **per diem** line
+  isn't a whole number of days at the daily value (Mar, Jun); **meal days** don't follow the
+  calendar (Jul: estimate 17, payslip 21; Aug: 8 vs 11; Sep: 19 vs 18).
+- Month-end planned vs real: all 9 months differ, as expected for night 1 (card purchases, tolls,
+  trips, transfers, the voucher provider's fee, Dec 2025 items paid in Jan): night 2 explains them
+  line by line (§ Acceptance 1–3).
+
+**Payment days proposed from the 2026 statements (a confirmar, used in the plan):**
+- 20th of M+1: SS (TSU) and IRS withheld (Renato; statements 14–24). 25th: net salaries (Renato).
+- 25th (with the salaries): meal card top-up and the Edenred vouchers via EasyPay; if not a
+  business day, the business day before.
+- Malt: invoice on the month's last day, money +10 days (statements: 4th–10th of M+1).
+- 8th: BPI account fee + stamp duty. 9th: MEO. 12th: accountant (paid in lumps, irregular). 15th:
+  health insurance, Via Verde, tolls, Tesla charging (estimates). 20th: BPI loan instalment.
+- 22nd of July, September, December: IRC payments on account (two equal state payments in Jul
+  and Sep 2026, so December inferred).
+- Annual insurances on their 2026 debit dates (23 Feb, 2 Mar, 6 Jul, 4 Aug).
+- Not planned: the company card's monthly settlement (end of month, variable) and the other
+  irregular "Pagamento ao Estado" debits (what they are: open).
+
+**A confirmar (placeholders in the data, marked in the UI):**
+1. The payment days above (except salaries 25 and SS/IRS 20).
+2. Commission holidays 2026: 2 Jan and 15 May are filed as Commission holidays, not Renato's days
+   off (both are on the Commission's usual list; May's payslip pays 15 May as a meal day). Nov–Dec
+   and 1 Jan 2027 are inferred from Malt's end-date estimate.
+3. Carnaval (17 Feb) as a NoisySource day off: February's payslip has one meal day fewer than the
+   calendar (the handoff's trap).
+4. Renato's leave: January's payslip shows a full month of parental leave while Malt paid 20 days
+   that month. So **leave (`licenca`) is a payroll fact**: it removes salary and meal days, not EC
+   days. February's 8 leave days are placed on 1–8 Feb (dates a confirmar).
+5. Trip days: counted from the per diem lines (amount ÷ daily value), dates placed on the first
+   free working days of the month. Daily values: Renato's (March's and June's lines don't divide
+   evenly at it) and Marisa's (one line only) a confirmar; Bernardo's divides every line.
+6. Christmas subsidy in **November** (not in the Dec 2025 payslips; 14 payments in a 2025 YTD).
+7. 9 July: Renato's day off isn't counted as vacation on July's payslip.
+8. The voucher payments carry the provider's fee (about 4.5% + VAT, from the amounts): not in the
+   plan yet.
+9. The loan instalment's interest is estimated on the outstanding capital per month; the bank's
+   differs by a little (it counts actual days).
+
+**Additions to the design** (handoff tables): calendar kind `licenca`; `opening` on EC contracts;
+terms carry subsidy months, holiday calendars and the per diem value; cost plans can be a loan;
+bank lines carry `seq`. Only the two 2026 Malt contracts were imported (the two older ones, 2024–2025,
+aren't needed for 2026).
+
+**Risky / failed / left in flight:**
+- **Commit `chore(finances): carry PR #124's domotics rules … DROP BEFORE MERGE`.** kidclub-dev's
+  live ruleset is #124's (`domotics_energy`, `domotics_climate`, `domotics_config/tariff`) and the Pi
+  writes the energy/climate history there; a PR deploys its whole `firestore.rules` to dev, so
+  without that copy this PR would have cut the Pi off. Before merging this PR: drop that commit, or
+  merge #118/#124 into `staging` first. Also: a domotics PR's next push redeploys its rules without
+  the v2 block, and then Tesouraria on dev says "Missing or insufficient permissions" until this
+  PR is pushed again (or the Deploy to Dev workflow re-runs on it).
+- No browser check (login can't be done unattended). Both pages were server-rendered locally
+  with the real events: no errors, no NaN.
+- Night 2 next: **Mês** + matching (suggested, confirmed by a click), the acceptance report per
+  month (§ Acceptance 1–5), **Diário**.
+
+## Direction change (2026-10-28): FinHub v2 — read this first
+Renato decided to rebuild FinHub as **three modules, one per company** (NoisySource, NoisyPhocus,
+Casa) in the same app, with an **append-only event log** as the record. **NoisySource first**,
+rebuilt for 2026 and checked against the bank statements (bank balances are the truth). Design,
+decisions, Renato's answers: **`HANDOFF-finhub-v2.md`** (same folder), on branch
+`agent/finhub-v2-noisysource` (worktree `.claude/worktrees/finhub-v2-noisysource`). Night 1 ran
+2026-10-29, night 2 the same day (reports above).
+
+**Paused (Renato, 2026-10-28), everything below this section:** #94 `agent/finhub-real-data`
+(open, not merged; its latest state is in *that branch's* STATUS.md, 2026-10-18, newer than this
+file; its real data stays on dev), KidClub reconciliation step 2, emails → expenses, the FinHub
+release. The old FinHub keeps running as it is until v2's NoisySource module passes.
+
+**Next step:** Renato checks night 2 on dev (Aceitação, Mês, Diário), confirms a month or two and
+answers the "a confirmar" lists above; then night 3 of `HANDOFF-finhub-v2.md` (§ Steps) on the
+same branch and PR. Timesheets still to come.
 
 ## Background — why this branch exists
 The 2026-09-21 session built a NoisyPhocus cost model on `agent/financial-events-model` (PR #20).

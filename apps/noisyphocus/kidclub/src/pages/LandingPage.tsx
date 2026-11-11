@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import SocialShare from '../components/SocialShare';
+import UpcomingEventsBanner from './events/UpcomingEventsBanner';
 
 export default function LandingPage() {
   const [lang, setLang] = useState<'pt' | 'en'>('pt');
@@ -82,6 +83,8 @@ export default function LandingPage() {
           {pt ? '👤 Entrar / Criar conta' : '👤 Sign in / Register'}
         </Link>
       </section>
+
+      <UpcomingEventsBanner pt={pt} />
 
       {/* Services */}
       <section className="py-12 px-4">
