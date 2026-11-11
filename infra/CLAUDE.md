@@ -47,9 +47,9 @@ Configured in `/firebase.json` and `/.firebaserc` at monorepo root.
 |---|---|---|---|
 | `kidclub` | KidClub | `kidclub-dev-arcoiris` | `rainbow-prod-2454b-arcoiris` |
 | `finances` | Finances | `kidclub-dev-finhub` | `rainbow-prod-2454b-finhub` |
-| `domotics` | Domotics | `kidclub-dev-domotics` | `rainbow-prod-2454b-domotics` (declared, not created yet; prod deploy off until it is — see root CLAUDE.md "Domotics in prod") |
+| `domotics` | Domotics | `kidclub-dev-domotics` | none, and none to be created: Domotics goes to `noisysource-prod` (see `HANDOFF-repo-restructure.md`) |
 
-> Site IDs also retain legacy names. Rename via `firebase hosting:sites:create` when infra is cleaned up.
+> FinHub and Domotics leave these projects for `noisysource-dev` / `noisysource-prod`; the order and progress are in `HANDOFF-repo-restructure.md`.
 
 ---
 
@@ -90,12 +90,15 @@ terraform apply -var-file="env/kidclub-dev.tfvars"
 |---|---|---|
 | `kidclub-dev` | `(default)` | `europe-west3` |
 | `rainbow-prod-2454b` | `(default)` | `eur3` |
+| `noisysource-dev` / `noisysource-prod` | not created yet | `europe-west3` (decided 2026-11-11) |
+
+Today each KidClub database is shared by KidClub, FinHub and Domotics (one rules file,
+`/firestore.rules`). After the restructure each company has its own.
 
 ---
 
 ## Cost Notes
-- Firebase Spark (free) plan covers most internal usage
+- Every billed project is on Blaze (pay-as-you-go) through Central Billing; the aim is to stay inside the free allowances
 - Cloud Functions: 2M calls/month free
 - Firebase Hosting: 10GB storage / 360MB/day free
 - Firestore: 1GB / 50K reads / 20K writes per day free
-- Upgrade to Blaze (pay-as-you-go) only if free tier is exceeded
