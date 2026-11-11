@@ -45,7 +45,7 @@ export default function Sidebar() {
           <SidebarNavLink to="/admin/financial-summary">📊 Resumo Financeiro</SidebarNavLink>
           <SidebarNavLink to="/admin/config/descontos">🏷️ Descontos</SidebarNavLink>
           <SidebarNavLink to="/admin/study-room-planner">📖 Planeador — Sala de Estudo</SidebarNavLink>
-          <SidebarNavLink to="/admin/transport-planner">🗓️ Planeador — Transporte</SidebarNavLink>
+          <SidebarNavLink to="/admin/transportes">🚐 Transportes</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="⚙️ Operações">

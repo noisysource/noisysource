@@ -2,13 +2,55 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
+**Last updated:** 2026-11-09 (the 🚐 transport board section just below only. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
+
+**Why.** KidClub is getting a second vehicle (the owned electric Model X, 5 children, a new driver at
+€6/hour; decided by Renato 2026-11-09). The old planner put every child of a period into one run for
+one van, and its "optimise" called Google's Routes API from the browser, the API behind the €500
+charge (disabled by hand, see `infra/gcp/terraform/project.tf`). Renato planned the two vehicles on a
+prototype board instead (a Claude artifact, private to him) and asked for it in the app.
+
+**What's in the branch.**
+- `/admin/transportes` (sidebar "🚐 Transportes"; `/admin/transport-planner` redirects there): a week of
+  van and car lanes in 5-minute rows. Each run is a solid pick-up box and an outlined drop-off box;
+  a pick-up drags its drop-off along, a drop-off moves alone; another vehicle takes the whole run.
+  On-board strip, "N de M lugares" overload, must-arrive-by warning, undo, "Destacar novos",
+  vehicle filter, phone day tabs. Code: `src/pages/admin/transportBoard/` (pure logic + vitest tests
+  in `logic.ts` / `logic.test.ts`; `pnpm --filter kidclub test`). Vehicles live in `VEHICLES` there.
+- **Runs come live from the DB** (Renato, 2026-11-09: "the data should come from the DB"). Every leg of
+  every active or pending, not-ended transport subscription is a run: child, day, places and the
+  requested time come from the subscription (PENDENTE badge when pending). It starts in the van.
+  The board stores only its plan for that leg in `_apps/arcoiris/transportRuns/{subId}_{day}_{leg}`:
+  vehicle, planned pick-up (only if it differs; the box then says "Pedido às …"), drop-off, must
+  arrive by, note, flag. `leg` = position among that day's legs by requested time, so a time change
+  keeps the plan, but adding or removing a leg the same day can shift it. A subscription leg's day
+  can't be dragged: that's a subscription change. "Repor plano" deletes the stored plan.
+- **Planning-only runs** (PLANO badge, "Adicionar só no quadro"): a child who isn't in the DB yet,
+  stored whole in the same collection with no `subId`. Delete it once the real subscription exists,
+  or the child counts twice. The board never writes to subscriptions or billing; admin-only rule.
+- Removed: `TransportPlannerPage.tsx` and `lib/routeSolver.ts` (the Routes API caller). Gone with
+  them: the planner's settings "apply to subscriptions" button, which rewrote every active
+  subscription's `monthlyFee` with its own discount maths (ignoring `discountOverrides`). Transport
+  prices are still edited at `/admin/transport-config`; "rota atribuída / sem rota" is still the
+  manual toggle on the subscriptions page. Old `transportRoutes` versions stay in Firestore, unread.
+- No seed: nothing to import for the subscriptions. The prototype's own plan (car assignments,
+  drop-off times, Lara / Filipa's children / Patrícia's child, who have no subscription) is not
+  carried over; re-plan on the board, or ask for a one-off import if that's quicker.
+
+**Next step.** Renato clicks through it on dev (it shows dev's own subscriptions). Then promote
+`staging` → `main` as usual; no data step for prod.
+**Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
+driver); a warning when a PLANO run's child now has a subscription; live car position.
+
+**Before that:** 2026-11-05 (the study-enroll hotfix section just below only; nothing else re-checked. The 🧾 2026-10-31 section under it still says "NOT merged", but #128 has since merged)
 
 **Before that:** 2026-10-31 (the 🧾 hotfix section only. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
 
-## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (NOT merged, NOT in prod); dev preview #136
+## Hotfix 2026-11-05: parents couldn't enroll in the study room on its own. `hotfix/kidclub-study-enroll-link`, PR #135 → `main` (**merged and deployed to prod 2026-11-11**); #136 merged into `staging` the same day
 
-**State.** The fix is built and in review. Merging #135 deploys it to prod (a hotfix PR doesn't deploy when opened).
+**State (2026-11-11).** #135 merged; the prod deploy was green (kidclub.pt served the new build at 11:24 UTC). Nobody has clicked through the new links on prod yet. What follows in this paragraph is the pre-merge note.
 Branch protection isn't enforced, so check the merge run is green yourself. The dev preview is #136
 (`sync/hotfix-study-enroll-to-staging` → `staging`). Merging #136 after #135 also does the main→staging sync.
 
