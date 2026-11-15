@@ -57,3 +57,21 @@ resource "google_project_iam_member" "functions_runtime" {
   role    = each.key
   member  = google_service_account.functions_runtime.member
 }
+
+# --- The identity function builds run as --------------------------------------
+# Cloud Functions builds each deploy as the project's default compute account.
+# Google used to give that account broad rights by itself; the org policy
+# switches that off, so in a new project it has none and every build fails
+# with "missing permission on the build service account" (the first deploy to
+# noisysource-dev, 2026-11-15). This is the one role a build needs: read the
+# source, write the image and the logs.
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
+resource "google_project_iam_member" "functions_build" {
+  project    = var.project_id
+  role       = "roles/cloudbuild.builds.builder"
+  member     = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+  depends_on = [google_project_service.apis]
+}
