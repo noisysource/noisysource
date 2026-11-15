@@ -9,6 +9,11 @@ State: bucket `kidclub-terraform-state`, prefix = the project id.
 It creates the service accounts and their IAM grants, so CI can't do it.
 
 ```bash
+# 0. Once per project, before Terraform: it enables APIs through the Cloud
+#    Resource Manager API, which a new project doesn't have, so it can't enable
+#    that one itself (403 "Cloud Resource Manager API has not been used").
+gcloud services enable cloudresourcemanager.googleapis.com --project noisysource-dev
+
 cd infra/gcp/terraform/noisysource
 terraform init -backend-config="prefix=noisysource-dev" -reconfigure
 
