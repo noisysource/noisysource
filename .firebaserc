@@ -1,20 +1,9 @@
 {
   "projects": {
-    "default": "rainbow-78314",
     "dev": "kidclub-dev",
     "prod": "rainbow-prod-2454b"
   },
   "targets": {
-    "rainbow-78314": {
-      "hosting": {
-        "finances": [
-          "rainbow-78314-finhub-v2"
-        ],
-        "kidclub": [
-          "rainbow-78314"
-        ]
-      }
-    },
     "kidclub-dev": {
       "hosting": {
         "finances": ["kidclub-dev-finhub"],

@@ -97,7 +97,7 @@ projects and its own database.
    - split CI and Terraform per project
    - optionally move the Terraform state bucket, WIF pool and billing cutoff into a
      NoisySource project
-   - fix `.firebaserc`'s `default` (the dead `rainbow-78314`)
+   - ~~fix `.firebaserc`'s `default` (the dead `rainbow-78314`)~~ done 2026-11-15
    - close "My Billing Account" and its three leftover budgets (console)
 7. **Second KidClub facility.** This is a separate KidClub app track (`kidclub-feature`), not
    infrastructure. The proposal is a `clubId` in the data, inside the same project. Today
