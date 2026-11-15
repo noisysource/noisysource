@@ -1,0 +1,143 @@
+rules_version = '2';
+// Rules for the NoisySource projects (noisysource-dev, noisysource-prod): the
+// private tools' own Firestore. Today that is Domotics only. KidClub's and
+// FinHub's rules are the repo-root firestore.rules, in KidClub's projects.
+//
+// The Domotics block is the one from the root file, with one difference:
+// there is no `users` collection here, so the owner is known by email alone
+// (the root file also accepts a `roles.owner` flag on the user's document).
+//
+// Tests: see README.md in this folder.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // ── Domotics app ──────────────────────────────────────────────────────────
+    // The app has no Firebase Auth, so the client is unauthenticated here. It
+    // only ever touches `customization` (room/device display names — harmless).
+    //
+    // `netatmo` holds the OAuth client secret + refresh token and must never be
+    // client-readable: a Hosting-level gate (IAP/login) does not protect
+    // Firestore, which is reachable directly at firestore.googleapis.com. Only
+    // legrandGetStatus/legrandSetState read it, via the Admin SDK, which
+    // bypasses rules entirely — so denying it here costs nothing.
+    //
+    // Rules are permissive-OR: a separate, more specific `if false` match on a
+    // secret doc would NOT override this wildcard, so the restriction has to
+    // live in the condition below.
+    //
+    // Allowlist, not denylist: `netatmo` and `tuya` hold vendor credentials and
+    // are read only by Cloud Functions through the Admin SDK, which bypasses
+    // rules. Naming the two *safe* docs means every future vendor secret is
+    // denied by default instead of depending on someone remembering to add it.
+    match /domotics_config/{docId} {
+      allow read, write: if docId in ['customization', 'floorplan'];
+      // The bridge additionally reads its own device list, which holds the Tuya
+      // local keys. Added as a separate `allow` so the allowlist above is left
+      // exactly as it is: rules are permissive-OR, so this grants the bridge one
+      // more document and widens nothing for anyone else.
+      allow read: if isBridge() && docId == 'tuya_devices';
+      // Heating automation settings (domotics-bridge/src/automation.ts). Unlike
+      // the display documents above, this one decides how the house is heated,
+      // so only the owner may read or change it; the bridge reads it to act on.
+      // The bridge clamps every value to hard limits anyway — the rule decides
+      // who, the bridge decides how much.
+      allow read, write: if isDomoticsOwner() && docId == 'automation';
+      allow read: if isBridge() && docId == 'automation';
+      // E13 guard on/off (domotics-bridge/src/guard.ts): it switches the heat
+      // pump off and on by itself, so it is held to the automation's rule.
+      allow read, write: if isDomoticsOwner() && docId == 'guard';
+      allow read: if isBridge() && docId == 'guard';
+      // One-off "warm by HH:MM" request (domotics-bridge/src/warmby.ts). Read
+      // by the owner and the bridge; written only by the `domoticsWarmBy`
+      // callable (Admin SDK), which checks every request, so no client writes.
+      allow read: if (isDomoticsOwner() || isBridge()) && docId == 'warm_by';
+      // Electricity tariff for the Energia page (packages/shared/lib/energyBill.ts):
+      // prices, potência, billing day. The owner's alone; the bridge records kWh
+      // and never needs a price.
+      allow read, write: if isDomoticsOwner() && docId == 'tariff';
+    }
+
+    // Relay between the house and the app when away from the LAN. At home the
+    // app talks to the bridge directly over HTTP and none of this is touched;
+    // these documents exist only because a bridge behind NAT cannot be reached
+    // from outside.
+    //
+    // Unlike the rest of the domotics collections, these MUST require auth:
+    // `domotics_commands` is a channel that turns heating on and off, and it is
+    // reachable from the public internet. The owner is known by email: this
+    // project has no `users` collection to hold a role.
+    function isDomoticsOwner() {
+      return isAuthenticated() && request.auth.token.email == 'admin@kidclub.pt';
+    }
+
+    // The bridge on the Raspberry Pi. It signs in as an ordinary Firebase Auth
+    // user rather than using a service account, because the org policy
+    // `iam.disableServiceAccountKeyCreation` forbids the key — and because the
+    // role that path needed (roles/datastore.user) would have given a device in
+    // the hall cupboard read/write over every collection here, including the
+    // finances bank data. Identified by email, matching isDomoticsOwner above.
+    function isBridge() {
+      return isAuthenticated() &&
+        request.auth.token.email == 'domotics-bridge@kidclub.pt';
+    }
+
+    match /domotics_state/{docId} {
+      allow read: if isDomoticsOwner();
+      allow write: if isBridge();
+    }
+
+    // Heat pump faults and on/off transitions, recorded by the bridge
+    // (domotics-bridge/src/incidents.ts) for the Reports page. A record of
+    // what happened in the house: the owner reads it, only the bridge writes
+    // it, and nobody deletes it from a client. The bridge writes each document
+    // whole under a fixed id, so create + update is all it needs; it never reads
+    // them back.
+    match /domotics_incidents/{docId} {
+      allow read: if isDomoticsOwner();
+      allow create, update: if isBridge();
+    }
+
+    // kWh history, recorded by the bridge (domotics-bridge/src/energy.ts) for
+    // the Energia page: one document per Lisbon day, one field per 15-minute
+    // slot. Like the incidents: the owner reads, only the bridge writes, nobody
+    // deletes. The bridge patches one slot at a time, so create + update is all
+    // it needs, and only under a date id; it never reads them back.
+    match /domotics_energy/{docId} {
+      allow read: if isDomoticsOwner();
+      allow create, update: if isBridge() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    // Room and pump temperatures per 15-minute slot, and people's interventions
+    // (domotics-bridge/src/climate.ts): how the house cools and warms up. Same
+    // shape and same access as the energy history.
+    match /domotics_climate/{docId} {
+      allow read: if isDomoticsOwner();
+      allow create, update: if isBridge() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    match /domotics_commands/{docId} {
+      allow read, create: if isDomoticsOwner();
+      // The bridge lists the queue, deletes each command once executed, and
+      // writes an `error` field back onto the ones that fail.
+      allow read, update, delete: if isBridge();
+    }
+
+    // Administration of the bridge itself — status, logs, restart — travelling
+    // the same outbound path as commands, because the Pi accepts no inbound
+    // connection and is otherwise unreachable from outside the house.
+    //
+    // This is a remote-execution channel into a private home, so it is held to
+    // the same rule as the heating: only the owner may ask, and the bridge
+    // enforces a fixed allowlist of actions on top of this. Delete is granted
+    // to the owner as well so a finished request can be cleared from the app.
+    match /domotics_admin/{docId} {
+      allow read, create, delete: if isDomoticsOwner();
+      // The bridge reads requests and writes the answer back onto the document.
+      allow read, update, delete: if isBridge();
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "projects": {
+    "dev": "noisysource-dev",
+    "prod": "noisysource-prod"
+  },
+  "targets": {
+    "noisysource-dev": {
+      "hosting": {
+        "domotics": ["noisysource-dev-domotics"]
+      }
+    },
+    "noisysource-prod": {
+      "hosting": {
+        "domotics": ["noisysource-prod-domotics"]
+      }
+    }
+  },
+  "etags": {}
+}
