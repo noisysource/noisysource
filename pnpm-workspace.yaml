@@ -3,3 +3,4 @@ packages:
   - apps/noisysource/*
   - packages/*
   - functions
+  - firebase/*/functions
