@@ -1,5 +1,3 @@
-# /Users/renatolopes/dev/rainbow/terraform/env/kidclub-dev.tfvars
-#
 # Variables for the 'kidclub-dev' environment.
 
 gcp_project_id = "kidclub-dev"
