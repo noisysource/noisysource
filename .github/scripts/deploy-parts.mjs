@@ -9,9 +9,19 @@
 // deploys only the parts it touches, and the parts it doesn't touch keep
 // whatever was last deployed there.
 //
+// Deploy units (since 2026-11-15, infra/HANDOFF-repo-restructure.md): the repo
+// deploys into two pairs of projects, and each pair is a unit with its own
+// parts and its own paths (UNITS below).
+//   kidclub      kidclub-dev / rainbow-prod-2454b: everything that exists
+//                today (KidClub, FinHub, domotics, /functions, root rules).
+//   noisysource  noisysource-dev / noisysource-prod: firebase/noisysource/,
+//                infra/gcp/terraform/noisysource/ and the apps that have moved.
+// A path that belongs only to the other unit deploys nothing in this one.
+// Without --unit the unit is kidclub, so the existing workflow is unchanged.
+//
 // Usage (run from the repo root, with the head commit checked out):
-//   node .github/scripts/deploy-parts.mjs --base <rev> --head <rev>
-//   node .github/scripts/deploy-parts.mjs --all "<why>"
+//   node .github/scripts/deploy-parts.mjs [--unit <unit>] --base <rev> --head <rev>
+//   node .github/scripts/deploy-parts.mjs [--unit <unit>] --all "<why>"
 // Env:
 //   DISABLED_PARTS  comma-separated parts this environment never deploys
 //                   (e.g. "terraform,storage_rules,domotics" for prod)
@@ -19,17 +29,18 @@
 //
 // Plain Node, no dependencies: it runs before `pnpm install`, on the runner's
 // own node. Rules, in order (first match wins for each changed file):
-//   1. Not deployed by this pipeline: any *.md, scripts/, mcp/, the Pi bridge
+//   1. Not deployed by any pipeline: any *.md, scripts/, mcp/, the Pi bridge
 //      (apps/noisysource/domotics-bridge), editor files -> nothing.
-//   2. Pipeline / workspace / shared build config (.github/, root
-//      package.json, firebase.json, tsconfig*, vite.config.base.ts, ...)
-//      -> everything.
-//   3. pnpm-lock.yaml -> the workspace packages whose resolved dependencies
+//   2. A path that belongs to another unit -> nothing in this one.
+//   3. Pipeline / workspace / shared build config (.github/, root
+//      package.json, tsconfig*, vite.config.base.ts, ...) and the unit's own
+//      firebase.json / .firebaserc -> everything.
+//   4. pnpm-lock.yaml -> the workspace packages whose resolved dependencies
 //      changed (see lockfileParts); everything if that can't be told apart.
-//   4. A path owned by one part (apps/<app>/, functions/, rules, terraform).
-//   5. packages/shared/ -> every app/functions that actually imports the
-//      changed file (import graph, see Repo.reachableFrom).
-//   6. Anything else -> everything. Unknown means "deploy it all", never
+//   5. A path owned by one part (apps/<app>/, functions, rules, terraform).
+//   6. packages/shared/ -> every app/functions of the unit that actually
+//      imports the changed file (import graph, see Repo.reachableFrom).
+//   7. Anything else -> everything. Unknown means "deploy it all", never
 //      "deploy nothing".
 
 import { execFileSync } from 'node:child_process';
@@ -49,7 +60,7 @@ export const PARTS = [
 ];
 
 const LABELS = {
-  terraform: 'Terraform (infra/gcp/terraform)',
+  terraform: 'Terraform',
   firestore_rules: 'Firestore rules',
   firestore_indexes: 'Firestore indexes',
   storage_rules: 'Storage rules',
@@ -85,15 +96,70 @@ const CONSUMERS = {
 };
 const SHARED = 'packages/shared/';
 
-// pnpm-lock.yaml importer -> parts. '.' (the root package) is everything.
+// The deploy units. For each: its parts, the paths each part owns, who in it
+// consumes packages/shared, which files redeploy all of it (`everything`), and
+// which paths are another unit's alone (`foreign`: nothing to deploy here).
+// An app can be in two units while it moves (domotics): each unit's caller
+// switches its own copy on or off with DISABLED_PARTS.
+export const UNITS = {
+  kidclub: {
+    parts: PARTS,
+    owned: OWNED,
+    ownedFiles: OWNED_FILES,
+    consumers: CONSUMERS,
+    everything: [/^firebase\.json$/, /^\.firebaserc$/],
+    foreign: [/^firebase\/noisysource\//, /^infra\/gcp\/terraform\/noisysource\//],
+  },
+  noisysource: {
+    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics'],
+    owned: [
+      { dir: 'infra/gcp/terraform/noisysource/', part: 'terraform' },
+      { dir: 'firebase/noisysource/functions/', part: 'functions' },
+      { dir: 'apps/noisysource/domotics/', part: 'domotics' },
+    ],
+    ownedFiles: {
+      'firebase/noisysource/firestore.rules': 'firestore_rules',
+      'firebase/noisysource/firestore.indexes.json': 'firestore_indexes',
+    },
+    consumers: {
+      domotics: 'apps/noisysource/domotics/',
+      functions: 'firebase/noisysource/functions/',
+    },
+    everything: [/^firebase\/noisysource\/(firebase\.json|\.firebaserc)$/],
+    foreign: [
+      /^firebase\.json$/,
+      /^\.firebaserc$/,
+      /^firestore\.rules$/,
+      /^firestore\.indexes\.json$/,
+      /^storage\.rules$/,
+      /^functions\//,
+      /^apps\/noisyphocus\//,
+      /^apps\/noisysource\/finances\//,
+      // KidClub's Terraform root is this directory itself; this unit's root is
+      // the noisysource/ folder inside it.
+      /^infra\/gcp\/terraform\/(?!noisysource\/)/,
+    ],
+  },
+};
+
+function unitOf(name) {
+  const unit = UNITS[name];
+  if (!unit) throw new Error(`unknown unit "${name}" (known: ${Object.keys(UNITS).join(', ')})`);
+  return unit;
+}
+
+// pnpm-lock.yaml importer -> parts, per unit. '.' (the root package) is
+// everything. An importer listed here without an entry for a unit deploys
+// nothing in that unit; an importer not listed at all deploys everything.
 const IMPORTERS = {
-  'apps/noisyphocus/kidclub': ['kidclub'],
-  'apps/noisysource/finances': ['finances'],
-  'apps/noisysource/domotics': ['domotics'],
-  functions: ['functions'],
+  'apps/noisyphocus/kidclub': { kidclub: ['kidclub'] },
+  'apps/noisysource/finances': { kidclub: ['finances'] },
+  'apps/noisysource/domotics': { kidclub: ['domotics'], noisysource: ['domotics'] },
+  functions: { kidclub: ['functions'] },
+  'firebase/noisysource/functions': { noisysource: ['functions'] },
   // shared's own dependencies (zod) get bundled into whoever imports it.
-  'packages/shared': Object.keys(CONSUMERS),
-  'apps/noisysource/domotics-bridge': [], // runs on the Pi, deployed by hand
+  'packages/shared': 'consumers',
+  'apps/noisysource/domotics-bridge': {}, // runs on the Pi, deployed by hand
 };
 
 const NOT_DEPLOYED = [
@@ -113,8 +179,6 @@ const EVERYTHING = [
   /^pnpm-workspace\.yaml$/,
   /^\.npmrc$/,
   /^\.nvmrc$/,
-  /^firebase\.json$/,
-  /^\.firebaserc$/,
   /^tsconfig(\.[^/]+)?\.json$/,
   /^vite\.config\.base\.ts$/,
   /^tailwind\.config\.[cm]?[jt]s$/,
@@ -201,7 +265,8 @@ function changedKeys(a, b) {
   return { added, removed, modified };
 }
 
-export function lockfileParts(baseText, headText) {
+export function lockfileParts(baseText, headText, unitName = 'kidclub') {
+  const unit = unitOf(unitName);
   if (baseText === null || headText === null) {
     return { everything: 'pnpm-lock.yaml was added or removed' };
   }
@@ -230,8 +295,9 @@ export function lockfileParts(baseText, headText) {
   const parts = new Set();
   for (const importer of importers) {
     if (importer === '.') return { everything: 'pnpm-lock.yaml: the root package\'s dependencies changed' };
-    const mapped = IMPORTERS[importer];
-    if (!mapped) return { everything: `pnpm-lock.yaml: unknown workspace package "${importer}" changed` };
+    const known = IMPORTERS[importer];
+    if (!known) return { everything: `pnpm-lock.yaml: unknown workspace package "${importer}" changed` };
+    const mapped = known === 'consumers' ? Object.keys(unit.consumers) : known[unitName] ?? [];
     mapped.forEach((p) => parts.add(p));
   }
   return { parts: [...parts], importers };
@@ -342,9 +408,11 @@ export class Repo {
 
 // ---------------------------------------------------------------------------
 
-export function planFromFiles(changed, { repo, lockfile } = {}) {
-  const parts = new Map(PARTS.map((p) => [p, []])); // part -> reasons
+export function planFromFiles(changed, { repo, lockfile, unit: unitName = 'kidclub' } = {}) {
+  const unit = unitOf(unitName);
+  const parts = new Map(unit.parts.map((p) => [p, []])); // part -> reasons
   const ignored = [];
+  const foreign = [];
   let everything = null;
   const add = (part, why) => parts.get(part).push(why);
   const sharedChanged = [];
@@ -354,7 +422,11 @@ export function planFromFiles(changed, { repo, lockfile } = {}) {
       ignored.push(file);
       continue;
     }
-    if (EVERYTHING.some((re) => re.test(file))) {
+    if (unit.foreign.some((re) => re.test(file))) {
+      foreign.push(file);
+      continue;
+    }
+    if (EVERYTHING.some((re) => re.test(file)) || unit.everything.some((re) => re.test(file))) {
       everything ??= `${file} changed (pipeline, workspace or shared build config)`;
       continue;
     }
@@ -364,11 +436,11 @@ export function planFromFiles(changed, { repo, lockfile } = {}) {
       else res.parts.forEach((p) => add(p, `pnpm-lock.yaml (dependencies of ${res.importers.join(', ')})`));
       continue;
     }
-    if (OWNED_FILES[file]) {
-      add(OWNED_FILES[file], file);
+    if (unit.ownedFiles[file]) {
+      add(unit.ownedFiles[file], file);
       continue;
     }
-    const owner = OWNED.find((o) => file.startsWith(o.dir));
+    const owner = unit.owned.find((o) => file.startsWith(o.dir));
     if (owner) {
       add(owner.part, file);
       continue;
@@ -383,7 +455,7 @@ export function planFromFiles(changed, { repo, lockfile } = {}) {
   if (sharedChanged.length && !everything) {
     const code = sharedChanged.filter((f) => SOURCE_EXT.test(f) && repo?.files.has(f));
     const other = sharedChanged.filter((f) => !code.includes(f));
-    for (const [consumer, dir] of Object.entries(CONSUMERS)) {
+    for (const [consumer, dir] of Object.entries(unit.consumers)) {
       if (other.length) {
         // package.json, tsconfig.json, or a deleted/renamed file: can't trace
         // who used it any more, so assume everyone.
@@ -400,16 +472,17 @@ export function planFromFiles(changed, { repo, lockfile } = {}) {
     }
   }
 
-  return { parts, ignored, everything, sharedChanged: sharedChanged.length > 0 };
+  return { parts, ignored, foreign, everything, sharedChanged: sharedChanged.length > 0 };
 }
 
-function render(plan, { disabled, mode }) {
+function render(plan, { disabled, mode, unitName }) {
+  const PARTS = unitOf(unitName).parts; // this unit's parts, not the kidclub list above
   const deploy = {};
   for (const p of PARTS) {
     deploy[p] = !disabled.has(p) && (plan.everything !== null || plan.parts.get(p).length > 0);
   }
   const lines = [];
-  lines.push(`### Deploy plan (${mode})`);
+  lines.push(`### Deploy plan: ${unitName} (${mode})`);
   lines.push('');
   if (plan.changedCount !== undefined) lines.push(`${plan.changedCount} changed file(s).`, '');
   if (plan.everything) lines.push(`**Deploying everything:** ${plan.everything}`, '');
@@ -427,12 +500,17 @@ function render(plan, { disabled, mode }) {
   if (plan.ignored?.length) {
     lines.push('', `Not deployed by this pipeline (docs, scripts, Pi bridge, ...): ${plan.ignored.length} file(s).`);
   }
+  if (plan.foreign?.length) {
+    lines.push('', `Belong to another deploy unit, nothing to deploy here: ${plan.foreign.length} file(s).`);
+  }
   return { deploy, summary: lines.join('\n') };
 }
 
 function main(argv) {
+  const unitName = argv.includes('--unit') ? argv[argv.indexOf('--unit') + 1] : 'kidclub';
+  const PARTS = unitOf(unitName).parts; // this unit's parts, not the kidclub list above
   const disabled = new Set((process.env.DISABLED_PARTS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
-  for (const d of disabled) if (!PARTS.includes(d)) throw new Error(`DISABLED_PARTS: unknown part "${d}"`);
+  for (const d of disabled) if (!PARTS.includes(d)) throw new Error(`DISABLED_PARTS: unknown part "${d}" for unit ${unitName}`);
 
   let plan;
   let mode;
@@ -444,7 +522,7 @@ function main(argv) {
     const base = argv[argv.indexOf('--base') + 1];
     const head = argv[argv.indexOf('--head') + 1];
     if (!argv.includes('--base') || !argv.includes('--head') || !base || !head) {
-      throw new Error('usage: deploy-parts.mjs --base <rev> --head <rev> | --all "<why>"');
+      throw new Error('usage: deploy-parts.mjs [--unit <unit>] --base <rev> --head <rev> | --all "<why>"');
     }
     mode = `changes ${git(['rev-parse', '--short', base]).trim()}..${git(['rev-parse', '--short', head]).trim()}`;
     // --no-renames: a rename shows as delete + add, so both paths are seen.
@@ -452,12 +530,13 @@ function main(argv) {
     const repo = Repo.fromWorkingTree(process.cwd());
     plan = planFromFiles(changed, {
       repo,
-      lockfile: () => lockfileParts(gitShow(base, 'pnpm-lock.yaml'), gitShow(head, 'pnpm-lock.yaml')),
+      unit: unitName,
+      lockfile: () => lockfileParts(gitShow(base, 'pnpm-lock.yaml'), gitShow(head, 'pnpm-lock.yaml'), unitName),
     });
     plan.changedCount = changed.length;
   }
 
-  const { deploy, summary } = render(plan, { disabled, mode });
+  const { deploy, summary } = render(plan, { disabled, mode, unitName });
   const outputs = { ...deploy };
   // packages/shared is compiled whole by the functions predeploy
   // (`pnpm --filter @shared build`), so any change to it gets that build
@@ -465,7 +544,8 @@ function main(argv) {
   outputs.shared_check = plan.sharedChanged || plan.everything !== null;
   outputs.any = PARTS.some((p) => deploy[p]);
   // Whether the plan job needs pnpm + node_modules (anything to build/compile).
-  outputs.install = ['kidclub', 'finances', 'domotics', 'functions'].some((p) => deploy[p]) || outputs.shared_check;
+  const NO_BUILD = ['terraform', 'firestore_rules', 'firestore_indexes', 'storage_rules'];
+  outputs.install = PARTS.some((p) => !NO_BUILD.includes(p) && deploy[p]) || outputs.shared_check;
 
   console.log(summary);
   console.log('\noutputs: ' + JSON.stringify(outputs));
