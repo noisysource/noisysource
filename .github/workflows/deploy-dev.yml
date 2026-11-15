@@ -74,6 +74,8 @@ jobs:
       tf_dir: infra/gcp/terraform/noisysource
       tf_var_file: env/dev.tfvars
       only_changed: true
+      # build:nsdev = Vite mode `nsdev`, the app's .env.nsdev (noisysource-dev).
+      # build:staging stays kidclub-dev's, for the job above, until the cutover.
       apps: >-
         [{"part": "domotics", "dir": "apps/noisysource/domotics",
-          "build": "pnpm --filter domotics build:staging", "target": "domotics"}]
+          "build": "pnpm --filter domotics build:nsdev", "target": "domotics"}]
