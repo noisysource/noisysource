@@ -1,5 +1,9 @@
 name: Deploy to Dev
 
+# Two deploy units, one job each: KidClub's (`deploy`, into kidclub-dev) and
+# NoisySource's (`noisysource`, into noisysource-dev; at the bottom). Each
+# deploys only its own files; the other unit's files are nothing to it.
+#
 # Any PR targeting staging (open/update) deploys a live preview to
 # kidclub-dev, so Renato can review real behavior before promoting.
 # Also re-runs on push to staging (i.e. right after a PR merges), since a
@@ -52,3 +56,26 @@ jobs:
       # storage.rules (payment proofs, FinHub insurances). Prod stays off
       # until Storage is active there — see _deploy-kidclub-env.yml.
       deploy_storage_rules: true
+
+  # The NoisySource unit: the private tools' own project. Being built up one
+  # PR at a time (infra/HANDOFF-repo-restructure.md): a part deploys once its
+  # files exist, so today this is Terraform only.
+  noisysource:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/staging'
+    uses: ./.github/workflows/_deploy-env.yml
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    with:
+      unit: noisysource
+      environment: noisysource-dev
+      service_account: github-deploy@noisysource-dev.iam.gserviceaccount.com
+      firebase_dir: firebase/noisysource
+      tf_dir: infra/gcp/terraform/noisysource
+      tf_var_file: env/dev.tfvars
+      only_changed: true
+      # build:nsdev = Vite mode `nsdev`, the app's .env.nsdev (noisysource-dev).
+      # build:staging stays kidclub-dev's, for the job above, until the cutover.
+      apps: >-
+        [{"part": "domotics", "dir": "apps/noisysource/domotics",
+          "build": "pnpm --filter domotics build:nsdev", "target": "domotics"}]
