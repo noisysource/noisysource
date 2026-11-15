@@ -32,8 +32,20 @@ For prod: the same with `prefix=noisysource-prod` and `env/prod.tfvars`. Always 
 `-reconfigure` when switching: the prefix decides which project's state is loaded.
 
 ## After that
-- **A change that doesn't touch `iam.tf`**: CI applies it (once the NoisySource pipeline
-  exists, PR 5 of the restructure).
+- **Once per project, so CI can reach the Terraform state** (Renato; the bucket is in
+  `kidclub-dev`, so this root can't grant it):
+
+  ```bash
+  gcloud storage buckets add-iam-policy-binding gs://kidclub-terraform-state \
+    --member="serviceAccount:github-deploy@noisysource-dev.iam.gserviceaccount.com" \
+    --role="roles/storage.objectAdmin"
+  ```
+
+  For prod, the same with `github-deploy@noisysource-prod.iam.gserviceaccount.com`. The
+  grant covers the whole bucket, KidClub's state included: a grant limited to one prefix
+  breaks `terraform init`, which lists the bucket.
+- **A change that doesn't touch `iam.tf`**: CI applies it (`.github/workflows/_deploy-env.yml`,
+  called from `deploy-dev.yml`).
 - **A change to `iam.tf`**: Renato applies it by hand first, with the two commands above
   (`init`, then `apply`). The deploy account can read IAM but can't grant anything, so
   CI's apply fails until then. That is on purpose.
