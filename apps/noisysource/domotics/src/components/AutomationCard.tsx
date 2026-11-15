@@ -1,3 +1,4 @@
+import { SIGNED_IN_HOST } from '../lib/origin';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, Minus, Plus, Bot, AlarmClock } from 'lucide-react';
 import {
@@ -180,7 +181,7 @@ export default function AutomationCard({ status, canEdit, pumpOn }: Props) {
         {error && <p className="text-xs text-red-400">{error}</p>}
         {!canEdit && status && (
           <p className="text-[11px] text-zinc-500 leading-relaxed">
-            Para ligar, pausar ou mudar, abra a app com sessão iniciada (kidclub-dev-domotics.web.app). Na rede local só se vê o estado.
+            Para ligar, pausar ou mudar, abra a app com sessão iniciada ({SIGNED_IN_HOST}). Na rede local só se vê o estado.
           </p>
         )}
       </div>
@@ -549,7 +550,7 @@ function Settings({ canEdit, summary }: { canEdit: boolean; summary?: Automation
 
       {open && !canEdit && (
         <p className="text-xs text-zinc-500 leading-relaxed">
-          Para alterar, abra a app com sessão iniciada (kidclub-dev-domotics.web.app). Na rede local só se vê o estado.
+          Para alterar, abra a app com sessão iniciada ({SIGNED_IN_HOST}). Na rede local só se vê o estado.
         </p>
       )}
       {open && error && <p className="text-xs text-red-400">{error}</p>}

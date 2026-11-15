@@ -7,6 +7,7 @@
     "dev:prod": "vite --mode production",
     "build": "vite build",
     "build:staging": "vite build --mode staging",
+    "build:nsdev": "vite build --mode nsdev",
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "esbuild src/data/heatingTimeline.ts src/components/timeline/stripLogic.ts src/components/energy/costTimeline.ts src/components/energy/view.ts ../../../packages/shared/lib/energyBill.ts --bundle --platform=node --format=cjs --out-extension:.js=.cjs --tsconfig=tsconfig.app.json --entry-names=[name] --outdir=node_modules/.tmp/test --log-level=warning && node test/heatingTimeline.test.cjs && TZ=Pacific/Auckland node test/heatingTimeline.test.cjs && node test/costTimeline.test.cjs && TZ=Pacific/Auckland node test/costTimeline.test.cjs"
