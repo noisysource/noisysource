@@ -16,19 +16,28 @@
 /noisysource/
 ├── CLAUDE.md                        ← you are here
 ├── .code-workspace
+├── firebase.json, .firebaserc, firestore.rules   ← one Firebase config for every app (today)
 ├── functions/                       ← shared Firebase Cloud Functions (all apps)
+├── packages/shared/                 ← code shared by the apps
 ├── apps/
 │   ├── noisysource/                 ← NoisySource internal apps
 │   │   ├── finances/                ← Finance management (private)
 │   │   ├── domotics/                ← Home/building automation (private)
-│   │   ├── tasks/                   ← Task management & event tracking (private)
-│   │   └── social/                  ← Social platform (public, auth-required)
+│   │   ├── domotics-bridge/         ← the Raspberry Pi bridge (deployed by hand)
+│   │   ├── tasks/                   ← Task management & event tracking (private, not built)
+│   │   └── social/                  ← Social platform (public, auth-required, not built)
 │   └── noisyphocus/
 │       └── kidclub/                 ← KidClub public website (Noisy Phocus)
 └── infra/
-    ├── firebase/                    ← Firebase hosting configs per app
-    └── gcp/                         ← GCP IAP, project configs, environments
+    ├── HANDOFF-repo-restructure.md  ← the plan to split all of this per project pair
+    └── gcp/                         ← Terraform, GCP reorg handoff
 ```
+
+**This layout is being restructured** to match the Google Cloud layout: one deploy unit per
+project pair (`firebase/kidclub`, `firebase/noisysource`), FinHub and Domotics moving to the
+`noisysource-*` projects. The plan, the PR order and its progress are in
+`infra/HANDOFF-repo-restructure.md`; read it before touching `firebase.json`, the rules,
+`functions/`, Terraform or the workflows.
 
 ---
 
@@ -59,7 +68,7 @@ Google Cloud layout (reorganised 2026-11-10; org `kidclub.pt`; every billed proj
   - `noisysource-prod` / `noisysource-dev` (NoisySource Prod / Dev): billed, still empty. FinHub and Domotics move here from the KidClub projects; until they do, they still run in `rainbow-prod-2454b` / `kidclub-dev` as described below.
   - `noisysource-agent` (display: Jarvis): Renato's NoisySource agent. No billing, Workspace APIs only, keyless service account.
 
-The plan and what's left: `infra/gcp/HANDOFF-gcp-reorg.md`.
+What was done in Google Cloud: `infra/gcp/HANDOFF-gcp-reorg.md`. The repo-side plan and what's left: `infra/HANDOFF-repo-restructure.md`.
 
 GitHub: `github.com/noisysource/noisysource`
 
@@ -83,11 +92,14 @@ All apps share Firebase Cloud Functions located in `/functions`.
 - Firestore security rules are also managed centrally
 
 ## Firestore Architecture
-Single `(default)` database per project — both KidClub and FinHub share the same database within each environment. Collection scoping prevents conflicts:
+**Today:** one `(default)` database per KidClub project (`kidclub-dev`, `rainbow-prod-2454b`), shared by KidClub, FinHub and Domotics and kept apart by collection:
 - KidClub: `_apps/arcoiris/{collection}/...`
-- FinHub: `finances_entities/{entityId}/{collection}/...`
+- FinHub: `finances_entities/{entityId}/{collection}/...`, `finhub/{company}/events` (v2) and the other `finances_*` / `vault_*` roots
+- Domotics: `domotics_*`
 
-This allows FinHub to read KidClub data directly for financial management (subscription revenue → income tracking).
+So today FinHub reads KidClub data directly.
+
+**Where it's going** (decided 2026-11-10): each company gets its own database. FinHub and Domotics move to `noisysource-dev` / `noisysource-prod` (`europe-west3`), and each company writes only to its own. Cross-company reads go through Cloud Functions with read-only cross-project access: FinHub reads KidClub billing, KidClub reads FinHub's `costSummary`. Don't build new direct cross-app reads from the browser.
 
 ## Shared Integrations
 Third-party accounts already set up that any app can build on. Credentials are never in the repo: **ask Renato for them before starting.**
@@ -155,7 +167,7 @@ Normal flow end-to-end: branch off `staging` → PR into `staging` (deploys to d
 
 - **Push and open a PR** rather than pushing directly to `staging` or `main` — same reasoning as always (diff review). **Always check the base branch when opening a PR**: GitHub defaults it to the repo's default branch (`main`), not `staging`, so a PR opened by clicking through the post-push banner will target the wrong branch. A stray `agent/*` → `main` PR is now inert rather than prod-deploying, but it's still the wrong target and will sit there confusing the next person.
 - **FinHub deploys with KidClub** (since 2026-10-12): the same reusable workflow builds FinHub (`build:staging` for dev, `build` for prod) and deploys `hosting:finances` in its own job. Everything a run is going to deploy is built first, in the "Plan + build" job, and it refuses to go on unless every built bundle's Firebase `projectId` is the target project (a dev build in prod deploys fine and then breaks login). **Prod always deploys every part** (`only_changed: false` in `deploy-prod.yml`): prod must match what's promoted, whatever the diff. **`deploy-finances.yml` and `deploy-functions.yml`** stay as `workflow_dispatch` manual fallbacks for redeploying one piece alone; `deploy-finances.yml` deploys dev only from `staging` and prod only from `main`.
-- **Domotics in prod** (Renato, 2026-10-18: it ships like every other app — what merges into `staging` goes out on the next release). The pipeline is ready (`domotics_build_command: pnpm --filter domotics build` in `deploy-prod.yml`, same `projectId` check, own job), but **`deploy_domotics: false` there until all of these are done, by hand, once**, since deploying into a site that doesn't exist fails the whole prod deploy: (1) create the hosting site `rainbow-prod-2454b-domotics` — it's already declared in `infra/gcp/terraform/env/prod.tfvars` and mapped in `.firebaserc`, but CI doesn't apply terraform on prod, so create it with `firebase hosting:sites:create rainbow-prod-2454b-domotics --project rainbow-prod-2454b` and import it when prod state is reconciled (`terraform import 'google_firebase_hosting_site.sites["rainbow-prod-2454b-domotics"]' projects/rainbow-prod-2454b/sites/rainbow-prod-2454b-domotics`); (2) commit `apps/noisysource/domotics/.env.production` with prod's Firebase web config (the same six `VITE_FIREBASE_*` values as `apps/noisysource/finances/.env.production`) plus a `!apps/noisysource/domotics/.env.production` line in `.gitignore`; (3) allow `rainbow-prod-2454b-domotics.web.app` and `.firebaseapp.com` for Google sign-in on prod: Firebase Auth → authorized domains, and the prod browser API key's HTTP-referrer list (that key is referrer-restricted; see `deploy-finances.yml`); (4) then set `deploy_domotics: true` in `deploy-prod.yml`. Separately, prod domotics shows no live data until its backends point at prod: the Pi bridge publishes to `GCLOUD_PROJECT=kidclub-dev` (`domotics-bridge/deploy/domotics-bridge.service`) as `domotics-bridge@kidclub.pt` in kidclub-dev's Auth, and the Legrand/Tuya callables read `domotics_config/netatmo` / `tuya` from the same project's Firestore. One bridge serves one project, so moving it to prod takes live data away from dev — Renato's call.
+- **Domotics in prod: not in the KidClub projects** (decided 2026-11-10/11, replacing the 2026-10-18 checklist that stood here). **Don't create `rainbow-prod-2454b-domotics`** and leave `deploy_domotics: false` in `deploy-prod.yml`. Domotics moves to `noisysource-dev` / `noisysource-prod` with its own rules, functions and pipeline, and the bridge's live data goes to `noisysource-prod`; the steps are in `infra/HANDOFF-repo-restructure.md`. Until that cutover nothing changes: the app deploys to `kidclub-dev-domotics`, and the Pi bridge publishes to `kidclub-dev` (`domotics-bridge/deploy/domotics-bridge.service`) as `domotics-bridge@kidclub.pt`. One bridge serves one project.
 - **Terraform in CI runs `apply`, not just `plan`, whenever it deploys** (on dev: any PR/push that touches `infra/gcp/terraform/` or something that deploys everything) — the GCS backend prefixes are `kidclub-dev` (dev) and `rainbow-prod-2454b` (prod); verified directly against the `kidclub-terraform-state` bucket, don't assume/guess a different prefix if you're touching this. If a CI terraform step ever fails on a permissions error, the service account is missing an IAM role for whatever resource type triggered it — fix by adding the role in `infra/gcp/terraform/iam.tf` and having Renato apply it once by hand (CI can't grant itself permissions it doesn't have yet).
 - **Clean up your worktree when the task is done:** `git worktree remove .claude/worktrees/<short-task-name>` after the branch is merged (or abandoned). A stale worktree is how real credentials end up copied into a forgotten folder (this happened once already — see the audit notes) — don't let it happen again.
 - **Visibility:** if you're not sure what agents/worktrees currently exist, `git worktree list` from the main checkout shows every active one and its branch. Treat any worktree not shown there, or any branch you don't recognize, as something to ask about before building on top of it — this includes stale/abandoned branches pushed to origin that never got cleaned up; don't assume a branch that exists is safe to build on top of.
