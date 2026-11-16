@@ -57,9 +57,10 @@ jobs:
       # until Storage is active there — see _deploy-kidclub-env.yml.
       deploy_storage_rules: true
 
-  # The NoisySource unit: the private tools' own project. Being built up one
-  # PR at a time (infra/HANDOFF-repo-restructure.md): a part deploys once its
-  # files exist, so today this is Terraform only.
+  # The NoisySource unit: the private tools' own project
+  # (infra/HANDOFF-repo-restructure.md). A part deploys once its files exist.
+  # Its prod (noisysource-prod) deploys on a merge into staging, from
+  # deploy-noisysource-prod.yml.
   noisysource:
     if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/staging'
     uses: ./.github/workflows/_deploy-env.yml

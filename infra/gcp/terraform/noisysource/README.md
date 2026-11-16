@@ -45,7 +45,8 @@ For prod: the same with `prefix=noisysource-prod` and `env/prod.tfvars`. Always 
   grant covers the whole bucket, KidClub's state included: a grant limited to one prefix
   breaks `terraform init`, which lists the bucket.
 - **A change that doesn't touch `iam.tf`**: CI applies it (`.github/workflows/_deploy-env.yml`,
-  called from `deploy-dev.yml`).
+  called from `deploy-dev.yml` for `noisysource-dev`, on a PR into `staging`, and from
+  `deploy-noisysource-prod.yml` for `noisysource-prod`, on a merge into `staging`).
 - **A change to `iam.tf`**: Renato applies it by hand first, with the two commands above
   (`init`, then `apply`). The deploy account can read IAM but can't grant anything, so
   CI's apply fails until then. That is on purpose.

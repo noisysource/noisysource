@@ -5,7 +5,8 @@ rules, indexes and, as they arrive, functions and hosting. Run `firebase` from t
 and it acts on these projects only; the repo root's `firebase.json` is KidClub's.
 
 Deployed by CI (`.github/workflows/_deploy-env.yml`): a PR into `staging` deploys what it
-changes here to `noisysource-dev`.
+changes here to `noisysource-dev`; merging it deploys the same to `noisysource-prod`
+(`deploy-noisysource-prod.yml`). A merge into `staging` is a release for these projects.
 
 ## Hosting
 `firebase deploy` only serves folders inside this one, so each hosting target's `public` is

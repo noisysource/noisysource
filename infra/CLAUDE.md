@@ -14,8 +14,8 @@ Reorganised on 2026-11-10 into one folder per company; the plan and what's left 
 |---|---|---|---|
 | Noisy Phocus | `rainbow-prod-2454b` | KidClub Prod | KidClub live. **Still also hosts FinHub prod** until it moves |
 | Noisy Phocus | `kidclub-dev` | KidClub Dev | KidClub dev. Still also hosts FinHub/Domotics dev, the Terraform state bucket, the GitHub WIF pool and the billing cutoff |
-| NoisySource | `noisysource-prod` | NoisySource Prod | Future home of FinHub, Domotics, Tasks (prod). Empty |
-| NoisySource | `noisysource-dev` | NoisySource Dev | Same, dev. Empty |
+| NoisySource | `noisysource-prod` | NoisySource Prod | Prod of the private tools: Domotics first (live data arrives at the cutover), then FinHub and Tasks. Set up in step 9 of `HANDOFF-repo-restructure.md` |
+| NoisySource | `noisysource-dev` | NoisySource Dev | Same, dev. Domotics runs here (rules, five functions, site `noisysource-dev-domotics`) |
 | NoisySource | `noisysource-agent` | Jarvis | Renato's NoisySource agent: Workspace APIs, SA `noisysource-agent@noisysource-agent.iam.gserviceaccount.com`, **no billing** |
 
 > Project IDs can't be renamed; KidClub keeps `kidclub-dev` / `rainbow-prod-2454b` for good (display names say what they are).
@@ -62,6 +62,8 @@ this table is just the file map.
 |---|---|---|---|
 | `deploy-dev.yml` | PR opened/updated against `staging`, push to `staging`, or manual run on `staging` | to kidclub-dev, **only the parts the PR/push changed** (terraform, rules/indexes/storage rules, functions, KidClub/FinHub/domotics hosting; rules in `.github/scripts/deploy-parts.mjs`); a manual run deploys everything from `staging` | `gmail-sender-kidclub-dev` |
 | `deploy-prod.yml` | PR opened/updated against `main` **whose head is `staging`**, or push to `main` | same, to rainbow-prod-2454b (deploys pre-merge only on the staging→main promotion PR; a PR into `main` from any other branch skips the deploy job entirely — see the header comment in that file for the incident that prompted the guard. `sync-staging` fast-forwards/PRs `staging` to match, only on the post-merge push) | `github-action-1020915538` |
+| `deploy-noisysource-prod.yml` | push to `staging` (a merge), or manual run on `staging` | the NoisySource unit to noisysource-prod: only the parts the merge changed; a manual run deploys everything. No PR ever deploys here, and the prod account only accepts the `staging` branch's token | `github-deploy@noisysource-prod` |
+| `_deploy-env.yml` | `workflow_call` only | the generic reusable deploy, used by the NoisySource unit: the `noisysource` job of `deploy-dev.yml` (noisysource-dev, SA `github-deploy@noisysource-dev`) and `deploy-noisysource-prod.yml` | (whichever caller passes in) |
 | `_deploy-kidclub-env.yml` | `workflow_call` only | the reusable deploy logic both of the above call: a plan + build job, then one job per part (terraform → rules → functions → hosting), each with its own concurrency group | (whichever caller passes in) |
 | `ci-checks.yml` | PR opened/updated against `main` | nothing — build/typecheck/terraform-validate only | n/a |
 | `deploy-finances.yml` | manual | Finances hosting | `gmail-sender-kidclub-dev` (dev), `github-action-1020915538` (prod) |
@@ -90,7 +92,8 @@ terraform apply -var-file="env/kidclub-dev.tfvars"
 |---|---|---|
 | `kidclub-dev` | `(default)` | `europe-west3` |
 | `rainbow-prod-2454b` | `(default)` | `eur3` |
-| `noisysource-dev` / `noisysource-prod` | not created yet | `europe-west3` (decided 2026-11-11) |
+| `noisysource-dev` | `(default)` | `europe-west3` |
+| `noisysource-prod` | `(default)`, created by the first Terraform apply (step 9) | `europe-west3` |
 
 Today each KidClub database is shared by KidClub, FinHub and Domotics (one rules file,
 `/firestore.rules`). After the restructure each company has its own.
