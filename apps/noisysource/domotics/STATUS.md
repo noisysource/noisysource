@@ -4,6 +4,9 @@
 
 **Last updated:** 2026-11-16
 
+## ▶️ 16/11: sign in as `admin@noisysource.com`
+On `noisysource-prod-domotics.web.app` (and the dev one) the owner is **`admin@noisysource.com`**, not `admin@kidclub.pt` (Renato's choice, 16/11, branch `agent/ns-domotics-owner`). Any other account signs in fine and then sees an empty house and "no access" on lights: that's the rules and the functions refusing it, not a bug. The owner's and the bridge's addresses must also be verified now (`firebase/noisysource/firestore.rules`, tested by `scripts/rules-tests/domotics-identity.rules-test.cjs`). The old copy in the KidClub projects still says `admin@kidclub.pt`; it goes away in step 11.
+
 ## ▶️ Now (16/11): the app is moving to its own Google Cloud project
 Part of the repo restructure (`infra/HANDOFF-repo-restructure.md` has the plan and its progress; read that, not this, for the details).
 

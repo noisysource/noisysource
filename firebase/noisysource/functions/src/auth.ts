@@ -1,7 +1,7 @@
 import { HttpsError } from "firebase-functions/v2/https";
 
 /** The same address the Firestore rules know the owner by (../../firestore.rules). */
-const OWNER_EMAIL = "admin@kidclub.pt";
+const OWNER_EMAIL = "admin@noisysource.com";
 
 /**
  * Everything in this project is Renato's alone. `onCall` does not reject

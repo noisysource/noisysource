@@ -48,8 +48,11 @@ codebase, one Terraform root and one KidClub-named pipeline.
   from `kidclub-dev`. Dev keeps the app's `?demo` mode.
 - **Firestore in `noisysource-*`:** `europe-west3`, single region, both projects. It can't be
   changed after creation.
-- **Domotics keeps its two identities** (`admin@kidclub.pt` as owner,
-  `domotics-bridge@kidclub.pt` as the bridge) in the new project's rules.
+- **Domotics' identities in the new projects:** the owner is `admin@noisysource.com`
+  (Renato, 2026-11-16, right after the cutover; it was `admin@kidclub.pt` until then, and
+  still is in the KidClub projects' copy) and the bridge stays `domotics-bridge@kidclub.pt`.
+  Both must be verified addresses: email/password sign-in is on for the bridge, and there
+  anyone can create an account with an address that isn't taken.
 - **FinHub is rebuilt as a whole** (v2) directly in the NoisySource unit. Don't preserve its
   current structure; don't break what's deployed until the replacement exists.
 - **`packages/shared`** shrinks to what both companies use (money, VAT, dates, login). Domain
