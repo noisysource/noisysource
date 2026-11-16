@@ -6,6 +6,7 @@ import * as admin from "firebase-admin";
 
 admin.initializeApp();
 
-export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
+export { legrandGetHome, legrandGetStatus, legrandSetState } from "./domotics/legrand";
 export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
 export { domoticsWarmBy } from "./domotics/warmBy";
+export { domoticsEnergyBill } from "./domotics/energyBillCallable";

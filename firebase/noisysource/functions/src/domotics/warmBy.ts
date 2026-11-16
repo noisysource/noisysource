@@ -1,12 +1,12 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
-import { requireOwner } from "../auth";
+import { requireOwnerOrAgent } from "../auth";
 import { describeLocal, parseWarmByInput, type WarmByInput } from "./warmByLogic";
 
 /**
  * "Have the house warm by HH:MM": the heating automation's one-off target
  * (apps/noisysource/domotics-bridge/src/warmby.ts). Called by the app's
- * automation card, and later by the chat after the user's confirm tap
+ * automation card, by Atlas (Renato's assistant, after his OK there), and later by the chat after the user's confirm tap
  * (HANDOFF-reports-and-chat.md, section 2).
  *
  * It only stores the request in `domotics_config/warm_by`. The bridge on the
@@ -22,7 +22,7 @@ import { describeLocal, parseWarmByInput, type WarmByInput } from "./warmByLogic
 const DOC = "domotics_config/warm_by";
 
 export const domoticsWarmBy = onCall<WarmByInput>(async ({ auth, data }) => {
-  requireOwner(auth);
+  requireOwnerOrAgent(auth);
   const now = Date.now();
   const parsed = parseWarmByInput(data, now);
   if ("error" in parsed) throw new HttpsError("invalid-argument", parsed.error);
