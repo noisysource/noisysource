@@ -139,11 +139,28 @@ if (!WRITE) {
 }
 
 // --- Copy, check, then move the token ---------------------------------------
-for (let i = 0; i < docs.length; i += 200) {
-  const writes = docs.slice(i, i + 200).map(d => ({ update: { name: `${root(TO)}/${d.id}`, fields: d.fields } }));
-  await call(TO, 'POST', `${root(TO)}:commit`, { writes });
-  console.log(`  written ${Math.min(i + 200, docs.length)}/${docs.length}`);
+// Batches by size as well as count: a commit has a size limit, and a day of
+// climate or energy history is a large document.
+const MAX_BATCH_BYTES = 300_000;
+let batch = [];
+let batchBytes = 0;
+let written = 0;
+const flush = async () => {
+  if (!batch.length) return;
+  await call(TO, 'POST', `${root(TO)}:commit`, { writes: batch });
+  written += batch.length;
+  console.log(`  written ${written}/${docs.length}`);
+  batch = [];
+  batchBytes = 0;
+};
+for (const d of docs) {
+  const write = { update: { name: `${root(TO)}/${d.id}`, fields: d.fields } };
+  const bytes = JSON.stringify(write).length;
+  if (batch.length && (batchBytes + bytes > MAX_BATCH_BYTES || batch.length >= 100)) await flush();
+  batch.push(write);
+  batchBytes += bytes;
 }
+await flush();
 
 const copied = ONLY ? [await get(TO, ONLY)] : (await Promise.all(COLLECTIONS.map(c => list(TO, c)))).flat();
 const byId = new Map(copied.filter(Boolean).map(d => [d.id, d]));
