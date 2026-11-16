@@ -4,7 +4,7 @@ import {
 } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { app } from './firebase';
-import { isInstalledApp, isLanOrigin } from './origin';
+import { isInstalledApp, isLanOrigin, SIGNED_IN_HOST } from './origin';
 
 /**
  * Sign-in for the domotics app.
@@ -68,7 +68,7 @@ export async function redirectSignInError(): Promise<unknown> {
  * address is one (localhost included) — so on the LAN, sign-in always fails.
  */
 export const LAN_NO_SIGN_IN =
-  'Na rede local não é possível iniciar sessão. Use a app (kidclub-dev-domotics.web.app).';
+  `Na rede local não é possível iniciar sessão. Use a app (${SIGNED_IN_HOST}).`;
 
 /** Sign-in failures in words, for the person holding the phone. */
 export function describeSignInError(err: unknown): string {

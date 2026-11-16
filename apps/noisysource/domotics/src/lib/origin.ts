@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Where this page was served from.
  *
@@ -33,3 +34,10 @@ export function isFirebaseHosting(): boolean {
   const { protocol, hostname } = window.location;
   return protocol === 'https:' && (hostname.endsWith('.web.app') || hostname.endsWith('.firebaseapp.com'));
 }
+
+/**
+ * The address to open for the signed-in app, shown in the hints on the LAN
+ * version. Every project names its Domotics site `<project>-domotics`, so it
+ * follows from the Firebase project this build targets.
+ */
+export const SIGNED_IN_HOST = `${import.meta.env.VITE_FIREBASE_PROJECT_ID}-domotics.web.app`;

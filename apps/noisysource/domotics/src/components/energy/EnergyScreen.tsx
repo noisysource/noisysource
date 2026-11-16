@@ -1,3 +1,4 @@
+import { SIGNED_IN_HOST } from '../../lib/origin';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowLeft, Battery, BatteryCharging, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Home, Loader2, RefreshCw,
@@ -210,7 +211,7 @@ export default function EnergyScreen({ onBack, canRead, live, automation }: Prop
           {!canRead && (
             <p className="text-sm text-zinc-400 leading-relaxed">
               O histórico de energia precisa de sessão iniciada. Na rede de casa não é possível entrar — abra
-              kidclub-dev-domotics.web.app e inicie sessão.
+              {SIGNED_IN_HOST} e inicie sessão.
             </p>
           )}
 

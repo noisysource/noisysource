@@ -1,3 +1,4 @@
+import { SIGNED_IN_HOST } from '../lib/origin';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { addDays, lisbonDate } from '@shared/lib/energyBill';
@@ -150,7 +151,7 @@ export default function HeatingTimeline({ status, canRead, pumpOn, now }: Props)
 
       {!canRead && date <= today && (
         <p className="text-[11px] text-zinc-500 leading-snug">
-          Aqui vê-se o plano e as últimas ações. O que a bomba fez e porquê precisa de sessão iniciada (kidclub-dev-domotics.web.app).
+          Aqui vê-se o plano e as últimas ações. O que a bomba fez e porquê precisa de sessão iniciada ({SIGNED_IN_HOST}).
         </p>
       )}
       {loading && <p className="text-[11px] text-zinc-500">A ler o histórico…</p>}

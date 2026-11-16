@@ -1,13 +1,42 @@
 {
-  "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
   "functions": {
     "source": "functions",
     "codebase": "noisysource",
     "runtime": "nodejs22",
-    "predeploy": ["pnpm --dir \"$RESOURCE_DIR\" run build"]
+    "predeploy": [
+      "pnpm --dir \"$RESOURCE_DIR\" run build"
+    ]
   },
+  "hosting": [
+    {
+      "target": "domotics",
+      "public": "hosting/domotics",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
+    }
+  ],
   "emulators": {
-    "firestore": { "port": 8089 },
-    "ui": { "enabled": false }
+    "firestore": {
+      "port": 8089
+    },
+    "ui": {
+      "enabled": false
+    },
+    "hosting": {
+      "port": 5089
+    }
   }
 }

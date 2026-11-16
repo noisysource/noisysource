@@ -2,9 +2,17 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-05
+**Last updated:** 2026-11-16
 
-## ▶️ Now (5/11): all three steps are merged into `staging` and on dev
+## ▶️ Now (16/11): the app is moving to its own Google Cloud project
+Part of the repo restructure (`infra/HANDOFF-repo-restructure.md` has the plan and its progress; read that, not this, for the details).
+
+- **Two sites until the cutover.** `kidclub-dev-domotics.web.app` is still the real one: the Pi bridge, the live data and the vendor credentials are all in `kidclub-dev`. `noisysource-dev-domotics.web.app` is the new one: same app, built with `pnpm --filter domotics build:nsdev` (`.env.nsdev`), with its own rules and its own copy of the five callables (`firebase/noisysource/`). It has **no live data and no vendor credentials**, so signed in it shows an empty house; `?demo` works only on a local dev server.
+- **A change to the app deploys to both sites.** A change to a callable must be made twice until step 11 removes the old copy: `functions/src/domotics/` (kidclub-dev) and `firebase/noisysource/functions/src/domotics/` (new).
+- **In the new project every callable requires the owner's verified email.** The old Legrand and Tuya ones still accept any signed-in user (plan 3 below); that goes away with the old copies.
+- **Next:** step 9 (`noisysource-prod`), then the cutover (step 10), which Renato does outside the heating windows: copy the `domotics_*` data, create the bridge user, point the Pi at the new project.
+
+## Earlier (5/11): all three steps are merged into `staging` and on dev
 Renato looked at them on dev and said "it looks good, we can merge them all" (5/11); which items of the list below were tried wasn't recorded. #131, #132 and #133 are merged, in that order, and their worktrees removed. Nothing changed on the Pi.
 
 **Next:** nothing in progress on these. They reach `main` with the next `staging` → `main` promotion, which is Renato's call; there's still no prod hosting for domotics.
