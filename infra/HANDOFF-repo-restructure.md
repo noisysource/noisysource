@@ -3,9 +3,10 @@
 **Agreed with Renato:** 2026-11-11. **Read first:** root `CLAUDE.md` (pipeline, cost and prod
 safety) and `infra/gcp/HANDOFF-gcp-reorg.md` (what was done in Google Cloud on 2026-11-10).
 
-**Progress (2026-11-16):** PRs 1–7 (#143–#149) are merged. `noisysource-dev` has its
-pipeline, Firestore rules and the five Domotics functions. PR 8 is open. After it: step 9
-(`noisysource-prod`), then the cutover. Update this line and the
+**Progress (2026-11-16):** PRs 1–8 (#143–#150) are merged. Domotics runs on `noisysource-dev`
+(pipeline, rules, five functions, site `noisysource-dev-domotics.web.app`; Renato signed in
+there), with no live data until the cutover. **Next: step 9** (`noisysource-prod`), in a new
+session. Update this line and the
 table below as PRs merge.
 
 ## Why
@@ -81,7 +82,7 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 5 | Generic `_deploy-env.yml` and a `noisysource-dev` caller | **Everything** on KidClub dev; first run on `noisysource-dev` | Functions check; new run green | merged, #147. `noisysource-dev` Terraform applied by CI with 0 changes; KidClub dev full deploy clean |
 | 6 | `firebase/noisysource/`: config, Domotics-only rules, their tests | NoisySource rules | Rules tests | merged, #148. KidClub dev deployed nothing |
 | 7 | NoisySource functions codebase with the five Domotics callables | NoisySource functions; **everything** on KidClub dev (`pnpm-workspace.yaml` and the lockfile change) | Callables exist; KidClub functions check | merged, #149. Five functions active in `europe-west3` as `functions-runtime@`; KidClub dev full deploy clean. Needed two Terraform additions, applied by Renato: the build account's role and the image repository |
-| 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | open. Google sign-in on `noisysource-dev` enabled in the console by Renato |
+| 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | merged, #150. Renato signed in on the new site 2026-11-16. The pipeline now copies each build into `firebase/noisysource/hosting/<target>` (firebase deploy refuses a folder outside the Firebase project folder) |
 | 9 | `noisysource-prod`: Terraform apply, prod caller (deploy on merge to `staging`) | **Everything** | Prod site up, sign-in works | |
 | 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | |
 | 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | |
