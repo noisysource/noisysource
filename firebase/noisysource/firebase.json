@@ -14,7 +14,7 @@
   "hosting": [
     {
       "target": "domotics",
-      "public": "../../apps/noisysource/domotics/dist",
+      "public": "hosting/domotics",
       "ignore": [
         "firebase.json",
         "**/.*",

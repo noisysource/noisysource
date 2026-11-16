@@ -23,6 +23,10 @@ name: Deploy one environment of a deploy unit (reusable)
 #   firestore_indexes  <firebase_dir>/firestore.indexes.json exists
 #   functions          <firebase_dir>/functions/package.json exists
 #   an app             <firebase_dir>/firebase.json has its hosting target
+#
+# A hosting target's "public" must be "hosting/<target>": the hosting job puts
+# the app's build there (firebase deploy only serves folders inside the
+# Firebase project folder).
 
 on:
   workflow_call:
@@ -370,8 +374,16 @@ jobs:
           name: dist-${{ inputs.environment }}
           path: ${{ runner.temp }}/dists
 
+      # firebase deploy refuses a hosting folder outside the Firebase project
+      # folder, so the build goes to <firebase_dir>/hosting/<target>, which is
+      # what the target's "public" in firebase.json points at.
       - name: Unpack this app's build
-        run: tar -xzf "$RUNNER_TEMP/dists/${{ matrix.app.part }}.tgz" -C "${{ matrix.app.dir }}"
+        env:
+          DEST: ${{ inputs.firebase_dir }}/hosting/${{ matrix.app.target }}
+        run: |
+          mkdir -p "$DEST"
+          tar -xzf "$RUNNER_TEMP/dists/${{ matrix.app.part }}.tgz" -C "$DEST" --strip-components=1
+          test -f "$DEST/index.html"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
