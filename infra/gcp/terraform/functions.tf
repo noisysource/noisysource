@@ -132,11 +132,6 @@ locals {
     "cancelCampSubscription",
     # User management
     "lookupUserByEmail",
-    # Domotics
-    "legrandGetStatus",
-    "legrandSetState",
-    "tuyaGetDevices",
-    "tuyaSetState",
   ])
 }
 

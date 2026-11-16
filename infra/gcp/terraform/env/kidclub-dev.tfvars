@@ -2,7 +2,7 @@
 
 gcp_project_id = "kidclub-dev"
 
-firebase_hosting_site_ids = ["kidclub-dev-arcoiris", "kidclub-dev-finhub", "kidclub-dev-domotics"]
+firebase_hosting_site_ids = ["kidclub-dev-arcoiris", "kidclub-dev-finhub"]
 
 gmail_sender_sa_id = "gmail-sender-kidclub-dev"
 

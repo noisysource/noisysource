@@ -12,10 +12,11 @@
 // Deploy units (since 2026-11-15, infra/HANDOFF-repo-restructure.md): the repo
 // deploys into two pairs of projects, and each pair is a unit with its own
 // parts and its own paths (UNITS below).
-//   kidclub      kidclub-dev / rainbow-prod-2454b: everything that exists
-//                today (KidClub, FinHub, domotics, /functions, root rules).
+//   kidclub      kidclub-dev / rainbow-prod-2454b: KidClub, FinHub, /functions
+//                and the root rules.
 //   noisysource  noisysource-dev / noisysource-prod: firebase/noisysource/,
-//                infra/gcp/terraform/noisysource/ and the apps that have moved.
+//                infra/gcp/terraform/noisysource/ and the apps that have moved
+//                (Domotics, which left the kidclub unit on 2026-11-16).
 // A path that belongs only to the other unit deploys nothing in this one.
 // Without --unit the unit is kidclub, so the existing workflow is unchanged.
 //
@@ -24,7 +25,7 @@
 //   node .github/scripts/deploy-parts.mjs [--unit <unit>] --all "<why>"
 // Env:
 //   DISABLED_PARTS  comma-separated parts this environment never deploys
-//                   (e.g. "terraform,storage_rules,domotics" for prod)
+//                   (e.g. "terraform,storage_rules" for prod)
 //   GITHUB_OUTPUT / GITHUB_STEP_SUMMARY  set by Actions; written if present.
 //
 // Plain Node, no dependencies: it runs before `pnpm install`, on the runner's
@@ -48,6 +49,7 @@ import { existsSync, readFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+// The kidclub unit's parts (the noisysource unit lists its own in UNITS).
 export const PARTS = [
   'terraform',
   'firestore_rules',
@@ -56,7 +58,6 @@ export const PARTS = [
   'functions',
   'kidclub',
   'finances',
-  'domotics',
 ];
 
 const LABELS = {
@@ -75,7 +76,6 @@ const LABELS = {
 const OWNED = [
   { dir: 'apps/noisyphocus/kidclub/', part: 'kidclub' },
   { dir: 'apps/noisysource/finances/', part: 'finances' },
-  { dir: 'apps/noisysource/domotics/', part: 'domotics' },
   { dir: 'functions/', part: 'functions' },
   { dir: 'infra/gcp/terraform/', part: 'terraform' },
 ];
@@ -91,7 +91,6 @@ const OWNED_FILES = {
 const CONSUMERS = {
   kidclub: 'apps/noisyphocus/kidclub/',
   finances: 'apps/noisysource/finances/',
-  domotics: 'apps/noisysource/domotics/',
   functions: 'functions/',
 };
 const SHARED = 'packages/shared/';
@@ -99,8 +98,8 @@ const SHARED = 'packages/shared/';
 // The deploy units. For each: its parts, the paths each part owns, who in it
 // consumes packages/shared, which files redeploy all of it (`everything`), and
 // which paths are another unit's alone (`foreign`: nothing to deploy here).
-// An app can be in two units while it moves (domotics): each unit's caller
-// switches its own copy on or off with DISABLED_PARTS.
+// An app belongs to one unit: when it moves, its folder becomes `foreign` to
+// the unit it left (Domotics, 2026-11-16).
 export const UNITS = {
   kidclub: {
     parts: PARTS,
@@ -108,7 +107,11 @@ export const UNITS = {
     ownedFiles: OWNED_FILES,
     consumers: CONSUMERS,
     everything: [/^firebase\.json$/, /^\.firebaserc$/],
-    foreign: [/^firebase\/noisysource\//, /^infra\/gcp\/terraform\/noisysource\//],
+    foreign: [
+      /^firebase\/noisysource\//,
+      /^infra\/gcp\/terraform\/noisysource\//,
+      /^apps\/noisysource\/domotics\//,
+    ],
   },
   noisysource: {
     parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics'],
@@ -154,7 +157,7 @@ function unitOf(name) {
 const IMPORTERS = {
   'apps/noisyphocus/kidclub': { kidclub: ['kidclub'] },
   'apps/noisysource/finances': { kidclub: ['finances'] },
-  'apps/noisysource/domotics': { kidclub: ['domotics'], noisysource: ['domotics'] },
+  'apps/noisysource/domotics': { noisysource: ['domotics'] },
   functions: { kidclub: ['functions'] },
   'firebase/noisysource/functions': { noisysource: ['functions'] },
   // shared's own dependencies (zod) get bundled into whoever imports it.
