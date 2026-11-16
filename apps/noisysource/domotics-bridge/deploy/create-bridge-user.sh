@@ -6,7 +6,6 @@
 # Run this on the Mac, once per project. It needs `gcloud auth login` to be current.
 #
 #   ./deploy/create-bridge-user.sh noisysource-prod    # the house's project
-#   ./deploy/create-bridge-user.sh kidclub-dev         # where it ran until the cutover
 #
 # bridge.env also carries the project (GCLOUD_PROJECT), so that one file decides
 # where the Pi publishes: systemd lets it override the unit's own setting.
@@ -30,8 +29,7 @@ ENV_FILE="$HERE/bridge.env"
 case "$PROJECT" in
   noisysource-prod) APP_ENV="$HERE/../../domotics/.env.nsprod" ;;
   noisysource-dev)  APP_ENV="$HERE/../../domotics/.env.nsdev" ;;
-  kidclub-dev)      APP_ENV="$HERE/../../domotics/.env.staging" ;;
-  *) echo "usage: $0 <noisysource-prod | noisysource-dev | kidclub-dev>"; exit 1 ;;
+  *) echo "usage: $0 <noisysource-prod | noisysource-dev>"; exit 1 ;;
 esac
 
 command -v gcloud >/dev/null || { echo "gcloud not found"; exit 1; }

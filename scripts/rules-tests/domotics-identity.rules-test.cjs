@@ -7,9 +7,9 @@
 // sign-in verifies the owner's, and the bridge's account is created verified
 // (domotics-bridge/deploy/create-bridge-user.sh).
 //
-// Only for the NoisySource rules: the KidClub projects' copy (root
-// firestore.rules) still knows the owner as admin@kidclub.pt.
-// Run: see firebase/noisysource/README.md (needs Java).
+// admin@kidclub.pt was the owner while Domotics ran in the KidClub projects
+// (until 2026-11-16); here it is nobody.
+// Run: pnpm test:rules:domotics (needs Java).
 const { initializeApp } = require('firebase/app');
 const { getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, terminate } = require('firebase/firestore');
 
@@ -68,7 +68,7 @@ async function expect(outcome, label, fn) {
   await expect('denied', "the owner's address, no verified claim, reads the tariff", () => getDoc(tariff(ownerNoClaim)));
   await expect('denied', "the owner's address, not verified, sends a command",
     () => setDoc(command(ownerUnverified), { deviceId: 'x', action: 'set', createdAt: Date.now() }));
-  await expect('denied', 'admin@kidclub.pt (the owner in the KidClub projects) reads the tariff', () => getDoc(tariff(oldOwner)));
+  await expect('denied', 'admin@kidclub.pt (the owner before the move) reads the tariff', () => getDoc(tariff(oldOwner)));
 
   await expect('allowed', 'the bridge, verified, publishes state', () => setDoc(state(bridge), { devices: [] }));
   await expect('denied', "the bridge's address, not verified, publishes state", () => setDoc(state(bridgeUnverified), { devices: [] }));
