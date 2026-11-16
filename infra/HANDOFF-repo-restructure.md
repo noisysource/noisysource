@@ -112,8 +112,9 @@ until 1 and 2 are done, and at the app's build until 3 is.
    (same shape as `.env.nsdev`), committed on the PR's branch. Any session can do this from
    the output of step 1.
 4. **Google sign-in:** Firebase console → `noisysource-prod` → Authentication → Sign-in
-   method → Google → enable (as done for `noisysource-dev` in PR 8). The site's own
-   `noisysource-prod-domotics.web.app` domain is authorised by Firebase when the site exists.
+   method → Google → enable. Then Settings → Authorised domains: `noisysource-dev` lists
+   its site (`noisysource-dev-domotics.web.app`) beside the project's two defaults, so check
+   `noisysource-prod-domotics.web.app` is listed and add it if it isn't.
 5. Merge the PR, watch "Deploy NoisySource to Prod" go green, open
    `https://noisysource-prod-domotics.web.app` and sign in. The house is empty until step 10.
 
