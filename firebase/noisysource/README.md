@@ -28,4 +28,5 @@ pnpm test:rules:domotics    # from the repo root
 These rules are the only copy of the Domotics rules (the KidClub projects' root file had one
 until 2026-11-16). The owner is `admin@noisysource.com` and the bridge
 `domotics-bridge@kidclub.pt`, and both addresses must be verified; `domotics-identity` tests
-that. The emulator here uses port 8089, so it doesn't collide with one on 8080.
+that. Atlas, Renato's assistant, is `atlas@kidclub.pt` (verified): the owner's access to the
+house minus bridge admin, with its commands held to the app's shapes; `domotics-atlas` tests that. The emulator here uses port 8089, so it doesn't collide with one on 8080.
