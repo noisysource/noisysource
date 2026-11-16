@@ -13,8 +13,8 @@ name: Deploy to Dev
 # (`only_changed: true`; how parts are detected: .github/scripts/
 # deploy-parts.mjs). Several PRs into staging are usually open at once, and
 # each one used to redeploy every part from its own branch, reverting the
-# others' previews on dev. Now a FinHub PR redeploys FinHub, a domotics PR
-# redeploys domotics, and so on; a PR that changes the pipeline itself or the
+# others' previews on dev. Now a FinHub PR redeploys FinHub, a KidClub PR
+# redeploys KidClub, and so on; a PR that changes the pipeline itself or the
 # workspace config (this directory, root package.json, firebase.json, ...)
 # still deploys everything. The step summary of the "Plan + build" job says
 # what was deployed and why.
@@ -47,10 +47,6 @@ jobs:
       service_account: gmail-sender-kidclub-dev@kidclub-dev.iam.gserviceaccount.com
       build_command: pnpm --filter kidclub build:staging
       finances_build_command: pnpm --filter finances build:staging
-      # Site kidclub-dev-domotics (deployed by hand until 2026-10-18). Builds
-      # with apps/noisysource/domotics/.env.staging, committed for this.
-      domotics_build_command: pnpm --filter domotics build:staging
-      deploy_domotics: true
       tf_var_file: env/kidclub-dev.tfvars
       only_changed: true
       # storage.rules (payment proofs, FinHub insurances). Prod stays off

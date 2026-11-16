@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
-    "dev:prod": "vite --mode production",
-    "build": "vite build",
-    "build:staging": "vite build --mode staging",
+    "dev": "vite --mode nsdev",
+    "dev:prod": "vite --mode nsprod",
+    "build": "vite build --mode nsprod",
     "build:nsdev": "vite build --mode nsdev",
     "build:nsprod": "vite build --mode nsprod",
     "preview": "vite preview",

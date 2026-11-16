@@ -41,7 +41,7 @@ import { isControllerTimer } from './climate';
  * an order of magnitude faster; the relay is the fallback when away.
  */
 
-const PROJECT_ID = process.env.GCLOUD_PROJECT ?? 'kidclub-dev';
+const PROJECT_ID = process.env.GCLOUD_PROJECT ?? 'noisysource-prod';
 /**
  * Polling is demand-driven. These devices have very few connection slots and
  * degrade under pressure, and thermostats barely change minute to minute — so

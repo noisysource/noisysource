@@ -34,7 +34,7 @@ A Raspberry Pi on the house LAN (`192.168.1.125`) runs a bridge service that tal
 | Database | Firestore (`(default)` database, `domotics_*` collections) |
 | Realtime | Poll-based today; no WebSocket yet (root CLAUDE.md's Phase 2 WebSocket plan hasn't started) |
 | Auth | Firebase Auth (Google), gated by `firestore.rules` — no IAP |
-| Hosting | Firebase Hosting, **dev only** (`kidclub-dev-domotics`) — no prod hosting target exists yet |
+| Hosting | Firebase Hosting in the NoisySource projects: `noisysource-prod-domotics.web.app` (the house) and `noisysource-dev-domotics.web.app` |
 
 ## Firestore Collections
 Prefixed `domotics_`:
@@ -52,19 +52,14 @@ Prefixed `domotics_`:
 
 ## Local Dev
 ```bash
-pnpm dev:domotics        # runs against kidclub-dev, http://localhost:5173
+pnpm dev:domotics        # runs against noisysource-dev (.env.nsdev), http://localhost:5173
 pnpm dev:domotics:prod   # dev server against prod Firebase — see root CLAUDE.md, not a default debugging step
 pnpm --filter domotics test   # the heating timeline and the Energia cost chart's logic, no browser or Firebase
 ```
 
 ## Deploy
-Dev only for now (see Status/Hosting above). A PR into `staging` that changes the app deploys it to `hosting:domotics` on kidclub-dev by itself (`.github/workflows/deploy-dev.yml`, `deploy_domotics`, since 2026-10-18). By hand, only if needed:
-```bash
-pnpm --filter domotics build:staging
-firebase deploy --only hosting:domotics --project=kidclub-dev
-```
+CI does it (root `CLAUDE.md`, "Domotics deploys through the NoisySource unit only"): a PR into `staging` previews on `noisysource-dev`, and **merging it releases to `noisysource-prod`, the live house**. By hand, only if CI can't: `firebase/noisysource/README.md`, "Hosting".
 The bridge on the Pi is always deployed by hand: `../domotics-bridge/deploy/README.md`.
-There is no prod deploy target yet — don't invent one without checking with Renato first.
 
 ---
 

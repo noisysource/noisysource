@@ -71,8 +71,9 @@ test('a file no rule knows about deploys everything', () => {
 test('each owned path deploys only its own part', () => {
   assert.deepEqual(deployed(['apps/noisyphocus/kidclub/src/App.tsx']), ['kidclub']);
   assert.deepEqual(deployed(['apps/noisysource/finances/.env.staging']), ['finances']);
-  assert.deepEqual(deployed(['apps/noisysource/domotics/public/icon.png']), ['domotics']);
-  assert.deepEqual(deployed(['functions/src/domotics/legrand.ts']), ['functions']);
+  // Domotics left this unit (2026-11-16): its app deploys nothing here.
+  assert.deepEqual(deployed(['apps/noisysource/domotics/public/icon.png']), []);
+  assert.deepEqual(deployed(['functions/src/kidclub/billing.ts']), ['functions']);
   assert.deepEqual(deployed(['infra/gcp/terraform/iam.tf']), ['terraform']);
   assert.deepEqual(deployed(['firestore.rules']), ['firestore_rules']);
   assert.deepEqual(deployed(['firestore.indexes.json']), ['firestore_indexes']);
@@ -87,7 +88,8 @@ test('packages/shared deploys only the packages that import the changed file', (
   assert.deepEqual(deployed(['packages/shared/lib/money.ts']), ['kidclub']);
   // relative path into packages/shared counts too
   assert.deepEqual(deployed(['packages/shared/lib/vat.ts']), ['finances']);
-  assert.deepEqual(deployed(['packages/shared/models/Device.ts']), ['domotics']);
+  // only domotics imports Device, and it isn't in this unit
+  assert.deepEqual(deployed(['packages/shared/models/Device.ts']), []);
   // only a functions *test* imports partyPricing: tests aren't deployed
   assert.deepEqual(deployed(['packages/shared/models/partyPricing.ts']), []);
   // imported by nobody
@@ -95,7 +97,7 @@ test('packages/shared deploys only the packages that import the changed file', (
 });
 
 test('packages/shared changes that imports cannot trace deploy every consumer', () => {
-  const all = ['domotics', 'finances', 'functions', 'kidclub'];
+  const all = ['finances', 'functions', 'kidclub'];
   assert.deepEqual(deployed(['packages/shared/tsconfig.json']), all);
   // deleted file: gone from the head tree, so nobody can be seen importing it
   assert.deepEqual(deployed(['packages/shared/lib/gone.ts']), all);
@@ -103,9 +105,9 @@ test('packages/shared changes that imports cannot trace deploy every consumer', 
   // depend on all of it
   assert.deepEqual(
     deployed(['packages/shared/lib/unused.ts'], {
-      files: { 'apps/noisysource/domotics/src/x.ts': "import { y } from '@shared/lib/does-not-exist';" },
+      files: { 'apps/noisysource/finances/src/x.ts': "import { y } from '@shared/lib/does-not-exist';" },
     }),
-    ['domotics'],
+    ['finances'],
   );
 });
 
@@ -201,8 +203,14 @@ const withDomoticsDep = LOCK
 `);
 
 test('lockfile: a new dependency of one package deploys only that package', () => {
-  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep), { parts: ['domotics'], importers: ['apps/noisysource/domotics'] });
-  assert.deepEqual(deployed(['pnpm-lock.yaml'], { lockfile: () => lockfileParts(LOCK, withDomoticsDep) }), ['domotics']);
+  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep, 'noisysource'), { parts: ['domotics'], importers: ['apps/noisysource/domotics'] });
+  assert.deepEqual(
+    deployedIn('noisysource', ['pnpm-lock.yaml'], { lockfile: () => lockfileParts(LOCK, withDomoticsDep, 'noisysource') }),
+    ['domotics'],
+  );
+  // ...and nothing in the unit that doesn't deploy that package
+  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep).parts, []);
+  assert.deepEqual(deployed(['pnpm-lock.yaml'], { lockfile: () => lockfileParts(LOCK, withDomoticsDep) }), []);
 });
 
 test('lockfile: the Pi bridge\'s dependencies deploy nothing', () => {
@@ -300,7 +308,7 @@ test('units: the pipeline, workspace config and unknown files deploy everything 
 });
 
 test('units: packages/shared is traced through each unit\'s own consumers', () => {
-  // domotics is in both units while it moves; the bundled NoisySource
+  // domotics is in the NoisySource unit only; the bundled NoisySource
   // functions import shared code, /functions doesn't.
   assert.deepEqual(deployedIn('noisysource', ['packages/shared/models/Device.ts']), ['domotics']);
   assert.deepEqual(deployedIn('noisysource', ['packages/shared/lib/energyBill.ts']), ['functions']);

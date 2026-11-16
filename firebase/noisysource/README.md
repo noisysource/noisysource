@@ -22,13 +22,10 @@ firebase deploy --only hosting:domotics --project noisysource-dev
 Needs Java. From this folder:
 
 ```bash
-DOMOTICS_OWNER_EMAIL=admin@noisysource.com firebase emulators:exec --only firestore --project demo-kidclub-rules \
-  "node ../../scripts/rules-tests/domotics-automation.rules-test.cjs && node ../../scripts/rules-tests/domotics-incidents.rules-test.cjs && node ../../scripts/rules-tests/domotics-energy.rules-test.cjs && node ../../scripts/rules-tests/domotics-climate.rules-test.cjs && node ../../scripts/rules-tests/domotics-identity.rules-test.cjs"
+pnpm test:rules:domotics    # from the repo root
 ```
 
-The first four are the same tests that run against the root rules file
-(`pnpm test:rules:domotics`), so the two copies of the Domotics rules are held to the same
-behaviour until the root copy is removed. One difference is on purpose: here the owner is
-`admin@noisysource.com` (the root file's is `admin@kidclub.pt`), and both the owner's and the
-bridge's addresses must be verified; `domotics-identity` tests that, for these rules only.
-The emulator here uses port 8089, so it doesn't collide with one on 8080.
+These rules are the only copy of the Domotics rules (the KidClub projects' root file had one
+until 2026-11-16). The owner is `admin@noisysource.com` and the bridge
+`domotics-bridge@kidclub.pt`, and both addresses must be verified; `domotics-identity` tests
+that. The emulator here uses port 8089, so it doesn't collide with one on 8080.
