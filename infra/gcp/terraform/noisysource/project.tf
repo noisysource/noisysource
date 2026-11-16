@@ -88,3 +88,27 @@ resource "google_org_policy_policy" "allow_public_invoker" {
 
   depends_on = [google_project_service.apis]
 }
+
+# --- Where function images are kept -------------------------------------------
+# Cloud Functions would create this repository itself on the first deploy, but
+# without a cleanup rule, and `firebase deploy` then fails the run asking for
+# one. Creating it here, with the rule Firebase looks for (same id), keeps old
+# images from piling up and the deploy green.
+resource "google_artifact_registry_repository" "functions" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "gcf-artifacts"
+  format        = "DOCKER"
+  description   = "Cloud Functions images (managed by Terraform)"
+
+  cleanup_policies {
+    id     = "firebase-functions-cleanup"
+    action = "DELETE"
+    condition {
+      tag_state  = "ANY"
+      older_than = "86400s"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}

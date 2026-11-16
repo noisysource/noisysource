@@ -3,9 +3,9 @@
 **Agreed with Renato:** 2026-11-11. **Read first:** root `CLAUDE.md` (pipeline, cost and prod
 safety) and `infra/gcp/HANDOFF-gcp-reorg.md` (what was done in Google Cloud on 2026-11-10).
 
-**Progress (2026-11-15):** PRs 1–3 (#143, #144, #145) are merged. PR 4 (#146) is applied to
-`noisysource-dev` (its Firebase project, Firestore, hosting site and deploy account exist).
-PR 5 is open. Update this line and the
+**Progress (2026-11-15):** PRs 1–6 (#143–#148) are merged; `noisysource-dev` exists, its
+pipeline runs and it has its Firestore rules. PR 7 is open; PR 8 is written (branch
+`agent/ns-domotics`, stacked on it). Update this line and the
 table below as PRs merge.
 
 ## Why
@@ -78,9 +78,9 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 2 | Leftovers: add `test:rules:client-events`; drop `rainbow-78314` from `.firebaserc`; delete `env/dev.tfvars` and `functions/build.cjs`; remove the root `deploy*` scripts; drop the prod domotics site from `prod.tfvars` and fix its database comment | **Everything, Terraform included** | Dev functions' secrets, service account, max instances (tests #140's fix) | merged, #144. Full deploy clean: Terraform 0 changes, all 76 dev functions unchanged |
 | 3 | `deploy-parts.mjs` learns deploy units and the new paths (`--unit kidclub` by default, `--unit noisysource`; the table is `UNITS` in the script) | **Everything** | Same functions check | merged, #145. Full deploy clean again |
 | 4 | Terraform `noisysource` root (`infra/gcp/terraform/noisysource/`); Renato applies it to `noisysource-dev` | Nothing | Plan output before the apply (35 to add, nothing else) | applied to `noisysource-dev` 2026-11-15, #146 |
-| 5 | Generic `_deploy-env.yml` and a `noisysource-dev` caller | **Everything** on KidClub dev; first run on `noisysource-dev` | Functions check; new run green | open. Needs one grant from Renato first: the deploy account's access to the state bucket (command in the Terraform root's README) |
-| 6 | `firebase/noisysource/`: config, Domotics-only rules, their tests | NoisySource rules | Rules tests | |
-| 7 | NoisySource functions codebase with the five Domotics callables | NoisySource functions | Callables exist | |
+| 5 | Generic `_deploy-env.yml` and a `noisysource-dev` caller | **Everything** on KidClub dev; first run on `noisysource-dev` | Functions check; new run green | merged, #147. `noisysource-dev` Terraform applied by CI with 0 changes; KidClub dev full deploy clean |
+| 6 | `firebase/noisysource/`: config, Domotics-only rules, their tests | NoisySource rules | Rules tests | merged, #148. KidClub dev deployed nothing |
+| 7 | NoisySource functions codebase with the five Domotics callables | NoisySource functions; **everything** on KidClub dev (`pnpm-workspace.yaml` and the lockfile change) | Callables exist; KidClub functions check | open |
 | 8 | Domotics app: shared files move in, env points at the new project, site URL from env | NoisySource hosting | Renato signs in on the new site | |
 | 9 | `noisysource-prod`: Terraform apply, prod caller (deploy on merge to `staging`) | **Everything** | Prod site up, sign-in works | |
 | 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | |
