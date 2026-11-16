@@ -8,7 +8,11 @@ safety) and `infra/gcp/HANDOFF-gcp-reorg.md` (what was done in Google Cloud on 2
 there), with no live data until the cutover. **Step 9 is done** (#152, merged
 2026-11-16): `noisysource-prod` has its rules, the five functions and the site
 `noisysource-prod-domotics.web.app`, deployed on every merge into `staging`; Renato signed in
-there. **Next: step 10, the cutover**, which Renato runs from the runbook below. Update this
+there. **Step 10, the cutover, was done on 2026-11-16** (bridge stopped 12:49, running on
+`noisysource-prod` from 12:58 WET): the Pi publishes to `noisysource-prod`, the history and
+settings are there (244 documents), and the Netatmo token lives only there. `kidclub-dev`
+still has the old copy of everything else, frozen at 12:46, and its Domotics site and functions
+are dead weight until step 11. **Next: step 11** (remove Domotics from the KidClub unit). Update this
 line and the table below as PRs merge.
 
 ## Why
@@ -86,7 +90,7 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 7 | NoisySource functions codebase with the five Domotics callables | NoisySource functions; **everything** on KidClub dev (`pnpm-workspace.yaml` and the lockfile change) | Callables exist; KidClub functions check | merged, #149. Five functions active in `europe-west3` as `functions-runtime@`; KidClub dev full deploy clean. Needed two Terraform additions, applied by Renato: the build account's role and the image repository |
 | 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | merged, #150. Renato signed in on the new site 2026-11-16. The pipeline now copies each build into `firebase/noisysource/hosting/<target>` (firebase deploy refuses a folder outside the Firebase project folder) |
 | 9 | `noisysource-prod`: Terraform apply, prod caller `deploy-noisysource-prod.yml` (deploy on merge to `staging`), Domotics build mode `nsprod` | **Everything** on both dev projects; on merge, everything on `noisysource-prod` for the first time | Prod site up, sign-in works | merged, #152. Prod run green, five functions active as `functions-runtime@`, Renato signed in on the prod site 2026-11-16 |
-| 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | |
+| 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | done 2026-11-16 with the runbook below (tools in #153). Checked from the data: 244 documents copied, the bridge writes state, climate and energy to `noisysource-prod`, `domotics_config/netatmo` is gone from `kidclub-dev` |
 | 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | |
 
 ### Step 9, by hand (Renato) — done 2026-11-16, kept as the record of a project's first setup
@@ -119,7 +123,7 @@ until 1 and 2 are done, and at the app's build until 3 is.
 5. Merge the PR, watch "Deploy NoisySource to Prod" go green, open
    `https://noisysource-prod-domotics.web.app` and sign in. The house is empty until step 10.
 
-### Step 10, the cutover (Renato) — runbook
+### Step 10, the cutover (Renato) — runbook, run on 2026-11-16 and kept for the rollback
 Do it outside the heating windows (05:30–08:00, 16:30–23:00): the bridge is stopped for a few
 minutes, and with it the heating automation. Run everything from
 `apps/noisysource/domotics-bridge` in a checkout of `staging`, at home (the Pi is
