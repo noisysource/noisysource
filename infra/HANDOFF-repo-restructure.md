@@ -5,9 +5,10 @@ safety) and `infra/gcp/HANDOFF-gcp-reorg.md` (what was done in Google Cloud on 2
 
 **Progress (2026-11-16):** PRs 1–8 (#143–#150) are merged. Domotics runs on `noisysource-dev`
 (pipeline, rules, five functions, site `noisysource-dev-domotics.web.app`; Renato signed in
-there), with no live data until the cutover. **Next: step 9** (`noisysource-prod`), in a new
-session. Update this line and the
-table below as PRs merge.
+there), with no live data until the cutover. **Step 9 (`noisysource-prod`) is in progress:**
+the PR (branch `agent/ns-prod`) adds the prod caller and the `nsprod` build; it can't merge
+until Renato has done the "Step 9, by hand" list below. Update this line and the table below
+as PRs merge.
 
 ## Why
 Google Cloud has one folder per company: Noisy Phocus holds KidClub's projects (`kidclub-dev`,
@@ -83,9 +84,38 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 6 | `firebase/noisysource/`: config, Domotics-only rules, their tests | NoisySource rules | Rules tests | merged, #148. KidClub dev deployed nothing |
 | 7 | NoisySource functions codebase with the five Domotics callables | NoisySource functions; **everything** on KidClub dev (`pnpm-workspace.yaml` and the lockfile change) | Callables exist; KidClub functions check | merged, #149. Five functions active in `europe-west3` as `functions-runtime@`; KidClub dev full deploy clean. Needed two Terraform additions, applied by Renato: the build account's role and the image repository |
 | 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | merged, #150. Renato signed in on the new site 2026-11-16. The pipeline now copies each build into `firebase/noisysource/hosting/<target>` (firebase deploy refuses a folder outside the Firebase project folder) |
-| 9 | `noisysource-prod`: Terraform apply, prod caller (deploy on merge to `staging`) | **Everything** | Prod site up, sign-in works | |
+| 9 | `noisysource-prod`: Terraform apply, prod caller `deploy-noisysource-prod.yml` (deploy on merge to `staging`), Domotics build mode `nsprod` | **Everything** on both dev projects; on merge, everything on `noisysource-prod` for the first time | Prod site up, sign-in works | PR open. Waiting for the by-hand list below |
 | 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | |
 | 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | |
+
+### Step 9, by hand (Renato), before the PR merges
+The merge is the first deploy to `noisysource-prod`; it fails at sign-in to Google Cloud
+until 1 and 2 are done, and at the app's build until 3 is.
+
+1. **First Terraform apply** (creates the project's Firebase, the Firestore database in
+   `europe-west3` for good, the site, the deploy and runtime accounts). From the PR's branch:
+   ```bash
+   gcloud services enable cloudresourcemanager.googleapis.com --project noisysource-prod
+   cd infra/gcp/terraform/noisysource
+   terraform init -backend-config="prefix=noisysource-prod" -reconfigure
+   terraform apply -var-file=env/prod.tfvars -target=google_project_service.apis
+   terraform apply -var-file=env/prod.tfvars   # expect the same resources as dev had, nothing changed or destroyed
+   terraform output web_app_config
+   ```
+2. **Let CI reach the Terraform state:**
+   ```bash
+   gcloud storage buckets add-iam-policy-binding gs://kidclub-terraform-state \
+     --member="serviceAccount:github-deploy@noisysource-prod.iam.gserviceaccount.com" \
+     --role="roles/storage.objectAdmin"
+   ```
+3. **`apps/noisysource/domotics/.env.nsprod`** with the six values from `web_app_config`
+   (same shape as `.env.nsdev`), committed on the PR's branch. Any session can do this from
+   the output of step 1.
+4. **Google sign-in:** Firebase console → `noisysource-prod` → Authentication → Sign-in
+   method → Google → enable (as done for `noisysource-dev` in PR 8). The site's own
+   `noisysource-prod-domotics.web.app` domain is authorised by Firebase when the site exists.
+5. Merge the PR, watch "Deploy NoisySource to Prod" go green, open
+   `https://noisysource-prod-domotics.web.app` and sign in. The house is empty until step 10.
 
 Cutover notes (step 10): do it outside the heating windows (05:30–08:00, 16:30–23:00).
 Rollback is the Pi's env file plus copying `domotics_config/netatmo` back, since the token

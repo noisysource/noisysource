@@ -1,0 +1,46 @@
+name: Deploy NoisySource to Prod
+
+# The private tools (Domotics now; FinHub and Tasks later) release on a merge
+# into `staging`: this deploys the NoisySource unit to noisysource-prod. The
+# staging -> main promotion is KidClub's alone (deploy-prod.yml).
+# Decided 2026-11-11, infra/HANDOFF-repo-restructure.md.
+#
+# Only a push to `staging` (a merge) or a manual run on `staging` gets here:
+#   - no pull_request trigger, so an open PR never deploys to this project
+#     (its preview goes to noisysource-dev, from deploy-dev.yml);
+#   - and Google refuses anything else anyway: the prod deploy account only
+#     accepts this repository's token for refs/heads/staging
+#     (deploy_wif_members in infra/gcp/terraform/noisysource/env/prod.tfvars).
+#     Don't add `environment:` to the jobs of _deploy-env.yml: it changes the
+#     token's subject and every prod deploy would be refused.
+#
+# A merge deploys only the parts it changed (a KidClub-only merge deploys
+# nothing here); a change to the pipeline or the unit's firebase.json deploys
+# everything. If a run fails, re-run it: the next merge won't redeploy a part
+# it doesn't touch. A manual run (Actions -> Deploy NoisySource to Prod -> Run
+# workflow, on `staging`) deploys every part.
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+jobs:
+  noisysource:
+    if: github.ref == 'refs/heads/staging'
+    uses: ./.github/workflows/_deploy-env.yml
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    with:
+      unit: noisysource
+      environment: noisysource-prod
+      service_account: github-deploy@noisysource-prod.iam.gserviceaccount.com
+      firebase_dir: firebase/noisysource
+      tf_dir: infra/gcp/terraform/noisysource
+      tf_var_file: env/prod.tfvars
+      only_changed: true
+      # build:nsprod = Vite mode `nsprod`, the app's .env.nsprod
+      # (noisysource-prod). The plain `build` (.env.production) is left alone.
+      apps: >-
+        [{"part": "domotics", "dir": "apps/noisysource/domotics",
+          "build": "pnpm --filter domotics build:nsprod", "target": "domotics"}]

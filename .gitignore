@@ -54,6 +54,7 @@ apps/noisysource/domotics/.env.*
 # bakes every VITE_* value into the public bundle.
 !apps/noisysource/domotics/.env.staging
 !apps/noisysource/domotics/.env.nsdev
+!apps/noisysource/domotics/.env.nsprod
 
 # Claude Code — personal/local-only config, never shared or committed
 .claude/settings.local.json
