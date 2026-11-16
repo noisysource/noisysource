@@ -10,11 +10,10 @@ there), with no live data until the cutover. **Step 9 is done** (#152, merged
 `noisysource-prod-domotics.web.app`, deployed on every merge into `staging`; Renato signed in
 there. **Step 10, the cutover, was done on 2026-11-16** (bridge stopped 12:49, running on
 `noisysource-prod` from 12:58 WET): the Pi publishes to `noisysource-prod`, the history and
-settings are there (244 documents), and the Netatmo token lives only there. **Step 11 is in its PR**
-(branch `agent/ns-step11`): the KidClub unit no longer has a Domotics rules block, functions,
-hosting target or pipeline part. What it leaves for Renato to do by hand is listed under
-"Step 11, by hand" below. After that the Domotics move is finished; what follows is "After
-Domotics". Update this
+settings are there (244 documents), and the Netatmo token lives only there. **Step 11 is done**
+(#155, merged 2026-11-16): the KidClub unit no longer has a Domotics rules block, functions,
+hosting target or pipeline part. **The Domotics move is finished.** Two things are left for Renato, by hand, under
+"Step 11, by hand" below (items 2 and 3). What follows is "After Domotics". Update this
 line and the table below as PRs merge.
 
 ## Why
@@ -96,10 +95,10 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | merged, #150. Renato signed in on the new site 2026-11-16. The pipeline now copies each build into `firebase/noisysource/hosting/<target>` (firebase deploy refuses a folder outside the Firebase project folder) |
 | 9 | `noisysource-prod`: Terraform apply, prod caller `deploy-noisysource-prod.yml` (deploy on merge to `staging`), Domotics build mode `nsprod` | **Everything** on both dev projects; on merge, everything on `noisysource-prod` for the first time | Prod site up, sign-in works | merged, #152. Prod run green, five functions active as `functions-runtime@`, Renato signed in on the prod site 2026-11-16 |
 | 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | done 2026-11-16 with the runbook below (tools in #153). Checked from the data: 244 documents copied, the bridge writes state, climate and energy to `noisysource-prod`, `domotics_config/netatmo` is gone from `kidclub-dev` |
-| 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | PR open (branch `agent/ns-step11`). On `kidclub-dev` its preview removes the four Terraform-owned functions and the site `kidclub-dev-domotics` (Terraform), and `domoticsWarmBy`, which Terraform doesn't own, has to be deleted by hand for the Functions job to pass (item 1 below). By-hand list below |
+| 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | merged, #155. On `kidclub-dev` Terraform removed the four functions it owned and the site `kidclub-dev-domotics`; the Functions job failed until Renato deleted `domoticsWarmBy` by hand (the Firebase CLI won't deploy in CI while a function it deployed is missing from the source), then passed: 71 functions active. By-hand list below, item 1 done |
 
 ### Step 11, by hand (Renato)
-1. **For the PR's own preview on `kidclub-dev`: delete `domoticsWarmBy` there**, the one old
+1. (Done 2026-11-16.) **For the PR's own preview on `kidclub-dev`: delete `domoticsWarmBy` there**, the one old
    function Terraform doesn't own (same reason as item 2), then re-run the Functions job if
    it already failed:
    ```bash
@@ -108,8 +107,8 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 2. **Before the next `staging` → `main` promotion: delete the five old functions from
    `rainbow-prod-2454b`.** In CI the Firebase CLI refuses to deploy functions while functions
    it deployed earlier are missing from the source ("Aborting because deletion cannot proceed
-   in non-interactive mode"), so with them still there the promotion's Functions job is
-   expected to fail and nothing after it deploys. They were never used in prod (no bridge, no
+   in non-interactive mode"), so with them still there the promotion's Functions job
+   fails and nothing after it deploys (seen on `kidclub-dev` in #155). They were never used in prod (no bridge, no
    site, no data there):
    ```bash
    for f in legrandGetStatus legrandSetState tuyaGetDevices tuyaSetState domoticsWarmBy; do
