@@ -96,10 +96,16 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | merged, #150. Renato signed in on the new site 2026-11-16. The pipeline now copies each build into `firebase/noisysource/hosting/<target>` (firebase deploy refuses a folder outside the Firebase project folder) |
 | 9 | `noisysource-prod`: Terraform apply, prod caller `deploy-noisysource-prod.yml` (deploy on merge to `staging`), Domotics build mode `nsprod` | **Everything** on both dev projects; on merge, everything on `noisysource-prod` for the first time | Prod site up, sign-in works | merged, #152. Prod run green, five functions active as `functions-runtime@`, Renato signed in on the prod site 2026-11-16 |
 | 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | done 2026-11-16 with the runbook below (tools in #153). Checked from the data: 244 documents copied, the bridge writes state, climate and energy to `noisysource-prod`, `domotics_config/netatmo` is gone from `kidclub-dev` |
-| 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | PR open (branch `agent/ns-step11`). On `kidclub-dev` its preview removes the four Terraform-owned functions and the site `kidclub-dev-domotics` (Terraform), and `domoticsWarmBy` was deleted by hand first. By-hand list below |
+| 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | PR open (branch `agent/ns-step11`). On `kidclub-dev` its preview removes the four Terraform-owned functions and the site `kidclub-dev-domotics` (Terraform), and `domoticsWarmBy`, which Terraform doesn't own, has to be deleted by hand for the Functions job to pass (item 1 below). By-hand list below |
 
 ### Step 11, by hand (Renato)
-1. **Before the next `staging` → `main` promotion: delete the five old functions from
+1. **For the PR's own preview on `kidclub-dev`: delete `domoticsWarmBy` there**, the one old
+   function Terraform doesn't own (same reason as item 2), then re-run the Functions job if
+   it already failed:
+   ```bash
+   gcloud functions delete domoticsWarmBy --gen2 --region europe-west3 --project kidclub-dev --quiet
+   ```
+2. **Before the next `staging` → `main` promotion: delete the five old functions from
    `rainbow-prod-2454b`.** In CI the Firebase CLI refuses to deploy functions while functions
    it deployed earlier are missing from the source ("Aborting because deletion cannot proceed
    in non-interactive mode"), so with them still there the promotion's Functions job is
@@ -112,7 +118,7 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
    ```
    Don't run it earlier than needed: a hotfix merged into `main` before the promotion would
    deploy them again from `main`'s source (harmless; just delete them again).
-2. **When the rollback is no longer wanted** (the step 10 rollback already can't work once
+3. **When the rollback is no longer wanted** (the step 10 rollback already can't work once
    this PR is on `kidclub-dev`: its rules and functions are gone), clear what the house left
    in `kidclub-dev`. It includes the Tuya credentials (`domotics_config/tuya`), readable only
    by project admins:
@@ -125,7 +131,7 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
    `domotics-bridge@kidclub.pt`, in `kidclub-dev` only), then the old credentials:
    `rm ~/domotics-bridge/bridge.env.kidclub-dev` on the Pi and
    `apps/noisysource/domotics-bridge/deploy/bridge.env.kidclub-dev` on the Mac.
-3. Local leftovers on the Mac, harmless: `apps/noisysource/domotics/.env.development` and
+4. Local leftovers on the Mac, harmless: `apps/noisysource/domotics/.env.development` and
    `.env.staging` (untracked copies of the `kidclub-dev` web config). `pnpm dev:domotics` now
    runs against `noisysource-dev` from the committed `.env.nsdev`.
 
