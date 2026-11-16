@@ -22,10 +22,13 @@ firebase deploy --only hosting:domotics --project noisysource-dev
 Needs Java. From this folder:
 
 ```bash
-firebase emulators:exec --only firestore --project demo-kidclub-rules \
-  "node ../../scripts/rules-tests/domotics-automation.rules-test.cjs && node ../../scripts/rules-tests/domotics-incidents.rules-test.cjs && node ../../scripts/rules-tests/domotics-energy.rules-test.cjs && node ../../scripts/rules-tests/domotics-climate.rules-test.cjs"
+DOMOTICS_OWNER_EMAIL=admin@noisysource.com firebase emulators:exec --only firestore --project demo-kidclub-rules \
+  "node ../../scripts/rules-tests/domotics-automation.rules-test.cjs && node ../../scripts/rules-tests/domotics-incidents.rules-test.cjs && node ../../scripts/rules-tests/domotics-energy.rules-test.cjs && node ../../scripts/rules-tests/domotics-climate.rules-test.cjs && node ../../scripts/rules-tests/domotics-identity.rules-test.cjs"
 ```
 
-These are the same tests that run against the root rules file (`pnpm test:rules:domotics`),
-so the two copies of the Domotics rules are held to the same behaviour until the root copy
-is removed. The emulator here uses port 8089, so it doesn't collide with one on 8080.
+The first four are the same tests that run against the root rules file
+(`pnpm test:rules:domotics`), so the two copies of the Domotics rules are held to the same
+behaviour until the root copy is removed. One difference is on purpose: here the owner is
+`admin@noisysource.com` (the root file's is `admin@kidclub.pt`), and both the owner's and the
+bridge's addresses must be verified; `domotics-identity` tests that, for these rules only.
+The emulator here uses port 8089, so it doesn't collide with one on 8080.

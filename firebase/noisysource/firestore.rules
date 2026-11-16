@@ -70,8 +70,15 @@ service cloud.firestore {
     // `domotics_commands` is a channel that turns heating on and off, and it is
     // reachable from the public internet. The owner is known by email: this
     // project has no `users` collection to hold a role.
+    //
+    // The address must be verified. Email/password sign-in is on in these
+    // projects (the bridge uses it), and there anyone can create an account
+    // with any address that isn't taken; only a verified one proves who it is.
+    // Google sign-in, which the app uses, always verifies.
     function isDomoticsOwner() {
-      return isAuthenticated() && request.auth.token.email == 'admin@kidclub.pt';
+      return isAuthenticated() &&
+        request.auth.token.email == 'admin@noisysource.com' &&
+        request.auth.token.email_verified == true;
     }
 
     // The bridge on the Raspberry Pi. It signs in as an ordinary Firebase Auth
@@ -79,10 +86,12 @@ service cloud.firestore {
     // `iam.disableServiceAccountKeyCreation` forbids the key — and because the
     // role that path needed (roles/datastore.user) would have given a device in
     // the hall cupboard read/write over every collection here, including the
-    // finances bank data. Identified by email, matching isDomoticsOwner above.
+    // finances bank data. Identified by its verified email, like isDomoticsOwner above (its account is
+    // created verified: domotics-bridge/deploy/create-bridge-user.sh).
     function isBridge() {
       return isAuthenticated() &&
-        request.auth.token.email == 'domotics-bridge@kidclub.pt';
+        request.auth.token.email == 'domotics-bridge@kidclub.pt' &&
+        request.auth.token.email_verified == true;
     }
 
     match /domotics_state/{docId} {
