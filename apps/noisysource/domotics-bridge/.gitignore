@@ -5,6 +5,7 @@ automation-config.json
 
 # Holds the bridge account's password.
 bridge.env
+bridge.env.*
 *.env
 # E13 guard and incident recorder state (see src/guard.ts, src/incidents.ts).
 guard-config.json

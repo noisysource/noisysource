@@ -3,7 +3,13 @@
 # Creates the Firebase Auth account the bridge signs in as, and writes the
 # credentials the Pi needs to deploy/bridge.env.
 #
-# Run this on the Mac, once. It needs `gcloud auth login` to be current.
+# Run this on the Mac, once per project. It needs `gcloud auth login` to be current.
+#
+#   ./deploy/create-bridge-user.sh noisysource-prod    # the house's project
+#   ./deploy/create-bridge-user.sh kidclub-dev         # where it ran until the cutover
+#
+# bridge.env also carries the project (GCLOUD_PROJECT), so that one file decides
+# where the Pi publishes: systemd lets it override the unit's own setting.
 #
 # Why a user account and not a service account: key creation is refused by the
 # org policy iam.disableServiceAccountKeyCreation, and the role that path needed
@@ -16,11 +22,17 @@
 # printed, and bridge.env is gitignored.
 set -euo pipefail
 
-PROJECT=kidclub-dev
+PROJECT="${1:-}"
 EMAIL=domotics-bridge@kidclub.pt
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="$HERE/bridge.env"
-APP_ENV="$HERE/../../domotics/.env.development"
+# The project's web API key, from the app's committed build config.
+case "$PROJECT" in
+  noisysource-prod) APP_ENV="$HERE/../../domotics/.env.nsprod" ;;
+  noisysource-dev)  APP_ENV="$HERE/../../domotics/.env.nsdev" ;;
+  kidclub-dev)      APP_ENV="$HERE/../../domotics/.env.staging" ;;
+  *) echo "usage: $0 <noisysource-prod | noisysource-dev | kidclub-dev>"; exit 1 ;;
+esac
 
 command -v gcloud >/dev/null || { echo "gcloud not found"; exit 1; }
 TOKEN=$(gcloud auth print-access-token 2>/dev/null) || {
@@ -46,6 +58,20 @@ curl -s --max-time 30 "${AUTH[@]}" -X PATCH \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const c=JSON.parse(s);
       if(c.error){console.error("   error: "+c.error.message);process.exit(1);}
       console.log("   email/password:", c.signIn?.email?.enabled ? "enabled":"disabled");});'
+
+# A bridge.env without GCLOUD_PROJECT is from before the cutover: kidclub-dev.
+OLD_PROJECT=""
+if [ -f "$ENV_FILE" ]; then
+  OLD_PROJECT=$(grep '^GCLOUD_PROJECT=' "$ENV_FILE" | cut -d= -f2- || true)
+  OLD_PROJECT="${OLD_PROJECT:-kidclub-dev}"
+fi
+# Another project's file is kept beside the new one (it's the way back), and
+# its password is not reused: each project gets its own.
+if [ -n "$OLD_PROJECT" ] && [ "$OLD_PROJECT" != "$PROJECT" ]; then
+  mv "$ENV_FILE" "$HERE/bridge.env.$OLD_PROJECT"
+  chmod 600 "$HERE/bridge.env.$OLD_PROJECT"
+  echo "0. kept the $OLD_PROJECT credentials as deploy/bridge.env.$OLD_PROJECT"
+fi
 
 # Reuse an existing password on re-run, so a Pi already in the field does not
 # get orphaned by a rotation it never hears about.
@@ -90,20 +116,28 @@ umask 077
 cat > "$ENV_FILE" <<EOF
 # Credentials for the domotics bridge. Contains a password — 0600, gitignored.
 # Regenerate with deploy/create-bridge-user.sh
+GCLOUD_PROJECT=$PROJECT
 FIREBASE_API_KEY=$API_KEY
 BRIDGE_EMAIL=$EMAIL
 BRIDGE_PASSWORD=$PASSWORD
 EOF
 chmod 600 "$ENV_FILE"
 
+# The same sign-in the bridge does on the Pi. If this fails, so will the bridge.
+echo "4. signing in as the bridge"
+curl -s --max-time 30 -H "Content-Type: application/json" -X POST \
+  "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$API_KEY" \
+  -d "$(node -e 'console.log(JSON.stringify({email:process.argv[1],password:process.argv[2],returnSecureToken:true}))' "$EMAIL" "$PASSWORD")" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const c=JSON.parse(s);
+      if(c.error){console.error("   error: "+c.error.message);process.exit(1);}
+      console.log("   ok, signed in as", c.email);});'
+
 echo
 echo "   account : $EMAIL"
 echo "   uid     : $UID_OUT"
 echo "   written : $ENV_FILE (0600, password not shown)"
 echo
-echo "firestore.rules already grants this address exactly:"
-echo "  read  domotics_config/tuya_devices"
-echo "  write domotics_state/*"
-echo "  read/update/delete domotics_commands/*"
-echo "and nothing else. Deploy the rules before the bridge will work:"
-echo "  npx firebase-tools deploy --only firestore:rules --project $PROJECT"
+echo "   project : $PROJECT"
+echo
+echo "What this address may read and write is in the project's Firestore rules"
+echo "(isBridge); CI deploys them."

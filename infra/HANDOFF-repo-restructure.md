@@ -5,12 +5,15 @@ safety) and `infra/gcp/HANDOFF-gcp-reorg.md` (what was done in Google Cloud on 2
 
 **Progress (2026-11-16):** PRs 1–8 (#143–#150) are merged. Domotics runs on `noisysource-dev`
 (pipeline, rules, five functions, site `noisysource-dev-domotics.web.app`; Renato signed in
-there), with no live data until the cutover. **Step 9 (`noisysource-prod`) is in progress:**
-Renato applied Terraform to `noisysource-prod` on 2026-11-16 (39 resources in state), granted
-the state bucket and enabled Google sign-in; PR #152 adds the prod caller and the `nsprod`
-build. Its merge is the first deploy there; then Renato checks sign-in on
-`noisysource-prod-domotics.web.app`, and step 10 is next. Update this line and the table below
-as PRs merge.
+there), with no live data until the cutover. **Step 9 is done** (#152, merged
+2026-11-16): `noisysource-prod` has its rules, the five functions and the site
+`noisysource-prod-domotics.web.app`, deployed on every merge into `staging`; Renato signed in
+there. **Step 10, the cutover, was done on 2026-11-16** (bridge stopped 12:49, running on
+`noisysource-prod` from 12:58 WET): the Pi publishes to `noisysource-prod`, the history and
+settings are there (244 documents), and the Netatmo token lives only there. `kidclub-dev`
+still has the old copy of everything else, frozen at 12:46, and its Domotics site and functions
+are dead weight until step 11. **Next: step 11** (remove Domotics from the KidClub unit). Update this
+line and the table below as PRs merge.
 
 ## Why
 Google Cloud has one folder per company: Noisy Phocus holds KidClub's projects (`kidclub-dev`,
@@ -89,11 +92,11 @@ One worktree and one branch off `staging` per PR, PR into `staging`.
 | 6 | `firebase/noisysource/`: config, Domotics-only rules, their tests | NoisySource rules | Rules tests | merged, #148. KidClub dev deployed nothing |
 | 7 | NoisySource functions codebase with the five Domotics callables | NoisySource functions; **everything** on KidClub dev (`pnpm-workspace.yaml` and the lockfile change) | Callables exist; KidClub functions check | merged, #149. Five functions active in `europe-west3` as `functions-runtime@`; KidClub dev full deploy clean. Needed two Terraform additions, applied by Renato: the build account's role and the image repository |
 | 8 | Domotics app: a second build mode (`nsdev`) for the new project beside the `kidclub-dev` one, hosting target, site address from the build's project. The three shared files stay in `packages/shared` until the cleanup | NoisySource hosting; Domotics hosting on KidClub dev | Renato signs in on the new site | merged, #150. Renato signed in on the new site 2026-11-16. The pipeline now copies each build into `firebase/noisysource/hosting/<target>` (firebase deploy refuses a folder outside the Firebase project folder) |
-| 9 | `noisysource-prod`: Terraform apply, prod caller `deploy-noisysource-prod.yml` (deploy on merge to `staging`), Domotics build mode `nsprod` | **Everything** on both dev projects; on merge, everything on `noisysource-prod` for the first time | Prod site up, sign-in works | #152. By-hand list below done 2026-11-16 (items 1–4); the merge and the sign-in check remain |
-| 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | |
+| 9 | `noisysource-prod`: Terraform apply, prod caller `deploy-noisysource-prod.yml` (deploy on merge to `staging`), Domotics build mode `nsprod` | **Everything** on both dev projects; on merge, everything on `noisysource-prod` for the first time | Prod site up, sign-in works | merged, #152. Prod run green, five functions active as `functions-runtime@`, Renato signed in on the prod site 2026-11-16 |
+| 10 | Cutover, by Renato, no PR: copy `domotics_*` data, create the bridge user, switch the Pi's project and API key | — | Live data on the new site | done 2026-11-16 with the runbook below (tools in #153). Checked from the data: 244 documents copied, the bridge writes state, climate and energy to `noisysource-prod`, `domotics_config/netatmo` is gone from `kidclub-dev` |
 | 11 | Remove Domotics from the KidClub unit: rules block, function exports, hosting target, `deploy_domotics` | **Everything** | Reaches prod by promotion; Renato then deletes the five old functions and the old sites | |
 
-### Step 9, by hand (Renato), before the PR merges — 1 to 4 done 2026-11-16
+### Step 9, by hand (Renato) — done 2026-11-16, kept as the record of a project's first setup
 The merge is the first deploy to `noisysource-prod`; it fails at sign-in to Google Cloud
 until 1 and 2 are done, and at the app's build until 3 is.
 
@@ -123,9 +126,62 @@ until 1 and 2 are done, and at the app's build until 3 is.
 5. Merge the PR, watch "Deploy NoisySource to Prod" go green, open
    `https://noisysource-prod-domotics.web.app` and sign in. The house is empty until step 10.
 
-Cutover notes (step 10): do it outside the heating windows (05:30–08:00, 16:30–23:00).
-Rollback is the Pi's env file plus copying `domotics_config/netatmo` back, since the token
-will have rotated.
+### Step 10, the cutover (Renato) — runbook, run on 2026-11-16 and kept for the rollback
+Do it outside the heating windows (05:30–08:00, 16:30–23:00): the bridge is stopped for a few
+minutes, and with it the heating automation. Run everything from
+`apps/noisysource/domotics-bridge` in a checkout of `staging`, at home (the Pi is
+`pi@192.168.1.125`).
+
+Before, at any time (changes nothing for the house):
+1. **The bridge's account in the new project.** Enables email/password sign-in in
+   `noisysource-prod`, creates `domotics-bridge@kidclub.pt` there with a new password, writes
+   `deploy/bridge.env` (now with `GCLOUD_PROJECT=noisysource-prod`) and signs in once to prove
+   it works:
+   ```bash
+   ./deploy/create-bridge-user.sh noisysource-prod
+   ```
+2. **Dry run of the copy** (reads only; expect about 8 + 20 + 22 + 194 documents):
+   ```bash
+   node deploy/cutover-copy.mjs --from kidclub-dev --to noisysource-prod
+   ```
+
+The cutover:
+
+3. **Stop the bridge and keep its old credentials** on the Pi:
+   ```bash
+   ssh pi@192.168.1.125 'sudo systemctl stop domotics-bridge && cp -p ~/domotics-bridge/bridge.env ~/domotics-bridge/bridge.env.kidclub-dev'
+   ```
+4. **Copy the data.** Settings, tariff, floor plan, vendor credentials and the history
+   (`domotics_config`, `_climate`, `_energy`, `_incidents`). It checks the copy, then deletes
+   `domotics_config/netatmo` from `kidclub-dev`: the Netatmo token rotates, so it must live in
+   one project only. From this moment the old site can't switch lights:
+   ```bash
+   node deploy/cutover-copy.mjs --from kidclub-dev --to noisysource-prod --write
+   ```
+5. **Point the Pi at the new project and start it:**
+   ```bash
+   scp deploy/bridge.env pi@192.168.1.125:~/domotics-bridge/bridge.env
+   ssh pi@192.168.1.125 'chmod 600 ~/domotics-bridge/bridge.env && sudo systemctl start domotics-bridge && sleep 90 && journalctl -u domotics-bridge -n 40 --no-pager'
+   ```
+   Expect a sign-in line and 7 devices, as after any restart.
+6. **Check** `https://noisysource-prod-domotics.web.app`, signed in, with the phone off the
+   WiFi: thermostats and pump are live, a light switches, Energia and Clima show the history.
+   From now on this is the house's address; `kidclub-dev-domotics.web.app` shows the state
+   frozen at the cutover.
+7. Keep the new `deploy/bridge.env` (it's the only copy on the Mac of the new password; the
+   script keeps it across re-runs). If it was created in a worktree, move it to the main
+   checkout's `apps/noisysource/domotics-bridge/deploy/` before removing the worktree.
+
+Rollback, if step 5 or 6 fails:
+```bash
+ssh pi@192.168.1.125 'cp -p ~/domotics-bridge/bridge.env.kidclub-dev ~/domotics-bridge/bridge.env && sudo systemctl restart domotics-bridge'
+node deploy/cutover-copy.mjs --from noisysource-prod --to kidclub-dev --only domotics_config/netatmo --write
+```
+That puts the bridge and the Netatmo token back in `kidclub-dev`. What the bridge recorded in
+`noisysource-prod` in between stays there.
+
+The systemd unit in the repo now defaults to `noisysource-prod` too, but the one installed on
+the Pi doesn't need replacing: `bridge.env` carries the project and wins over the unit.
 
 ## After Domotics
 1. **FinHub v2** in the NoisySource unit, with the contracts package and the cross-project
