@@ -29,7 +29,7 @@ and a generated password. `bridge.env` decides which project the Pi publishes to
 A `bridge.env` for another project is kept as `deploy/bridge.env.<project>`.
 
 The house's project is `noisysource-prod` once the cutover is done
-(`infra/HANDOFF-repo-restructure.md`, step 10; until then it is `kidclub-dev`).
+(`infra/HANDOFF-repo-restructure.md`, step 10; it was `kidclub-dev` until 2026-11-16).
 
 **Not a service account.** The org policy
 `iam.disableServiceAccountKeyCreation` refuses to mint the key, and the role
