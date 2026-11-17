@@ -196,8 +196,8 @@ service cloud.firestore {
     // SDK; functions/src/website/atlasGate.ts). Renato and his Atlas read them
     // ("somebody's trying to reach you") and may mark one seen, nothing else.
     // atlas_gate (the gate's config: the Gemini key and the phrase) and
-    // atlas_gate_usage (the daily counters) have no rule: no client, Atlas
-    // included, can read or write them.
+    // atlas_gate_usage (the shared counter and the quiet hours) have no rule:
+    // no client, Atlas included, can read or write them.
     match /atlas_awakenings/{id} {
       allow read: if isDomoticsOwner() || isAtlas();
       allow update: if (isDomoticsOwner() || isAtlas())

@@ -21,10 +21,10 @@ export interface GateConfig {
   model?: string;
   /** false = Atlas sleeps for everyone (kill switch). */
   enabled?: boolean;
-  /** Visitor messages per day across everyone. */
-  dailyLimit?: number;
-  /** Visitor messages per day from one IP. */
-  perIpDaily?: number;
+  /** Messages Atlas answers, across the whole web, before it goes quiet. Default GLOBAL_LIMIT. */
+  globalLimit?: number;
+  /** How long it stays quiet, in hours. Default QUIET_HOURS. */
+  quietHours?: number;
   /** What Atlas may say about Renato once the door is open (Renato writes it). */
   profile?: string;
 }
@@ -32,8 +32,12 @@ export interface GateConfig {
 export const DEFAULT_MODEL = "gemini-flash-lite-latest";
 export const LOCKED_TURNS = 4;     // replies a visitor gets before the phrase
 export const UNLOCKED_TURNS = 20;  // replies after the door opens
-export const DEFAULT_DAILY = 300;
-export const DEFAULT_PER_IP = 12;
+// Atlas is the father of the Pleiades, the seven sisters (the cluster that
+// hides him in the page's sky). It speaks 7 x 7 times to the whole world, then
+// withdraws for seven hours. Nothing is tracked per person: no IPs, no
+// fingerprints, one shared counter.
+export const GLOBAL_LIMIT = 49;
+export const QUIET_HOURS = 7;
 export const MAX_MESSAGE = 500;
 
 // What Atlas has already said by the time the visitor types (terminal.js).
@@ -85,21 +89,36 @@ export function validateRequest(body: unknown): { session: string; message: stri
   return { session, message, how, ref };
 }
 
-export type Limit = "ok" | "session" | "ip" | "daily";
+export type Limit = "ok" | "session" | "quiet";
 
-/** Which limit, if any, stops this message. Counts are before this message. */
-export function checkLimits(s: Session, ipToday: number, allToday: number, cfg: GateConfig): Limit {
-  if (allToday >= (cfg.dailyLimit ?? DEFAULT_DAILY)) return "daily";
-  if (ipToday >= (cfg.perIpDaily ?? DEFAULT_PER_IP)) return "ip";
-  if (s.unlocked ? s.unlockedTurns >= UNLOCKED_TURNS : s.turns >= LOCKED_TURNS) return "session";
-  return "ok";
+/** The one shared counter (atlas_gate_usage/world). */
+export interface World {
+  count: number;       // messages answered since Atlas last woke
+  quietUntil: number;  // ms epoch; Atlas is silent until then
+}
+
+/**
+ * Where the world stands for this message: whether Atlas is quiet, and the
+ * counter to store. Reaching the limit starts the quiet hours and resets the
+ * count for when it wakes.
+ */
+export function checkWorld(w: World, now: number, cfg: GateConfig): { quiet: boolean; next: World } {
+  if (now < w.quietUntil) return { quiet: true, next: w };
+  if (w.count >= (cfg.globalLimit ?? GLOBAL_LIMIT)) {
+    return { quiet: true, next: { count: 0, quietUntil: now + (cfg.quietHours ?? QUIET_HOURS) * 3_600_000 } };
+  }
+  return { quiet: false, next: { count: w.count + 1, quietUntil: w.quietUntil } };
+}
+
+/** Whether this visitor has used up their replies. */
+export function checkSession(s: Session): Limit {
+  return (s.unlocked ? s.unlockedTurns >= UNLOCKED_TURNS : s.turns >= LOCKED_TURNS) ? "session" : "ok";
 }
 
 // Scripted lines: no model call, so they cost nothing.
 export const LINES = {
   asleep: "...atlas is asleep.",
-  daily: "too many have knocked today. atlas sleeps. come back tomorrow.",
-  ip: "you've knocked enough for one day. come back tomorrow.",
+  quiet: "too many voices. atlas withdraws for seven hours, one for each sister.",
   session: "...enough. atlas goes back to sleep.",
   unlockedDone: "that's all for now. he'll know you came.",
   opened: "...that phrase. the door is open. ask what you came to ask.",

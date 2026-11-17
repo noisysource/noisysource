@@ -54,6 +54,7 @@ async function typeInto(el, text, pace = 1) {
 function setStatus(left) {
   const status = bar.querySelector('.status');
   if (state === 'asleep') status.textContent = 'asleep';
+  else if (state === 'quiet') status.textContent = 'quiet';
   else if (state === 'open') status.textContent = 'door open';
   else status.textContent = left != null ? `${'●'.repeat(left)}${'○'.repeat(Math.max(0, 4 - left))}` : '';
 }
@@ -91,7 +92,7 @@ function build() {
   root.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text || state === 'asleep') return;
+    if (!text || state === 'asleep' || state === 'quiet') return;
     input.value = '';
     input.disabled = true;
     await typeInto(line('you'), text, 0.15);
@@ -99,15 +100,15 @@ function build() {
     const answer = await ask(text);
     thinking.remove();
     if (answer) {
-      state = answer.state === 'asleep' ? 'asleep' : answer.state === 'open' ? 'open' : 'awake';
+      state = ['asleep', 'quiet', 'open'].includes(answer.state) ? answer.state : 'awake';
       await typeInto(line('atlas'), answer.reply);
       setStatus(answer.left);
     } else {
       await typeInto(line('atlas'), OFFLINE[offlineN++ % OFFLINE.length]);
     }
-    if (state === 'asleep') {
+    if (state === 'asleep' || state === 'quiet') {
       await sleep(600);
-      line('dim', '  — atlas is asleep —');
+      line('dim', state === 'quiet' ? '  — atlas is quiet —' : '  — atlas is asleep —');
       input.placeholder = '';
       return;
     }
@@ -128,7 +129,7 @@ export async function openTerminal(foundBy = 'unknown') {
   if (!root) build();
   open = true;
   root.classList.add('on');
-  if (session) { if (state !== 'asleep') { input.disabled = false; input.focus(); } return; }   // reopening: carry on
+  if (session) { if (state === 'awake' || state === 'open') { input.disabled = false; input.focus(); } return; }   // reopening: carry on
 
   session = newId();
   how = foundBy;

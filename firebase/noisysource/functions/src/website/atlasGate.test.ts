@@ -60,11 +60,11 @@ let lastPrompt = "";
 const { atlasGate } = await import("./atlasGate");
 const handler = atlasGate as unknown as (req: unknown, res: unknown) => Promise<void>;
 
-async function say(session: string, message: string, ip = "1.2.3.4") {
+async function say(session: string, message: string) {
   let out: Record<string, unknown> = {};
   let status = 200;
   const res = { set: () => res, status: (s: number) => { status = s; return res; }, json: (o: Record<string, unknown>) => { out = o; } };
-  await handler({ method: "POST", body: { session, message, how: "star", ref: "https://linkedin.com" }, headers: { "x-forwarded-for": ip, "user-agent": "test" } }, res);
+  await handler({ method: "POST", body: { session, message, how: "star", ref: "https://linkedin.com" }, headers: { "x-forwarded-for": "1.2.3.4", "user-agent": "test" } }, res);
   return { status, ...out };
 }
 
@@ -112,14 +112,18 @@ describe("atlasGate", () => {
     expect(lastPrompt).not.toMatch(/sesamo/i);
   });
 
-  it("caps one IP across sessions and everyone per day", async () => {
-    store.set("atlas_gate/config", { geminiApiKey: "k", passphrase: "x y z", perIpDaily: 3, dailyLimit: 5 });
-    for (let i = 0; i < 3; i++) await say(`session-ip-${i}`, "hi", "9.9.9.9");
-    expect(await say("session-ip-4", "hi", "9.9.9.9")).toMatchObject({ state: "asleep", reply: expect.stringContaining("enough for one day") });
-    await say("session-b-1", "hi", "8.8.8.8");
-    await say("session-b-2", "hi", "8.8.8.8");
-    expect(await say("session-c-1", "hi", "7.7.7.7")).toMatchObject({ state: "asleep", reply: expect.stringContaining("too many") });
+  it("goes quiet for everyone after the shared limit, and keeps no IPs", async () => {
+    store.set("atlas_gate/config", { geminiApiKey: "k", passphrase: "x y z", globalLimit: 5 });
+    for (let i = 0; i < 5; i++) await say(`session-w-${i}`, "hi");
+    const r = await say("session-w-9", "hi");
+    expect(r).toMatchObject({ state: "quiet", left: 0, reply: expect.stringContaining("seven hours") });
+    expect(await say("session-w-0", "again")).toMatchObject({ state: "quiet" });
     expect(geminiCalls).toBe(5);
+    const world = store.get("atlas_gate_usage/world")!;
+    expect(world.count).toBe(0);
+    expect(world.quietUntil as number).toBeGreaterThan(Date.now() + 6.9 * 3_600_000);
+    const recs = [...store.entries()].filter(([k]) => k.startsWith("atlas_awakenings/")).map(([, v]) => JSON.stringify(v));
+    for (const r of recs) { expect(r).not.toContain("1.2.3.4"); expect(r).not.toMatch(/ipHash|"ua"/); }
   });
 
   it("answers with a scripted line when Gemini fails, and the turn still counts", async () => {

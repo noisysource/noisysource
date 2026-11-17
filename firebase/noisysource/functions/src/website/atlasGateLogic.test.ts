@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  normalize, saysPhrase, validateRequest, checkLimits, newSession, systemPrompt,
-  geminiRequest, parseGemini, left, LOCKED_TURNS, UNLOCKED_TURNS, OPENING,
+  normalize, saysPhrase, validateRequest, checkWorld, checkSession, newSession, systemPrompt,
+  geminiRequest, parseGemini, left, LOCKED_TURNS, UNLOCKED_TURNS, OPENING, GLOBAL_LIMIT, QUIET_HOURS,
 } from "./atlasGateLogic";
 
 describe("the phrase", () => {
@@ -40,20 +40,31 @@ describe("requests", () => {
 });
 
 describe("limits", () => {
-  const cfg = { dailyLimit: 10, perIpDaily: 3 };
-  it("lets a fresh visitor in", () => {
-    expect(checkLimits(newSession(), 0, 0, cfg)).toBe("ok");
+  const H = 3_600_000;
+  it("is seven times seven, then seven hours", () => {
+    expect(GLOBAL_LIMIT).toBe(49);
+    expect(QUIET_HOURS).toBe(7);
   });
-  it("stops at the daily, per-IP and per-session caps", () => {
-    expect(checkLimits(newSession(), 0, 10, cfg)).toBe("daily");
-    expect(checkLimits(newSession(), 3, 0, cfg)).toBe("ip");
-    expect(checkLimits({ ...newSession(), turns: LOCKED_TURNS }, 0, 0, {})).toBe("session");
+  it("counts every message across the whole web", () => {
+    expect(checkWorld({ count: 0, quietUntil: 0 }, 1000, {})).toEqual({ quiet: false, next: { count: 1, quietUntil: 0 } });
+    expect(checkWorld({ count: 48, quietUntil: 0 }, 1000, {}).quiet).toBe(false);
   });
-  it("gives more turns once the door is open", () => {
+  it("goes quiet for seven hours at the limit, then wakes with a fresh count", () => {
+    const hit = checkWorld({ count: 49, quietUntil: 0 }, 1000, {});
+    expect(hit).toEqual({ quiet: true, next: { count: 0, quietUntil: 1000 + 7 * H } });
+    expect(checkWorld(hit.next, 1000 + 7 * H - 1, {}).quiet).toBe(true);
+    expect(checkWorld(hit.next, 1000 + 7 * H, {})).toEqual({ quiet: false, next: { count: 1, quietUntil: 1000 + 7 * H } });
+  });
+  it("takes the limit and hours from the config", () => {
+    expect(checkWorld({ count: 3, quietUntil: 0 }, 0, { globalLimit: 3, quietHours: 1 }).next.quietUntil).toBe(H);
+  });
+  it("stops a visitor after their replies, with more once the door is open", () => {
+    expect(checkSession(newSession())).toBe("ok");
+    expect(checkSession({ ...newSession(), turns: LOCKED_TURNS })).toBe("session");
     const s = { ...newSession(), unlocked: true, turns: LOCKED_TURNS, unlockedTurns: 2 };
-    expect(checkLimits(s, 0, 0, {})).toBe("ok");
+    expect(checkSession(s)).toBe("ok");
     expect(left(s)).toBe(UNLOCKED_TURNS - 2);
-    expect(checkLimits({ ...s, unlockedTurns: UNLOCKED_TURNS }, 0, 0, {})).toBe("session");
+    expect(checkSession({ ...s, unlockedTurns: UNLOCKED_TURNS })).toBe("session");
   });
 });
 

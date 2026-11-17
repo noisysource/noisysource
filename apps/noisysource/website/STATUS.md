@@ -39,10 +39,12 @@ The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without ann
   colleague / curious / other) and **why**. 4 replies per visitor, then Atlas sleeps; on the
   last ones it hints to "ask the real Renato for the phrase". **The phrase opens the door**:
   checked in code, never by the model; then 20 more replies and Atlas may share what's in
-  `profile`. Caps: per visitor, per IP per day (12), everyone per day (300), 12 s timeout,
-  no retries, maxInstances 3. Every awakening is saved in `atlas_awakenings/{session}` (who,
-  why, how it was found, referrer, transcript with the phrase redacted, `seen: false`) for
-  Renato's Atlas to report. Without a server (the claude.ai preview) the terminal falls back to
+  `profile`. **Humankind isn't ready (Renato, 2026-11-17):** one shared limit for the whole
+  web, 49 messages (7 × 7), then Atlas goes quiet for **7 hours** ("one for each sister": Atlas
+  is the father of the Pleiades, the cluster hiding him in the sky). Nothing is tracked per
+  person: no IPs, no user agents. Plus 12 s timeout, no retries, maxInstances 3. Every
+  awakening is saved in `atlas_awakenings/{session}` (who, why, how it was found, referrer,
+  transcript with the phrase redacted, `seen: false`) for Renato's Atlas to report. Without a server (the claude.ai preview) the terminal falls back to
   short "not yet" lines.
 - **Browser console**: the tagline plus "you looked closer. so does it. try typing its name."
 - Rejected along the way: brain-as-logo, coral/blue human-vs-AI S monogram, code brackets.
@@ -78,7 +80,7 @@ the document **`atlas_gate/config`** with:
   models, which is fine here (nothing private reaches the model).
 - `passphrase` (string): the phrase you hand out. Case, accents and punctuation don't matter.
 - optional: `enabled` (false = Atlas sleeps for everyone), `model` (default
-  `gemini-flash-lite-latest`), `dailyLimit` (300), `perIpDaily` (12), `profile` (what Atlas may
+  `gemini-flash-lite-latest`), `globalLimit` (49), `quietHours` (7), `profile` (what Atlas may
   say about you once the door is open; empty = it says it can't share anything yet).
 Without the doc, Atlas just answers "...atlas is asleep." Clients can't read `atlas_gate` (rules).
 
