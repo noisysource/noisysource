@@ -162,21 +162,25 @@ export default function CampsAdminPage() {
     });
     try {
       const [daysSnap, subsSnap] = await Promise.all([
-        getDocs(query(col('campDays'), where('campId', '==', camp.id), orderBy('date', 'asc'))),
-        getDocs(query(col('campSubscriptions'), where('campId', '==', camp.id), orderBy('createdAt', 'desc'))),
+        // Sorted here, not with orderBy: where + orderBy on another field needs a
+        // composite index, and without one the query fails and the list shows empty.
+        getDocs(query(col('campDays'), where('campId', '==', camp.id))),
+        getDocs(query(col('campSubscriptions'), where('campId', '==', camp.id))),
       ]);
       setCampDays(daysSnap.docs.map(d => ({
         id: d.id,
         ...(d.data() as Omit<CampDay, 'id' | 'createdAt' | 'updatedAt'>),
         createdAt: safeDate(d.data().createdAt),
         updatedAt: safeDate(d.data().updatedAt),
-      })));
+      })).sort((x, y) => String(x.date).localeCompare(String(y.date))));
       setSubscriptions(subsSnap.docs.map(d => ({
         id: d.id,
         ...(d.data() as Omit<CampSubscription, 'id' | 'createdAt' | 'updatedAt'>),
         createdAt: safeDate(d.data().createdAt),
         updatedAt: safeDate(d.data().updatedAt),
-      })));
+      })).sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime()));
+    } catch (e: any) {
+      setError(`Não foi possível carregar os dias e inscrições: ${e.message}`);
     } finally {
       setLoading(false);
     }
