@@ -11,10 +11,12 @@ export const TAGLINE = [
 ];
 export const TAGLINE_TEXT = TAGLINE.map(([t]) => t).join('');
 
-// What the tagline becomes when someone finds Atlas (see intro.js).
+// What the tagline becomes when someone finds Atlas (see intro.js): the
+// call that wakes it, with a run button next to it (terminal.js).
 export const REVEAL = [
   ['const', 'kw'], [' ', 'p'], ['atlas', 'atlas'], [' = ', 'p'], ['combine', 'fn'], ['(', 'p'],
-  ['human', 'human'], [', ', 'p'], ['artificial', 'ai'], [');', 'p'], ['  // not yet.', 'cm'],
+  ['human', 'human'], [', ', 'p'], ['artificial', 'ai'], [');', 'p'], ['\n', 'p'],
+  ['atlas', 'atlas'], ['.', 'p'], ['wake', 'call'], ['();', 'p'],
 ];
 
 // Hovering "combine" shows its signature, like an editor would. Atlas is
@@ -27,7 +29,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const text = (tokens) => tokens.map(([t]) => t).join('');
 const classAt = (tokens) => tokens.flatMap(([t, c]) => [...t].map(() => c));
 
-function render(el, typed, classes, done) {
+function render(el, typed, classes, done, run = false) {
   let html = '';
   let cls = null;
   for (let n = 0; n < typed.length; n++) {
@@ -42,7 +44,8 @@ function render(el, typed, classes, done) {
     if (c === 'fn' && classes[n + 1] !== 'fn' && done) html += `<span class="sig" role="tooltip">${SIGNATURE}</span>`;
   }
   if (cls) html += '</span>';
-  el.innerHTML = html + `<span class="cursor${done ? ' idle' : ''}"></span>`;
+  el.innerHTML = html + (run ? '  <button class="run" type="button" aria-label="Run atlas.wake()">▶ run</button>' : '')
+    + `<span class="cursor${done ? ' idle' : ''}"></span>`;
 }
 
 // One keystroke's delay, in ms: a person isn't a metronome.
@@ -77,7 +80,7 @@ function keystrokes(tokens, typo) {
   return steps;
 }
 
-async function typeTokens(el, tokens, { typo = false, pace = 1, isCancelled = () => false } = {}) {
+async function typeTokens(el, tokens, { typo = false, pace = 1, run = false, isCancelled = () => false } = {}) {
   const classes = classAt(tokens);
   let typed = '';
   let prev = ' ';
@@ -91,7 +94,7 @@ async function typeTokens(el, tokens, { typo = false, pace = 1, isCancelled = ()
     prev = s.key;
     render(el, typed, classes, false);
   }
-  render(el, typed, classes, true);
+  render(el, typed, classes, true, run);
   return true;
 }
 
@@ -115,15 +118,11 @@ export function typeTagline(el, { isCancelled } = {}) {
   return typeTokens(el, TAGLINE, { typo: true, isCancelled });
 }
 
-// Someone found Atlas: the tagline is erased and rewritten to name it, held
-// for a moment, then put back.
+// Someone found Atlas: the tagline is erased and rewritten as the call that
+// wakes it, with a run button. It stays until the page is replayed.
 export async function revealAtlas(el, { isCancelled = () => false } = {}) {
-  if (!(await erase(el, TAGLINE, { isCancelled }))) return;
-  if (!(await typeTokens(el, REVEAL, { pace: 0.8, isCancelled }))) return;
-  await sleep(4200);
-  if (isCancelled()) return;
-  if (!(await erase(el, REVEAL, { isCancelled }))) return;
-  await typeTokens(el, TAGLINE, { pace: 0.7, isCancelled });
+  if (!(await erase(el, TAGLINE, { isCancelled }))) return false;
+  return typeTokens(el, REVEAL, { pace: 0.8, run: true, isCancelled });
 }
 
 // Shows the finished tagline at once (reduced motion).

@@ -20,6 +20,7 @@
 // (typewriter.js). Waking it rewrites the tagline for a moment.
 
 import { typeTagline, showTagline, revealAtlas } from './typewriter.js';
+import { openTerminal, terminalOpen } from './terminal.js';
 
 const FONT = 'Oxanium';
 const WEIGHT = 500;
@@ -57,7 +58,7 @@ export function startIntro({ canvas, flash, tagline }) {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let W = 0, H = 0, L = null, photons = [], passers = [], horizonDots = [], galaxy = [];
   let strikes = [], impacts = [], nextStrike = 0;
-  let hoverAtlas = false, taglineDone = false, revealing = false, revealT = -1, keys = '', pending = false;
+  let hoverAtlas = false, taglineDone = false, revealing = false, revealed = false, revealT = -1, keys = '', pending = false;
   let t0 = performance.now(), flashed = false, typing = 0;
 
   // ---------- layout: where every letter, the dot and the horizon go ----------
@@ -247,7 +248,7 @@ export function startIntro({ canvas, flash, tagline }) {
     if (!appear) return;
     const label = `400 ${Math.max(11, Math.round(L.fs * 0.15))}px "JetBrains Mono", monospace`;
     for (const c of sky) {
-      const hot = c === hoverSky || (c.atlas && revealing);
+      const hot = c === hoverSky || (c.atlas && (revealing || revealed));
       if (hot && c.lines.length) {
         ctx.globalAlpha = 0.35 * appear; ctx.strokeStyle = '#7fa6ff'; ctx.lineWidth = 0.7;
         ctx.beginPath();
@@ -275,13 +276,15 @@ export function startIntro({ canvas, flash, tagline }) {
 
   // Someone found Atlas: the light flares and the tagline names it.
   function reveal() {
-    if (revealing) return;
+    if (revealing || revealed) return;
     if (!taglineDone) { pending = true; return; }   // found early: wake it once the tagline is typed
     pending = false;
     revealing = true;
     revealT = (performance.now() - t0) / 1000;
     const run = runs;
-    revealAtlas(tagline, { isCancelled: () => run !== runs }).finally(() => { revealing = false; });
+    revealAtlas(tagline, { isCancelled: () => run !== runs })
+      .then((ok) => { if (ok && run === runs) revealed = true; })
+      .finally(() => { revealing = false; });
   }
 
   function placeTagline() {
@@ -506,7 +509,7 @@ export function startIntro({ canvas, flash, tagline }) {
 
   function replay() {
     t0 = performance.now(); flashed = false; typing = 0; runs++; strikes = []; impacts = [];
-    taglineDone = false; revealing = false; revealT = -1; pending = false;
+    taglineDone = false; revealing = false; revealed = false; revealT = -1; pending = false;
     tagline.innerHTML = '';
   }
 
@@ -525,12 +528,13 @@ export function startIntro({ canvas, flash, tagline }) {
     document.body.style.cursor = hoverSky ? 'pointer' : '';
   });
   window.addEventListener('click', (e) => {
-    if (e.target.closest('a, .fn')) return;
+    if (e.target.closest('.run')) { openTerminal(); return; }
+    if (terminalOpen() || e.target.closest('a, .fn, .term')) return;
     if (hoverAtlas) reveal();
     else if (!hoverSky) replay();   // a real constellation: nothing happens
   });
   window.addEventListener('keydown', (e) => {
-    if (e.key.length !== 1) return;
+    if (e.key.length !== 1 || terminalOpen() || e.target.closest?.('input')) return;
     keys = (keys + e.key.toLowerCase()).slice(-5);
     if (keys === 'atlas') reveal();
   });

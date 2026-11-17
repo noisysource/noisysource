@@ -28,7 +28,16 @@ The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without ann
   `function combine(human: Natural, artificial: Synthetic): Atlas` (`typewriter.js`).
 - **Typing `atlas`** anywhere wakes it too (queued if the tagline is still typing).
 - **Waking it**: the light in the i flares, and the tagline is erased and retyped as
-  `const atlas = combine(human, artificial);  // not yet.`, then restored.
+  `const atlas = combine(human, artificial);` / `atlas.wake();` with a **▶ run** button. It
+  stays until the page is replayed (click on empty space).
+- **▶ run** opens a terminal-style session (`src/terminal.js`): a boot sequence, then
+  "atlas › not yet. but I noticed you." Visitors can type; for now Atlas only answers with
+  honest placeholders ("not yet.", "soon.", ...). Nothing is stored or sent anywhere.
+- **Next for this (not built):** connect ▶ run to a *public, guest-mode* Atlas: a Cloud
+  Function in `noisysource-prod` proxying to the model, with **no tools and no private data**
+  (never Renato's own Atlas, which has his mail, calendar and the house), a provider-side spend
+  cap, per-visitor and per-day rate limits, a short max conversation, and App Check. Swap
+  `reply()` in `terminal.js` for that call.
 - **Browser console**: the tagline plus "you looked closer. so does it. try typing its name."
 - Rejected along the way: brain-as-logo, coral/blue human-vs-AI S monogram, code brackets.
 
