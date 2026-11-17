@@ -1,11 +1,16 @@
+import '@fontsource/oxanium/500.css';
+import '@fontsource/jetbrains-mono/400.css';
 import './style.css';
-import { startCosmos } from './cosmos.js';
-import { startTypewriter } from './typewriter.js';
+import { startIntro } from './intro.js';
 
-startCosmos({
-  canvas: document.getElementById('brain'),
-  status: document.getElementById('status'),
+const go = () => startIntro({
+  canvas: document.getElementById('stage'),
   flash: document.getElementById('flash'),
-  halo: document.querySelector('.halo'),
+  tagline: document.getElementById('tagline'),
 });
-startTypewriter(document.getElementById('msg'));
+
+// The canvas draws with Oxanium, so wait for it (but never hang on it).
+Promise.race([
+  Promise.all([document.fonts.load('500 64px Oxanium', 'noısy source i'), document.fonts.load('400 16px "JetBrains Mono"')]),
+  new Promise((r) => setTimeout(r, 2500)),
+]).then(go, go);

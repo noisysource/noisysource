@@ -1,26 +1,35 @@
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;overflow:hidden;background:#03040a;color:#c9d1d9;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;-webkit-font-smoothing:antialiased}
-canvas#brain{position:fixed;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity 2s ease}
-canvas#brain.on{opacity:1}
-.halo{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse 30% 28% at 50% 48%,rgba(60,110,255,.13),transparent 70%)}
-@keyframes breathe{50%{opacity:.5}}
-.flash{position:fixed;inset:0;pointer-events:none;opacity:0;background:radial-gradient(circle at 50% 50%,rgba(255,255,255,1) 0%,rgba(190,215,255,.85) 12%,rgba(70,120,255,.35) 38%,transparent 70%);mix-blend-mode:screen}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity 1.2s ease}
+canvas#stage.on{opacity:1}
+.halo{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse 34% 26% at 50% 46%,rgba(60,110,255,.09),transparent 70%)}
+.flash{position:fixed;inset:0;pointer-events:none;opacity:0;background:radial-gradient(circle at 50% 44%,rgba(255,255,255,1) 0%,rgba(190,215,255,.85) 12%,rgba(70,120,255,.35) 38%,transparent 70%);mix-blend-mode:screen}
 .flash.go{animation:flash 1.6s ease-out}
 @keyframes flash{0%{opacity:0}6%{opacity:1}100%{opacity:0}}
 .vignette{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 40%,rgba(3,4,10,.88) 100%)}
 .grain{position:fixed;inset:-50%;pointer-events:none;opacity:.05;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");animation:grain 1.2s steps(6) infinite}
 @keyframes grain{0%{transform:translate(0,0)}25%{transform:translate(-3%,2%)}50%{transform:translate(2%,-3%)}75%{transform:translate(-2%,-1%)}100%{transform:translate(0,0)}}
 
-.ui{position:fixed;font-size:11px;letter-spacing:.25em;text-transform:uppercase;color:rgba(201,209,217,.45);opacity:0;animation:fade 2s ease forwards}
-.tl{top:28px;left:32px;color:rgba(201,209,217,.8);animation-delay:1.5s}
-.tr{top:28px;right:32px;animation-delay:2s}
-.tr .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff3a2a;box-shadow:0 0 8px #ff3a2a;margin-right:10px;vertical-align:1px;animation:blink 2.4s ease-in-out infinite}
-.bl{bottom:28px;left:32px;animation-delay:2.5s}
-.br{bottom:28px;right:32px;animation-delay:2.5s}
+/* The tagline: typed like code, coloured like the logo (human white, artificial blue). */
+.tagline{position:fixed;left:0;right:0;text-align:center;font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:.02em;white-space:pre;color:#c9d1e6}
+.tagline .kw{color:#5f7cc4}
+.tagline .p{color:#6b7590}
+.tagline .id{color:#c9d1e6}
+.tagline .fn{color:#9fb8ff}
+.tagline .human{color:#ffffff}
+.tagline .ai{color:#4a7bff}
+.tagline .i{color:#cfe0ff;animation:ipulse 2.86s ease-in-out infinite}
+@keyframes ipulse{50%{opacity:.6}}
+.tagline .cursor{display:inline-block;width:.6em;height:1.1em;margin-left:2px;vertical-align:-.18em;background:#4a7bff}
+.tagline .cursor.idle{animation:blink 1.06s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+.ui{position:fixed;font-size:11px;letter-spacing:.25em;text-transform:uppercase;color:rgba(201,209,217,.45);opacity:0;animation:fade 2s ease forwards;animation-delay:2s}
+.bl{bottom:28px;left:32px}
+.br{bottom:28px;right:32px}
 .br a{color:inherit;text-decoration:none;transition:color .3s}
 .br a:hover{color:#6f9bff}
-.msg{position:fixed;left:50%;bottom:16vh;transform:translateX(-50%);font-size:13px;letter-spacing:.3em;color:rgba(233,236,239,.75);white-space:nowrap;text-transform:lowercase}
-.msg::after{content:"_";color:#5b8cff;animation:blink 1s steps(1) infinite;margin-left:2px}
 @keyframes fade{to{opacity:1}}
-@keyframes blink{50%{opacity:0}}
-@media(max-width:600px){.ui{font-size:9px;letter-spacing:.18em}.tl,.bl{left:18px}.tr,.br{right:18px}.msg{font-size:11px;letter-spacing:.2em}}
+@media(max-width:600px){.ui{font-size:9px;letter-spacing:.18em}.bl{left:18px}.br{right:18px}}

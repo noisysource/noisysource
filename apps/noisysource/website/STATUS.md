@@ -1,18 +1,31 @@
 # Website (noisysource.com) — STATUS
 
-NoisySource's public website. A single page with an animated, looping WebGL scene:
-void → photons pass by → two collide → expansion → the mind (neurons firing, building to an
-overload) → explosion → void. Deliberately minimal and mysterious; the scene hints at the
-agent being built without naming it.
+NoisySource's public website. A single page whose intro builds the logo:
+void → photons pass by → two collide (flash) → the burst collapses into **noisy** (white
+photons that keep shimmering) → **source** slides in (solid blue) → a photon wave crosses the
+name (white and wavy over noisy, straight and blue over source) → the dot of the i lights up →
+the horizon draws (clean, then scattering) → the tagline is typed like a person would, typo
+included: `for (const i of intelligence) combine(human, artificial);`. Click to replay.
+
+## Brand (decided with Renato, 2026-11-17)
+- Wordmark: `noisy` made of white photons (the noise), `source` solid signal blue, the i's dot
+  is a blue light (the idea). Lettering: Oxanium 500 ("machine", sober). Code: JetBrains Mono.
+- Story: from noise (chaos, photons) comes the idea; human + artificial intelligence combined.
+- Palette: void `#03040a`, ice `#e8eefc`, signal blue `#4a7bff`, light `#cfe0ff`.
+- Tagline: `for (const i of intelligence) combine(human, artificial);` (human white,
+  artificial blue, the `i` pulses with the logo's light). Valid syntax; `combine` etc. are
+  assumed declared, like any code excerpt.
+- Icon / favicon: the light alone (blue dot with its glow), `public/favicon.svg`.
+- Rejected along the way: brain-as-logo, coral/blue human-vs-AI S monogram, code brackets.
 
 ## How it's built
-- Vite, plain JS + CSS, no dependencies (the scene is hand-written WebGL in `src/cosmos.js`).
-  No Firebase SDK yet, so it has no `.env.<mode>` files and the CI build skips the
-  `projectId` check (`"firebase": false` in the workflows' `apps` entry).
-- `src/cosmos.js`: the scene. Stages, timings (`SEQ`), colours and the firing curve
-  (`fireLevel`) are at the top of the function.
-- `src/typewriter.js`: the lines typed under the shape (`LINES`).
-- `index.html` + `src/style.css`: the corner labels, flash, glow, grain.
+- Vite, plain JS + CSS. Only dependencies: the two fonts, self-hosted via `@fontsource/*`
+  (no Google Fonts request). No Firebase SDK yet, so it has no `.env.<mode>` files and the CI
+  build skips the `projectId` check (`"firebase": false` in the workflows' `apps` entry).
+- `src/intro.js`: the whole scene on a 2D canvas. Timeline `T` at the top. The letters of
+  "noisy" are sampled from the real glyphs, so the photons land on the lettering at any size.
+- `src/typewriter.js`: the tagline tokens/colours and the human typing (with the typo).
+- `index.html` + `src/style.css`: tagline styling, flash, glow, grain, corner labels.
 - Run locally: `pnpm --filter website dev` → http://localhost:5176
 
 ## Where it runs
@@ -28,7 +41,10 @@ agent being built without naming it.
   (see "Next step").
 
 ## In progress
-- First version: page moved into the monorepo, hosting + CI + Terraform wired (PR into `staging`).
+- PR #160 into `staging`, **kept as a draft on purpose: Renato isn't ready to launch.** Merging
+  it releases to `noisysource-prod` (and creates the noisysource.com custom domain). Pushes to
+  the branch only update the dev preview: https://noisysource-dev-website.web.app
+- Last done: intro rebuilt around the new logo (brain removed).
 
 ## Next step
 1. After the merge into `staging` (prod Terraform creates the custom domain): read the DNS
@@ -38,7 +54,9 @@ agent being built without naming it.
    **Don't touch the MX / Google Workspace records** — only add the A/TXT (and the `www`
    CNAME/A) records Firebase asks for. The SSL certificate is issued automatically after
    verification (minutes to a few hours).
-2. Features Renato wants to add next (to be defined).
+2. Final logo kit (custom-drawn letters instead of Oxanium, still/animated, icon, light/dark,
+   favicon sizes) once Renato signs off on the direction.
+3. Features Renato wants to add next (to be defined).
 
 ## Open questions for Renato
 - Contact email on the page is `hello@noisysource.com`: does that mailbox (or alias) exist?
