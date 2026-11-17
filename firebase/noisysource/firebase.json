@@ -55,6 +55,15 @@
             }
           ]
         }
+      ],
+      "rewrites": [
+        {
+          "source": "/api/atlas",
+          "function": {
+            "functionId": "atlasGate",
+            "region": "europe-west3"
+          }
+        }
       ]
     }
   ],

@@ -190,5 +190,18 @@ service cloud.firestore {
       // The bridge reads requests and writes the answer back onto the document.
       allow read, update, delete: if isBridge();
     }
+
+    // Awakenings of Atlas on noisysource.com: who woke it, why, how they found
+    // it, and the conversation. Written only by the atlasGate function (Admin
+    // SDK; functions/src/website/atlasGate.ts). Renato and his Atlas read them
+    // ("somebody's trying to reach you") and may mark one seen, nothing else.
+    // atlas_gate (the gate's config: the Gemini key and the phrase) and
+    // atlas_gate_usage (the daily counters) have no rule: no client, Atlas
+    // included, can read or write them.
+    match /atlas_awakenings/{id} {
+      allow read: if isDomoticsOwner() || isAtlas();
+      allow update: if (isDomoticsOwner() || isAtlas())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen']);
+    }
   }
 }
