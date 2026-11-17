@@ -30,14 +30,20 @@ The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without ann
 - **Waking it**: the light in the i flares, and the tagline is erased and retyped as
   `const atlas = combine(human, artificial);` / `atlas.wake();` with a **▶ run** button. It
   stays until the page is replayed (click on empty space).
-- **▶ run** opens a terminal-style session (`src/terminal.js`): a boot sequence, then
-  "atlas › not yet. but I noticed you." Visitors can type; for now Atlas only answers with
-  honest placeholders ("not yet.", "soon.", ...). Nothing is stored or sent anywhere.
-- **Next for this (not built):** connect ▶ run to a *public, guest-mode* Atlas: a Cloud
-  Function in `noisysource-prod` proxying to the model, with **no tools and no private data**
-  (never Renato's own Atlas, which has his mail, calendar and the house), a provider-side spend
-  cap, per-visitor and per-day rate limits, a short max conversation, and App Check. Swap
-  `reply()` in `terminal.js` for that call.
+- **▶ run** opens the Atlas session (`src/terminal.js`): boot sequence, then the warning
+  ("you've awakened something you don't know. you have a few tries. delving into the unknown
+  can be dangerous."), a notice that the conversation is kept, and "so. who are you, and why
+  did you wake me?". From there it's a real model, through `/api/atlas`.
+- **The gate** (`atlasGate`, `firebase/noisysource/functions/src/website/`): Gemini on a
+  free-tier key, steered to find out **who** woke Atlas (recruiter / investor / manager /
+  colleague / curious / other) and **why**. 4 replies per visitor, then Atlas sleeps; on the
+  last ones it hints to "ask the real Renato for the phrase". **The phrase opens the door**:
+  checked in code, never by the model; then 20 more replies and Atlas may share what's in
+  `profile`. Caps: per visitor, per IP per day (12), everyone per day (300), 12 s timeout,
+  no retries, maxInstances 3. Every awakening is saved in `atlas_awakenings/{session}` (who,
+  why, how it was found, referrer, transcript with the phrase redacted, `seen: false`) for
+  Renato's Atlas to report. Without a server (the claude.ai preview) the terminal falls back to
+  short "not yet" lines.
 - **Browser console**: the tagline plus "you looked closer. so does it. try typing its name."
 - Rejected along the way: brain-as-logo, coral/blue human-vs-AI S monogram, code brackets.
 
@@ -62,6 +68,29 @@ The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without ann
   `infra/gcp/terraform/noisysource/env/prod.tfvars` → `custom_domains`. Terraform creates the
   domain on the prod site; it only goes live once the DNS records are added at the registrar
   (see "Next step").
+
+## One-time setup for the gate (Renato, by hand — nothing secret goes in the repo)
+For each project (`noisysource-dev` first, then `noisysource-prod`), Firestore console → create
+the document **`atlas_gate/config`** with:
+- `geminiApiKey` (string): an API key from Google AI Studio, created in a project **without
+  billing** (e.g. `noisysource-agent`), so it can only use the free tier: Google refuses past
+  the limit, it can't charge. Free-tier conversations may be used by Google to improve its
+  models, which is fine here (nothing private reaches the model).
+- `passphrase` (string): the phrase you hand out. Case, accents and punctuation don't matter.
+- optional: `enabled` (false = Atlas sleeps for everyone), `model` (default
+  `gemini-flash-lite-latest`), `dailyLimit` (300), `perIpDaily` (12), `profile` (what Atlas may
+  say about you once the door is open; empty = it says it can't share anything yet).
+Without the doc, Atlas just answers "...atlas is asleep." Clients can't read `atlas_gate` (rules).
+
+## Not built yet (agreed in the 2026-11-17 voice call)
+- **Your Atlas telling you** "somebody's trying to reach you": the data is ready
+  (`atlas_awakenings`, readable by `atlas@kidclub.pt`, `seen` flag; contract in root
+  CLAUDE.md), the polling/announcing lives in the Atlas repo (`noisysource/Atlas`).
+- **Backup email** when your Atlas is off: not built; needs a mail sender for the NoisySource
+  projects (KidClub's `SendEmailFromOutbox` lives in the KidClub unit).
+- **Second layer**: a confirmation code by email for approved people (for now the phrase is
+  the only key).
+- App Check on `/api/atlas` (for now the caps are the protection).
 
 ## In progress
 - PR #160 into `staging`, **kept as a draft on purpose: Renato isn't ready to launch.** Merging

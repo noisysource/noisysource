@@ -13,7 +13,9 @@ changes here to `noisysource-dev`; merging it deploys the same to `noisysource-p
 `hosting/<target>` (gitignored). CI copies the app's build there. By hand:
 
 Targets: `domotics` and `website` (noisysource.com; its custom domain is Terraform's,
-`custom_domains` in `infra/gcp/terraform/noisysource/env/prod.tfvars`).
+`custom_domains` in `infra/gcp/terraform/noisysource/env/prod.tfvars`). The website rewrites
+`/api/atlas` to the `atlasGate` function, the one public function here (setup and limits:
+`apps/noisysource/website/STATUS.md`).
 
 ```bash
 pnpm --filter domotics build:nsdev

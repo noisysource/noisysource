@@ -58,7 +58,7 @@ export function startIntro({ canvas, flash, tagline }) {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let W = 0, H = 0, L = null, photons = [], passers = [], horizonDots = [], galaxy = [];
   let strikes = [], impacts = [], nextStrike = 0;
-  let hoverAtlas = false, taglineDone = false, revealing = false, revealed = false, revealT = -1, keys = '', pending = false;
+  let hoverAtlas = false, taglineDone = false, revealing = false, revealed = false, revealT = -1, keys = '', pending = false, foundBy = 'unknown';
   let t0 = performance.now(), flashed = false, typing = 0;
 
   // ---------- layout: where every letter, the dot and the horizon go ----------
@@ -275,7 +275,8 @@ export function startIntro({ canvas, flash, tagline }) {
   }
 
   // Someone found Atlas: the light flares and the tagline names it.
-  function reveal() {
+  function reveal(how) {
+    if (how) foundBy = how;
     if (revealing || revealed) return;
     if (!taglineDone) { pending = true; return; }   // found early: wake it once the tagline is typed
     pending = false;
@@ -528,15 +529,15 @@ export function startIntro({ canvas, flash, tagline }) {
     document.body.style.cursor = hoverSky ? 'pointer' : '';
   });
   window.addEventListener('click', (e) => {
-    if (e.target.closest('.run')) { openTerminal(); return; }
+    if (e.target.closest('.run')) { openTerminal(foundBy); return; }
     if (terminalOpen() || e.target.closest('a, .fn, .term')) return;
-    if (hoverAtlas) reveal();
+    if (hoverAtlas) reveal('star');
     else if (!hoverSky) replay();   // a real constellation: nothing happens
   });
   window.addEventListener('keydown', (e) => {
     if (e.key.length !== 1 || terminalOpen() || e.target.closest?.('input')) return;
     keys = (keys + e.key.toLowerCase()).slice(-5);
-    if (keys === 'atlas') reveal();
+    if (keys === 'atlas') reveal('typed');
   });
 
   layout();
