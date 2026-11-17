@@ -25,7 +25,8 @@
 │   │   ├── domotics/                ← Home/building automation (private)
 │   │   ├── domotics-bridge/         ← the Raspberry Pi bridge (deployed by hand)
 │   │   ├── tasks/                   ← Task management & event tracking (private, not built)
-│   │   └── social/                  ← Social platform (public, auth-required, not built)
+│   │   ├── social/                  ← Social platform (public, auth-required, not built)
+│   │   └── website/                 ← noisysource.com, the public website (see its STATUS.md)
 │   └── noisyphocus/
 │       └── kidclub/                 ← KidClub public website (Noisy Phocus)
 └── infra/
@@ -82,6 +83,7 @@ GitHub: `github.com/noisysource/noisysource`
 | Domotics | NoisySource | Private | Google sign-in, owner only (`admin@noisysource.com`) | ✅ Live on `noisysource-prod` |
 | Tasks | NoisySource | Private (IAP) | GCP IAP | 🆕 To build |
 | Social | NoisySource | Public | Firebase Auth | 🆕 To build |
+| Website (noisysource.com) | NoisySource | Public | None | 🆕 First version: sites `noisysource-{dev,prod}-website`, custom domain waiting on DNS |
 
 ---
 
