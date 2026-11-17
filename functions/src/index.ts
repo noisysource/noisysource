@@ -21,7 +21,7 @@ export { onPartyBookingCreated, onPartyBookingStatusNotify } from "./kidclub/par
 export { requestPartyBooking, getPartyBookingByLink, payPartyDepositByLink } from "./kidclub/partyPublic";
 export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/discountRecalc";
 export { onStudyroomReservationEventsSync, onTransportReservationEventsSync, setReservationEventStatus, backfillReservationEvents } from "./kidclub/reservationEvents";
-export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
+export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings, getCampAvailability, onCampDepositPaid, offerCampSeat } from "./kidclub/camp";
 export { clientErrorsDigest } from "./kidclub/clientErrorsDigest";
 export { enrollFunnelWeekly } from "./kidclub/enrollFunnelWeekly";
 export { getKidclubVatSummary } from "./kidclub/vatSummary";

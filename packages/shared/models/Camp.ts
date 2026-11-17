@@ -29,8 +29,18 @@ export interface CampSubscription {
     totalAmount: number;
     depositAmount: number;
     balanceAmount: number;
-    status: 'pending' | 'confirmed' | 'cancelled';
+    /**
+     * pending: seats held while the deposit is unpaid, until holdExpiresAt.
+     * confirmed: deposit paid (or confirmed by an admin). waitlisted: a day was
+     * full at sign-up, or the deposit wasn't paid in time; holds no seat.
+     */
+    status: 'pending' | 'confirmed' | 'waitlisted' | 'cancelled';
     statusReason?: string;
+    /** Firestore Timestamp. Missing on sign-ups made before holds existed. */
+    holdExpiresAt?: any;
+    waitlistReason?: 'full' | 'unpaid';
+    /** A late payment confirmed it although a day was already full. */
+    overCapacity?: boolean;
     depositBillingId?: string;
     balanceBillingId?: string;
     depositRefundPending?: boolean;
@@ -41,6 +51,7 @@ export interface CampSubscription {
 
 export interface CampDay {
     id: string;
+    campId?: string;
     date: string; // YYYY-MM-DD
     name: string; // e.g., "Arco-Íris de Natal"
 

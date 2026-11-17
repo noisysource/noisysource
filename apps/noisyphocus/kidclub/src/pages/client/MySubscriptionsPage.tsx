@@ -41,14 +41,16 @@ interface ChildSubs {
 }
 
 const campStatusLabel: Record<string, string> = {
-  pending: 'Pendente',
+  pending: 'Sinal por pagar',
   confirmed: 'Confirmado',
+  waitlisted: 'Lista de espera',
   cancelled: 'Cancelado',
 };
 
 const campStatusClass: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
   confirmed: 'bg-green-100 text-green-800',
+  waitlisted: 'bg-amber-100 text-amber-800',
   cancelled: 'bg-gray-100 text-gray-600',
 };
 

@@ -4,6 +4,45 @@
 
 **Last updated:** 2026-11-17 (camp days section just below; the rest is as of 2026-11-11), after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
 
+## ⛺ 2026-11-17: camp seats, waiting list and deposit reminders — PR open into `staging`, not in prod
+
+Branch `agent/kidclub-camp-waitlist` (worktree `.claude/worktrees/kidclub-camp-waitlist`), built **on top of #158**
+(its commits are in this PR until #158 merges). Renato's rule: **a seat is reserved by paying the deposit.**
+
+**How a camp sign-up works now** (`functions/src/kidclub/camp.ts`, rules in `campLogic.ts` + tests):
+- Sign-up for days with a free seat → `pending` ("Sinal por pagar"): the seats are held for **7 days**
+  (`holdExpiresAt`) and a `camp_deposit` bill is created, due the same day. The parent gets an email.
+- Sign-up for a day that's already full → a separate `waitlisted` sign-up for those days, no bill. One form can
+  produce both (some days with a seat, some on the waiting list). Parents can pick full days; they show as
+  "Completo · lista de espera".
+- **Deposit paid → `confirmed` automatically** (`onCampDepositPaid`, a trigger on billing updates; it exits at once
+  unless `type === "camp_deposit"`). Before, an admin had to press Confirmar; that button is still there for
+  payments made outside the app.
+- **Unpaid:** reminder emails on **day 3 and day 5**; when the 7 days are over → `waitlisted`
+  (`waitlistReason: "unpaid"`), seats freed, the unpaid deposit bill cancelled, email to the parent. This runs inside
+  the existing daily 09:00 job `createCampBalanceBillings` (no new Cloud Scheduler job), so "day 7" means the first
+  09:00 run after the hold ends.
+- **Waiting list → seat is by hand:** admin → Campos → Inscrições → **Dar vaga** (`offerCampSeat`): new 7-day hold, new
+  deposit bill, email. Refused if a day is still full. Nothing promotes the waiting list automatically.
+- Seats taken = confirmed + pending within their hold. Parents see places left through `getCampAvailability`.
+- Also: a sign-up is refused for a day that isn't the camp's, a closed camp, or a child already signed up for that
+  day. `firestore.rules`: parents can no longer create `campSubscriptions` directly (only through the function).
+  The old `/admin/camp` page, `CampAdmin.tsx` and `campService.ts` (the pre-`/admin/camps` model) are deleted.
+
+**Existing sign-ups:** `pending` ones created before this have no `holdExpiresAt`: they hold no seat (as before), get
+no reminders and are never moved to the waiting list. Confirm or cancel them by hand.
+
+**Checked:** functions typecheck; `campLogic.test.ts` passes (11 tests, run in a scratch copy). **Not checked:** the
+app build (CI does it) and nothing was clicked through. **To test on dev:** sign up for a day with capacity 1 from two
+accounts (second one lands on the waiting list); mark the deposit paid in Faturação and see the sign-up turn
+Confirmada; Dar vaga on a waitlisted one. Reminders/waitlisting only happen at the 09:00 run.
+
+**Open questions for Renato:**
+1. Late payment on a waitlisted sign-up (e.g. an MB WAY that was in flight) is confirmed and flagged "acima da
+   lotação" if the day filled meanwhile, instead of refused. OK?
+2. Should the waiting list be offered seats automatically, in sign-up order, when one frees up?
+3. Email wording (all in `camp.ts`) is a first draft.
+
 ## 🏕️ 2026-11-17: camp days "not saving" in admin — fix in PR #158 (open, into `staging`, not in prod)
 
 **Problem (reported by Renato, on prod).** In Admin → Campos (`/admin/camps`), a day added to a camp disappeared
