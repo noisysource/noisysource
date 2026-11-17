@@ -19,6 +19,19 @@ only, sort in the browser, show an error if the load fails. Not built or typeche
 Days saved on prod while it was broken will show up once the fix is there, so expect duplicates if the same day was
 entered several times: delete the extras from the list. Remove the worktree after the merge.
 
+## 🗑️ 2026-11-17: Registo de Horas (timesheets page) removed — PR open into `staging`, not in prod
+
+Renato: not in use, delete it for now. The page (`/admin/timesheets`) was broken anyway: its monthly query needed a
+composite index that doesn't exist, and its "generate" buttons read/wrote `dailySchedules` and `timesheets` at the
+database root, which the rules refuse. Removed: the page, its two modals, the route, the sidebar link and the
+generators in `employeeService.ts`. **Kept:** the `timesheets` / `dailySchedules` rules in `firestore.rules` and any
+data in Firestore (nothing deleted). Branch `agent/kidclub-remove-timesheets`, worktree
+`.claude/worktrees/kidclub-remove-timesheets`; not built locally, CI does it.
+
+**Still open, found in the same sweep:** `employeeService.ts` reads/writes `employmentContracts` at the database root
+while the rules only cover `_apps/arcoiris/employmentContracts`, so contract reads/writes from the HR pages are
+probably refused (not traced). `components/Calendar.tsx` reads root `bookings` the same way (not traced).
+
 ## 🚀 2026-11-11: everything on `staging` is in prod (promotion #141). `main` = `staging`, no open PRs
 
 **What happened.** #135 (study-enroll hotfix) merged into `main` at ~11:20 UTC. Then #136, #138, #139, #125 (FinHub v2)
