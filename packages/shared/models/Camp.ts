@@ -31,14 +31,17 @@ export interface CampSubscription {
     balanceAmount: number;
     /**
      * pending: seats held while the deposit is unpaid, until holdExpiresAt.
-     * confirmed: deposit paid (or confirmed by an admin). waitlisted: a day was
-     * full at sign-up, or the deposit wasn't paid in time; holds no seat.
+     * confirmed: deposit paid (or confirmed by an admin). waitlisted: holds no
+     * seat (see waitlistReason). Rules: functions/src/kidclub/campLogic.ts.
      */
     status: 'pending' | 'confirmed' | 'waitlisted' | 'cancelled';
     statusReason?: string;
     /** Firestore Timestamp. Missing on sign-ups made before holds existed. */
     holdExpiresAt?: any;
-    waitlistReason?: 'full' | 'unpaid';
+    /** full: no seat at sign-up. unpaid: deposit not paid in time. bumped: an unpaid day's seat went to a whole-week sign-up. */
+    waitlistReason?: 'full' | 'unpaid' | 'bumped';
+    /** On the waiting list with a deposit bill open: seats are free and the first to pay gets them. */
+    offerOpen?: boolean;
     /** A late payment confirmed it although a day was already full. */
     overCapacity?: boolean;
     depositBillingId?: string;

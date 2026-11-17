@@ -369,22 +369,6 @@ export default function CampsAdminPage() {
     }
   };
 
-  // Waiting list → a seat: the sign-up gets a new 7-day hold and a new deposit bill, and the parent is emailed.
-  const handleOfferSeat = async (subId: string) => {
-    setActionId(subId);
-    setError(null);
-    try {
-      const res = await callable('offerCampSeat')({ subscriptionId: subId });
-      const holdExpiresAt = new Date(Number((res.data as any)?.holdExpiresAt ?? Date.now()));
-      setSubscriptions(prev => prev.map(s => s.id === subId ? { ...s, status: 'pending', holdExpiresAt, waitlistReason: undefined } : s));
-      setSuccessMsg('Vaga dada. O cliente recebeu um email com o pedido de sinal.');
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setActionId(null);
-    }
-  };
-
   const handleCancelSub = async (subId: string) => {
     const reason = prompt('Motivo do cancelamento (opcional):') ?? undefined;
     setActionId(subId);
@@ -693,28 +677,23 @@ export default function CampsAdminPage() {
                                   <p className="text-xs text-gray-400 mt-1">vaga até {safeDate(sub.holdExpiresAt).toLocaleDateString('pt-PT')}</p>
                                 )}
                                 {sub.status === 'waitlisted' && (
-                                  <p className="text-xs text-gray-400 mt-1">{sub.waitlistReason === 'unpaid' ? 'sinal não pago' : 'dia completo'}</p>
+                                  <p className="text-xs text-gray-400 mt-1">
+                                    {sub.waitlistReason === 'unpaid' ? 'sinal não pago' : sub.waitlistReason === 'bumped' ? 'vaga cedida a semana completa' : 'sem vaga'}
+                                    {sub.offerOpen && <span className="text-indigo-600"> · vaga aberta, 1.º a pagar</span>}
+                                  </p>
                                 )}
                                 {sub.overCapacity && <p className="text-xs text-red-600 mt-1">acima da lotação</p>}
                               </td>
                               <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                                 <div className="flex gap-2">
-                                  {sub.status === 'pending' && (
+                                  {(sub.status === 'pending' || sub.status === 'waitlisted') && (
                                     <button
+                                      title="Confirmar à mão (pagamento feito fora da aplicação). Com o sinal pago na aplicação, a inscrição confirma-se sozinha."
                                       onClick={() => handleConfirmSub(sub.id)}
                                       disabled={actionId === sub.id}
                                       className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                                     >
                                       {actionId === sub.id ? '...' : 'Confirmar'}
-                                    </button>
-                                  )}
-                                  {sub.status === 'waitlisted' && (
-                                    <button
-                                      onClick={() => handleOfferSeat(sub.id)}
-                                      disabled={actionId === sub.id}
-                                      className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700 disabled:opacity-50"
-                                    >
-                                      {actionId === sub.id ? '...' : 'Dar vaga'}
                                     </button>
                                   )}
                                   {sub.status !== 'cancelled' && (

@@ -58,7 +58,10 @@ const CAMP_TYPE_META: Record<string, { label: string; from: string; to: string; 
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
-type SubType = 'day' | 'week' | 'full';
+type SubType = 'day' | 'week';
+
+interface Availability { taken: Record<string, number>; firm: Record<string, number>; waiting: Record<string, number> }
+const NO_AVAILABILITY: Availability = { taken: {}, firm: {}, waiting: {} };
 
 // ── component ─────────────────────────────────────────────────────────────────
 
@@ -69,7 +72,7 @@ export default function ClientCampsPage() {
   const [camps, setCamps] = useState<Camp[]>([]);
   const [selectedCamp, setSelectedCamp] = useState<Camp | null>(null);
   const [campDays, setCampDays] = useState<CampDay[]>([]);
-  const [confirmedCountsPerDay, setConfirmedCountsPerDay] = useState<Record<string, number>>({});
+  const [availability, setAvailability] = useState<Availability>(NO_AVAILABILITY);
 
   const [children, setChildren] = useState<Child[]>([]);
 
@@ -77,7 +80,7 @@ export default function ClientCampsPage() {
   const [loadingDays, setLoadingDays] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [result, setResult] = useState<{ reservedDays: string[]; waitlistedDays: string[]; holdExpiresAt?: number } | null>(null);
+  const [result, setResult] = useState<{ reservedDays: string[]; waitlistedDays: string[]; holdExpiresAt?: number; weekBookedAsDays?: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [childName, setChildName] = useState('');
@@ -149,10 +152,11 @@ export default function ClientCampsPage() {
         // If it fails the counts don't show; the server decides seat vs. waiting list on submit anyway.
         try {
           const res = await callable('getCampAvailability')({ campId: selectedCamp.id });
-          setConfirmedCountsPerDay(((res.data as any)?.taken ?? {}) as Record<string, number>);
+          const data = (res.data ?? {}) as Partial<Availability>;
+          setAvailability({ taken: data.taken ?? {}, firm: data.firm ?? {}, waiting: data.waiting ?? {} });
         } catch (e) {
           console.error('[ClientCampsPage] availability load failed:', e);
-          setConfirmedCountsPerDay({});
+          setAvailability(NO_AVAILABILITY);
         }
       } catch (e) {
         console.error('[ClientCampsPage] campDays load failed:', e);
@@ -175,7 +179,6 @@ export default function ClientCampsPage() {
   }, [campDays]);
 
   const effectiveSelectedDays = useMemo(() => {
-    if (subscriptionType === 'full') return new Set(campDays.map(d => d.id));
     if (subscriptionType === 'week') {
       const ids = new Set<string>();
       for (const [wk, days] of daysByWeek) {
@@ -186,26 +189,39 @@ export default function ClientCampsPage() {
     return selectedDays;
   }, [subscriptionType, selectedDays, selectedWeeks, campDays, daysByWeek]);
 
-  // Full days can still be picked: they go to the waiting list, with nothing to pay for now.
-  const waitlistCount = useMemo(
-    () => campDays.filter(d => effectiveSelectedDays.has(d.id) && (confirmedCountsPerDay[d.id] ?? 0) >= d.capacity).length,
-    [effectiveSelectedDays, campDays, confirmedCountsPerDay],
-  );
+  // Mirrors functions/src/kidclub/campLogic.ts (the server decides; this is what the parent is shown).
+  // Single day: waiting list if it has no free seat or people are already waiting for it.
+  // Whole week: it has precedence over unpaid single days, so only paid seats stop it; if one of its
+  // days is taken that way, the week is booked day by day, under the single-day rule.
+  const dayWaitlisted = (d: CampDay) => (availability.taken[d.id] ?? 0) >= d.capacity || (availability.waiting[d.id] ?? 0) > 0;
+  const weekBroken = (days: CampDay[]) => days.some(d => (availability.firm[d.id] ?? 0) >= d.capacity);
+  const waitlistedIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (subscriptionType === 'week') {
+      for (const [, days] of daysByWeek) if (weekBroken(days)) days.filter(dayWaitlisted).forEach(d => ids.add(d.id));
+    } else {
+      campDays.filter(dayWaitlisted).forEach(d => ids.add(d.id));
+    }
+    return ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscriptionType, campDays, daysByWeek, availability]);
+
+  const waitlistCount = useMemo(() => [...effectiveSelectedDays].filter(id => waitlistedIds.has(id)).length, [effectiveSelectedDays, waitlistedIds]);
   const seatCount = effectiveSelectedDays.size - waitlistCount;
 
   const totalAmount = useMemo(() => {
     let sum = 0;
     for (const day of campDays) {
-      if (effectiveSelectedDays.has(day.id) && (confirmedCountsPerDay[day.id] ?? 0) < day.capacity) sum += day.price;
+      if (effectiveSelectedDays.has(day.id) && !waitlistedIds.has(day.id)) sum += day.price;
     }
     return Math.round(sum * 100) / 100;
-  }, [effectiveSelectedDays, campDays, confirmedCountsPerDay]);
+  }, [effectiveSelectedDays, campDays, waitlistedIds]);
 
   const depositAmount = Math.round(totalAmount * 0.25 * 100) / 100;
   const balanceAmount = Math.round((totalAmount - depositAmount) * 100) / 100;
 
-  const isDayFull = (dayId: string, capacity: number) => (confirmedCountsPerDay[dayId] ?? 0) >= capacity;
-  const spotsLeft = (dayId: string, capacity: number) => Math.max(0, capacity - (confirmedCountsPerDay[dayId] ?? 0));
+  const isDayFull = (dayId: string, _capacity: number) => waitlistedIds.has(dayId);
+  const spotsLeft = (dayId: string, capacity: number) => Math.max(0, capacity - (availability.taken[dayId] ?? 0));
 
   const toggleDay = (dayId: string) => {
     setSelectedDays(prev => {
@@ -245,7 +261,7 @@ export default function ClientCampsPage() {
         ...(notes.trim() ? { notes: notes.trim() } : {}),
       });
       const data = (res.data ?? {}) as any;
-      setResult({ reservedDays: data.reservedDays ?? [], waitlistedDays: data.waitlistedDays ?? [], holdExpiresAt: data.holdExpiresAt });
+      setResult({ reservedDays: data.reservedDays ?? [], waitlistedDays: data.waitlistedDays ?? [], holdExpiresAt: data.holdExpiresAt, weekBookedAsDays: data.weekBookedAsDays });
       setSubmitted(true);
     } catch (e: any) {
       console.error('[ClientCampsPage] createCampSubscription failed:', e);
@@ -268,6 +284,9 @@ export default function ClientCampsPage() {
         <p className="text-gray-600 mb-4">
           Inscrição de <strong>{childName}</strong> no campo <strong>{selectedCamp?.name}</strong>.
         </p>
+        {result?.weekBookedAsDays && (
+          <p className="text-sm text-gray-600 mb-3">A semana pedida já tem dias completos, por isso a inscrição foi feita dia a dia.</p>
+        )}
         {result && result.reservedDays.length > 0 && (
           <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 mb-3 text-left">
             <p className="font-semibold mb-1">Vaga à espera do sinal</p>
@@ -283,7 +302,7 @@ export default function ClientCampsPage() {
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 mb-3 text-left">
             <p className="font-semibold mb-1">Lista de espera</p>
             <p>{result.waitlistedDays.join(', ')}</p>
-            <p className="mt-1">Estes dias já estão completos. Avisamos por email se surgir uma vaga; não há nada a pagar por eles para já.</p>
+            <p className="mt-1">Estes dias não têm vaga. Avisamos por email se surgir uma; nessa altura, a vaga é de quem pagar primeiro o sinal. Não há nada a pagar por eles para já.</p>
           </div>
         )}
         <div className="mb-5" />
@@ -386,8 +405,8 @@ export default function ClientCampsPage() {
           {/* Subscription type */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <h2 className="font-semibold text-gray-800 mb-4">Tipo de inscrição</h2>
-            <div className="grid grid-cols-3 gap-2">
-              {(['day', 'week', 'full'] as SubType[]).map(t => (
+            <div className="grid grid-cols-2 gap-2">
+              {(['day', 'week'] as SubType[]).map(t => (
                 <button
                   key={t}
                   type="button"
@@ -398,7 +417,7 @@ export default function ClientCampsPage() {
                       : 'border-gray-200 text-gray-600 hover:border-gray-300'
                   }`}
                 >
-                  {t === 'day' ? '🗓 Dia(s)' : t === 'week' ? '📅 Semana(s)' : '🎯 Completo'}
+                  {t === 'day' ? '🗓 Dia(s)' : '📅 Semana(s) completa(s)'}
                 </button>
               ))}
             </div>
@@ -424,14 +443,6 @@ export default function ClientCampsPage() {
                 </span>
               </h2>
 
-              {subscriptionType === 'full' && (
-                <div className="space-y-2">
-                  {campDays.map(day => (
-                    <DayRow key={day.id} day={day} selected spotsLeft={spotsLeft(day.id, day.capacity)} isFull={isDayFull(day.id, day.capacity)} />
-                  ))}
-                </div>
-              )}
-
               {subscriptionType === 'day' && (
                 <div className="space-y-2">
                   {campDays.map(day => {
@@ -450,6 +461,7 @@ export default function ClientCampsPage() {
 
               {subscriptionType === 'week' && (
                 <div className="space-y-4">
+                  <p className="text-xs text-gray-500">Uma semana completa tem prioridade sobre inscrições de dias avulsos ainda sem sinal pago.</p>
                   {daysByWeek.map(([wk, days]) => {
                     const wkSelected = selectedWeeks.has(wk);
                     const weekTotal = days.reduce((s, d) => s + d.price, 0);
@@ -578,7 +590,7 @@ export default function ClientCampsPage() {
               <p className="text-xs text-center text-gray-500">
                 {seatCount > 0
                   ? <>A vaga fica reservada com o pagamento do sinal de <strong>€{depositAmount.toFixed(2)}</strong>, no prazo de 7 dias. Sem pagamento, a inscrição passa para a lista de espera.</>
-                  : <>Os dias escolhidos estão completos: a inscrição fica em lista de espera, sem nada a pagar para já.</>}
+                  : <>Os dias escolhidos não têm vaga: a inscrição fica em lista de espera, sem nada a pagar para já.</>}
               </p>
             )}
             <button
