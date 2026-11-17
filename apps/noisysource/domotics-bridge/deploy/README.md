@@ -43,6 +43,20 @@ that.
 The rules are deployed by CI (`firebase/noisysource/firestore.rules` for the
 `noisysource-*` projects).
 
+### Atlas's account (not the bridge's)
+
+Atlas, Renato's assistant, signs in to the same project with an account of its
+own, made the same way:
+
+```bash
+./deploy/create-agent-user.sh noisysource-prod
+```
+
+It asks for a password twice (at least 16 characters), creates or updates
+`atlas@kidclub.pt` as a verified user, and writes nothing to disk. What Atlas
+may do is in the rules (`isAtlas`) and the callables (`requireOwnerOrAgent`);
+it has nothing to do with the Pi.
+
 ## 2. Node on the Pi
 
 `uname -m` reports `armv6l`, which neither NodeSource nor nodejs.org publish

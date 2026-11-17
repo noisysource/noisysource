@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
-import { requireOwner } from "../auth";
+import { requireOwnerOrAgent } from "../auth";
+import { agentModulesError } from "./legrandModules";
 
 const TOKEN_URL = "https://api.netatmo.com/oauth2/token";
 const API_BASE = "https://api.netatmo.com/api";
@@ -39,8 +40,22 @@ async function getAccessToken(): Promise<{ token: string; homeId: string }> {
   return { token: data.access_token, homeId: config.homeId };
 }
 
+/**
+ * The home's layout: every module's name, type and room. Atlas needs it to
+ * know what the ids in legrandGetStatus are.
+ */
+export const legrandGetHome = onCall(async (request) => {
+  requireOwnerOrAgent(request.auth);
+  const { token, homeId } = await getAccessToken();
+  const resp = await fetch(`${API_BASE}/homesdata?home_id=${homeId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new HttpsError("internal", `Netatmo error: ${resp.status}`);
+  return resp.json();
+});
+
 export const legrandGetStatus = onCall(async (request) => {
-  requireOwner(request.auth);
+  requireOwnerOrAgent(request.auth);
   const { token, homeId } = await getAccessToken();
   const resp = await fetch(`${API_BASE}/homestatus?home_id=${homeId}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -59,8 +74,14 @@ export const legrandSetState = onCall<{
     brightness?: number;
   }>;
 }>(async (request) => {
-  requireOwner(request.auth);
+  const caller = requireOwnerOrAgent(request.auth);
   const { data } = request;
+  // The app's own calls are forwarded as they are. Atlas's are checked first:
+  // it may switch lights and move blinds, and nothing else Netatmo would take.
+  if (caller === "agent") {
+    const error = agentModulesError(data?.modules);
+    if (error) throw new HttpsError("invalid-argument", error);
+  }
   const { token, homeId } = await getAccessToken();
   const resp = await fetch(`${API_BASE}/setstate`, {
     method: "POST",

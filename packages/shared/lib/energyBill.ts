@@ -8,11 +8,12 @@
 //
 // Pure: no Firestore, no clock. The callers pass `now`.
 //
-// functions/ can't import @shared at runtime (see packages/shared/package.json),
-// so everything below the marker line is copied byte for byte into
-// functions/src/domotics/energyBill.ts, and functions/src/domotics/energyBill.test.ts
-// fails if the two copies differ: change both in the same PR.
-// ---- mirrored below: packages/shared/lib/energyBill.ts = functions/src/domotics/energyBill.ts ----
+// The NoisySource functions (firebase/noisysource/functions) type-check with
+// rootDir src, so they can't import this file: everything below the marker line
+// is copied byte for byte into firebase/noisysource/functions/src/domotics/energyBill.ts,
+// and energyBill.test.ts beside it fails if the two copies differ: change both
+// in the same PR.
+// ---- mirrored below: packages/shared/lib/energyBill.ts = firebase/noisysource/functions/src/domotics/energyBill.ts ----
 
 // --- Energy ------------------------------------------------------------------
 

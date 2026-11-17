@@ -4,6 +4,20 @@
 
 **Last updated:** 2026-11-16
 
+## ▶️ 16/11: Atlas can see and run the house (branch `agent/atlas-house`, PR into `staging`)
+Atlas is Renato's assistant (repo `noisysource/Atlas`, on his Mac). With this change it **reads the whole house and, after Renato's OK on a card in Atlas, changes what the app changes, except bridge admin**. Nothing changes in the app itself.
+
+- **Who it is:** its own Firebase Auth user, `atlas@kidclub.pt`, email and password like the Pi bridge, created verified. No service account, no Terraform. The rules know it as `isAtlas()` (`firebase/noisysource/firestore.rules`), the callables as `requireOwnerOrAgent` (`firebase/noisysource/functions/src/auth.ts`).
+- **What it may do:** read `domotics_state`, `domotics_energy`, `domotics_climate`, `domotics_incidents`; read and write `domotics_config/automation`, `guard` and `tariff`; read `warm_by`; read `domotics_commands` and queue only the app's thermostat and heat pump commands (`temp_set`, `mode`, `switch`); call `legrandGetHome` (new: module names, types, rooms), `legrandGetStatus`, `legrandSetState` (its modules are validated: on/off, brightness, blind position, nothing else), `domoticsWarmBy`, and `domoticsEnergyBill` (new, read-only: the Energia page's kWh, bills and savings for a range of days).
+- **What it may not:** `domotics_admin` (the remote-execution channel into the Pi), the vendor secrets (`netatmo`, `tuya`, `tuya_devices`), the Tuya callables, and writing history or state. The bridge still clamps heating values to its limits, whoever asks.
+- **The energy maths has a copy again:** `firebase/noisysource/functions/src/domotics/energyBill.ts` mirrors `packages/shared/lib/energyBill.ts` (the old copy in `/functions` went with step 11). A test fails if they differ: change both in the same PR.
+- **Atlas depends on these shapes:** root `CLAUDE.md`, "Cross-App Data Contracts". Changing them means telling Atlas.
+- **Left for Renato, by hand, after the merge into `staging`** (the merge deploys the rules and callables to `noisysource-prod`), in order:
+  1. `./apps/noisysource/domotics-bridge/deploy/create-agent-user.sh noisysource-prod` (asks for a password twice, 16+ characters; prints and stores nothing).
+  2. In Atlas: `npm run house:connect -- noisysource-prod <VITE_FIREBASE_API_KEY from apps/noisysource/domotics/.env.nsprod> atlas@kidclub.pt`, typing the same password.
+  3. Atlas's `.env`: `HOUSE=on`, `HOUSE_CONTROL=on`.
+- **Risk in flight:** until step 1 the address `atlas@kidclub.pt` doesn't exist in `noisysource-prod`. Email/password sign-up is on there, so someone could register it first, but an account made that way is unverified and the rules and callables refuse it; the script then takes it over (sets the password, marks it verified).
+
 ## ▶️ 16/11: sign in as `admin@noisysource.com`
 On `noisysource-prod-domotics.web.app` (and the dev one) the owner is **`admin@noisysource.com`**, not `admin@kidclub.pt` (Renato's choice, 16/11, branch `agent/ns-domotics-owner`). Any other account signs in fine and then sees an empty house and "no access" on lights: that's the rules and the functions refusing it, not a bug. The owner's and the bridge's addresses must also be verified now (`firebase/noisysource/firestore.rules`, tested by `scripts/rules-tests/domotics-identity.rules-test.cjs`). The old copy in the KidClub projects still says `admin@kidclub.pt`; it goes away in step 11.
 
