@@ -2,7 +2,22 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-11, after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
+**Last updated:** 2026-11-17 (camp days section just below; the rest is as of 2026-11-11), after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
+
+## 🏕️ 2026-11-17: camp days "not saving" in admin — fix in PR #158 (open, into `staging`, not in prod)
+
+**Problem (reported by Renato, on prod).** In Admin → Campos (`/admin/camps`), a day added to a camp disappeared
+after a refresh. The days **were saved** (`_apps/arcoiris/campDays`); loading them failed. `CampsAdminPage.tsx`
+queried `campDays` with `where('campId') + orderBy('date')` and `campSubscriptions` with `orderBy('createdAt')`.
+Both need a composite index that exists neither in `firestore.indexes.json` nor on dev/prod (checked with
+`gcloud firestore indexes composite list`), and the load had no `catch`, so the list just stayed empty.
+
+**Fix (#158, branch `agent/kidclub-camp-days`, worktree `.claude/worktrees/kidclub-camp-days`).** Query by `campId`
+only, sort in the browser, show an error if the load fails. Not built or typechecked locally; CI does it.
+
+**Next step.** Renato checks on dev (open a camp, add a day, refresh), merges #158, then promotes `staging` → `main`.
+Days saved on prod while it was broken will show up once the fix is there, so expect duplicates if the same day was
+entered several times: delete the extras from the list. Remove the worktree after the merge.
 
 ## 🚀 2026-11-11: everything on `staging` is in prod (promotion #141). `main` = `staging`, no open PRs
 
