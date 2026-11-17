@@ -16,6 +16,18 @@ included: `for (const i of intelligence) combine(human, artificial);`. Click to 
   artificial blue, the `i` pulses with the logo's light). Valid syntax; `combine` etc. are
   assumed declared, like any code excerpt.
 - Icon / favicon: the light alone (blue dot with its glow), `public/favicon.svg`.
+- No contact details on the page (email and location removed on purpose, 2026-11-17).
+
+## Atlas, hidden in plain sight (Renato, 2026-11-17)
+The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without announcing it:
+- **The Pleiades** sit among the background stars, top right. One of them is the real star
+  Atlas: hovering it shows its name, clicking it wakes it (`buildPleiades` in `intro.js`).
+- **combine()'s signature**: hovering `combine` in the tagline shows
+  `function combine(human: Natural, artificial: Synthetic): Atlas` (`typewriter.js`).
+- **Typing `atlas`** anywhere wakes it too (queued if the tagline is still typing).
+- **Waking it**: the light in the i flares, and the tagline is erased and retyped as
+  `const atlas = combine(human, artificial);  // not yet.`, then restored.
+- **Browser console**: the tagline plus "you looked closer. so does it. try typing its name."
 - Rejected along the way: brain-as-logo, coral/blue human-vs-AI S monogram, code brackets.
 
 ## How it's built

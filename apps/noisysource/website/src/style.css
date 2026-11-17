@@ -22,14 +22,13 @@ canvas#stage.on{opacity:1}
 .tagline .ai{color:#4a7bff}
 .tagline .i{color:#cfe0ff;animation:ipulse 2.86s ease-in-out infinite}
 @keyframes ipulse{50%{opacity:.6}}
+.tagline .atlas{color:#cfe0ff}
+.tagline .cm{color:#4c5570;font-style:italic}
+/* combine()'s signature, shown on hover/focus like an editor tooltip */
+.tagline .fn{position:relative;cursor:help;outline:none}
+.tagline .sig{position:absolute;left:50%;bottom:calc(100% + 10px);transform:translate(-50%,4px);white-space:pre;padding:7px 11px;border:1px solid #1d2438;border-radius:6px;background:#0a0d18;color:#8a94b0;font-size:.85em;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+.tagline .fn:hover .sig,.tagline .fn:focus .sig{opacity:1;transform:translate(-50%,0)}
 .tagline .cursor{display:inline-block;width:.6em;height:1.1em;margin-left:2px;vertical-align:-.18em;background:#4a7bff}
 .tagline .cursor.idle{animation:blink 1.06s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
 
-.ui{position:fixed;font-size:11px;letter-spacing:.25em;text-transform:uppercase;color:rgba(201,209,217,.45);opacity:0;animation:fade 2s ease forwards;animation-delay:2s}
-.bl{bottom:28px;left:32px}
-.br{bottom:28px;right:32px}
-.br a{color:inherit;text-decoration:none;transition:color .3s}
-.br a:hover{color:#6f9bff}
-@keyframes fade{to{opacity:1}}
-@media(max-width:600px){.ui{font-size:9px;letter-spacing:.18em}.bl{left:18px}.br{right:18px}}

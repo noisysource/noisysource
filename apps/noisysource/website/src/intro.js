@@ -12,8 +12,13 @@
 // Plain 2D canvas, no dependencies. Positions come from the real glyphs: the
 // letters of "noisy" are drawn off-screen and sampled, so the photons land
 // exactly on the lettering. Click anywhere (not on a link) to replay.
+//
+// Atlas is hidden in plain sight: the Pleiades sit among the stars, and one
+// of them is Atlas (hover it to see its name, click it to wake it). Typing
+// "atlas" anywhere does the same, and so does reading combine()'s signature
+// (typewriter.js). Waking it rewrites the tagline for a moment.
 
-import { typeTagline, showTagline } from './typewriter.js';
+import { typeTagline, showTagline, revealAtlas } from './typewriter.js';
 
 const FONT = 'Oxanium';
 const WEIGHT = 500;
@@ -51,6 +56,7 @@ export function startIntro({ canvas, flash, tagline }) {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let W = 0, H = 0, L = null, photons = [], passers = [], horizonDots = [], galaxy = [];
   let strikes = [], impacts = [], nextStrike = 0;
+  let pleiades = [], hoverAtlas = false, taglineDone = false, revealing = false, revealT = -1, keys = '', pending = false;
   let t0 = performance.now(), flashed = false, typing = 0;
 
   // ---------- layout: where every letter, the dot and the horizon go ----------
@@ -86,6 +92,7 @@ export function startIntro({ canvas, flash, tagline }) {
     buildPhotons();
     buildPassers();
     buildHorizon();
+    buildPleiades();
     placeTagline();
   }
 
@@ -193,6 +200,50 @@ export function startIntro({ canvas, flash, tagline }) {
       const amp = Math.pow(k, 1.8) * 22 * sc;
       horizonDots.push({ x, y: L.hz.arcY(x) + (rnd() - 0.5) * 2 * amp, r: (0.4 + rnd() * 0.8) * Math.max(1, sc), a: 0.85 - 0.6 * k, k });
     }
+  }
+
+  // The Pleiades, roughly as they sit in the sky, up and to the right of the
+  // name. Atlas is the left one of the pair at the end of the "handle".
+  function buildPleiades() {
+    const k = Math.max(16, L.fs * 0.62);
+    const cx = W * (W < 700 ? 0.74 : 0.8), cy = Math.max(L.fs * 1.6, H * (W < 700 ? 0.17 : 0.19));
+    pleiades = [
+      ['electra', -1.0, 0.12, 0.85], ['merope', -0.55, 0.48, 0.8], ['maia', -0.45, -0.32, 0.85],
+      ['taygeta', -0.18, -0.74, 0.7], ['alcyone', 0, 0, 1], ['atlas', 0.78, 0.06, 0.95], ['pleione', 0.8, -0.16, 0.6],
+    ].map(([name, x, y, m]) => ({ name, x: cx + x * k, y: cy + y * k, m, ph: rnd() * 6.283 }));
+  }
+  const atlasStar = () => pleiades.find((p) => p.name === 'atlas');
+
+  function drawPleiades(t) {
+    const appear = clamp01((t - T.formEnd - 0.5) / 2.5);
+    if (!appear) return;
+    for (const p of pleiades) {
+      const atlas = p.name === 'atlas', hot = atlas && (hoverAtlas || revealing);
+      const tw = 0.8 + 0.2 * Math.sin(t * 1.7 + p.ph);
+      const r = (1.1 + p.m * 0.9) * (hot ? 1.5 : 1);
+      ctx.fillStyle = '#cfe0ff';
+      ctx.globalAlpha = 0.16 * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.85 * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+      if (hot) {
+        ctx.globalAlpha = 0.5 * appear; ctx.strokeStyle = '#7fa6ff'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r * 5 + Math.sin(t * 3) * 1.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = '#9fb8ff';
+        ctx.font = `400 ${Math.max(11, Math.round(L.fs * 0.15))}px "JetBrains Mono", monospace`;
+        ctx.fillText('atlas', p.x + r * 5 + 6, p.y + 4);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Someone found Atlas: the light flares and the tagline names it.
+  function reveal() {
+    if (revealing) return;
+    if (!taglineDone) { pending = true; return; }   // found early: wake it once the tagline is typed
+    pending = false;
+    revealing = true;
+    revealT = (performance.now() - t0) / 1000;
+    const run = runs;
+    revealAtlas(tagline, { isCancelled: () => run !== runs }).finally(() => { revealing = false; });
   }
 
   function placeTagline() {
@@ -363,7 +414,8 @@ export function startIntro({ canvas, flash, tagline }) {
 
   function drawDot(t) {
     if (t < T.dot) return;
-    const k = easeOutBack((t - T.dot) / 0.7), pulse = 1 + 0.12 * Math.sin(t * 2.2);
+    const flare = revealT >= 0 && t - revealT < 2.4 ? Math.sin(Math.PI * (t - revealT) / 2.4) * 1.4 : 0;
+    const k = easeOutBack((t - T.dot) / 0.7), pulse = 1 + 0.12 * Math.sin(t * 2.2) + flare;
     const { x, y, r } = L.dot;
     ctx.fillStyle = BLUE;
     ctx.globalAlpha = 0.12 * clamp01(k); ctx.beginPath(); ctx.arc(x, y, r * 3.3 * pulse * k, 0, Math.PI * 2); ctx.fill();
@@ -393,6 +445,7 @@ export function startIntro({ canvas, flash, tagline }) {
     const t = reduce ? 999 : (now - t0) / 1000;
     ctx.clearRect(0, 0, W, H);
     drawGalaxy(t, reduce);
+    drawPleiades(t);
     if (t < T.collide) drawPassers(t);
     if (!flashed && t >= T.collide && t < T.collide + 1) {
       flashed = true; flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
@@ -406,8 +459,8 @@ export function startIntro({ canvas, flash, tagline }) {
     if (typing === 0 && t >= T.type) {
       typing = 1;
       const run = ++runs;
-      if (reduce) showTagline(tagline);
-      else typeTagline(tagline, { isCancelled: () => run !== runs });
+      if (reduce) { showTagline(tagline); taglineDone = true; }
+      else typeTagline(tagline, { isCancelled: () => run !== runs }).then((ok) => { if (ok && run === runs) { taglineDone = true; if (pending) setTimeout(reveal, 600); } });
     }
     requestAnimationFrame(frame);
   }
@@ -415,11 +468,26 @@ export function startIntro({ canvas, flash, tagline }) {
 
   function replay() {
     t0 = performance.now(); flashed = false; typing = 0; runs++; strikes = []; impacts = [];
+    taglineDone = false; revealing = false; revealT = -1; pending = false;
     tagline.innerHTML = '';
   }
 
   window.addEventListener('resize', layout);
-  window.addEventListener('click', (e) => { if (!e.target.closest('a')) replay(); });
+  window.addEventListener('pointermove', (e) => {
+    const a = atlasStar();
+    const t = (performance.now() - t0) / 1000;
+    hoverAtlas = !!a && t > T.formEnd + 1 && Math.hypot(e.clientX - a.x, e.clientY - a.y) < 16;
+    document.body.style.cursor = hoverAtlas ? 'pointer' : '';
+  });
+  window.addEventListener('click', (e) => {
+    if (e.target.closest('a, .fn')) return;
+    if (hoverAtlas) reveal(); else replay();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key.length !== 1) return;
+    keys = (keys + e.key.toLowerCase()).slice(-5);
+    if (keys === 'atlas') reveal();
+  });
 
   layout();
   canvas.classList.add('on');

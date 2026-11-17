@@ -14,3 +14,11 @@ Promise.race([
   Promise.all([document.fonts.load('500 64px Oxanium', 'noısy source i'), document.fonts.load('400 16px "JetBrains Mono"')]),
   new Promise((r) => setTimeout(r, 2500)),
 ]).then(go, go);
+
+// For whoever opens the console.
+console.log(
+  '%cfor (const i of intelligence) combine(human, artificial);\n%c// you looked closer. so does it. try typing its name.',
+  'font: 13px "JetBrains Mono", monospace; color: #4a7bff',
+  'font: 12px "JetBrains Mono", monospace; color: #6b7590',
+);
+
