@@ -13,8 +13,9 @@
 // letters of "noisy" are drawn off-screen and sampled, so the photons land
 // exactly on the lettering. Click anywhere (not on a link) to replay.
 //
-// Atlas is hidden in plain sight: the Pleiades sit among the stars, and one
-// of them is Atlas (hover it to see its name, click it to wake it). Typing
+// Atlas is hidden in plain sight: real constellations sit among the stars,
+// and hovering one names it. One label reads "atlas", which is no
+// constellation (it's a star of the Pleiades): click that one to wake it. Typing
 // "atlas" anywhere does the same, and so does reading combine()'s signature
 // (typewriter.js). Waking it rewrites the tagline for a moment.
 
@@ -56,7 +57,7 @@ export function startIntro({ canvas, flash, tagline }) {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let W = 0, H = 0, L = null, photons = [], passers = [], horizonDots = [], galaxy = [];
   let strikes = [], impacts = [], nextStrike = 0;
-  let pleiades = [], hoverAtlas = false, taglineDone = false, revealing = false, revealT = -1, keys = '', pending = false;
+  let hoverAtlas = false, taglineDone = false, revealing = false, revealT = -1, keys = '', pending = false;
   let t0 = performance.now(), flashed = false, typing = 0;
 
   // ---------- layout: where every letter, the dot and the horizon go ----------
@@ -202,34 +203,71 @@ export function startIntro({ canvas, flash, tagline }) {
     }
   }
 
-  // The Pleiades, roughly as they sit in the sky, up and to the right of the
-  // name. Atlas is the left one of the pair at the end of the "handle".
+  // Real constellations scattered in the sky. Hovering one draws its lines
+  // and names it. The odd one out is the Pleiades: its label reads "atlas",
+  // which isn't a constellation (it's one of the Pleiades' stars). Only that
+  // one does something when clicked.
+  // Shapes: [x, y, brightness] per star (roughly as in the sky) and lines
+  // between star indices. Where: fractions of the screen, kept clear of the
+  // name and the tagline.
+  const SKY = [
+    { name: 'orion', at: [0.13, 0.25], stars: [[0, -1.25, 0.6], [-0.55, -0.9, 1], [0.48, -0.75, 0.8], [-0.17, 0, 0.75], [0, -0.06, 0.75], [0.17, -0.12, 0.75], [-0.42, 0.85, 0.65], [0.58, 0.75, 1]],
+      lines: [[0, 1], [0, 2], [1, 3], [2, 5], [3, 4], [4, 5], [3, 6], [5, 7]] },
+    { name: 'cassiopeia', at: [0.47, 0.11], stars: [[-1, 0, 0.8], [-0.5, 0.45, 0.9], [0, 0.08, 0.85], [0.5, 0.5, 0.8], [1, 0.02, 0.7]],
+      lines: [[0, 1], [1, 2], [2, 3], [3, 4]] },
+    { name: 'ursa major', at: [0.27, 0.86], stars: [[-1, -0.15, 0.8], [-0.62, -0.05, 0.85], [-0.27, 0.02, 0.8], [0.05, 0.18, 0.7], [0.12, 0.55, 0.75], [0.62, 0.6, 0.85], [0.66, 0.2, 0.9]],
+      lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 3]] },
+    { name: 'lyra', at: [0.9, 0.62], stars: [[0, -0.75, 1], [0.12, -0.3, 0.55], [0.08, 0.05, 0.6], [0.45, 0.1, 0.6], [0.36, 0.6, 0.55], [-0.02, 0.52, 0.55]],
+      lines: [[0, 1], [0, 2], [2, 3], [3, 4], [4, 5], [5, 2]] },
+    { name: 'cygnus', at: [0.7, 0.87], stars: [[0, -1, 1], [0, -0.22, 0.8], [0, 0.9, 0.7], [-0.75, -0.38, 0.65], [0.72, -0.05, 0.65]],
+      lines: [[0, 1], [1, 2], [3, 1], [1, 4]] },
+    { name: 'crux', at: [0.08, 0.72], stars: [[0, -0.8, 0.9], [0.02, 0.8, 1], [-0.55, 0.02, 0.75], [0.5, -0.1, 0.65]],
+      lines: [[0, 1], [2, 3]] },
+    // The odd one out. Atlas is the left star of the pair at the end.
+    { name: 'atlas', at: [0.8, 0.19], atlas: true,
+      stars: [[-1, 0.12, 0.85], [-0.55, 0.48, 0.8], [-0.45, -0.32, 0.85], [-0.18, -0.74, 0.7], [0, 0, 1], [0.78, 0.06, 0.95], [0.8, -0.16, 0.6]],
+      lines: [] },
+  ];
+  let sky = [], hoverSky = null;
   function buildPleiades() {
-    const k = Math.max(16, L.fs * 0.62);
-    const cx = W * (W < 700 ? 0.74 : 0.8), cy = Math.max(L.fs * 1.6, H * (W < 700 ? 0.17 : 0.19));
-    pleiades = [
-      ['electra', -1.0, 0.12, 0.85], ['merope', -0.55, 0.48, 0.8], ['maia', -0.45, -0.32, 0.85],
-      ['taygeta', -0.18, -0.74, 0.7], ['alcyone', 0, 0, 1], ['atlas', 0.78, 0.06, 0.95], ['pleione', 0.8, -0.16, 0.6],
-    ].map(([name, x, y, m]) => ({ name, x: cx + x * k, y: cy + y * k, m, ph: rnd() * 6.283 }));
+    const k = Math.max(14, L.fs * (W < 700 ? 0.45 : 0.6));
+    const keepClear = (y) => Math.abs(y - L.midY) < L.fs * 1.4 || (y > L.base + L.fs && y < L.base + L.fs * 2.4);
+    sky = [];
+    for (const c of SKY) {
+      let cx = W * c.at[0], cy = H * c.at[1];
+      if (keepClear(cy)) cy = cy < L.midY ? L.midY - L.fs * 1.6 : L.base + L.fs * 2.6 + k;   // never over the name or the tagline
+      cx = Math.min(W - k * 1.4, Math.max(k * 1.4, cx));
+      cy = Math.min(H - k * 1.4, Math.max(k * 1.4, cy));
+      sky.push({ ...c, pts: c.stars.map(([x, y, m]) => ({ x: cx + x * k, y: cy + y * k, m, ph: rnd() * 6.283 })) });
+    }
   }
-  const atlasStar = () => pleiades.find((p) => p.name === 'atlas');
 
   function drawPleiades(t) {
     const appear = clamp01((t - T.formEnd - 0.5) / 2.5);
     if (!appear) return;
-    for (const p of pleiades) {
-      const atlas = p.name === 'atlas', hot = atlas && (hoverAtlas || revealing);
-      const tw = 0.8 + 0.2 * Math.sin(t * 1.7 + p.ph);
-      const r = (1.1 + p.m * 0.9) * (hot ? 1.5 : 1);
-      ctx.fillStyle = '#cfe0ff';
-      ctx.globalAlpha = 0.16 * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 0.85 * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+    const label = `400 ${Math.max(11, Math.round(L.fs * 0.15))}px "JetBrains Mono", monospace`;
+    for (const c of sky) {
+      const hot = c === hoverSky || (c.atlas && revealing);
+      if (hot && c.lines.length) {
+        ctx.globalAlpha = 0.35 * appear; ctx.strokeStyle = '#7fa6ff'; ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        for (const [i, j] of c.lines) { ctx.moveTo(c.pts[i].x, c.pts[i].y); ctx.lineTo(c.pts[j].x, c.pts[j].y); }
+        ctx.stroke();
+      }
+      for (const p of c.pts) {
+        const tw = 0.8 + 0.2 * Math.sin(t * 1.7 + p.ph);
+        const r = (0.9 + p.m * 0.9) * (hot ? 1.35 : 1);
+        ctx.fillStyle = '#cfe0ff';
+        ctx.globalAlpha = (hot ? 0.25 : 0.13) * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = (hot ? 1 : 0.75) * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+      }
       if (hot) {
-        ctx.globalAlpha = 0.5 * appear; ctx.strokeStyle = '#7fa6ff'; ctx.lineWidth = 0.8;
-        ctx.beginPath(); ctx.arc(p.x, p.y, r * 5 + Math.sin(t * 3) * 1.5, 0, Math.PI * 2); ctx.stroke();
-        ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = '#9fb8ff';
-        ctx.font = `400 ${Math.max(11, Math.round(L.fs * 0.15))}px "JetBrains Mono", monospace`;
-        ctx.fillText('atlas', p.x + r * 5 + 6, p.y + 4);
+        let rx = -Infinity, ty = Infinity;
+        for (const p of c.pts) { rx = Math.max(rx, p.x); ty = Math.min(ty, p.y); }
+        ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = c.atlas ? '#cfe0ff' : '#9fb8ff'; ctx.font = label;
+        const w = ctx.measureText(c.name).width;
+        const lx = rx + 12 + w > W - 8 ? Math.min(...c.pts.map((p) => p.x)) - 12 - w : rx + 12;
+        ctx.fillText(c.name, lx, ty + 4);
       }
     }
     ctx.globalAlpha = 1;
@@ -474,14 +512,22 @@ export function startIntro({ canvas, flash, tagline }) {
 
   window.addEventListener('resize', layout);
   window.addEventListener('pointermove', (e) => {
-    const a = atlasStar();
     const t = (performance.now() - t0) / 1000;
-    hoverAtlas = !!a && t > T.formEnd + 1 && Math.hypot(e.clientX - a.x, e.clientY - a.y) < 16;
-    document.body.style.cursor = hoverAtlas ? 'pointer' : '';
+    hoverSky = null;
+    if (t > T.formEnd + 1) {
+      let best = 18;
+      for (const c of sky) for (const p of c.pts) {
+        const d = Math.hypot(e.clientX - p.x, e.clientY - p.y);
+        if (d < best) { best = d; hoverSky = c; }
+      }
+    }
+    hoverAtlas = !!hoverSky && !!hoverSky.atlas;
+    document.body.style.cursor = hoverSky ? 'pointer' : '';
   });
   window.addEventListener('click', (e) => {
     if (e.target.closest('a, .fn')) return;
-    if (hoverAtlas) reveal(); else replay();
+    if (hoverAtlas) reveal();
+    else if (!hoverSky) replay();   // a real constellation: nothing happens
   });
   window.addEventListener('keydown', (e) => {
     if (e.key.length !== 1) return;

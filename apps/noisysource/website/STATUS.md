@@ -20,8 +20,10 @@ included: `for (const i of intelligence) combine(human, artificial);`. Click to 
 
 ## Atlas, hidden in plain sight (Renato, 2026-11-17)
 The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without announcing it:
-- **The Pleiades** sit among the background stars, top right. One of them is the real star
-  Atlas: hovering it shows its name, clicking it wakes it (`buildPleiades` in `intro.js`).
+- **The sky**: real constellations sit among the stars (Orion, Cassiopeia, Ursa Major, Lyra,
+  Cygnus, Crux). Hovering one draws its lines and names it; clicking does nothing. The odd one
+  out is the Pleiades: its label reads **atlas**, which isn't a constellation (it's one of the
+  Pleiades' stars). Clicking that one wakes Atlas. Shapes and positions: `SKY` in `intro.js`.
 - **combine()'s signature**: hovering `combine` in the tagline shows
   `function combine(human: Natural, artificial: Synthetic): Atlas` (`typewriter.js`).
 - **Typing `atlas`** anywhere wakes it too (queued if the tagline is still typing).
