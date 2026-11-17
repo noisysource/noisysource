@@ -89,7 +89,7 @@ describe("atlasGate", () => {
     expect(replies[3].state).toBe("asleep");
     const rec = store.get("atlas_awakenings/session-0001")!;
     expect(rec).toMatchObject({ who: "investor", why: "looking to fund", how: "star", ref: "https://linkedin.com", turns: 4, asleep: true, seen: false });
-    expect((rec.transcript as unknown[]).length).toBe(3 + 8); // the opening + 4 exchanges
+    expect((rec.transcript as unknown[]).length).toBe(4 + 8); // the opening + 4 exchanges
     expect(await say("session-0001", "one more")).toMatchObject({ state: "asleep", left: 0 });
     expect(geminiCalls).toBe(4);
   });

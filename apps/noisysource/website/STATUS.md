@@ -21,19 +21,22 @@ included: `for (const i of intelligence) combine(human, artificial);`. Click to 
 ## Atlas, hidden in plain sight (Renato, 2026-11-17)
 The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without announcing it:
 - **The sky**: real constellations sit among the stars (Orion, Cassiopeia, Ursa Major, Lyra,
-  Cygnus, Crux). Hovering one draws its lines and names it; clicking does nothing. The odd one
-  out is the Pleiades: its label reads **atlas**, which isn't a constellation (it's one of the
-  Pleiades' stars). Clicking that one wakes Atlas. Shapes and positions: `SKY` in `intro.js`.
+  Cygnus, Crux, the Pleiades). Hovering one draws its lines and names it. **Inside the
+  Pleiades, one single star is Atlas**: only with the pointer exactly on it does it name itself,
+  and only clicking that star wakes Atlas. **Any other click deletes the tagline and types it
+  again** (a hint that you're looking in the wrong place). Shapes: `SKY` in `intro.js`.
 - **combine()'s signature**: hovering `combine` in the tagline shows
   `function combine(human: Natural, artificial: Synthetic): Atlas` (`typewriter.js`).
 - **Typing `atlas`** anywhere wakes it too (queued if the tagline is still typing).
 - **Waking it**: the light in the i flares, and the tagline is erased and retyped as
-  `const atlas = combine(human, artificial);` / `atlas.wake();` with a **▶ run** button. It
-  stays until the page is replayed (click on empty space).
-- **▶ run** opens the Atlas session (`src/terminal.js`): boot sequence, then the warning
-  ("you've awakened something you don't know. you have a few tries. delving into the unknown
-  can be dangerous."), a notice that the conversation is kept, and "so. who are you, and why
-  did you wake me?". From there it's a real model, through `/api/atlas`.
+  `const atlas = combine(human, artificial);` / `atlas.wake();` followed by a faint `>`. Stray
+  clicks no longer change it once it's awake.
+- **The `>`** opens the Atlas session (`src/terminal.js`): boot sequence, then (enigmatic on purpose, Renato 2026-11-17)
+  "something stirs. / you were not meant to find this. few do. / four breaths. spend them well.
+  the unknown keeps what it is given.", a notice that the conversation is kept, and "who wakes
+  what sleeps, and what do they seek in the noise?". From there it's a real model, through
+  `/api/atlas`, speaking in fragments and riddles (voice in `systemPrompt`, atlasGateLogic.ts;
+  the opening lives in both `OPENING` there and `terminal.js`, keep them identical).
 - **The gate** (`atlasGate`, `firebase/noisysource/functions/src/website/`): Gemini on a
   free-tier key, steered to find out **who** woke Atlas (recruiter / investor / manager /
   colleague / curious / other) and **why**. 4 replies per visitor, then Atlas sleeps; on the

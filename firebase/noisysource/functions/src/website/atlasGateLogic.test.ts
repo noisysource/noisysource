@@ -76,7 +76,7 @@ describe("prompts", () => {
     expect(p).toContain(`reply 1 of ${LOCKED_TURNS}`);
   });
   it("tells the last locked reply to point at the real Renato", () => {
-    expect(systemPrompt({ ...newSession(), turns: LOCKED_TURNS - 1 }, {})).toContain("ask the real Renato for the phrase");
+    expect(systemPrompt({ ...newSession(), turns: LOCKED_TURNS - 1 }, {})).toContain("renato holds the words that open the door");
   });
   it("shares the profile only once unlocked, and never the phrase", () => {
     const p = systemPrompt({ ...newSession(), unlocked: true }, { passphrase: "abre te sesamo", profile: "Renato builds things." });

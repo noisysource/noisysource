@@ -11,15 +11,16 @@
 //
 // Plain 2D canvas, no dependencies. Positions come from the real glyphs: the
 // letters of "noisy" are drawn off-screen and sampled, so the photons land
-// exactly on the lettering. Click anywhere (not on a link) to replay.
+// exactly on the lettering.
 //
 // Atlas is hidden in plain sight: real constellations sit among the stars,
-// and hovering one names it. One label reads "atlas", which is no
-// constellation (it's a star of the Pleiades): click that one to wake it. Typing
+// and hovering one names it. Inside the Pleiades, one single star is Atlas:
+// hovering exactly that star names it, clicking it wakes it. Any other click
+// deletes the tagline and types it again. Typing
 // "atlas" anywhere does the same, and so does reading combine()'s signature
 // (typewriter.js). Waking it rewrites the tagline for a moment.
 
-import { typeTagline, showTagline, revealAtlas } from './typewriter.js';
+import { typeTagline, showTagline, revealAtlas, retypeTagline } from './typewriter.js';
 import { openTerminal, terminalOpen } from './terminal.js';
 
 const FONT = 'Oxanium';
@@ -205,9 +206,9 @@ export function startIntro({ canvas, flash, tagline }) {
   }
 
   // Real constellations scattered in the sky. Hovering one draws its lines
-  // and names it. The odd one out is the Pleiades: its label reads "atlas",
-  // which isn't a constellation (it's one of the Pleiades' stars). Only that
-  // one does something when clicked.
+  // and names it. In the Pleiades, the star Atlas names itself only when the
+  // pointer is on it exactly, and it's the only star that does anything when
+  // clicked.
   // Shapes: [x, y, brightness] per star (roughly as in the sky) and lines
   // between star indices. Where: fractions of the screen, kept clear of the
   // name and the tagline.
@@ -224,12 +225,13 @@ export function startIntro({ canvas, flash, tagline }) {
       lines: [[0, 1], [1, 2], [3, 1], [1, 4]] },
     { name: 'crux', at: [0.08, 0.72], stars: [[0, -0.8, 0.9], [0.02, 0.8, 1], [-0.55, 0.02, 0.75], [0.5, -0.1, 0.65]],
       lines: [[0, 1], [2, 3]] },
-    // The odd one out. Atlas is the left star of the pair at the end.
-    { name: 'atlas', at: [0.8, 0.19], atlas: true,
+    // The Pleiades. Star 5, the left one of the pair at the end, is Atlas.
+    { name: 'pleiades', at: [0.8, 0.19], atlasStar: 5,
       stars: [[-1, 0.12, 0.85], [-0.55, 0.48, 0.8], [-0.45, -0.32, 0.85], [-0.18, -0.74, 0.7], [0, 0, 1], [0.78, 0.06, 0.95], [0.8, -0.16, 0.6]],
       lines: [] },
   ];
-  let sky = [], hoverSky = null;
+  let sky = [], hoverSky = null, hoverStar = -1;
+  const onAtlas = () => !!hoverSky && hoverSky.atlasStar === hoverStar;
   function buildPleiades() {
     const k = Math.max(14, L.fs * (W < 700 ? 0.45 : 0.6));
     const keepClear = (y) => Math.abs(y - L.midY) < L.fs * 1.4 || (y > L.base + L.fs && y < L.base + L.fs * 2.4);
@@ -248,27 +250,44 @@ export function startIntro({ canvas, flash, tagline }) {
     if (!appear) return;
     const label = `400 ${Math.max(11, Math.round(L.fs * 0.15))}px "JetBrains Mono", monospace`;
     for (const c of sky) {
-      const hot = c === hoverSky || (c.atlas && (revealing || revealed));
+      const hot = c === hoverSky;
+      const lit = c.atlasStar != null && (revealing || revealed || (hot && onAtlas()));
       if (hot && c.lines.length) {
         ctx.globalAlpha = 0.35 * appear; ctx.strokeStyle = '#7fa6ff'; ctx.lineWidth = 0.7;
         ctx.beginPath();
         for (const [i, j] of c.lines) { ctx.moveTo(c.pts[i].x, c.pts[i].y); ctx.lineTo(c.pts[j].x, c.pts[j].y); }
         ctx.stroke();
       }
-      for (const p of c.pts) {
+      c.pts.forEach((p, i) => {
         const tw = 0.8 + 0.2 * Math.sin(t * 1.7 + p.ph);
-        const r = (0.9 + p.m * 0.9) * (hot ? 1.35 : 1);
+        const atlasHere = lit && i === c.atlasStar;
+        const r = (0.9 + p.m * 0.9) * (hot ? 1.35 : 1) * (atlasHere ? 1.3 : 1);
         ctx.fillStyle = '#cfe0ff';
         ctx.globalAlpha = (hot ? 0.25 : 0.13) * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = (hot ? 1 : 0.75) * appear * tw * p.m; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
-      }
-      if (hot) {
+        if (atlasHere) {
+          ctx.globalAlpha = 0.5 * appear; ctx.strokeStyle = '#7fa6ff'; ctx.lineWidth = 0.8;
+          ctx.beginPath(); ctx.arc(p.x, p.y, r * 4.5 + Math.sin(t * 3) * 1.2, 0, Math.PI * 2); ctx.stroke();
+        }
+      });
+      if (lit && !hot) {
+        const a = c.pts[c.atlasStar];
+        ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = '#cfe0ff'; ctx.font = label;
+        ctx.fillText('atlas', a.x + 14, a.y + 4);
+      } else if (hot) {
         let rx = -Infinity, ty = Infinity;
         for (const p of c.pts) { rx = Math.max(rx, p.x); ty = Math.min(ty, p.y); }
-        ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = c.atlas ? '#cfe0ff' : '#9fb8ff'; ctx.font = label;
-        const w = ctx.measureText(c.name).width;
-        const lx = rx + 12 + w > W - 8 ? Math.min(...c.pts.map((p) => p.x)) - 12 - w : rx + 12;
-        ctx.fillText(c.name, lx, ty + 4);
+        ctx.font = label;
+        if (lit) {                                         // on the star itself: it names itself
+          const a = c.pts[c.atlasStar];
+          ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = '#cfe0ff';
+          ctx.fillText('atlas', a.x + 14, a.y + 4);
+        } else {
+          ctx.globalAlpha = 0.85 * appear; ctx.fillStyle = '#9fb8ff';
+          const w = ctx.measureText(c.name).width;
+          const lx = rx + 12 + w > W - 8 ? Math.min(...c.pts.map((p) => p.x)) - 12 - w : rx + 12;
+          ctx.fillText(c.name, lx, ty + 4);
+        }
       }
     }
     ctx.globalAlpha = 1;
@@ -281,6 +300,7 @@ export function startIntro({ canvas, flash, tagline }) {
     if (!taglineDone) { pending = true; return; }   // found early: wake it once the tagline is typed
     pending = false;
     revealing = true;
+    rewriteRun++;   // stops a retype in progress
     revealT = (performance.now() - t0) / 1000;
     const run = runs;
     revealAtlas(tagline, { isCancelled: () => run !== runs })
@@ -502,37 +522,43 @@ export function startIntro({ canvas, flash, tagline }) {
       typing = 1;
       const run = ++runs;
       if (reduce) { showTagline(tagline); taglineDone = true; }
-      else typeTagline(tagline, { isCancelled: () => run !== runs }).then((ok) => { if (ok && run === runs) { taglineDone = true; if (pending) setTimeout(reveal, 600); } });
+      else { const rw = rewriteRun; typeTagline(tagline, { isCancelled: () => run !== runs || rw !== rewriteRun }).then((ok) => { if (ok && run === runs && rw === rewriteRun) { taglineDone = true; if (pending) setTimeout(reveal, 600); } }); }
     }
     requestAnimationFrame(frame);
   }
   let runs = 0;
 
-  function replay() {
-    t0 = performance.now(); flashed = false; typing = 0; runs++; strikes = []; impacts = [];
-    taglineDone = false; revealing = false; revealed = false; revealT = -1; pending = false;
-    tagline.innerHTML = '';
+  // A wrong click, once the tagline exists and Atlas isn't awake: delete it
+  // and type it again (the latest click wins).
+  let rewriteRun = 0;
+  function rewrite() {
+    const t = (performance.now() - t0) / 1000;
+    if (t < T.type || revealing || revealed || reduce) return;
+    taglineDone = false;
+    const run = ++rewriteRun, intro = runs;
+    retypeTagline(tagline, { isCancelled: () => run !== rewriteRun || intro !== runs })
+      .then((ok) => { if (ok && run === rewriteRun) { taglineDone = true; if (pending) setTimeout(reveal, 600); } });
   }
 
   window.addEventListener('resize', layout);
   window.addEventListener('pointermove', (e) => {
     const t = (performance.now() - t0) / 1000;
-    hoverSky = null;
+    hoverSky = null; hoverStar = -1;
     if (t > T.formEnd + 1) {
       let best = 18;
-      for (const c of sky) for (const p of c.pts) {
+      for (const c of sky) c.pts.forEach((p, i) => {
         const d = Math.hypot(e.clientX - p.x, e.clientY - p.y);
-        if (d < best) { best = d; hoverSky = c; }
-      }
+        if (d < best) { best = d; hoverSky = c; hoverStar = i; }
+      });
     }
-    hoverAtlas = !!hoverSky && !!hoverSky.atlas;
+    hoverAtlas = onAtlas() && Math.hypot(e.clientX - hoverSky.pts[hoverStar].x, e.clientY - hoverSky.pts[hoverStar].y) < 9;
     document.body.style.cursor = hoverSky ? 'pointer' : '';
   });
   window.addEventListener('click', (e) => {
-    if (e.target.closest('.run')) { openTerminal(foundBy); return; }
+    if (e.target.closest('.wake')) { openTerminal(foundBy); return; }
     if (terminalOpen() || e.target.closest('a, .fn, .term')) return;
     if (hoverAtlas) reveal('star');
-    else if (!hoverSky) replay();   // a real constellation: nothing happens
+    else rewrite();   // any other click: the loop is deleted and typed again
   });
   window.addEventListener('keydown', (e) => {
     if (e.key.length !== 1 || terminalOpen() || e.target.closest?.('input')) return;

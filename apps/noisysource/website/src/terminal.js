@@ -11,20 +11,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const BOOT = [
   ['cmd', '> atlas.wake()'],
-  ['dim', '  loading memory ..................... ok'],
-  ['dim', '  combining human + artificial ....... ok'],
-  ['dim', '  listening .......................... ok'],
+  ['dim', '  gathering what was scattered ....... ok'],
+  ['dim', '  natural & synthetic ................ ok'],
+  ['dim', '  listening .......................... ...'],
   ['', ''],
 ];
 // Keep in step with OPENING in firebase/noisysource/functions/src/website/atlasGateLogic.ts:
 // the server assumes Atlas has already said these.
 const OPENING = [
-  "you've awakened something you don't know.",
-  'you have a few tries. delving into the unknown can be dangerous.',
+  'something stirs.',
+  'you were not meant to find this. few do.',
+  'four breaths. spend them well. the unknown keeps what it is given.',
 ];
-const NOTICE = '  (this conversation is kept and read by the one who built me.)';
-const QUESTION = 'so. who are you, and why did you wake me?';
-const OFFLINE = ['...the signal is weak here. not yet.', 'soon.', "I can't hear you from here."];
+const NOTICE = '  (what is said here is kept, and read by the one who made me.)';
+const QUESTION = 'who wakes what sleeps, and what do they seek in the noise?';
+const OFFLINE = ['...the signal is too weak here.', 'not yet.', 'the dark is too thick. later.'];
 
 let root, log, input, bar, open = false, session = null, how = 'unknown', state = 'awake', offlineN = 0;
 
@@ -108,7 +109,7 @@ function build() {
     }
     if (state === 'asleep' || state === 'quiet') {
       await sleep(600);
-      line('dim', state === 'quiet' ? '  — atlas is quiet —' : '  — atlas is asleep —');
+      line('dim', state === 'quiet' ? '  — quiet —' : '  — asleep —');
       input.placeholder = '';
       return;
     }

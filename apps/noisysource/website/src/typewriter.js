@@ -26,6 +26,7 @@ const SIGNATURE =
   '<span class="ai">artificial</span>: Synthetic): <span class="atlas">Atlas</span>';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let shown = 0;   // characters currently on screen (whatever is being typed)
 const text = (tokens) => tokens.map(([t]) => t).join('');
 const classAt = (tokens) => tokens.flatMap(([t, c]) => [...t].map(() => c));
 
@@ -44,7 +45,8 @@ function render(el, typed, classes, done, run = false) {
     if (c === 'fn' && classes[n + 1] !== 'fn' && done) html += `<span class="sig" role="tooltip">${SIGNATURE}</span>`;
   }
   if (cls) html += '</span>';
-  el.innerHTML = html + (run ? '  <button class="run" type="button" aria-label="Run atlas.wake()">▶ run</button>' : '')
+  shown = typed.length;
+  el.innerHTML = html + (run ? '  <button class="wake" type="button" aria-label="Run atlas.wake()">&gt;</button>' : '')
     + `<span class="cursor${done ? ' idle' : ''}"></span>`;
 }
 
@@ -123,6 +125,20 @@ export function typeTagline(el, { isCancelled } = {}) {
 export async function revealAtlas(el, { isCancelled = () => false } = {}) {
   if (!(await erase(el, TAGLINE, { isCancelled }))) return false;
   return typeTokens(el, REVEAL, { pace: 0.8, run: true, isCancelled });
+}
+
+// A wrong click: whatever is there is deleted, and the loop is typed again.
+export async function retypeTagline(el, { isCancelled = () => false } = {}) {
+  const classes = classAt(TAGLINE);
+  let n = Math.min(shown, TAGLINE_TEXT.length);
+  while (n > 0) {
+    if (isCancelled()) return false;
+    n -= 1;
+    render(el, TAGLINE_TEXT.slice(0, n), classes, false);
+    await sleep(n > 6 ? 10 + Math.random() * 8 : 50);
+  }
+  await sleep(220);
+  return typeTokens(el, TAGLINE, { typo: Math.random() < 0.5, pace: 0.8, isCancelled });
 }
 
 // Shows the finished tagline at once (reduced motion).

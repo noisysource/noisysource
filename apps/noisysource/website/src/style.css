@@ -29,8 +29,8 @@ canvas#stage.on{opacity:1}
 .tagline .sig{position:absolute;left:50%;bottom:calc(100% + 10px);transform:translate(-50%,4px);white-space:pre;padding:7px 11px;border:1px solid #1d2438;border-radius:6px;background:#0a0d18;color:#8a94b0;font-size:.85em;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
 .tagline .fn:hover .sig,.tagline .fn:focus .sig{opacity:1;transform:translate(-50%,0)}
 .tagline .call{color:#9fb8ff}
-.tagline .run{margin-left:.4em;padding:.15em .6em;font:inherit;font-size:.9em;color:#cfe0ff;background:transparent;border:1px solid #2a3a6a;border-radius:4px;cursor:pointer;transition:background .2s,border-color .2s;vertical-align:.05em}
-.tagline .run:hover,.tagline .run:focus-visible{background:#0f1a3a;border-color:#4a7bff;outline:none}
+.tagline .wake{margin-left:.5em;padding:0 .15em;font:inherit;color:#3a4460;background:none;border:0;cursor:pointer;transition:color .4s,text-shadow .4s}
+.tagline .wake:hover,.tagline .wake:focus-visible{color:#cfe0ff;text-shadow:0 0 8px #4a7bff;outline:none}
 .tagline .cursor{display:inline-block;width:.6em;height:1.1em;margin-left:2px;vertical-align:-.18em;background:#4a7bff}
 .tagline .cursor.idle{animation:blink 1.06s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
