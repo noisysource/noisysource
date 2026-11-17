@@ -1,7 +1,7 @@
 // The intro, and then the logo it settles into:
 //
-//   void → photons pass by → two of them collide (flash) → the burst
-//   becomes a galaxy that stays in the background, slowly turning → photons
+//   void → photons pass by → two of them collide (flash) → the burst fills
+//   the screen and stays as the background, still slowly expanding → photons
 //   stream out of it into "noisy" (white photons that keep shimmering), and
 //   now and then one more breaks away and hits the name → "source"
 //   slides in (solid blue) → a photon wave crosses the name: white and wavy
@@ -145,29 +145,26 @@ export function startIntro({ canvas, flash, tagline }) {
     };
   }
 
-  // The galaxy the explosion leaves behind: two loose spiral arms plus dust,
-  // flattened and tilted, centred behind the name. It stays, slowly turning.
+  // The universe the explosion leaves behind: it fills the whole screen and
+  // stays, still expanding very slowly (stars drift outwards and new ones fade
+  // in near the centre, so it never empties). Some stars are short radial
+  // streaks, like the first moments of the burst.
   function galaxyPoint() {
-    const maxR = Math.max(W, H) * 0.62, r = maxR * Math.pow(rnd(), 0.55);
-    let a;
-    if (rnd() < 0.72) {
-      const g = (rnd() + rnd() + rnd() - 1.5) / 1.5;
-      a = (rnd() < 0.5 ? 0 : Math.PI) + (r / maxR) * 4.2 + g * 0.55;
-    } else a = rnd() * Math.PI * 2;
-    const x = Math.cos(a) * r, y = Math.sin(a) * r * 0.42, tilt = -0.22;
-    return { x: x * Math.cos(tilt) - y * Math.sin(tilt), y: x * Math.sin(tilt) + y * Math.cos(tilt), r, a, maxR };
+    const maxR = Math.hypot(W, H) / 2 * 1.05, r = Math.pow(rnd(), 0.75), a = rnd() * Math.PI * 2;
+    return { x: Math.cos(a) * r * maxR * 1.1, y: Math.sin(a) * r * maxR * 0.8, r, a, maxR };
   }
   function buildGalaxy() {
     L.G = { x: W / 2, y: L.midY };
+    L.maxR = Math.hypot(W, H) / 2 * 1.05;
     galaxy = [];
-    const n = Math.round(Math.min(900, (W * H) / 1400));
+    const n = Math.round(Math.min(1600, Math.max(500, (W * H) / 800)));
     for (let i = 0; i < n; i++) {
-      const g = galaxyPoint(), k = g.r / g.maxR;
       const c = rnd();
       galaxy.push({
-        gr: g.r, ga: g.a, w: (0.035 + 0.07 * (1 - k)) * (rnd() < 0.5 ? 1 : 0.8),   // angular speed: inner turns faster
-        r: 0.55 + rnd() * 1.1, a: 0.22 + rnd() * 0.5 * (1 - 0.4 * k),
-        col: c < 0.12 ? '#ffffff' : c < 0.45 ? '#9fb8ff' : '#4a7bff', ph: rnd() * 6.283, sp: 0.6 + rnd() * 1.8,
+        r0: Math.pow(rnd(), 0.75), ga: rnd() * Math.PI * 2,
+        v: 0.004 + rnd() * 0.012,                       // outward drift, in screen radii per second
+        streak: rnd() < 0.3, r: 0.5 + rnd() * 1.1, a: 0.2 + rnd() * 0.55,
+        col: c < 0.14 ? '#ffffff' : c < 0.45 ? '#9fb8ff' : '#4a7bff', ph: rnd() * 6.283, sp: 0.6 + rnd() * 1.8,
         cx: 0, cy: 0,
       });
     }
@@ -240,21 +237,27 @@ export function startIntro({ canvas, flash, tagline }) {
     }
   }
 
-  const GC = Math.cos(-0.22), GS = Math.sin(-0.22);   // the galaxy's tilt (same as galaxyPoint)
   function drawGalaxy(t, still) {
     if (t < T.collide) return;
     const C = { x: (L.x0 + L.x1) / 2, y: L.midY };
-    const spread = easeOut((t - T.collide) / (T.burstEnd - T.collide + 0.8));
+    const spread = easeOut((t - T.collide) / 1.3);
     const tt = still ? 0 : t - T.collide;
     for (const s of galaxy) {
-      const a0 = s.ga + s.w * tt, ex = Math.cos(a0) * s.gr, ey = Math.sin(a0) * s.gr * 0.42;
-      const gx = L.G.x + ex * GC - ey * GS, gy = L.G.y + ex * GS + ey * GC;
-      const x = C.x + (gx - C.x) * spread, y = C.y + (gy - C.y) * spread;
+      const r = (s.r0 + s.v * tt) % 1;                   // keeps expanding; wraps back to the centre
+      const R = r * L.maxR * spread, ca = Math.cos(s.ga), sa = Math.sin(s.ga);
+      const x = L.G.x + (C.x - L.G.x) * (1 - spread) + ca * R * 1.1, y = L.G.y + sa * R * 0.8;
       s.cx = x; s.cy = y;
-      let a = s.a * (0.7 + 0.3 * Math.sin(t * s.sp + s.ph)) * (0.5 + 0.5 * spread);
+      let a = s.a * (0.7 + 0.3 * Math.sin(t * s.sp + s.ph)) * (0.4 + 0.6 * spread);
+      a *= Math.min(1, r / 0.08);                         // newborn stars fade in at the centre
       if (Math.abs(y - L.midY) < L.fs * 0.9 && x > L.x0 - L.fs && x < L.xEnd + L.fs) a *= 0.35;   // keep the name legible
-      ctx.globalAlpha = a; ctx.fillStyle = s.col;
-      ctx.beginPath(); ctx.arc(x, y, s.r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = a;
+      if (s.streak) {
+        const len = 3 + r * 14 * (1 + (1 - spread) * 4);  // longer while the burst is fresh
+        ctx.strokeStyle = s.col; ctx.lineWidth = s.r * 0.8; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x - ca * len * 1.1, y - sa * len * 0.8); ctx.lineTo(x, y); ctx.stroke();
+      } else {
+        ctx.fillStyle = s.col; ctx.beginPath(); ctx.arc(x, y, s.r, 0, Math.PI * 2); ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
   }
