@@ -12,6 +12,9 @@ changes here to `noisysource-dev`; merging it deploys the same to `noisysource-p
 `firebase deploy` only serves folders inside this one, so each hosting target's `public` is
 `hosting/<target>` (gitignored). CI copies the app's build there. By hand:
 
+Targets: `domotics` and `website` (noisysource.com; its custom domain is Terraform's,
+`custom_domains` in `infra/gcp/terraform/noisysource/env/prod.tfvars`).
+
 ```bash
 pnpm --filter domotics build:nsdev
 mkdir -p hosting && rm -rf hosting/domotics && cp -R ../../apps/noisysource/domotics/dist hosting/domotics

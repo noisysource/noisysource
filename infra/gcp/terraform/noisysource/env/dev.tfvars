@@ -1,6 +1,6 @@
 project_id = "noisysource-dev"
 
-hosting_site_ids = ["noisysource-dev-domotics"]
+hosting_site_ids = ["noisysource-dev-domotics", "noisysource-dev-website"]
 
 web_apps = {
   domotics = "Domotics (dev)"
