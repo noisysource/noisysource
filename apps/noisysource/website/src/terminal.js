@@ -3,7 +3,7 @@
 // Atlas opens with a warning and asks who you are and why you woke it. Each
 // message goes to /api/atlas (the atlasGate function, through a Hosting
 // rewrite): a real model answers, a few times only. If the visitor types the
-// phrase Renato hands out, the door opens. The server decides all of that;
+// phrase its maker hands out, the door opens. The server decides all of that;
 // this page only shows what it says. Where there's no server (a local preview,
 // a network error), Atlas answers with a short line instead.
 

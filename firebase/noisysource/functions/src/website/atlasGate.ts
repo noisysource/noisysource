@@ -12,9 +12,9 @@ import {
  *
  * A visitor who wakes Atlas gets a few replies from a real model (Gemini, on
  * a free-tier key), steered to find out who they are and why they came. If
- * they type the phrase Renato hands out, the door opens: more replies, and
- * Atlas may share what Renato put in `profile`. Every awakening is recorded
- * in atlas_awakenings/{session}, which Renato's own Atlas reads to tell him
+ * they type the phrase the maker hands out, the door opens: more replies, and
+ * Atlas may share what the maker put in `profile`. Every awakening is recorded
+ * in atlas_awakenings/{session}, which the maker's own Atlas reads to tell him
  * someone came (that's the only link to the real Atlas: this function has no
  * tools and no private data).
  *

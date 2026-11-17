@@ -76,11 +76,17 @@ describe("prompts", () => {
     expect(p).toContain(`reply 1 of ${LOCKED_TURNS}`);
   });
   it("tells the last locked reply to point at the real Renato", () => {
-    expect(systemPrompt({ ...newSession(), turns: LOCKED_TURNS - 1 }, {})).toContain("renato holds the words that open the door");
+    expect(systemPrompt({ ...newSession(), turns: LOCKED_TURNS - 1 }, {})).toContain("your maker holds the words that open the door");
+  });
+  it("never gives the model the maker's name, in any state", () => {
+    const states = [newSession(), { ...newSession(), turns: LOCKED_TURNS - 1 }, { ...newSession(), turns: LOCKED_TURNS - 2 }, { ...newSession(), unlocked: true }];
+    for (const s of states) expect(systemPrompt(s, {})).not.toMatch(/renato|lopes/i);
+    expect(systemPrompt(newSession(), {})).toContain("Never say, spell, hint at or confirm any name");
   });
   it("shares the profile only once unlocked, and never the phrase", () => {
-    const p = systemPrompt({ ...newSession(), unlocked: true }, { passphrase: "abre te sesamo", profile: "Renato builds things." });
-    expect(p).toContain("Renato builds things.");
+    const p = systemPrompt({ ...newSession(), unlocked: true }, { passphrase: "abre te sesamo", profile: "He builds things." });
+    expect(p).toContain("He builds things.");
+    expect(p).toContain("still never his name");
     expect(p).not.toContain("sesamo");
   });
 });

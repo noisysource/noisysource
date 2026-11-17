@@ -19,6 +19,12 @@ included: `for (const i of intelligence) combine(human, artificial);`. Click to 
 - No contact details on the page (email and location removed on purpose, 2026-11-17).
 
 ## Atlas, hidden in plain sight (Renato, 2026-11-17)
+**No name, anywhere (Renato, 2026-11-17): build hype, unicorn-style.** The maker's name must
+not appear on the site or reach the model: the gate's prompt never contains it (only "my
+maker"), forbids saying, spelling, hinting at or confirming any name even if a visitor guesses
+it or it shows up in `profile`, and a test checks the prompt in every state. Atlas lets visitors
+feel something vast is being built without saying what. Keep it that way in any new copy.
+
 The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without announcing it:
 - **The sky**: real constellations sit among the stars (Orion, Cassiopeia, Ursa Major, Lyra,
   Cygnus, Crux, the Pleiades). Hovering one draws its lines and names it. **Inside the

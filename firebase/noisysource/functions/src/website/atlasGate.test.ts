@@ -72,7 +72,7 @@ beforeEach(() => {
   store.clear();
   geminiCalls = 0;
   geminiReply = { reply: "and who sent you?", who: "investor", why: "looking to fund" };
-  store.set("atlas_gate/config", { geminiApiKey: "k", passphrase: "Abre-te Sésamo", profile: "Renato builds Atlas." });
+  store.set("atlas_gate/config", { geminiApiKey: "k", passphrase: "Abre-te Sésamo", profile: "He builds Atlas." });
 });
 
 describe("atlasGate", () => {
@@ -103,12 +103,12 @@ describe("atlasGate", () => {
     expect(rec.unlocked).toBe(true);
     expect(JSON.stringify(rec)).not.toMatch(/sesamo/i);
     await say("session-0002", "tell me about him");
-    expect(lastPrompt).toContain("Renato builds Atlas.");
+    expect(lastPrompt).toContain("He builds Atlas.");
   });
 
   it("never shows the model the profile while locked", async () => {
     await say("session-0003", "who is Renato?");
-    expect(lastPrompt).not.toContain("Renato builds Atlas.");
+    expect(lastPrompt).not.toContain("He builds Atlas.");
     expect(lastPrompt).not.toMatch(/sesamo/i);
   });
 
