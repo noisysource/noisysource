@@ -227,6 +227,8 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.19.17)
 
+  apps/noisysource/website: {}
+
   firebase/noisysource/functions:
     dependencies:
       firebase-admin:

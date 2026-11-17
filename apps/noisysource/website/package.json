@@ -1,0 +1,13 @@
+{
+  "name": "website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "noisysource.com, the public website",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:nsdev": "vite build --mode nsdev",
+    "build:nsprod": "vite build --mode nsprod",
+    "preview": "vite preview"
+  }
+}
