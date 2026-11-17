@@ -16,7 +16,8 @@
 //                and the root rules.
 //   noisysource  noisysource-dev / noisysource-prod: firebase/noisysource/,
 //                infra/gcp/terraform/noisysource/ and the apps that have moved
-//                (Domotics, which left the kidclub unit on 2026-11-16).
+//                (Domotics, which left the kidclub unit on 2026-11-16), plus
+//                the public website (noisysource.com, since 2026-11-17).
 // A path that belongs only to the other unit deploys nothing in this one.
 // Without --unit the unit is kidclub, so the existing workflow is unchanged.
 //
@@ -69,6 +70,7 @@ const LABELS = {
   kidclub: 'KidClub hosting',
   finances: 'FinHub hosting',
   domotics: 'Domotics hosting',
+  website: 'Website hosting (noisysource.com)',
 };
 
 // Code that ends up in a deploy, and which part it belongs to. `dir` is
@@ -111,14 +113,16 @@ export const UNITS = {
       /^firebase\/noisysource\//,
       /^infra\/gcp\/terraform\/noisysource\//,
       /^apps\/noisysource\/domotics\//,
+      /^apps\/noisysource\/website\//,
     ],
   },
   noisysource: {
-    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics'],
+    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'website'],
     owned: [
       { dir: 'infra/gcp/terraform/noisysource/', part: 'terraform' },
       { dir: 'firebase/noisysource/functions/', part: 'functions' },
       { dir: 'apps/noisysource/domotics/', part: 'domotics' },
+      { dir: 'apps/noisysource/website/', part: 'website' },
     ],
     ownedFiles: {
       'firebase/noisysource/firestore.rules': 'firestore_rules',
@@ -158,6 +162,7 @@ const IMPORTERS = {
   'apps/noisyphocus/kidclub': { kidclub: ['kidclub'] },
   'apps/noisysource/finances': { kidclub: ['finances'] },
   'apps/noisysource/domotics': { noisysource: ['domotics'] },
+  'apps/noisysource/website': { noisysource: ['website'] },
   functions: { kidclub: ['functions'] },
   'firebase/noisysource/functions': { noisysource: ['functions'] },
   // shared's own dependencies (zod) get bundled into whoever imports it.

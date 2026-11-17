@@ -1,6 +1,6 @@
 name: Deploy NoisySource to Prod
 
-# The private tools (Domotics now; FinHub and Tasks later) release on a merge
+# The NoisySource apps (Domotics and the website now; FinHub and Tasks later) release on a merge
 # into `staging`: this deploys the NoisySource unit to noisysource-prod. The
 # staging -> main promotion is KidClub's alone (deploy-prod.yml).
 # Decided 2026-11-11, infra/HANDOFF-repo-restructure.md.
@@ -43,4 +43,6 @@ jobs:
       # (noisysource-prod). The plain `build` (.env.production) is left alone.
       apps: >-
         [{"part": "domotics", "dir": "apps/noisysource/domotics",
-          "build": "pnpm --filter domotics build:nsprod", "target": "domotics"}]
+          "build": "pnpm --filter domotics build:nsprod", "target": "domotics"},
+         {"part": "website", "dir": "apps/noisysource/website",
+          "build": "pnpm --filter website build:nsprod", "target": "website", "firebase": false}]
