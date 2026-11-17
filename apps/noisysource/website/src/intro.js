@@ -1,7 +1,9 @@
 // The intro, and then the logo it settles into:
 //
 //   void → photons pass by → two of them collide (flash) → the burst
-//   collapses into "noisy" (white photons that keep shimmering) → "source"
+//   becomes a galaxy that stays in the background, slowly turning → photons
+//   stream out of it into "noisy" (white photons that keep shimmering), and
+//   now and then one more breaks away and hits the name → "source"
 //   slides in (solid blue) → a photon wave crosses the name: white and wavy
 //   over "noisy", straight and blue over "source" → the dot of the i lights
 //   up → the horizon draws (clean, then breaking into particles) → the
@@ -21,17 +23,19 @@ const LIGHT = '#cfe0ff';
 
 // Timeline, in seconds from the start.
 const T = {
-  passStart: 0.8,   // photons start passing by
-  pairStart: 4.2,   // the two that will collide come in
-  collide: 6.0,     // flash
-  burstEnd: 7.0,    // the burst has spread out
-  formEnd: 9.6,     // "noisy" has formed
-  source: 9.7,      // "source" slides in (0.9 s)
-  wave: 10.7,       // the photon wave starts crossing (then loops)
-  dot: 11.5,        // the light in the i
-  horizon: 11.9,    // the horizon draws (1.3 s)
-  type: 13.4,       // the tagline starts typing
+  passStart: 0.3,   // photons start passing by
+  pairStart: 1.4,   // the two that will collide come in
+  collide: 2.7,     // flash
+  burstEnd: 3.5,    // the burst has spread out into the galaxy
+  formEnd: 5.5,     // "noisy" has formed (photons stream in with staggered starts)
+  source: 5.2,      // "source" slides in (0.7 s)
+  wave: 5.9,        // the photon wave starts crossing (then loops)
+  dot: 6.1,         // the light in the i
+  horizon: 6.4,     // the horizon draws (1 s)
+  type: 7.1,        // the tagline starts typing
 };
+const FORM_STAGGER = 0.9;   // spread of start times as photons leave the galaxy for "noisy"
+const STRIKE_EVERY = 0.45;  // after that, a photon breaks away and hits the name this often (s)
 const WAVE_PERIOD = 4.6;
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -45,7 +49,8 @@ const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647
 export function startIntro({ canvas, flash, tagline }) {
   const ctx = canvas.getContext('2d');
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let W = 0, H = 0, L = null, photons = [], passers = [], horizonDots = [];
+  let W = 0, H = 0, L = null, photons = [], passers = [], horizonDots = [], galaxy = [];
+  let strikes = [], impacts = [], nextStrike = 0;
   let t0 = performance.now(), flashed = false, typing = 0;
 
   // ---------- layout: where every letter, the dot and the horizon go ----------
@@ -77,6 +82,7 @@ export function startIntro({ canvas, flash, tagline }) {
     L = { fs, font, base, chars1, chars2, x0, x1, s0, xEnd, dot,
           midY: base - fs * 0.36, waveAmp: fs * 0.1, waveK: 0.22 * 38 / fs };
 
+    buildGalaxy();
     buildPhotons();
     buildPassers();
     buildHorizon();
@@ -129,14 +135,42 @@ export function startIntro({ canvas, flash, tagline }) {
   }
 
   function makePhoton(C, tx, ty, amp, alpha) {
-    const a = rnd() * Math.PI * 2, reach = L.fs * (1.5 + rnd() * 6);
+    const g = galaxyPoint();                       // it sits in the galaxy until it leaves for its letter
     return {
       tx, ty, amp, alpha,
-      bx: C.x + Math.cos(a) * reach * 1.6, by: C.y + Math.sin(a) * reach * 0.8,   // where the burst throws it
-      delay: rnd() * 0.7, ph: rnd() * 6.283, sp: 0.8 + rnd() * 1.6,
+      bx: L.G.x + g.x, by: L.G.y + g.y,
+      delay: rnd() * FORM_STAGGER, ph: rnd() * 6.283, sp: 0.8 + rnd() * 1.6,
       r: (0.65 + rnd() * 0.55) * Math.max(1, L.fs / 48),
       white: rnd() < 0.3,
     };
+  }
+
+  // The galaxy the explosion leaves behind: two loose spiral arms plus dust,
+  // flattened and tilted, centred behind the name. It stays, slowly turning.
+  function galaxyPoint() {
+    const maxR = Math.max(W, H) * 0.62, r = maxR * Math.pow(rnd(), 0.55);
+    let a;
+    if (rnd() < 0.72) {
+      const g = (rnd() + rnd() + rnd() - 1.5) / 1.5;
+      a = (rnd() < 0.5 ? 0 : Math.PI) + (r / maxR) * 4.2 + g * 0.55;
+    } else a = rnd() * Math.PI * 2;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r * 0.42, tilt = -0.22;
+    return { x: x * Math.cos(tilt) - y * Math.sin(tilt), y: x * Math.sin(tilt) + y * Math.cos(tilt), r, a, maxR };
+  }
+  function buildGalaxy() {
+    L.G = { x: W / 2, y: L.midY };
+    galaxy = [];
+    const n = Math.round(Math.min(900, (W * H) / 1400));
+    for (let i = 0; i < n; i++) {
+      const g = galaxyPoint(), k = g.r / g.maxR;
+      const c = rnd();
+      galaxy.push({
+        gr: g.r, ga: g.a, w: (0.035 + 0.07 * (1 - k)) * (rnd() < 0.5 ? 1 : 0.8),   // angular speed: inner turns faster
+        r: 0.55 + rnd() * 1.1, a: 0.22 + rnd() * 0.5 * (1 - 0.4 * k),
+        col: c < 0.12 ? '#ffffff' : c < 0.45 ? '#9fb8ff' : '#4a7bff', ph: rnd() * 6.283, sp: 0.6 + rnd() * 1.8,
+        cx: 0, cy: 0,
+      });
+    }
   }
 
   // Photons passing by before the collision, plus the pair that collides.
@@ -206,6 +240,60 @@ export function startIntro({ canvas, flash, tagline }) {
     }
   }
 
+  const GC = Math.cos(-0.22), GS = Math.sin(-0.22);   // the galaxy's tilt (same as galaxyPoint)
+  function drawGalaxy(t, still) {
+    if (t < T.collide) return;
+    const C = { x: (L.x0 + L.x1) / 2, y: L.midY };
+    const spread = easeOut((t - T.collide) / (T.burstEnd - T.collide + 0.8));
+    const tt = still ? 0 : t - T.collide;
+    for (const s of galaxy) {
+      const a0 = s.ga + s.w * tt, ex = Math.cos(a0) * s.gr, ey = Math.sin(a0) * s.gr * 0.42;
+      const gx = L.G.x + ex * GC - ey * GS, gy = L.G.y + ex * GS + ey * GC;
+      const x = C.x + (gx - C.x) * spread, y = C.y + (gy - C.y) * spread;
+      s.cx = x; s.cy = y;
+      let a = s.a * (0.7 + 0.3 * Math.sin(t * s.sp + s.ph)) * (0.5 + 0.5 * spread);
+      if (Math.abs(y - L.midY) < L.fs * 0.9 && x > L.x0 - L.fs && x < L.xEnd + L.fs) a *= 0.35;   // keep the name legible
+      ctx.globalAlpha = a; ctx.fillStyle = s.col;
+      ctx.beginPath(); ctx.arc(x, y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // After the name has formed: now and then a photon leaves the galaxy and
+  // hits the name (a short trail, then a small ring where it lands).
+  function drawStrikes(t, dt) {
+    if (t < T.formEnd) { strikes = []; impacts = []; nextStrike = T.formEnd + 0.4; return; }
+    if (t >= nextStrike && strikes.length < 5 && galaxy.length) {
+      nextStrike = t + STRIKE_EVERY * (0.6 + rnd() * 0.8);
+      const s = galaxy[(rnd() * galaxy.length) | 0];
+      let tx, ty, blue = false;
+      if (rnd() < 0.6 && photons.length) { const p = photons[(rnd() * photons.length) | 0]; tx = p.tx; ty = p.ty; }
+      else { tx = L.s0 + rnd() * (L.xEnd - L.s0); ty = L.midY + (rnd() - 0.5) * L.fs * 0.6; blue = true; }
+      strikes.push({ x0: s.cx, y0: s.cy, tx, ty, t0: t, d: 0.7 + rnd() * 0.5, blue });
+    }
+    ctx.lineCap = 'round';
+    strikes = strikes.filter((k) => {
+      const q = easeInOut((t - k.t0) / k.d);
+      const x = k.x0 + (k.tx - k.x0) * q, y = k.y0 + (k.ty - k.y0) * q;
+      const ang = Math.atan2(k.ty - k.y0, k.tx - k.x0), len = Math.min(40, Math.hypot(x - k.x0, y - k.y0));
+      const grad = ctx.createLinearGradient(x - Math.cos(ang) * len, y - Math.sin(ang) * len, x, y);
+      grad.addColorStop(0, 'rgba(127,166,255,0)'); grad.addColorStop(1, k.blue ? 'rgba(127,166,255,0.9)' : 'rgba(255,255,255,0.9)');
+      ctx.strokeStyle = grad; ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.moveTo(x - Math.cos(ang) * len, y - Math.sin(ang) * len); ctx.lineTo(x, y); ctx.stroke();
+      ctx.fillStyle = '#ffffff'; ctx.globalAlpha = 0.9; ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+      if (q >= 1) { impacts.push({ x: k.tx, y: k.ty, t0: t, blue: k.blue }); return false; }
+      return true;
+    });
+    impacts = impacts.filter((m) => {
+      const q = (t - m.t0) / 0.45;
+      if (q >= 1) return false;
+      ctx.globalAlpha = 0.7 * (1 - q); ctx.strokeStyle = m.blue ? '#7fa6ff' : '#ffffff'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(m.x, m.y, 1.5 + q * L.fs * 0.14, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+      return true;
+    });
+  }
+
   function drawNoisy(t, settled) {
     if (t < T.collide) return;
     const burst = easeOut((t - T.collide) / (T.burstEnd - T.collide));
@@ -215,7 +303,7 @@ export function startIntro({ canvas, flash, tagline }) {
       if (t < T.burstEnd) {
         x = C.x + (p.bx - C.x) * burst; y = C.y + (p.by - C.y) * burst;
       } else {
-        const k = easeInOut((t - T.burstEnd - p.delay) / (T.formEnd - T.burstEnd - 0.7));
+        const k = easeInOut((t - T.burstEnd - p.delay) / (T.formEnd - T.burstEnd - FORM_STAGGER));
         shimmer = settled ? 0 : k;
         x = p.bx + (p.tx - p.bx) * k; y = p.by + (p.ty - p.by) * k;
       }
@@ -232,7 +320,7 @@ export function startIntro({ canvas, flash, tagline }) {
 
   function drawSource(t) {
     if (t < T.source) return;
-    const k = easeOut((t - T.source) / 0.9);
+    const k = easeOut((t - T.source) / 0.7);
     ctx.font = L.font; ctx.fillStyle = BLUE; ctx.globalAlpha = k;
     const shift = (1 - k) * L.fs * 0.9;
     for (const ch of L.chars2) ctx.fillText(ch.c, ch.x + shift, L.base);
@@ -284,14 +372,14 @@ export function startIntro({ canvas, flash, tagline }) {
   function drawHorizon(t) {
     if (t < T.horizon) return;
     const { arcY, a0, split } = L.hz;
-    const k = easeInOut((t - T.horizon) / 0.7);
+    const k = easeInOut((t - T.horizon) / 0.5);
     ctx.strokeStyle = BLUE; ctx.globalAlpha = 0.9; ctx.lineWidth = 1.2;
     ctx.beginPath();
     for (let x = a0; x <= a0 + (split - a0) * k; x += 2) (x === a0 ? ctx.moveTo(x, arcY(x)) : ctx.lineTo(x, arcY(x)));
     ctx.stroke();
     ctx.fillStyle = BLUE;
     for (const d of horizonDots) {
-      const a = clamp01((t - T.horizon - 0.6 - d.k * 0.6) / 0.4);
+      const a = clamp01((t - T.horizon - 0.4 - d.k * 0.5) / 0.35);
       if (!a) continue;
       ctx.globalAlpha = d.a * a; ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill();
     }
@@ -301,11 +389,13 @@ export function startIntro({ canvas, flash, tagline }) {
   function frame(now) {
     const t = reduce ? 999 : (now - t0) / 1000;
     ctx.clearRect(0, 0, W, H);
+    drawGalaxy(t, reduce);
     if (t < T.collide) drawPassers(t);
     if (!flashed && t >= T.collide && t < T.collide + 1) {
       flashed = true; flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
     }
     drawNoisy(t, reduce);
+    if (!reduce) drawStrikes(t);
     drawSource(t);
     if (!reduce) drawWave(t);
     drawDot(t);
@@ -321,7 +411,7 @@ export function startIntro({ canvas, flash, tagline }) {
   let runs = 0;
 
   function replay() {
-    t0 = performance.now(); flashed = false; typing = 0; runs++;
+    t0 = performance.now(); flashed = false; typing = 0; runs++; strikes = []; impacts = [];
     tagline.innerHTML = '';
   }
 

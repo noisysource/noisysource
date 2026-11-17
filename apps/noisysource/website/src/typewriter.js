@@ -29,10 +29,10 @@ function render(el, text, done) {
 
 // One keystroke's delay, in ms: a person isn't a metronome.
 function keyDelay(prev, next) {
-  let d = 38 + Math.random() * 65;
-  if (prev === ' ') d += 30 + Math.random() * 60;            // starting a new word
-  if ('(),;'.includes(prev)) d += 90 + Math.random() * 120;  // after punctuation
-  if (Math.random() < 0.06) d += 180 + Math.random() * 260;  // a moment's thought
+  let d = 28 + Math.random() * 48;
+  if (prev === ' ') d += 20 + Math.random() * 40;            // starting a new word
+  if ('(),;'.includes(prev)) d += 60 + Math.random() * 80;  // after punctuation
+  if (Math.random() < 0.05) d += 140 + Math.random() * 180;  // a moment's thought
   if (next === next.toUpperCase() && /[a-z]/i.test(next)) d += 40;
   return d;
 }
@@ -44,9 +44,9 @@ function keystrokes() {
   const typo = TAGLINE_TEXT.indexOf('artificial');
   for (let n = 0; n < TAGLINE_TEXT.length; n++) {
     if (n === typo) {
-      steps.push({ pause: 420 });                              // hesitates before the last word
+      steps.push({ pause: 300 });                              // hesitates before the last word
       for (const c of 'artifical') steps.push({ key: c });
-      steps.push({ pause: 520 });                              // notices
+      steps.push({ pause: 380 });                              // notices
       for (let b = 0; b < 3; b++) steps.push({ back: true });  // "cal"
       steps.push({ pause: 160 });
       for (const c of 'cial') steps.push({ key: c });
