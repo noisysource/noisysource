@@ -2,15 +2,15 @@
 //
 //   void → photons pass by → two of them collide (flash) → the burst fills
 //   the screen and stays as the background, still slowly expanding → photons
-//   stream out of it into "noisy" (white photons that keep shimmering), and
-//   now and then one more breaks away and hits the name → "source"
-//   slides in (solid blue) → a photon wave crosses the name: white and wavy
-//   over "noisy", straight and blue over "source" → the dot of the i lights
-//   up → the horizon draws (clean, then breaking into particles) → the
-//   tagline is typed out (typewriter.js).
+//   stream out of it into "atlas" (white photons that keep shimmering), and
+//   now and then one more breaks away and hits the name → the maker's quiet
+//   signature fades in under it ("by noisy source") → a photon wave crosses
+//   the name: white and wavy, then straight and blue → the light lights up as
+//   the name's full stop → the horizon draws (clean, then breaking into
+//   particles) → the tagline is typed out (typewriter.js).
 //
 // Plain 2D canvas, no dependencies. Positions come from the real glyphs: the
-// letters of "noisy" are drawn off-screen and sampled, so the photons land
+// letters of "atlas" are drawn off-screen and sampled, so the photons land
 // exactly on the lettering.
 //
 // Atlas is hidden in plain sight: real constellations sit among the stars,
@@ -69,27 +69,33 @@ export function startIntro({ canvas, flash, tagline }) {
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const fs = Math.round(Math.max(30, Math.min(W * 0.085, 96)));
+    // The product's name, built of photons; the light is its full stop; the
+    // maker signs underneath, small and quiet.
+    const fs = Math.round(Math.max(44, Math.min(W * 0.15, 150)));
     const font = `${WEIGHT} ${fs}px ${FONT}`;
     ctx.font = font;
-    const track = fs * 0.12, gap = fs * 0.42;
-    const width = (s) => [...s].reduce((a, c) => a + ctx.measureText(c).width + track, 0) - track;
-    const word1 = 'noısy', word2 = 'source';           // dotless ı: the dot is ours
-    const total = width(word1) + gap + width(word2);
-    const base = Math.round(H * 0.46 + fs * 0.35);
-    let x = (W - total) / 2;
-    const chars1 = [], chars2 = [];
-    for (const c of word1) { chars1.push({ c, x }); x += ctx.measureText(c).width + track; }
-    x += gap - track;
-    for (const c of word2) { chars2.push({ c, x }); x += ctx.measureText(c).width + track; }
-    const xEnd = x - track;
-    const x0 = chars1[0].x, x1 = chars1[4].x + ctx.measureText('y').width, s0 = chars2[0].x;
+    const track = fs * 0.14;
+    const word = 'atlas';
+    const width = [...word].reduce((a, c) => a + ctx.measureText(c).width + track, 0) - track;
+    const dotGap = fs * 0.2;
+    const base = Math.round(H * 0.44 + fs * 0.35);
+    let x = (W - width - dotGap) / 2;
+    const chars1 = [];
+    for (const c of word) { chars1.push({ c, x }); x += ctx.measureText(c).width + track; }
+    const x0 = chars1[0].x, x1 = chars1[4].x + ctx.measureText('s').width;
+    const s0 = chars1[3].x;          // the photon's wave turns straight and blue from here
+    const xEnd = x1;
+    const dot = { x: x1 + dotGap * 0.75, y: base - fs * 0.07, r: Math.max(3, fs * 0.055) };
 
-    // The i's dot: where the font puts it (pixels of "i" minus "ı").
-    const dot = findDot(font, fs, chars1[2].x, base);
+    const sigFs = Math.max(11, Math.round(fs * 0.13));
+    const sigFont = `400 ${sigFs}px "JetBrains Mono", ui-monospace, monospace`;
+    ctx.font = sigFont;
+    const sigText = 'by noisy source', sigTrack = sigFs * 0.32;
+    const sigW = [...sigText].reduce((a, c) => a + ctx.measureText(c).width + sigTrack, 0) - sigTrack;
+    const sig = { text: sigText, font: sigFont, track: sigTrack, x: x1 - sigW, y: base + fs * 0.42 };
 
-    L = { fs, font, base, chars1, chars2, x0, x1, s0, xEnd, dot,
-          midY: base - fs * 0.36, waveAmp: fs * 0.1, waveK: 0.22 * 38 / fs };
+    L = { fs, font, base, chars1, x0, x1, s0, xEnd, dot, sig,
+          midY: base - fs * 0.36, waveAmp: fs * 0.08, waveK: 0.22 * 38 / fs };
 
     buildGalaxy();
     buildPhotons();
@@ -99,19 +105,7 @@ export function startIntro({ canvas, flash, tagline }) {
     placeTagline();
   }
 
-  function findDot(font, fs, x, base) {
-    const pad = Math.ceil(fs * 1.5);
-    const c = document.createElement('canvas'); c.width = pad; c.height = pad;
-    const g = c.getContext('2d', { willReadFrequently: true });
-    const read = (ch) => { g.clearRect(0, 0, pad, pad); g.font = font; g.fillStyle = '#fff'; g.fillText(ch, 0, fs * 1.1); return g.getImageData(0, 0, pad, pad).data; };
-    const withDot = read('i'), without = read('ı');
-    let sx = 0, sy = 0, n = 0;
-    for (let i = 3; i < withDot.length; i += 4) {
-      if (withDot[i] > 128 && without[i] < 64) { const p = (i - 3) / 4; sx += p % pad; sy += Math.floor(p / pad); n++; }
-    }
-    if (!n) return { x: x + fs * 0.12, y: base - fs * 0.8, r: fs * 0.045 };
-    return { x: x + sx / n, y: base - fs * 1.1 + sy / n, r: Math.max(2.4, Math.sqrt(n / Math.PI) * 0.9) };
-  }
+
 
   // The photons that become "noisy": one per sampled pixel of its letters.
   function buildPhotons() {
@@ -123,7 +117,7 @@ export function startIntro({ canvas, flash, tagline }) {
     g.scale(S, S); g.font = font; g.fillStyle = '#fff';
     for (const ch of chars1) g.fillText(ch.c, ch.x - ox, base - oy);
     const img = g.getImageData(0, 0, w, h).data;
-    const step = Math.max(1.6, fs / 24);
+    const step = Math.max(1.6, fs / 42);
     const C = { x: (x0 + x1) / 2, y: L.midY };
     photons = [];
     seed = 7;
@@ -150,7 +144,7 @@ export function startIntro({ canvas, flash, tagline }) {
       tx, ty, amp, alpha,
       bx: L.G.x + g.x, by: L.G.y + g.y,
       delay: rnd() * FORM_STAGGER, ph: rnd() * 6.283, sp: 0.8 + rnd() * 1.6,
-      r: (0.65 + rnd() * 0.55) * Math.max(1, L.fs / 48),
+      r: (0.65 + rnd() * 0.55) * Math.max(1, L.fs / 80),
       white: rnd() < 0.3,
     };
   }
@@ -309,8 +303,9 @@ export function startIntro({ canvas, flash, tagline }) {
   }
 
   function placeTagline() {
-    tagline.style.top = `${Math.round(L.base + L.fs * 1.75)}px`;
-    tagline.style.fontSize = `${Math.max(11, Math.round(L.fs * 0.19))}px`;
+    tagline.style.top = `${Math.round(L.base + L.fs * 1.45)}px`;
+    // as big as the name allows, never wider than the screen (56 monospace characters)
+    tagline.style.fontSize = `${Math.max(8, Math.min(17, Math.round(L.fs * 0.18), Math.floor((W - 24) / (56 * 0.62))))}px`;
   }
 
   // ---------- drawing ----------
@@ -410,7 +405,7 @@ export function startIntro({ canvas, flash, tagline }) {
     });
   }
 
-  function drawNoisy(t, settled) {
+  function drawName(t, settled) {
     if (t < T.collide) return;
     const burst = easeOut((t - T.collide) / (T.burstEnd - T.collide));
     const C = { x: (L.x0 + L.x1) / 2, y: L.midY };
@@ -434,12 +429,15 @@ export function startIntro({ canvas, flash, tagline }) {
     ctx.globalAlpha = 1;
   }
 
-  function drawSource(t) {
+  // The maker's signature under the name: "by noisy source", small, blue, quiet.
+  function drawSignature(t) {
     if (t < T.source) return;
-    const k = easeOut((t - T.source) / 0.7);
-    ctx.font = L.font; ctx.fillStyle = BLUE; ctx.globalAlpha = k;
-    const shift = (1 - k) * L.fs * 0.9;
-    for (const ch of L.chars2) ctx.fillText(ch.c, ch.x + shift, L.base);
+    const k = easeOut((t - T.source) / 1.1);
+    const { text, font, track, x, y } = L.sig;
+    ctx.font = font; ctx.fillStyle = BLUE; ctx.globalAlpha = 0.75 * k;
+    let cx = x;
+    const dy = (1 - k) * L.fs * 0.12;
+    for (const c of text) { ctx.fillText(c, cx, y + dy); cx += ctx.measureText(c).width + track; }
     ctx.globalAlpha = 1;
   }
 
@@ -512,9 +510,9 @@ export function startIntro({ canvas, flash, tagline }) {
     if (!flashed && t >= T.collide && t < T.collide + 1) {
       flashed = true; flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
     }
-    drawNoisy(t, reduce);
+    drawName(t, reduce);
     if (!reduce) drawStrikes(t);
-    drawSource(t);
+    drawSignature(t);
     if (!reduce) drawWave(t);
     drawDot(t);
     drawHorizon(t);
@@ -556,12 +554,12 @@ export function startIntro({ canvas, flash, tagline }) {
   });
   window.addEventListener('click', (e) => {
     if (e.target.closest('.wake')) { openTerminal(foundBy); return; }
-    if (terminalOpen() || e.target.closest('a, .fn, .term')) return;
+    if (terminalOpen() || e.target.closest('a, .fn, .term, .maker')) return;
     if (hoverAtlas) reveal('star');
     else rewrite();   // any other click: the loop is deleted and typed again
   });
   window.addEventListener('keydown', (e) => {
-    if (e.key.length !== 1 || terminalOpen() || e.target.closest?.('input')) return;
+    if (e.key.length !== 1 || terminalOpen() || e.target.closest?.('input, textarea, select, .maker')) return;
     keys = (keys + e.key.toLowerCase()).slice(-5);
     if (keys === 'atlas') reveal('typed');
   });

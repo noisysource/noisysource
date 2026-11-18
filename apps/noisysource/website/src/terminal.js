@@ -27,7 +27,7 @@ const NOTICE = '  (what is said here is kept, and read by the one who made me.)'
 const QUESTION = 'who wakes what sleeps, and what do they seek in the noise?';
 const OFFLINE = ['...the signal is too weak here.', 'not yet.', 'the dark is too thick. later.'];
 
-let root, log, input, bar, open = false, session = null, how = 'unknown', state = 'awake', offlineN = 0;
+let root, log, input, bar, open = false, session = null, how = 'unknown', state = 'awake', offlineN = 0, test = null;
 
 export const terminalOpen = () => open;
 
@@ -66,7 +66,7 @@ async function ask(message) {
     const res = await fetch('/api/atlas', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session, message, how, ref: document.referrer.slice(0, 200) }),
+      body: JSON.stringify({ session, message, how, ref: document.referrer.slice(0, 200), ...(test ? { asRole: test.asRole, token: test.token } : {}) }),
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -125,11 +125,27 @@ function close() {
 }
 
 // `foundBy`: how the visitor woke Atlas ('star' | 'typed'), recorded with the awakening.
-export async function openTerminal(foundBy = 'unknown') {
+// `asTest`: {asRole, token} from the maker panel: a fresh session as that role,
+// already inside the door, not counted and not announced.
+export async function openTerminal(foundBy = 'unknown', asTest = null) {
   if (open) return;
   if (!root) build();
   open = true;
   root.classList.add('on');
+  if (asTest) {
+    test = asTest;
+    session = `maker-${newId()}`;
+    state = 'open';
+    log.innerHTML = '';
+    bar.querySelector('span').textContent = `atlas — as ${asTest.asRole}`;
+    line('cmd', `> atlas.wake()  // as ${asTest.asRole}`);
+    line('dim', '  (maker test: inside the door, not counted, not announced)');
+    setStatus(20);
+    input.disabled = false;
+    input.focus();
+    return;
+  }
+  if (test) { test = null; session = null; bar.querySelector('span').textContent = 'atlas — session'; }   // back from a test
   if (session) { if (state === 'awake' || state === 'open') { input.disabled = false; input.focus(); } return; }   // reopening: carry on
 
   session = newId();
