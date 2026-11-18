@@ -108,7 +108,9 @@ function renderPanel() {
   body.querySelector('.mk-talk').addEventListener('click', () => {
     const role = body.querySelector('.mk-test select').value;
     close();
-    openTerminal('maker', { asRole: role, token });
+    // what this role may hear, from the saved state (what the gate will use)
+    const hears = (access.roles[role] ?? []).filter((t) => (access.topics[t] ?? '').trim());
+    openTerminal('maker', { asRole: role, token, hears });
   });
 }
 

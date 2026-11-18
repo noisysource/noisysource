@@ -140,6 +140,9 @@ export async function openTerminal(foundBy = 'unknown', asTest = null) {
     bar.querySelector('span').textContent = `atlas — as ${asTest.asRole}`;
     line('cmd', `> atlas.wake()  // as ${asTest.asRole}`);
     line('dim', '  (maker test: inside the door, not counted, not announced)');
+    line('dim', asTest.hears?.length
+      ? `  (may hear: ${asTest.hears.join(', ')})`
+      : '  (may hear: nothing. switch a topic on for this role, give it text, and save)');
     setStatus(20);
     input.disabled = false;
     input.focus();
