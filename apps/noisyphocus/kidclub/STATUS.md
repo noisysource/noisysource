@@ -14,7 +14,11 @@ prod lists `createCampSubscription`, `getCampAvailability`, `onCampDepositPaid`,
 (nobody signed in there); Renato tested the flows on dev. Worktrees for the three PRs are removed.
 
 - **Dev has a test camp:** "Campo de Natal 2026", 21–31 Dec, €25/day, capacity 3, 25 Dec inactive (placeholder values).
-  **Prod has no Christmas camp yet**; create it in Admin → Campos with the real prices and capacity.
+  **Prod already has its camps** ("Atividades Natal", 21–23 Dec; "Atividades Fim de Ano", 28–30 Dec), created by
+  Renato before this change; their days and any sign-ups were not checked against the new rules.
+- **Stale page after a deploy** (seen 2026-11-18, `/admin` blank until a hard refresh): `index.html` is cached for an
+  hour and a request for the previous bundle gets `index.html` back. Fix if it recurs: `Cache-Control: no-cache` on
+  `index.html` in `firebase.json`.
 - **Open:** the first run of the 09:00 job with the new reminder/waiting-list step hasn't been looked at;
   `onCampSubscriptionCreated` emails the admin once per sign-up document, so a mixed sign-up (week + days + waiting
   list) sends up to three admin emails.
