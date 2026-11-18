@@ -60,19 +60,27 @@ let lastPrompt = "";
 const { atlasGate } = await import("./atlasGate");
 const handler = atlasGate as unknown as (req: unknown, res: unknown) => Promise<void>;
 
-async function say(session: string, message: string) {
+async function call(body: Record<string, unknown>) {
   let out: Record<string, unknown> = {};
   let status = 200;
   const res = { set: () => res, status: (s: number) => { status = s; return res; }, json: (o: Record<string, unknown>) => { out = o; } };
-  await handler({ method: "POST", body: { session, message, how: "star", ref: "https://linkedin.com" }, headers: { "x-forwarded-for": "1.2.3.4", "user-agent": "test" } }, res);
+  await handler({ method: "POST", body, headers: { "x-forwarded-for": "1.2.3.4", "user-agent": "test" } }, res);
   return { status, ...out };
 }
+const say = (session: string, message: string, extra: Record<string, unknown> = {}) =>
+  call({ session, message, how: "star", ref: "https://linkedin.com", ...extra });
+const TOKEN = "maker-token-0123456789abcdef";
 
 beforeEach(() => {
   store.clear();
   geminiCalls = 0;
   geminiReply = { reply: "and who sent you?", who: "investor", why: "looking to fund" };
-  store.set("atlas_gate/config", { geminiApiKey: "k", passphrase: "Abre-te Sésamo", profile: "He builds Atlas." });
+  store.set("atlas_gate/config", { geminiApiKey: "k", passphrase: "Abre-te Sésamo", adminToken: TOKEN });
+  store.set("atlas_gate/access", {
+    topics: { business: "He builds Atlas.", infrastructure: "INFRA TEXT" },
+    roles: { investor: ["business"], manager: ["infrastructure"] },
+    keys: [{ phrase: "blue door", role: "manager", label: "boss", enabled: true }],
+  });
 });
 
 describe("atlasGate", () => {
@@ -102,8 +110,11 @@ describe("atlasGate", () => {
     const rec = store.get("atlas_awakenings/session-0002")!;
     expect(rec.unlocked).toBe(true);
     expect(JSON.stringify(rec)).not.toMatch(/sesamo/i);
+    geminiReply = { reply: "...", who: "investor", why: "funding" };
     await say("session-0002", "tell me about him");
+    // shared phrase: the role is Atlas's guess (investor, from the first reply), so business only
     expect(lastPrompt).toContain("He builds Atlas.");
+    expect(lastPrompt).not.toContain("INFRA TEXT");
   });
 
   it("never shows the model the profile while locked", async () => {
@@ -130,6 +141,41 @@ describe("atlasGate", () => {
     geminiReply = null;
     const r = await say("session-0004", "hello");
     expect(r).toMatchObject({ reply: expect.stringContaining("signal breaks"), left: 3 });
+  });
+
+  it("opens as the key's role with a personal key, and records which key", async () => {
+    expect(await say("session-key-1", "the blue door")).toMatchObject({ state: "open" });
+    const rec = store.get("atlas_awakenings/session-key-1")!;
+    expect(rec).toMatchObject({ unlocked: true, role: "manager", keyLabel: "boss" });
+    expect(JSON.stringify(rec)).not.toContain("blue door");
+    await say("session-key-1", "how is it built?");
+    expect(lastPrompt).toContain("INFRA TEXT");
+    expect(lastPrompt).not.toContain("He builds Atlas.");
+  });
+
+  it("lets the maker read and save the access matrix, with the token only", async () => {
+    expect((await call({ action: "access.get" })).status).toBe(403);
+    expect((await call({ action: "access.get", token: "wrong-token-0123456789abcd" })).status).toBe(403);
+    const got = await call({ action: "access.get", token: TOKEN });
+    expect((got.access as { roles: unknown }).roles).toEqual({ investor: ["business"], manager: ["infrastructure"] });
+    const saved = await call({ action: "access.set", token: TOKEN, access: { topics: { profile: "P" }, roles: { recruiter: ["profile", "nonsense"] }, keys: [] } });
+    expect(saved.access).toEqual({ topics: { profile: "P" }, roles: { recruiter: ["profile"] }, keys: [] });
+    expect(store.get("atlas_gate/access")).toMatchObject({ topics: { profile: "P" }, roles: { recruiter: ["profile"] } });
+  });
+
+  it("refuses everyone when there's no token configured", async () => {
+    store.set("atlas_gate/config", { geminiApiKey: "k" });
+    expect((await call({ action: "access.get", token: "" })).status).toBe(403);
+  });
+
+  it("lets the maker talk as a role: not counted, not announced", async () => {
+    store.set("atlas_gate/config", { geminiApiKey: "k", adminToken: TOKEN, globalLimit: 1 });
+    const r = await say("session-test-1", "how is it built?", { asRole: "manager", token: TOKEN });
+    expect(r).toMatchObject({ state: "open" });
+    expect(lastPrompt).toContain("INFRA TEXT");
+    expect(store.get("atlas_awakenings/session-test-1")).toMatchObject({ test: true, seen: true, role: "manager", how: "maker" });
+    expect(store.get("atlas_gate_usage/world")).toBeUndefined();
+    expect((await say("session-test-2", "hi", { asRole: "manager", token: "nope-nope-nope-nope-nope-nope" })).status).toBe(403);
   });
 
   it("rejects bad requests", async () => {

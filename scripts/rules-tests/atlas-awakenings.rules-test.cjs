@@ -47,6 +47,7 @@ async function expect(outcome, label, fn) {
   await seed('atlas_awakenings/visit-1', { who: s('investor'), why: s('funding'), seen: b(false) });
   await seed('atlas_gate/config', { passphrase: s('secret'), geminiApiKey: s('key') });
   await seed('atlas_gate_usage/world', { count: { integerValue: '3' } });
+  await seed('atlas_gate/access', { keys: { arrayValue: {} } });
 
   const owner = client('owner', 'admin@noisysource.com');
   const atlas = client('atlas', 'atlas@kidclub.pt');
@@ -62,11 +63,15 @@ async function expect(outcome, label, fn) {
     await expect('denied', `${name} deletes an awakening`, () => deleteDoc(doc(db, 'atlas_awakenings/visit-1')));
     await expect('denied', `${name} reads the gate config`, () => getDoc(doc(db, 'atlas_gate/config')));
     await expect('denied', `${name} reads the counter`, () => getDoc(doc(db, 'atlas_gate_usage/world')));
+    await expect('allowed', `${name} reads the access matrix`, () => getDoc(doc(db, 'atlas_gate/access')));
+    await expect('allowed', `${name} saves the access matrix`, () => setDoc(doc(db, 'atlas_gate/access'), { roles: {} }, { merge: true }));
   }
   for (const [name, db] of [['stranger', stranger], ['anonymous', anon]]) {
     await expect('denied', `${name} reads an awakening`, () => getDoc(doc(db, 'atlas_awakenings/visit-1')));
     await expect('denied', `${name} creates an awakening`, () => setDoc(doc(db, 'atlas_awakenings/x'), { who: 'x' }));
     await expect('denied', `${name} reads the gate config`, () => getDoc(doc(db, 'atlas_gate/config')));
+    await expect('denied', `${name} reads the access matrix`, () => getDoc(doc(db, 'atlas_gate/access')));
+    await expect('denied', `${name} writes the access matrix`, () => setDoc(doc(db, 'atlas_gate/access'), { roles: {} }));
     await expect('denied', `${name} resets the counter`, () => setDoc(doc(db, 'atlas_gate_usage/world'), { count: 0 }));
   }
 

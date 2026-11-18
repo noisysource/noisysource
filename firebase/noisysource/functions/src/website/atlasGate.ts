@@ -1,9 +1,11 @@
 import { onRequest } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import * as admin from "firebase-admin";
+import { timingSafeEqual } from "crypto";
 import {
-  GateConfig, Session, World, LINES, DEFAULT_MODEL, LOCKED_TURNS, UNLOCKED_TURNS,
-  newSession, validateRequest, saysPhrase, checkWorld, checkSession, geminiRequest, parseGemini, left,
+  GateConfig, Session, World, Access, Role, ROLES, LINES, DEFAULT_MODEL, LOCKED_TURNS, UNLOCKED_TURNS,
+  newSession, validateRequest, matchKey, cleanAccess, emptyAccess, checkWorld, checkSession,
+  geminiRequest, parseGemini, left,
 } from "./atlasGateLogic";
 
 /**
@@ -27,14 +29,31 @@ import {
  *
  * Config: atlas_gate/config (server-only; no client rule), see GateConfig.
  * Missing doc or `enabled: false` = Atlas stays asleep.
+ *
+ * Access: atlas_gate/access (see Access): knowledge blocks ("topics"), which
+ * of them each role may hear ("roles"), and personal keys that open the door
+ * as a given role. The shared `passphrase` opens it as Atlas's own guess.
+ *
+ * The maker panel (#maker on the site) sends `token` (= config.adminToken) to
+ * read/save the access doc (`action: "access.get" | "access.set"`) and to talk
+ * to Atlas as a role (`asRole`): such test sessions don't count towards the
+ * world limit and are saved with `test: true, seen: true`.
  */
 
 const CONFIG_DOC = "atlas_gate/config";
 const SESSIONS = "atlas_awakenings";
 const WORLD = "atlas_gate_usage/world";
+const ACCESS_DOC = "atlas_gate/access";
+
+function tokenOk(given: unknown, cfg: GateConfig): boolean {
+  const want = cfg.adminToken ?? "";
+  if (want.length < 24 || typeof given !== "string") return false;
+  const a = Buffer.from(given), b = Buffer.from(want);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 const TIMEOUT_MS = 12_000;
 
-async function askGemini(cfg: GateConfig, s: Session, message: string) {
+async function askGemini(cfg: GateConfig, s: Session, message: string, access: Access) {
   const model = cfg.model || DEFAULT_MODEL;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -42,7 +61,7 @@ async function askGemini(cfg: GateConfig, s: Session, message: string) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": cfg.geminiApiKey ?? "" },
-      body: JSON.stringify(geminiRequest(s, cfg, message)),
+      body: JSON.stringify(geminiRequest(s, cfg, message, access)),
       signal: ctrl.signal,
     });
     if (!res.ok) {
@@ -62,12 +81,29 @@ export const atlasGate = onRequest({ invoker: "public", timeoutSeconds: 30, memo
   res.set("Cache-Control", "no-store");
   if (req.method !== "POST") { res.status(405).json({ error: "POST only" }); return; }
 
-  const input = validateRequest(req.body);
-  if (!input) { res.status(400).json({ error: "bad request" }); return; }
-
   const db = admin.firestore();
-  const cfgSnap = await db.doc(CONFIG_DOC).get();
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const [cfgSnap, accessSnap] = await Promise.all([db.doc(CONFIG_DOC).get(), db.doc(ACCESS_DOC).get()]);
   const cfg = (cfgSnap.data() ?? {}) as GateConfig;
+  const access = cleanAccess(accessSnap.data()) ?? emptyAccess();
+
+  // The maker panel: read or save the access matrix.
+  if (body.action === "access.get" || body.action === "access.set") {
+    if (!tokenOk(body.token, cfg)) { res.status(403).json({ error: "no" }); return; }
+    if (body.action === "access.get") { res.json({ access }); return; }
+    const next = cleanAccess(body.access);
+    if (!next) { res.status(400).json({ error: "bad access" }); return; }
+    await db.doc(ACCESS_DOC).set({ ...next, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    res.json({ access: next });
+    return;
+  }
+
+  const input = validateRequest(body);
+  if (!input) { res.status(400).json({ error: "bad request" }); return; }
+  const asRole = (ROLES as readonly unknown[]).includes(body.asRole) ? (body.asRole as Role) : null;
+  const testing = !!asRole && tokenOk(body.token, cfg);
+  if (asRole && !testing) { res.status(403).json({ error: "no" }); return; }
+
   if (!cfgSnap.exists || cfg.enabled === false || !cfg.geminiApiKey) {
     res.json({ reply: LINES.asleep, state: "asleep", left: 0 });
     return;
@@ -85,9 +121,10 @@ export const atlasGate = onRequest({ invoker: "public", timeoutSeconds: 30, memo
     const existing = sSnap.exists ? (sSnap.data() as Session) : null;
     const s: Session = existing ?? newSession();
     if (!existing) {
+      if (testing) Object.assign(s, { unlocked: true, role: asRole, test: true });
       tx.set(sessionRef, {
-        ...s, how: input.how, ref: input.ref,
-        who: "unknown", why: "", seen: false, createdAt: now, updatedAt: now,
+        ...s, how: testing ? "maker" : input.how, ref: testing ? "" : input.ref,
+        who: "unknown", why: "", seen: testing, createdAt: now, updatedAt: now,
       });
     }
     if (s.asleep) return { kind: "reply", line: LINES.asleep, state: "asleep", s };
@@ -98,19 +135,24 @@ export const atlasGate = onRequest({ invoker: "public", timeoutSeconds: 30, memo
       return { kind: "reply", line: s.unlocked ? LINES.unlockedDone : LINES.session, state: "asleep", s };
     }
 
-    const world: World = { count: wSnap.get("count") ?? 0, quietUntil: wSnap.get("quietUntil") ?? 0 };
-    const { quiet, next } = checkWorld(world, Date.now(), cfg);
-    if (next !== world) tx.set(worldRef, next);
-    if (quiet) {
-      // Quiet for everyone: this visitor isn't put to sleep for good, they can come back.
-      return { kind: "reply", line: LINES.quiet, state: "quiet", s };
+    if (!s.test) {
+      const world: World = { count: wSnap.get("count") ?? 0, quietUntil: wSnap.get("quietUntil") ?? 0 };
+      const { quiet, next } = checkWorld(world, Date.now(), cfg);
+      if (next !== world) tx.set(worldRef, next);
+      if (quiet) {
+        // Quiet for everyone: this visitor isn't put to sleep for good, they can come back.
+        return { kind: "reply", line: LINES.quiet, state: "quiet", s };
+      }
     }
 
-    if (!s.unlocked && saysPhrase(input.message, cfg.passphrase)) {
+    const key = s.unlocked ? null : matchKey(input.message, cfg, access);
+    if (key) {
       s.unlocked = true;
+      s.role = key.role;
       s.transcript.push({ from: "visitor", text: "[the phrase]" }, { from: "atlas", text: LINES.opened });
       tx.set(sessionRef, {
         unlocked: true, unlockedAt: now, updatedAt: now, transcript: s.transcript, seen: false,
+        role: key.role, keyLabel: key.label,
       }, { merge: true });
       return { kind: "reply", line: LINES.opened, state: "open", s };
     }
@@ -124,7 +166,7 @@ export const atlasGate = onRequest({ invoker: "public", timeoutSeconds: 30, memo
 
   // 2. One model call. A failure costs the visitor the turn (no retry loops).
   const s = plan.s;
-  const answer = await askGemini(cfg, s, input.message);
+  const answer = await askGemini(cfg, s, input.message, access);
   const reply = answer?.reply ?? LINES.broken;
   if (s.unlocked) s.unlockedTurns += 1; else s.turns += 1;
   s.transcript.push({ from: "visitor", text: input.message }, { from: "atlas", text: reply });
@@ -133,7 +175,7 @@ export const atlasGate = onRequest({ invoker: "public", timeoutSeconds: 30, memo
 
   const update: Record<string, unknown> = {
     turns: s.turns, unlockedTurns: s.unlockedTurns, asleep: s.asleep,
-    transcript: s.transcript, updatedAt: now, seen: false,
+    transcript: s.transcript, updatedAt: now, seen: !!s.test,
   };
   if (answer && answer.who !== "unknown") update.who = answer.who;
   if (answer?.why) update.why = answer.why;

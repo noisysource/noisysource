@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   normalize, saysPhrase, validateRequest, checkWorld, checkSession, newSession, systemPrompt,
   geminiRequest, parseGemini, left, LOCKED_TURNS, UNLOCKED_TURNS, OPENING, GLOBAL_LIMIT, QUIET_HOURS,
+  cleanAccess, matchKey, roleOf, topicsFor, emptyAccess,
 } from "./atlasGateLogic";
 
 describe("the phrase", () => {
@@ -83,11 +84,53 @@ describe("prompts", () => {
     for (const s of states) expect(systemPrompt(s, {})).not.toMatch(/renato|lopes/i);
     expect(systemPrompt(newSession(), {})).toContain("Never say, spell, hint at or confirm any name");
   });
-  it("shares the profile only once unlocked, and never the phrase", () => {
-    const p = systemPrompt({ ...newSession(), unlocked: true }, { passphrase: "abre te sesamo", profile: "He builds things." });
-    expect(p).toContain("He builds things.");
-    expect(p).toContain("still never his name");
-    expect(p).not.toContain("sesamo");
+  it("shares only the topics switched on for the role, and never the phrase", () => {
+    const access = cleanAccess({
+      topics: { profile: "PROFILE TEXT", infrastructure: "INFRA TEXT", business: "BUSINESS TEXT", apps: "APPS TEXT" },
+      roles: { investor: ["business", "product"], recruiter: ["profile"] },
+    })!;
+    const investor = systemPrompt({ ...newSession(), unlocked: true, role: "investor" }, { passphrase: "abre te sesamo" }, access);
+    expect(investor).toContain("BUSINESS TEXT");
+    expect(investor).not.toMatch(/PROFILE TEXT|INFRA TEXT|APPS TEXT|sesamo/);
+    expect(investor).toContain("still never your maker's name");
+    const recruiter = systemPrompt({ ...newSession(), unlocked: true, role: "recruiter" }, {}, access);
+    expect(recruiter).toContain("PROFILE TEXT");
+    expect(recruiter).not.toMatch(/BUSINESS TEXT|INFRA TEXT|APPS TEXT/);
+    const manager = systemPrompt({ ...newSession(), unlocked: true, role: "manager" }, {}, access);
+    expect(manager).toContain("not allowed to share anything");
+  });
+  it("never shares a topic while locked, whatever the switches", () => {
+    const access = cleanAccess({ topics: { profile: "PROFILE TEXT" }, roles: { curious: ["profile"] } })!;
+    expect(systemPrompt({ ...newSession(), who: "curious" }, {}, access)).not.toContain("PROFILE TEXT");
+  });
+});
+
+describe("access", () => {
+  it("cleans what it's given: known topics and roles only, valid keys only", () => {
+    const a = cleanAccess({
+      topics: { profile: "p", secrets: "nope" },
+      roles: { investor: ["business", "business", "secrets"], hacker: ["profile"] },
+      keys: [{ phrase: "blue door", role: "investor", label: "VC" }, { phrase: "x", role: "investor" }, { phrase: "ok then", role: "god" }],
+    })!;
+    expect(a.topics).toEqual({ profile: "p" });
+    expect(a.roles).toEqual({ investor: ["business"] });
+    expect(a.keys).toEqual([{ phrase: "blue door", role: "investor", label: "VC", enabled: true }]);
+    expect(cleanAccess("nope")).toBeNull();
+  });
+  it("opens with a personal key as its role, with the shared phrase as Atlas's guess", () => {
+    const a = cleanAccess({ keys: [{ phrase: "Blue Door", role: "investor", label: "VC" }, { phrase: "red door", role: "manager", enabled: false }] })!;
+    expect(matchKey("the blue door?", { passphrase: "abre te sesamo" }, a)).toEqual({ role: "investor", label: "VC" });
+    expect(matchKey("red door", {}, a)).toBeNull();
+    expect(matchKey("abre te sesamo", { passphrase: "abre te sesamo" }, a)).toEqual({ role: "auto", label: "shared phrase" });
+    expect(matchKey("hello", { passphrase: "abre te sesamo" }, a)).toBeNull();
+  });
+  it("works out the role: the key's, or Atlas's guess for the shared phrase", () => {
+    expect(roleOf({ ...newSession(), role: "manager", who: "investor" })).toBe("manager");
+    expect(roleOf({ ...newSession(), role: "auto", who: "investor" })).toBe("investor");
+    expect(roleOf({ ...newSession(), role: "auto", who: "unknown" })).toBe("unknown");
+    expect(topicsFor("unknown", cleanAccess({ topics: { profile: "p" }, roles: {} })!)).toEqual([]);
+    expect(topicsFor("recruiter", cleanAccess({ topics: { profile: "p", apps: "" }, roles: { recruiter: ["apps", "profile"] } })!)).toEqual(["profile"]);
+    expect(topicsFor("recruiter", emptyAccess())).toEqual([]);
   });
 });
 

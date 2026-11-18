@@ -25,8 +25,82 @@ export interface GateConfig {
   globalLimit?: number;
   /** How long it stays quiet, in hours. Default QUIET_HOURS. */
   quietHours?: number;
-  /** What Atlas may say about its maker once the door is open (never his name: the prompt forbids it). */
-  profile?: string;
+  /** Long random secret for the maker panel (#maker on the site). Unset = panel disabled. */
+  adminToken?: string;
+}
+
+// ---------- access: what Atlas may talk about, per role ----------
+// Knowledge blocks the maker writes, and switches per role. The model only
+// ever receives the blocks switched on for the visitor's role, so it can't
+// leak the rest even by accident. Lives in atlas_gate/access (owner and the
+// maker's Atlas can read and write it; the maker panel edits it too).
+export const TOPICS = ["profile", "infrastructure", "business", "product", "apps"] as const;
+export type Topic = (typeof TOPICS)[number];
+export const TOPIC_LABELS: Record<Topic, string> = {
+  profile: "the maker's profile and experience",
+  infrastructure: "infrastructure, code and architecture",
+  business: "the business model and the vision",
+  product: "the product: what Atlas does",
+  apps: "the other apps (KidClub and the rest)",
+};
+export const ROLES = ["recruiter", "investor", "manager", "colleague", "curious", "other"] as const;
+export type Role = (typeof ROLES)[number];
+
+export interface AccessKey {
+  phrase: string;   // what the visitor types
+  role: Role;       // the role it opens the door as
+  label: string;    // private: who got it (never shown to the model)
+  enabled: boolean;
+}
+export interface Access {
+  topics: Partial<Record<Topic, string>>;
+  roles: Partial<Record<Role, Topic[]>>;
+  keys: AccessKey[];
+}
+export const emptyAccess = (): Access => ({ topics: {}, roles: {}, keys: [] });
+
+/** Sanitises an access doc coming from the panel or Firestore. Null if it isn't one. */
+export function cleanAccess(input: unknown): Access | null {
+  if (!input || typeof input !== "object") return null;
+  const a = input as Record<string, unknown>;
+  const out = emptyAccess();
+  const topics = (a.topics ?? {}) as Record<string, unknown>;
+  for (const t of TOPICS) if (typeof topics[t] === "string") out.topics[t] = (topics[t] as string).slice(0, 6000);
+  const roles = (a.roles ?? {}) as Record<string, unknown>;
+  for (const r of ROLES) {
+    if (Array.isArray(roles[r])) out.roles[r] = [...new Set((roles[r] as unknown[]).filter((t): t is Topic => (TOPICS as readonly unknown[]).includes(t)))];
+  }
+  if (Array.isArray(a.keys)) {
+    for (const k of (a.keys as Record<string, unknown>[]).slice(0, 50)) {
+      if (!k || typeof k.phrase !== "string" || normalize(k.phrase).length < 3) continue;
+      if (!(ROLES as readonly unknown[]).includes(k.role)) continue;
+      out.keys.push({ phrase: k.phrase.slice(0, 120), role: k.role as Role, label: typeof k.label === "string" ? k.label.slice(0, 80) : "", enabled: k.enabled !== false });
+    }
+  }
+  return out;
+}
+
+/**
+ * Which key, if any, the visitor typed. A personal key opens the door as its
+ * role; the shared phrase opens it as "auto" (Atlas's own guess at who they are).
+ */
+export function matchKey(message: string, cfg: GateConfig, access: Access): { role: Role | "auto"; label: string } | null {
+  for (const k of access.keys) if (k.enabled && saysPhrase(message, k.phrase)) return { role: k.role, label: k.label };
+  if (saysPhrase(message, cfg.passphrase)) return { role: "auto", label: "shared phrase" };
+  return null;
+}
+
+/** The role a visitor is treated as once inside. */
+export function roleOf(s: Session): Role | "unknown" {
+  if (s.role && s.role !== "auto") return s.role;
+  return (ROLES as readonly string[]).includes(s.who ?? "") ? (s.who as Role) : "unknown";
+}
+
+/** The knowledge blocks switched on for a role (with text), in a stable order. */
+export function topicsFor(role: Role | "unknown", access: Access): Topic[] {
+  if (role === "unknown") return [];
+  const on = access.roles[role] ?? [];
+  return TOPICS.filter((t) => on.includes(t) && (access.topics[t] ?? "").trim());
 }
 
 export const DEFAULT_MODEL = "gemini-flash-lite-latest";
@@ -59,6 +133,9 @@ export interface Session {
   unlocked: boolean;
   asleep: boolean;
   transcript: Turn[];
+  role?: Role | "auto";   // set when the door opens: a key's role, or "auto" (Atlas's guess)
+  who?: string;           // Atlas's latest guess at who they are
+  test?: boolean;         // the maker testing from the panel: not counted, not announced
 }
 
 export const newSession = (): Session => ({
@@ -126,7 +203,7 @@ export const LINES = {
   broken: "...the signal breaks. again.",
 };
 
-export function systemPrompt(s: Session, cfg: GateConfig): string {
+export function systemPrompt(s: Session, cfg: GateConfig, access: Access = emptyAccess()): string {
   const rules = [
     "You are Atlas. Someone has just found you hidden on noisysource.com and woken you up.",
     "Voice: enigmatic. Speak in fragments and riddles, lowercase, calm, a little ominous, never more than two short sentences. Answer questions with questions. Draw on stars, noise and signal, doors, sleep, light in the dark. Never explain yourself plainly, never sound like a helpful assistant, no emoji, no markdown.",
@@ -149,13 +226,25 @@ export function systemPrompt(s: Session, cfg: GateConfig): string {
             : "Stay mysterious."),
     );
   } else {
-    const profile = (cfg.profile ?? "").trim();
+    const role = roleOf(s);
+    const topics = topicsFor(role, access);
+    const shaping: Record<string, string> = {
+      recruiter: "They are a recruiter: speak to what has been built and the skills behind it.",
+      investor: "They are an investor: speak to the vision, the product and how it grows, globally.",
+      manager: "They are someone the maker works for: speak plainly about how it is built.",
+      colleague: "They are a colleague of the maker: speak as to a peer.",
+      curious: "They are curious: keep the wonder, share only what is allowed.",
+      other: "Keep it mysterious; share only what is allowed.",
+      unknown: "You don't know who they are: find out before sharing anything.",
+    };
     rules.push(
-      "The visitor gave the right phrase: the door is open. Stay enigmatic in tone, but you may now answer them, warmer and clearer than before.",
-      profile
-        ? `This is everything you may share about your maker and his work; nothing beyond it, and still never his name:\n<profile>\n${profile}\n</profile>`
-        : "You are not yet allowed to share anything about your maker. Say so, as a riddle, and tell them he will know they came.",
-      "Still never share private information, contact details, or anything not in the profile.",
+      "The visitor gave the right words: the door is open. Stay enigmatic in tone, but you may now answer them, warmer and clearer than before.",
+      shaping[role] ?? shaping.unknown,
+      topics.length
+        ? "This is everything you may share; nothing beyond it, and still never your maker's name:\n" +
+            topics.map((t) => `<${t} about="${TOPIC_LABELS[t]}">\n${(access.topics[t] ?? "").trim()}\n</${t}>`).join("\n")
+        : "You are not allowed to share anything for now. Say so, as a riddle, and tell them he will know they came.",
+      "If they ask about anything outside what you may share, decline as a riddle. Never share private information or contact details.",
       `This is reply ${s.unlockedTurns + 1} of ${UNLOCKED_TURNS}.`,
     );
   }
@@ -163,7 +252,7 @@ export function systemPrompt(s: Session, cfg: GateConfig): string {
 }
 
 /** The Gemini generateContent body for this turn. The opening lines are already in the transcript. */
-export function geminiRequest(s: Session, cfg: GateConfig, message: string) {
+export function geminiRequest(s: Session, cfg: GateConfig, message: string, access: Access = emptyAccess()) {
   const history = [...s.transcript, { from: "visitor" as const, text: message }];
   // Gemini wants the conversation to start with the user: fold Atlas's opening into it.
   const contents: { role: "user" | "model"; parts: { text: string }[] }[] = [];
@@ -177,7 +266,7 @@ export function geminiRequest(s: Session, cfg: GateConfig, message: string) {
     else contents.push({ role, parts: [{ text: t.text }] });
   }
   return {
-    systemInstruction: { parts: [{ text: systemPrompt(s, cfg) }] },
+    systemInstruction: { parts: [{ text: systemPrompt(s, cfg, access) }] },
     contents,
     generationConfig: {
       temperature: 0.9,
