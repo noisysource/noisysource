@@ -32,7 +32,7 @@ pnpm build && pnpm start
 |---|---|---|
 | `PORT` | `8787` | HTTP listen port |
 | `POLL_MS` | `10000` | how often devices are read |
-| `GCLOUD_PROJECT` | `kidclub-dev` | project holding the device config |
+| `GCLOUD_PROJECT` | `noisysource-prod` | project holding the device config. On the Pi it comes from `bridge.env` (`deploy/create-bridge-user.sh <project>` writes it) |
 
 ## API
 

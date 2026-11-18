@@ -21,12 +21,9 @@ export { onPartyBookingCreated, onPartyBookingStatusNotify } from "./kidclub/par
 export { requestPartyBooking, getPartyBookingByLink, payPartyDepositByLink } from "./kidclub/partyPublic";
 export { onTransportDiscountRecalc, onStudyroomDiscountRecalc } from "./kidclub/discountRecalc";
 export { onStudyroomReservationEventsSync, onTransportReservationEventsSync, setReservationEventStatus, backfillReservationEvents } from "./kidclub/reservationEvents";
-export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings } from "./kidclub/camp";
+export { createCampSubscription, confirmCampSubscription, cancelCampSubscription, createCampBalanceBillings, getCampAvailability, onCampDepositPaid } from "./kidclub/camp";
 export { clientErrorsDigest } from "./kidclub/clientErrorsDigest";
 export { enrollFunnelWeekly } from "./kidclub/enrollFunnelWeekly";
-export { legrandGetStatus, legrandSetState } from "./domotics/legrand";
-export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
-export { domoticsWarmBy } from "./domotics/warmBy";
 export { getKidclubVatSummary } from "./kidclub/vatSummary";
 export { getInvoicePdf } from "./kidclub/invoicePdf";
 export { markBillingPaid, attachPaymentProof } from "./kidclub/manualPayment";

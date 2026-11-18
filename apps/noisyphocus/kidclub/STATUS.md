@@ -2,9 +2,120 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+**Last updated:** 2026-11-17 (camp days section just below; the rest is as of 2026-11-11), after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
 
-## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (NOT in prod)
+## ⛺ 2026-11-17: camp seats, waiting list and deposit reminders — PR #162 open into `staging`, not in prod
+
+Branch `agent/kidclub-camp-waitlist` (worktree `.claude/worktrees/kidclub-camp-waitlist`), built **on top of #158**
+(its commits are in #162 until #158 merges). The rules are Renato's (2026-11-17) and live, with tests, in
+`functions/src/kidclub/campLogic.ts`; the Firestore side is `functions/src/kidclub/camp.ts`.
+
+**The rules**
+1. **A seat is reserved by paying the deposit, and payment always confirms** (`onCampDepositPaid`, a trigger on billing
+   updates; exits at once unless `type === "camp_deposit"`). If the day had filled meanwhile, the sign-up is confirmed
+   anyway and shows "acima da lotação" in the admin list.
+2. **Sign-ups are single days or whole weeks** (the "Completo" option is gone from the form). A week must include
+   every open day of the camp in that week; the function refuses anything else.
+3. **Single day with a free seat** → `pending` ("Sinal por pagar"): seat held 7 days (`holdExpiresAt`), `camp_deposit`
+   bill due the same day, email. **Unpaid:** reminder emails on day 3 and day 5; after day 7 → waiting list, seat
+   freed, bill cancelled, email.
+4. **A whole week takes precedence over unpaid single days.** It takes the held seat of the newest unpaid single-day
+   sign-up for that day; that family's day goes to the waiting list (`waitlistReason: "bumped"`), its deposit bill is
+   reduced or cancelled, and it gets an email. Only paid seats, other weeks' holds, and a hold with a payment in
+   flight stop a week.
+5. **A week with a day taken that way is booked day by day instead:** the days with a free seat as a single-day
+   sign-up (no precedence), the rest on the waiting list. Each week of a multi-week request is decided on its own, so
+   one form can produce up to three sign-ups (week, single days, waiting list) and two deposit bills.
+6. **Waiting list = first to pay.** A single day with no free seat, **or with people already waiting for it**, goes
+   to the waiting list (so a newcomer can't hold a seat ahead of those waiting). Whenever every day of a waiting
+   sign-up has a free seat, it gets a deposit bill and a "Há vaga" email (`offerOpen: true`); everyone waiting is
+   offered at once and the first to pay is confirmed. When the day fills again the others' bills are cancelled and
+   they get a "Vaga já ocupada" email. This is `syncWaitlistOffers`, run after every sign-up, payment, cancellation
+   and manual confirmation, and daily.
+7. Reminders, the day-7 step and the daily offer sync run inside the existing 09:00 job `createCampBalanceBillings`
+   (no new Cloud Scheduler job), so "day 7" means the first 09:00 run after the hold ends.
+
+**Also in #162:** parents see places left through `getCampAvailability`; a child can't be signed up twice for a day;
+a closed camp refuses sign-ups; `firestore.rules`: parents can no longer create `campSubscriptions` directly; admin
+**Confirmar** now also works on a waitlisted sign-up (payment made outside the app); the old `/admin/camp` page,
+`CampAdmin.tsx` and `campService.ts` are deleted. There is no "Dar vaga" button (an earlier draft of #162 had one).
+
+**Existing sign-ups:** `pending` ones created before this have no `holdExpiresAt`: they hold no seat (as before), get
+no reminders and are never moved to the waiting list. Confirm or cancel them by hand.
+
+**Checked:** functions typecheck; `campLogic.test.ts` passes (20 tests, run in a scratch copy); no type errors in the
+changed app files. **Not checked:** the app build (CI does it); nothing was clicked through; the Firestore side
+(`camp.ts`) has no tests. **To test on dev** (camp with a 5-day week, capacity 1): (a) family A signs up for one day,
+family B for the whole week → B holds the week, A's day is on the waiting list with an email; (b) mark a deposit
+paid in Faturação → Confirmada; (c) with a paid day, a week sign-up becomes 4 single days + 1 waiting; (d) cancel a
+confirmed sign-up → those waiting get "Há vaga" and a bill; pay one → confirmed, the others get "Vaga já ocupada".
+Reminders and day 7 only happen at the 09:00 run.
+
+**Open for Renato:**
+1. **Email wording**: Renato is reviewing it (he asked to). Eight emails, all in `camp.ts`: sign-up received,
+   reminder, moved to waiting list (unpaid), lost the seat to a week, há vaga, vaga já ocupada, vaga confirmada, and
+   the older manual "Inscrição confirmada" (which still says "Pagar sinal").
+2. With a week taking a single day's held seat, the family that loses it has done nothing wrong and may have been
+   about to pay. Renato chose this; the email explains it.
+
+## 🏕️ 2026-11-17: camp days "not saving" in admin — fix in PR #158 (open, into `staging`, not in prod)
+
+**Problem (reported by Renato, on prod).** In Admin → Campos (`/admin/camps`), a day added to a camp disappeared
+after a refresh. The days **were saved** (`_apps/arcoiris/campDays`); loading them failed. `CampsAdminPage.tsx`
+queried `campDays` with `where('campId') + orderBy('date')` and `campSubscriptions` with `orderBy('createdAt')`.
+Both need a composite index that exists neither in `firestore.indexes.json` nor on dev/prod (checked with
+`gcloud firestore indexes composite list`), and the load had no `catch`, so the list just stayed empty.
+
+**Fix (#158, branch `agent/kidclub-camp-days`, worktree `.claude/worktrees/kidclub-camp-days`).** Query by `campId`
+only, sort in the browser, show an error if the load fails. Not built or typechecked locally; CI does it.
+
+**Next step.** Renato checks on dev (open a camp, add a day, refresh), merges #158, then promotes `staging` → `main`.
+Days saved on prod while it was broken will show up once the fix is there, so expect duplicates if the same day was
+entered several times: delete the extras from the list. Remove the worktree after the merge.
+
+## 🗑️ 2026-11-17: Registo de Horas (timesheets page) removed — PR open into `staging`, not in prod
+
+Renato: not in use, delete it for now. The page (`/admin/timesheets`) was broken anyway: its monthly query needed a
+composite index that doesn't exist, and its "generate" buttons read/wrote `dailySchedules` and `timesheets` at the
+database root, which the rules refuse. Removed: the page, its two modals, the route, the sidebar link and the
+generators in `employeeService.ts`. **Kept:** the `timesheets` / `dailySchedules` rules in `firestore.rules` and any
+data in Firestore (nothing deleted). Branch `agent/kidclub-remove-timesheets`, worktree
+`.claude/worktrees/kidclub-remove-timesheets`; not built locally, CI does it.
+
+**Still open, found in the same sweep:** `employeeService.ts` reads/writes `employmentContracts` at the database root
+while the rules only cover `_apps/arcoiris/employmentContracts`, so contract reads/writes from the HR pages are
+probably refused (not traced). `components/Calendar.tsx` reads root `bookings` the same way (not traced).
+
+## 🚀 2026-11-11: everything on `staging` is in prod (promotion #141). `main` = `staging`, no open PRs
+
+**What happened.** #135 (study-enroll hotfix) merged into `main` at ~11:20 UTC. Then #136, #138, #139, #125 (FinHub v2)
+and #137 merged into `staging`, and #141 promoted `staging` → `main`: prod deploy green before the merge (12:54 UTC) and
+again after it; `sync-staging` fast-forwarded `staging`. All worktrees were removed.
+
+**In prod for the first time with #141:** one-off events (#110), the Vendus listing fix (#116), the transport board
+(#138), vehicle costs (#139), the enroll funnel (#137), FinHub v2 (#125). Domotics code is on `main` but doesn't deploy
+to prod (`deploy_domotics: false`).
+
+**Checked on prod, read-only (2026-11-11 ~13:00 UTC):** all 15 composite indexes READY; scheduler jobs
+`expireAdhocHolds` (every 10 min) and `enrollFunnelWeekly` (Mondays 08:00) ENABLED; the 11 new functions ACTIVE;
+kidclub.pt, kidclub.pt/eventos and the FinHub site answer 200 with the new build. TTL on `expireAt` is ACTIVE on prod
+for `clientEvents` and `clientErrors` (Renato ran it before the promotion).
+
+**NOT done: nobody has clicked through any of it on prod.** Renato's list:
+1. The study-room links from the hotfix ("+ Transporte" / "+ Sala de Estudo" on a child).
+2. `/admin/transportes` (the board shows prod's real subscriptions; it stores only its own plan).
+3. Vehicle costs on the Resumo Financeiro: enter prod's values (steps 1–3 in the 🚐 transport costs section). Until
+   then the page shows the old single-van figures.
+4. `/eventos` and one event end to end. The Vendus invoice for an event bill can only be verified in prod.
+5. Monday 2026-11-16, 08:00: the first enrollment funnel email from prod. Check "Contas novas" isn't "indisponível".
+6. The IVA page: KidClub rows should be there (#116).
+
+**Next for the repo:** restructure of the monorepo along the Google Cloud project pairs (KidClub vs NoisySource), see
+`infra/gcp/HANDOFF-gcp-reorg.md`. `test:rules:client-events` is still missing from the root `package.json`; add it then.
+
+**Before that:** 2026-11-11 (merge states of #135–#139 only; the 🚐 transport board section is from 2026-11-09, the enroll funnel section from 2026-11-05. 2026-10-31 the 🧾 hotfix section. 2026-10-25 touched the Vendus listing line under ▶️ Start here and the parked shared-custody note. Nothing else re-checked since 2026-10-21)
+
+## 🚐 2026-11-09: Transport board replaces the Transport Planner. `agent/kidclub-transport-board` → `staging` (#138). **IN PROD since 2026-11-11** (promotion #141)
 
 **Why.** KidClub is getting a second vehicle (the owned electric Model X, 5 children, a new driver at
 €6/hour; decided by Renato 2026-11-09). The old planner put every child of a period into one run for
@@ -44,7 +155,7 @@ prototype board instead (a Claude artifact, private to him) and asked for it in 
 **Follow-ups, not built:** costs per vehicle on the Resumo Financeiro (it still has one van and one
 driver); a warning when a PLANO run's child now has a subscription; live car position.
 
-## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (**merged 2026-11-11**, on dev). NOT in prod
+## Enroll funnel 2026-11-05: weekly email + form events. `agent/kidclub-enroll-funnel`, PR #137 → `staging` (merged 2026-11-11). **IN PROD since 2026-11-11** (promotion #141)
 
 **Why.** For 7 weeks no parent created a subscription and nobody noticed. The submit button was disabled for study-only
 parents, and a disabled button throws nothing, so `clientErrors` and its digest had nothing to report. This makes that
@@ -171,7 +282,7 @@ either, so a second problem is possible.
   both unless they switch study off. Possibly part of the second problem above.
 - The study form link doesn't carry over the days already picked on the transport form.
 
-## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (NOT merged, NOT in prod); dev preview #129
+## 🧾 Hotfix 2026-10-31: absences in paid months, mid-month starts, per-child calendar. `hotfix/kidclub-absences`, PR #128 → `main` (**merged 2026-11-02, in prod**); dev preview #129
 
 Three fixes, all decided by Renato (A on 2026-10-30, B and C on 2026-10-31), shipped as a hotfix off `main`
 ("today's fixes only", not a staging→main promotion). It replaces PR #126 (closed). The dev preview is
@@ -269,7 +380,7 @@ child page links straight to the family calendar.
 with `reconcileService`), `billingCarryOver.test.ts` (B through `autoCreateBillingSchedule`). `tsc` clean;
 `pnpm --filter kidclub build` OK. The app's `tsc` has 11 older errors, none in files touched here.
 
-## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (NOT merged, NOT in prod)
+## 🚐 2026-11-09: Transport costs per vehicle (second vehicle). `agent/kidclub-vehicle-costs`, PR #139 → `staging` (merged 2026-11-11). **IN PROD since 2026-11-11** (promotion #141); prod's cost values NOT entered yet
 
 (Placed here, not at the top, so it doesn't conflict with #138's STATUS edit. The "Last updated" line above
 doesn't mention it for the same reason.)
@@ -322,7 +433,7 @@ Nothing in `functions/`, FinHub or the rest of `packages/shared` reads these fie
 **Risk:** nothing prod-touching, no external API calls. The only new write is `config/transportation.vehicles`,
 and only when someone edits a vehicle on the Resumo.
 
-## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: ON DEV since 2026-10-21, NOT in prod. Next in line for prod.
+## 🎃 One-off events (Halloween, strike days) — PR #110 → `staging`: on dev since 2026-10-21. **IN PROD since 2026-11-11** (promotion #141); not clicked through on prod yet
 
 **What it is.** Anyone can sign children up for a one-off event, with or without a KidClub account.
 Events have their own prices and per-day capacity. Public pages: `/eventos` (list),
@@ -429,7 +540,7 @@ after the first real deploy.
 
 ## ▶️ Start here (left 2026-10-21)
 
-**🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`, NOT in prod.** `listDocuments` (`vendus.ts`) filtered
+**🧾 Vendus listing bug (2026-10-25): PR #116 → `staging`. IN PROD since 2026-11-11 (promotion #141); the IVA page check on prod is still to do.** `listDocuments` (`vendus.ts`) filtered
 with `date_from`/`date_to`, which live Vendus rejects with 403 `P001`, so `getKidclubVatSummary` (FinHub → IVA,
 NoisyPhocus) failed. #116 switches it to `since`/`until` with `per_page=50` and a 40-page cap, and treats Vendus's
 empty-page answer (404 `A001` "No data", verified live 2026-10-25) as the end of the list. It reaches prod only via

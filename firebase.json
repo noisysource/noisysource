@@ -38,12 +38,6 @@
           "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
         }
       ]
-    },
-    {
-      "target": "domotics",
-      "public": "apps/noisysource/domotics/dist",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [{ "source": "**", "destination": "/index.html" }]
     }
   ],
   "emulators": {

@@ -32,8 +32,9 @@ const CAMP_TYPE_LABELS: Record<string, string> = {
 };
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
-  pending:   { label: 'Pendente',   className: 'bg-yellow-100 text-yellow-800' },
+  pending:   { label: 'Sinal por pagar', className: 'bg-yellow-100 text-yellow-800' },
   confirmed: { label: 'Confirmada', className: 'bg-green-100 text-green-800' },
+  waitlisted: { label: 'Lista de espera', className: 'bg-amber-100 text-amber-800' },
   cancelled: { label: 'Cancelada',  className: 'bg-gray-100 text-gray-500' },
 };
 
@@ -162,21 +163,25 @@ export default function CampsAdminPage() {
     });
     try {
       const [daysSnap, subsSnap] = await Promise.all([
-        getDocs(query(col('campDays'), where('campId', '==', camp.id), orderBy('date', 'asc'))),
-        getDocs(query(col('campSubscriptions'), where('campId', '==', camp.id), orderBy('createdAt', 'desc'))),
+        // Sorted here, not with orderBy: where + orderBy on another field needs a
+        // composite index, and without one the query fails and the list shows empty.
+        getDocs(query(col('campDays'), where('campId', '==', camp.id))),
+        getDocs(query(col('campSubscriptions'), where('campId', '==', camp.id))),
       ]);
       setCampDays(daysSnap.docs.map(d => ({
         id: d.id,
         ...(d.data() as Omit<CampDay, 'id' | 'createdAt' | 'updatedAt'>),
         createdAt: safeDate(d.data().createdAt),
         updatedAt: safeDate(d.data().updatedAt),
-      })));
+      })).sort((x, y) => String(x.date).localeCompare(String(y.date))));
       setSubscriptions(subsSnap.docs.map(d => ({
         id: d.id,
         ...(d.data() as Omit<CampSubscription, 'id' | 'createdAt' | 'updatedAt'>),
         createdAt: safeDate(d.data().createdAt),
         updatedAt: safeDate(d.data().updatedAt),
-      })));
+      })).sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime()));
+    } catch (e: any) {
+      setError(`Não foi possível carregar os dias e inscrições: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -668,11 +673,22 @@ export default function CampsAdminPage() {
                                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_META[sub.status]?.className ?? 'bg-gray-100 text-gray-500'}`}>
                                   {STATUS_META[sub.status]?.label ?? sub.status}
                                 </span>
+                                {sub.status === 'pending' && sub.holdExpiresAt && (
+                                  <p className="text-xs text-gray-400 mt-1">vaga até {safeDate(sub.holdExpiresAt).toLocaleDateString('pt-PT')}</p>
+                                )}
+                                {sub.status === 'waitlisted' && (
+                                  <p className="text-xs text-gray-400 mt-1">
+                                    {sub.waitlistReason === 'unpaid' ? 'sinal não pago' : sub.waitlistReason === 'bumped' ? 'vaga cedida a semana completa' : 'sem vaga'}
+                                    {sub.offerOpen && <span className="text-indigo-600"> · vaga aberta, 1.º a pagar</span>}
+                                  </p>
+                                )}
+                                {sub.overCapacity && <p className="text-xs text-red-600 mt-1">acima da lotação</p>}
                               </td>
                               <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                                 <div className="flex gap-2">
-                                  {sub.status === 'pending' && (
+                                  {(sub.status === 'pending' || sub.status === 'waitlisted') && (
                                     <button
+                                      title="Confirmar à mão (pagamento feito fora da aplicação). Com o sinal pago na aplicação, a inscrição confirma-se sozinha."
                                       onClick={() => handleConfirmSub(sub.id)}
                                       disabled={actionId === sub.id}
                                       className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50"

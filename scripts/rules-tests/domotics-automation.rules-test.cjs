@@ -11,6 +11,9 @@ const {
 } = require('firebase/firestore');
 
 const PROJECT = 'demo-kidclub-rules';
+// The owner's address differs per rules file: the root one (KidClub projects)
+// by default, firebase/noisysource's through the environment (its README).
+const OWNER_EMAIL = 'admin@noisysource.com';
 const HOST = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
 const BASE = `http://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
 
@@ -44,8 +47,8 @@ async function expect(outcome, label, fn) {
   await seed('domotics_config/netatmo', { secret: { stringValue: 'x' } });
   await seed('domotics_config/warm_by', { at: { timestampValue: '2026-10-26T07:00:00Z' }, target: { nullValue: null } });
 
-  const owner = client('owner', { sub: 'owner-uid', user_id: 'owner-uid', email: 'admin@kidclub.pt', email_verified: true });
-  const bridge = client('bridge', { sub: 'bridge-uid', user_id: 'bridge-uid', email: 'domotics-bridge@kidclub.pt' });
+  const owner = client('owner', { sub: 'owner-uid', user_id: 'owner-uid', email: OWNER_EMAIL, email_verified: true });
+  const bridge = client('bridge', { sub: 'bridge-uid', user_id: 'bridge-uid', email: 'domotics-bridge@kidclub.pt', email_verified: true });
   const stranger = client('stranger', { sub: 'parent-uid', user_id: 'parent-uid', email: 'parent@example.com' });
   const anon = client('anon');
   const settings = db => doc(db, 'domotics_config', 'automation');

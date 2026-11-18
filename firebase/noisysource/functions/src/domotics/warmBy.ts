@@ -1,11 +1,12 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
+import { requireOwnerOrAgent } from "../auth";
 import { describeLocal, parseWarmByInput, type WarmByInput } from "./warmByLogic";
 
 /**
  * "Have the house warm by HH:MM": the heating automation's one-off target
  * (apps/noisysource/domotics-bridge/src/warmby.ts). Called by the app's
- * automation card, and later by the chat after the user's confirm tap
+ * automation card, by Atlas (Renato's assistant, after his OK there), and later by the chat after the user's confirm tap
  * (HANDOFF-reports-and-chat.md, section 2).
  *
  * It only stores the request in `domotics_config/warm_by`. The bridge on the
@@ -20,21 +21,8 @@ import { describeLocal, parseWarmByInput, type WarmByInput } from "./warmByLogic
 
 const DOC = "domotics_config/warm_by";
 
-/**
- * Renato only, for now (decided 2026-10-24). Stricter than legrand.ts/tuya.ts,
- * which still accept any signed-in user (STATUS.md, plan 3).
- */
-const OWNER_EMAIL = "admin@kidclub.pt";
-
-function requireDomoticsOwner(auth: { token?: { email?: string; email_verified?: boolean } } | undefined) {
-  if (!auth) throw new HttpsError("unauthenticated", "Sign-in required");
-  if (auth.token?.email !== OWNER_EMAIL || auth.token.email_verified !== true) {
-    throw new HttpsError("permission-denied", "Only the house owner can set this");
-  }
-}
-
-export const domoticsWarmBy = onCall<WarmByInput>({ region: "europe-west3" }, async ({ auth, data }) => {
-  requireDomoticsOwner(auth);
+export const domoticsWarmBy = onCall<WarmByInput>(async ({ auth, data }) => {
+  requireOwnerOrAgent(auth);
   const now = Date.now();
   const parsed = parseWarmByInput(data, now);
   if ("error" in parsed) throw new HttpsError("invalid-argument", parsed.error);

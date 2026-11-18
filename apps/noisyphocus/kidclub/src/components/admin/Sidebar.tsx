@@ -56,7 +56,6 @@ export default function Sidebar() {
 
         <SidebarSection title="👥 Recursos Humanos">
           <SidebarNavLink to="/admin/hr">👥 Colaboradores</SidebarNavLink>
-          <SidebarNavLink to="/admin/timesheets">⏰ Registo de Horas</SidebarNavLink>
         </SidebarSection>
 
         <SidebarSection title="🛠️ Admin">

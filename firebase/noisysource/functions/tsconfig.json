@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    // Type-check only: esbuild writes lib/index.js as one bundle (see the
+    // build script), so workspace code can be imported and ends up inside it.
+    "noEmit": true,
+    "rootDir": "src",
+    "module": "CommonJS",
+    "target": "ES2022",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

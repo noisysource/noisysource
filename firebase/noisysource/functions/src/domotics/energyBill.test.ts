@@ -18,7 +18,7 @@ function mirroredPart(path: string): string {
 
 describe("energyBill.ts mirror", () => {
   it("is identical to packages/shared/lib/energyBill.ts below the marker", () => {
-    const shared = mirroredPart(join(__dirname, "../../../packages/shared/lib/energyBill.ts"));
+    const shared = mirroredPart(join(__dirname, "../../../../../packages/shared/lib/energyBill.ts"));
     expect(mirroredPart(join(__dirname, "energyBill.ts"))).toBe(shared);
   });
 });
@@ -299,7 +299,7 @@ describe("solar surplus", () => {
   });
 
   it("the app's live hint uses the same thresholds (apps/noisysource/domotics/src/data/energy.ts)", () => {
-    const app = readFileSync(join(__dirname, "../../../apps/noisysource/domotics/src/data/energy.ts"), "utf8");
+    const app = readFileSync(join(__dirname, "../../../../../apps/noisysource/domotics/src/data/energy.ts"), "utf8");
     expect(Number(/const SURPLUS_MIN_W = (\d+);/.exec(app)?.[1])).toBe(SURPLUS_MIN_W);
     expect(Number(/const BATTERY_FULL_SOC = (\d+);/.exec(app)?.[1])).toBe(BATTERY_FULL_SOC);
   });

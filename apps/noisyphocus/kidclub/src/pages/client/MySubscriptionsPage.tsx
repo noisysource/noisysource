@@ -41,14 +41,16 @@ interface ChildSubs {
 }
 
 const campStatusLabel: Record<string, string> = {
-  pending: 'Pendente',
+  pending: 'Sinal por pagar',
   confirmed: 'Confirmado',
+  waitlisted: 'Lista de espera',
   cancelled: 'Cancelado',
 };
 
 const campStatusClass: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
   confirmed: 'bg-green-100 text-green-800',
+  waitlisted: 'bg-amber-100 text-amber-800',
   cancelled: 'bg-gray-100 text-gray-600',
 };
 
@@ -222,9 +224,15 @@ export default function MySubscriptionsPage() {
                 </div>
                 <div className="flex items-center gap-4">
                   <span className="font-semibold text-gray-900">€{sub.totalAmount.toFixed(2)}</span>
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${campStatusClass[sub.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                    {campStatusLabel[sub.status] ?? sub.status}
-                  </span>
+                  {sub.status === 'waitlisted' && sub.offerOpen ? (
+                    <Link to="/client/payments" className="text-xs px-2.5 py-1 rounded-full font-medium bg-indigo-100 text-indigo-800 hover:bg-indigo-200">
+                      Há vaga · pagar sinal
+                    </Link>
+                  ) : (
+                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${campStatusClass[sub.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {campStatusLabel[sub.status] ?? sub.status}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}

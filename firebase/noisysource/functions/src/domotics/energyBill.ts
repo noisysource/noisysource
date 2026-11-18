@@ -1,11 +1,12 @@
-// functions/src/domotics/energyBill.ts
+// firebase/noisysource/functions/src/domotics/energyBill.ts
 //
 // A copy of packages/shared/lib/energyBill.ts (the domotics app's Energia page
-// uses that one), for the domotics chat to price the house's electricity the
-// same way. functions/ can't import @shared at runtime, so everything below the
-// marker line is a byte-for-byte copy; energyBill.test.ts fails if they differ.
+// uses that one), so that `domoticsEnergyBill` prices the house's electricity
+// the same way. This codebase type-checks with rootDir src and can't import
+// the shared file, so everything below the marker line is a byte-for-byte copy;
+// energyBill.test.ts fails if they differ.
 // Edit packages/shared/lib/energyBill.ts, then copy it here.
-// ---- mirrored below: packages/shared/lib/energyBill.ts = functions/src/domotics/energyBill.ts ----
+// ---- mirrored below: packages/shared/lib/energyBill.ts = firebase/noisysource/functions/src/domotics/energyBill.ts ----
 
 // --- Energy ------------------------------------------------------------------
 

@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PARTS, Repo, planFromFiles, lockfileParts } from './deploy-parts.mjs';
+import { PARTS, UNITS, Repo, planFromFiles, lockfileParts } from './deploy-parts.mjs';
 
 // A tiny monorepo shaped like the real one.
 const FIXTURE = {
@@ -71,8 +71,9 @@ test('a file no rule knows about deploys everything', () => {
 test('each owned path deploys only its own part', () => {
   assert.deepEqual(deployed(['apps/noisyphocus/kidclub/src/App.tsx']), ['kidclub']);
   assert.deepEqual(deployed(['apps/noisysource/finances/.env.staging']), ['finances']);
-  assert.deepEqual(deployed(['apps/noisysource/domotics/public/icon.png']), ['domotics']);
-  assert.deepEqual(deployed(['functions/src/domotics/legrand.ts']), ['functions']);
+  // Domotics left this unit (2026-11-16): its app deploys nothing here.
+  assert.deepEqual(deployed(['apps/noisysource/domotics/public/icon.png']), []);
+  assert.deepEqual(deployed(['functions/src/kidclub/billing.ts']), ['functions']);
   assert.deepEqual(deployed(['infra/gcp/terraform/iam.tf']), ['terraform']);
   assert.deepEqual(deployed(['firestore.rules']), ['firestore_rules']);
   assert.deepEqual(deployed(['firestore.indexes.json']), ['firestore_indexes']);
@@ -87,7 +88,8 @@ test('packages/shared deploys only the packages that import the changed file', (
   assert.deepEqual(deployed(['packages/shared/lib/money.ts']), ['kidclub']);
   // relative path into packages/shared counts too
   assert.deepEqual(deployed(['packages/shared/lib/vat.ts']), ['finances']);
-  assert.deepEqual(deployed(['packages/shared/models/Device.ts']), ['domotics']);
+  // only domotics imports Device, and it isn't in this unit
+  assert.deepEqual(deployed(['packages/shared/models/Device.ts']), []);
   // only a functions *test* imports partyPricing: tests aren't deployed
   assert.deepEqual(deployed(['packages/shared/models/partyPricing.ts']), []);
   // imported by nobody
@@ -95,7 +97,7 @@ test('packages/shared deploys only the packages that import the changed file', (
 });
 
 test('packages/shared changes that imports cannot trace deploy every consumer', () => {
-  const all = ['domotics', 'finances', 'functions', 'kidclub'];
+  const all = ['finances', 'functions', 'kidclub'];
   assert.deepEqual(deployed(['packages/shared/tsconfig.json']), all);
   // deleted file: gone from the head tree, so nobody can be seen importing it
   assert.deepEqual(deployed(['packages/shared/lib/gone.ts']), all);
@@ -103,9 +105,9 @@ test('packages/shared changes that imports cannot trace deploy every consumer', 
   // depend on all of it
   assert.deepEqual(
     deployed(['packages/shared/lib/unused.ts'], {
-      files: { 'apps/noisysource/domotics/src/x.ts': "import { y } from '@shared/lib/does-not-exist';" },
+      files: { 'apps/noisysource/finances/src/x.ts': "import { y } from '@shared/lib/does-not-exist';" },
     }),
-    ['domotics'],
+    ['finances'],
   );
 });
 
@@ -201,8 +203,14 @@ const withDomoticsDep = LOCK
 `);
 
 test('lockfile: a new dependency of one package deploys only that package', () => {
-  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep), { parts: ['domotics'], importers: ['apps/noisysource/domotics'] });
-  assert.deepEqual(deployed(['pnpm-lock.yaml'], { lockfile: () => lockfileParts(LOCK, withDomoticsDep) }), ['domotics']);
+  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep, 'noisysource'), { parts: ['domotics'], importers: ['apps/noisysource/domotics'] });
+  assert.deepEqual(
+    deployedIn('noisysource', ['pnpm-lock.yaml'], { lockfile: () => lockfileParts(LOCK, withDomoticsDep, 'noisysource') }),
+    ['domotics'],
+  );
+  // ...and nothing in the unit that doesn't deploy that package
+  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep).parts, []);
+  assert.deepEqual(deployed(['pnpm-lock.yaml'], { lockfile: () => lockfileParts(LOCK, withDomoticsDep) }), []);
 });
 
 test('lockfile: the Pi bridge\'s dependencies deploy nothing', () => {
@@ -228,4 +236,98 @@ test('lockfile: anything that could be shared deploys everything', () => {
     assert.ok(lockfileParts(LOCK, head).everything, name);
   }
   assert.ok(lockfileParts(null, LOCK).everything, 'lockfile added');
+});
+
+// --- deploy units ----------------------------------------------------------
+// The second pair of projects (noisysource-dev / noisysource-prod) is its own
+// unit: each unit must ignore what only the other one deploys.
+
+const NS_FIXTURE = {
+  'firebase/noisysource/functions/src/index.ts': "import { bill } from '@shared/lib/energyBill';",
+  'packages/shared/lib/energyBill.ts': 'export const bill = 1;',
+};
+
+function deployedIn(unit, changed, opts = {}) {
+  const plan = planFromFiles(changed, { repo: repo({ ...NS_FIXTURE, ...opts.files }), lockfile: opts.lockfile, unit });
+  if (plan.everything) return 'everything';
+  return UNITS[unit].parts.filter((p) => plan.parts.get(p).length).sort();
+}
+
+test('units: the NoisySource unit\'s own files deploy nothing in the KidClub unit', () => {
+  assert.deepEqual(
+    deployedIn('kidclub', [
+      'firebase/noisysource/firebase.json',
+      'firebase/noisysource/.firebaserc',
+      'firebase/noisysource/firestore.rules',
+      'firebase/noisysource/functions/src/index.ts',
+      'infra/gcp/terraform/noisysource/main.tf',
+    ]),
+    [],
+  );
+  // ...and KidClub's Terraform root, the directory around it, still deploys.
+  assert.deepEqual(deployedIn('kidclub', ['infra/gcp/terraform/iam.tf']), ['terraform']);
+});
+
+test('units: the KidClub unit\'s own files deploy nothing in the NoisySource unit', () => {
+  assert.deepEqual(
+    deployedIn('noisysource', [
+      'firebase.json',
+      '.firebaserc',
+      'firestore.rules',
+      'firestore.indexes.json',
+      'storage.rules',
+      'functions/src/kidclub/billing.ts',
+      'apps/noisyphocus/kidclub/src/App.tsx',
+      'apps/noisysource/finances/src/App.tsx',
+      'infra/gcp/terraform/iam.tf',
+      'infra/gcp/terraform/env/prod.tfvars',
+    ]),
+    [],
+  );
+});
+
+test('units: each NoisySource path deploys only its own part there', () => {
+  assert.deepEqual(deployedIn('noisysource', ['infra/gcp/terraform/noisysource/main.tf']), ['terraform']);
+  assert.deepEqual(deployedIn('noisysource', ['firebase/noisysource/firestore.rules']), ['firestore_rules']);
+  assert.deepEqual(deployedIn('noisysource', ['firebase/noisysource/firestore.indexes.json']), ['firestore_indexes']);
+  assert.deepEqual(deployedIn('noisysource', ['firebase/noisysource/functions/src/index.ts']), ['functions']);
+  assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/domotics/src/App.tsx']), ['domotics']);
+  assert.equal(deployedIn('noisysource', ['firebase/noisysource/firebase.json']), 'everything');
+  assert.equal(deployedIn('noisysource', ['firebase/noisysource/.firebaserc']), 'everything');
+  // unknown file inside the unit's folder: safe default
+  assert.equal(deployedIn('noisysource', ['firebase/noisysource/storage.rules']), 'everything');
+});
+
+test('units: the pipeline, workspace config and unknown files deploy everything in both', () => {
+  for (const unit of Object.keys(UNITS)) {
+    for (const f of ['.github/workflows/deploy-dev.yml', 'package.json', 'tsconfig.base.json', 'some-new-root-config.json']) {
+      assert.equal(deployedIn(unit, [f]), 'everything', `${unit}: ${f}`);
+    }
+    assert.deepEqual(deployedIn(unit, ['CLAUDE.md', 'apps/noisysource/domotics-bridge/src/index.ts']), [], unit);
+  }
+});
+
+test('units: packages/shared is traced through each unit\'s own consumers', () => {
+  // domotics is in the NoisySource unit only; the bundled NoisySource
+  // functions import shared code, /functions doesn't.
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/models/Device.ts']), ['domotics']);
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/lib/energyBill.ts']), ['functions']);
+  assert.deepEqual(deployedIn('kidclub', ['packages/shared/lib/energyBill.ts']), []);
+  // KidClub's and FinHub's models are nobody's in the NoisySource unit.
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/models/Booking.ts']), []);
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'functions']);
+});
+
+test('units: lockfile importers map to the unit that deploys them', () => {
+  assert.deepEqual(lockfileParts(LOCK, withDomoticsDep, 'noisysource').parts, ['domotics']);
+  const finances = LOCK.replace('version: 4.5.0\n\npackages', 'version: 4.5.0\n      zod:\n        specifier: 4.0.0\n        version: 4.0.0\n\npackages');
+  assert.deepEqual(lockfileParts(LOCK, finances, 'kidclub').parts, ['finances']);
+  assert.deepEqual(lockfileParts(LOCK, finances, 'noisysource').parts, []);
+  const nsFunctions = LOCK.replace('importers:\n', 'importers:\n\n  firebase/noisysource/functions:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n');
+  assert.deepEqual(lockfileParts(LOCK, nsFunctions, 'noisysource').parts, ['functions']);
+  assert.deepEqual(lockfileParts(LOCK, nsFunctions, 'kidclub').parts, []);
+});
+
+test('units: an unknown unit is an error, not an empty plan', () => {
+  assert.throws(() => planFromFiles(['x'], { unit: 'nope' }), /unknown unit/);
 });

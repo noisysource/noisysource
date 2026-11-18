@@ -1,3 +1,4 @@
+import { SIGNED_IN_HOST } from '../../lib/origin';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Printer, RefreshCw } from 'lucide-react';
 import {
@@ -122,7 +123,7 @@ export default function ReportsScreen({ onBack, canRead }: Props) {
           {!canRead && (
             <p className="text-sm text-zinc-400 leading-relaxed">
               Os relatórios precisam de sessão iniciada. Na rede de casa não é possível entrar — abra
-              kidclub-dev-domotics.web.app e inicie sessão.
+              {SIGNED_IN_HOST} e inicie sessão.
             </p>
           )}
           {error && <p className="text-sm text-red-400">{error}</p>}

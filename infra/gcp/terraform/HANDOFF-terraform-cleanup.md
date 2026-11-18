@@ -30,9 +30,9 @@ resource, and give Renato the exact one-off `gcloud` command to apply it. Do not
    secrets in prod and dev, and the three old user-managed keys on `gmail-sender-prod`
    (`6e9c3df9…`, `d23edcc9…`, `a9b84999…`, all from Sept 2025). Confirm nothing else reads those secrets first
    (`grep -r SA_PRIVATE_KEY`).
-4. **`.firebaserc`**: `default` is still `rainbow-78314`, a dead project. Any `firebase` command without
-   `--project` targets it — likely how that project's config got copied into prod. Remove `default` (or point
-   it at `kidclub-dev`) and the stale `rainbow-78314` hosting targets.
+4. **`.firebaserc`** — **done 2026-11-15**: the `default` alias (the dead `rainbow-78314`) and that
+   project's hosting targets are gone, along with `env/dev.tfvars`. A `firebase` command without `--project`
+   now fails instead of targeting a dead project.
 5. **Prod state reconciliation** (bigger, separate PR): import real prod resources so prod `apply` can be
    turned back on. `terraform plan -var-file=env/prod.tfvars` showed ~81 resources pending creation. Only
    start this if Renato asks; it's real effort.

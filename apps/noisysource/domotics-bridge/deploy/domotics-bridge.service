@@ -41,8 +41,11 @@ RestartSec=10
 # the bridge crash-loops into its start limit — which is precisely backwards.
 # The devices are on the LAN and controllable without Google's involvement, so
 # no credentials should cost the relay and nothing else.
+#
+# bridge.env also names the project (GCLOUD_PROJECT) and wins over the line
+# below, so switching project is that one file and a restart.
 EnvironmentFile=-/home/pi/domotics-bridge/bridge.env
-Environment=GCLOUD_PROJECT=kidclub-dev
+Environment=GCLOUD_PROJECT=noisysource-prod
 Environment=NODE_ENV=production
 
 # 512MB of swap on an SD card is slower than useless under real pressure, and

@@ -20,12 +20,16 @@ is causing the brownouts and it needs its own PSU.
 On the Mac, once:
 
 ```bash
-./deploy/create-bridge-user.sh
+./deploy/create-bridge-user.sh noisysource-prod
 ```
 
-This creates a Firebase Auth account for the bridge and writes
-`deploy/bridge.env` (0600, gitignored) with the API key, address and a generated
-password.
+This creates a Firebase Auth account for the bridge in that project and writes
+`deploy/bridge.env` (0600, gitignored) with the project, its API key, the address
+and a generated password. `bridge.env` decides which project the Pi publishes to.
+A `bridge.env` for another project is kept as `deploy/bridge.env.<project>`.
+
+The house's project is `noisysource-prod` once the cutover is done
+(`infra/HANDOFF-repo-restructure.md`, step 10; it was `kidclub-dev` until 2026-11-16).
 
 **Not a service account.** The org policy
 `iam.disableServiceAccountKeyCreation` refuses to mint the key, and the role
@@ -36,11 +40,22 @@ included. As an ordinary signed-in user the bridge is governed by
 command queue, and nothing else. There are emulator assertions covering exactly
 that.
 
-Deploy the rules before the bridge can use them:
+The rules are deployed by CI (`firebase/noisysource/firestore.rules` for the
+`noisysource-*` projects).
+
+### Atlas's account (not the bridge's)
+
+Atlas, Renato's assistant, signs in to the same project with an account of its
+own, made the same way:
 
 ```bash
-npx firebase-tools deploy --only firestore:rules --project kidclub-dev
+./deploy/create-agent-user.sh noisysource-prod
 ```
+
+It asks for a password twice (at least 16 characters), creates or updates
+`atlas@kidclub.pt` as a verified user, and writes nothing to disk. What Atlas
+may do is in the rules (`isAtlas`) and the callables (`requireOwnerOrAgent`);
+it has nothing to do with the Pi.
 
 ## 2. Node on the Pi
 
@@ -72,7 +87,7 @@ pnpm build                      # produces lib/
 # No trailing slashes on lib and deploy — with them, rsync copies the *contents*
 # of each into the target and flattens both, leaving index.js at the top level
 # where the systemd unit's `lib/index.js` cannot find it.
-rsync -a --exclude bridge.env package.json lib deploy pi@192.168.1.125:~/domotics-bridge/
+rsync -a --exclude 'bridge.env*' package.json lib deploy pi@192.168.1.125:~/domotics-bridge/
 scp deploy/bridge.env pi@192.168.1.125:~/domotics-bridge/bridge.env
 ```
 
@@ -95,7 +110,7 @@ and the state files alone), restart, then check 7/7 and the ARP pins (see
 
 ```bash
 ssh pi@192.168.1.125 'cd ~/domotics-bridge && cp -a lib lib.bak-$(date +%Y%m%d)'
-rsync -a --exclude bridge.env package.json lib deploy pi@192.168.1.125:~/domotics-bridge/
+rsync -a --exclude 'bridge.env*' package.json lib deploy pi@192.168.1.125:~/domotics-bridge/
 ssh pi@192.168.1.125 'sudo systemctl restart domotics-bridge && sleep 90 && journalctl -u domotics-bridge -n 40 --no-pager'
 ```
 
