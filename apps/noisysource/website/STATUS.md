@@ -1,15 +1,19 @@
 # Website (noisysource.com) — STATUS
 
-NoisySource's public website. A single page whose intro builds the logo:
-void → photons pass by → two collide (flash) → the burst collapses into **noisy** (white
-photons that keep shimmering) → **source** slides in (solid blue) → a photon wave crosses the
-name (white and wavy over noisy, straight and blue over source) → the dot of the i lights up →
-the horizon draws (clean, then scattering) → the tagline is typed like a person would, typo
-included: `for (const i of intelligence) combine(human, artificial);`. Click to replay.
+NoisySource's public website, now the home of **Atlas, a product with no visible maker**
+(Renato, 2026-11-18: Atlas is the product; the company only signs "by noisy source"; nothing
+on the site or in Atlas's answers says who made it or why). The intro builds the logo:
+void → photons pass by → two collide (flash) → the burst fills the screen and stays as the
+background, slowly expanding → photons stream out of it into **atlas** (white photons that keep
+shimmering) → the quiet signature "by noisy source" fades in under it → a photon wave crosses the
+name (white and wavy, then straight and blue) → the light lights up as the name's **full stop**
+→ the horizon draws → the tagline is typed like a person would, typo included:
+`for (const i of intelligence) combine(human, artificial);`.
 
 ## Brand (decided with Renato, 2026-11-17)
-- Wordmark: `noisy` made of white photons (the noise), `source` solid signal blue, the i's dot
-  is a blue light (the idea). Lettering: Oxanium 500 ("machine", sober). Code: JetBrains Mono.
+- Wordmark (since 2026-11-18): **atlas** made of white photons, the blue light as its full stop,
+  "by noisy source" small in blue mono underneath. (Before: `noisy` in photons + `source` in
+  blue, the light as the i's dot.) Lettering: Oxanium 500. Code: JetBrains Mono.
 - Story: from noise (chaos, photons) comes the idea; human + artificial intelligence combined.
 - Palette: void `#03040a`, ice `#e8eefc`, signal blue `#4a7bff`, light `#cfe0ff`.
 - Tagline: `for (const i of intelligence) combine(human, artificial);` (human white,
@@ -79,6 +83,28 @@ The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without ann
   `infra/gcp/terraform/noisysource/env/prod.tfvars` → `custom_domains`. Terraform creates the
   domain on the prod site; it only goes live once the DNS records are added at the registrar
   (see "Next step").
+
+## Access: who hears what (Renato, 2026-11-18)
+Once inside the door, what Atlas may talk about depends on the visitor's **role**:
+- **Topics** (knowledge blocks Renato writes): `profile` (for recruiters, typically),
+  `infrastructure` (code, architecture), `business` (model, vision, growth), `product` (what
+  Atlas does), `apps` (KidClub and the rest).
+- **Roles**: recruiter, investor, manager, colleague, curious, other. Each has on/off switches
+  per topic. The model only ever receives the blocks switched on for the role, so it can't leak
+  the rest. Strangers (no words yet) never hear any of it.
+- **How the role is set**: a **personal key** (phrase + role + private label, can be switched
+  off) opens the door as that role; the **shared `passphrase`** opens it as Atlas's own guess
+  (`who`, from the conversation).
+- **Where it lives**: `atlas_gate/access` (`{topics, roles, keys}`), readable/writable by the owner
+  and Atlas (rules), validated by the function on every read (`cleanAccess`).
+- **The maker panel**: open the site with **`#maker`** (e.g.
+  https://noisysource-dev-website.web.app/#maker), enter the token: switch grid, topic texts,
+  personal keys, save, and **talk as** any role (test sessions: inside the door, not counted
+  towards the 49, saved with `test: true, seen: true`). Later this moves into the Atlas app,
+  which can edit the same doc directly.
+- **Panel setup**: add `adminToken` (string, at least 24 characters; e.g. the output of
+  `openssl rand -hex 24`) to `atlas_gate/config`. Without it the panel just answers "no.".
+  The access doc is created on the first save.
 
 ## One-time setup for the gate (Renato, by hand — nothing secret goes in the repo)
 For each project (`noisysource-dev` first, then `noisysource-prod`), Firestore console → create
