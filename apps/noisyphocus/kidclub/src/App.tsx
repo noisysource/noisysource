@@ -17,7 +17,6 @@ import FinancialSummaryPage from './pages/admin/FinancialSummaryPage';
 import CalendarPage from './pages/admin/CalendarPage';
 import EmailCenterPage from './pages/admin/EmailCenterPage';
 import TransportationConfigPage from './pages/admin/transport/TransportationConfigPage';
-import CampAdminPage from './pages/admin/CampAdminPage';
 import CampsAdminPage from './pages/admin/CampsAdminPage';
 import EditEmployeePage from './pages/admin/EditEmployeePage';
 import DataManagementPage from './pages/admin/DataManagementPage';
@@ -89,7 +88,6 @@ export default function App() {
           <Route path="transport-config" element={<TransportationConfigPage />} />
           <Route path="transportes" element={<TransportBoardPage />} />
           <Route path="transport-planner" element={<Navigate to="/admin/transportes" replace />} />
-          <Route path="camp" element={<CampAdminPage />} />
           <Route path="camps" element={<CampsAdminPage />} />
           <Route path="eventos" element={<AdhocEventsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
