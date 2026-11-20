@@ -32,6 +32,8 @@ export interface PumpSample {
   suct?: number;
   /** Active fault codes (E13, ...); empty when none. */
   faults: string[];
+  /** The pump didn't report (all of) its fault bitmaps: `faults` empty means "none seen", not "none". Absent otherwise. */
+  faultsUnknown?: true;
   /** Zone valves open, of `zones` reachable. */
   valves?: number;
   zones?: number;
@@ -264,6 +266,14 @@ export function createRecorder(
           doc.lockoutWhy = `avaria ainda ativa ao fim de ${Math.round(lockoutAfterMs / MIN)} min`;
           dirty = true;
         }
+      } else if (sample.faultsUnknown) {
+        // The pump stopped reporting its fault bitmaps mid-fault: that is not
+        // the fault clearing. The record stops here, its end not known.
+        doc.status = 'unknown';
+        doc.endedHow = 'unknown';
+        doc.note = 'A bomba deixou de reportar avarias durante esta: não se sabe quando acabou.';
+        s.open = null;
+        dirty = true;
       } else {
         doc.status = 'ended';
         doc.endedAt = new Date(t);

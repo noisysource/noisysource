@@ -176,6 +176,8 @@ export interface GuardInput {
     dis?: number;
     coil?: number;
     faults: string[];
+    /** The pump didn't report (all of) its fault bitmaps: `faults` empty is "none seen", not "none". */
+    faultsUnknown?: boolean;
   };
   /** From the heating automation (live only): its plan has the pump off, so a rest that is due to end carries on. */
   holdRest?: boolean;
@@ -229,7 +231,12 @@ function preemptReason(w: Precursor, until: number, now: number, lastHour: numbe
   return what + then + long;
 }
 
-interface Ctx { pausedUntil: number | null; automationOwns: boolean }
+interface Ctx {
+  pausedUntil: number | null;
+  automationOwns: boolean;
+  /** What the pump isn't reporting, for the note ('' = nothing missing, or no fresh reading). */
+  blind?: string;
+}
 const NO_CTX: Ctx = { pausedUntil: null, automationOwns: false };
 
 export function createGuard(initial: Partial<GuardState> = INITIAL_GUARD) {
@@ -256,7 +263,7 @@ export function createGuard(initial: Partial<GuardState> = INITIAL_GUARD) {
       mode: cfg.enabled ? st.mode : 'off',
       restUntil: st.mode === 'rest' ? st.restUntil : null,
       // Why it no longer stops the pump before a trip belongs with what it's doing.
-      note: preempt.offUntil ? `${note}. ${preempt.note}` : note,
+      note: [note, preempt.offUntil ? preempt.note : '', cfg.enabled ? ctx.blind ?? '' : ''].filter(Boolean).join('. '),
       lastAction: st.lastAction,
       reonAt: cfg.enabled && st.mode === 'watch' && st.offOutsideAt && !held ? st.offOutsideAt + REON_AFTER_MS : null,
       pausedUntil: pausedUntil ?? null,
@@ -269,7 +276,13 @@ export function createGuard(initial: Partial<GuardState> = INITIAL_GUARD) {
   function decide(cfg: GuardConfig, input: GuardInput): GuardDecision {
     const { now, pump } = input;
     const paused = input.pausedUntil && now < input.pausedUntil ? input.pausedUntil : null;
-    const ctx: Ctx = { pausedUntil: paused, automationOwns: !!input.automationOwns };
+    // Datapoints the pump isn't reporting: said in the note, since the rules
+    // that need them can't fire (a trip isn't seen; neither is idling at the setpoint).
+    const blind = !pump ? '' : [
+      pump.faultsUnknown ? 'a bomba não está a reportar avarias (um disparo não se vê)' : '',
+      pump.sp === undefined ? 'a bomba não está a reportar a temperatura da água pedida (não se vê quando fica parada no setpoint)' : '',
+    ].filter(Boolean).join('; ');
+    const ctx: Ctx = { pausedUntil: paused, automationOwns: !!input.automationOwns, blind: blind ? `Atenção: ${blind}` : '' };
     const act = (on: boolean, reason: string, next: Omit<GuardState, 'lastAction'>): GuardDecision => {
       const full: GuardState = { ...next, lastAction: { at: now, what: on ? 'on' : 'off', reason } };
       return { status: status(cfg, now, full, false, ctx), action: { on, reason, next: full } };
@@ -281,8 +294,10 @@ export function createGuard(initial: Partial<GuardState> = INITIAL_GUARD) {
     if (pump) {
       const fault = pump.faults.length > 0;
       tripped = fault && s.lastSeenFault === false;
+      // No bitmaps, no fault seen: not known, so a fault found when they come back isn't counted as a fresh trip.
+      const seenFault = fault ? true : pump.faultsUnknown ? null : false;
       const { watch } = watchDischarge(s.discharge ?? INITIAL_WATCH, { t: now, on: pump.on, hz: pump.hz, dis: pump.dis, coil: pump.coil, faults: pump.faults });
-      s = { ...s, discharge: watch, lastSeenFault: fault };
+      s = { ...s, discharge: watch, lastSeenFault: seenFault };
     }
     // Switched off (the warning or the whole guard): forgotten, so switching it on starts afresh.
     const preemptOn = cfg.enabled && cfg.preempt;
