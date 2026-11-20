@@ -128,6 +128,25 @@ The bit → E-code tables for the bitmaps, and what each code means, live in the
 app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts` (a copy of the bit
 tables is in `src/faults.ts`, for the incidents).
 
+**The module doesn't always report all of them.** Since about 19/11/2026
+(probably a power cut that restarted it) a full read brings only dps 1, 16, 18
+and 20–25: on/off, compressor Hz and the temperatures. No `mode`, no setpoints
+(117–119), no fault bitmaps (15, 109, 120–123), and a refresh doesn't bring them
+back. So the bridge finds the pump by its category (`znrb`), never by a
+datapoint, and treats a missing one as not known rather than 0
+(`src/readings.ts`):
+
+- **Faults:** missing bitmaps are "no reading", not "no fault". The automation
+  says so in its status (`pumpBlind`, and a line in `reasons`), the guard in its
+  note, the app shows "Sem leitura de avarias" instead of "Sem avarias". No fault
+  is made up and the pump is still switched by the plan. A fault incident open
+  when the bitmaps disappear is closed as "end not known", not as cleared.
+- **Water setpoint:** without `p02_heating` the automation sends no water
+  setpoint (it would be sent blind every 15 min, over whatever was set by hand),
+  and neither it nor the guard can see the compressor idling at the setpoint, so
+  the rest at the setpoint doesn't happen. The guard's early warning (discharge
+  temperature) still works.
+
 ### Incidents and the E13 guard
 
 - **The pump is read every 30 s even when nobody is watching** (`PUMP_POLL_MS`;
