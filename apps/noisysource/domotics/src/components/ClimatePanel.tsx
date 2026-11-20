@@ -136,6 +136,13 @@ export function HeatPumpCard({
             </li>
           ))}
         </ul>
+      ) : !offline && p.faultsUnknown ? (
+        <p
+          className="flex items-center gap-1.5 text-xs text-amber-300"
+          title="A bomba não está a reportar os dados de avarias: uma avaria ou um bloqueio não aparecem aqui."
+        >
+          <AlertTriangle size={14} /> Sem leitura de avarias
+        </p>
       ) : !offline && (
         <p className="flex items-center gap-1.5 text-xs text-emerald-400">
           <CheckCircle2 size={14} /> Sem avarias
