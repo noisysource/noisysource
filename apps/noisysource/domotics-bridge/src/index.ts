@@ -8,12 +8,13 @@ import { startHttp } from './http';
 import { readInverter, type InverterReading } from './inverter';
 import {
   createAutomation, parseConfig, pausedUntil,
-  type AutomationConfig, type AutomationMemory, type AutomationStatus, type PumpReading, type ZoneReading,
+  type AutomationConfig, type AutomationMemory, type AutomationStatus,
 } from './automation';
 import { parseWarmBy, type WarmByRequest } from './warmby';
-import { PUMP_FAULT_CODES, decodeFaults } from './faults';
+import { PUMP_FAULT_CODES } from './faults';
+import { PUMP_CATEGORY, readHeating, readPumpSample } from './readings';
 import {
-  createRecorder, type Incident, type PumpDps, type PumpSample, type RecorderSnapshot, type SwitchSource,
+  createRecorder, type Incident, type PumpSample, type RecorderSnapshot, type SwitchSource,
 } from './incidents';
 import {
   createGuard, parseGuardConfig, INITIAL_GUARD, type GuardConfig, type GuardState, type GuardStatus,
@@ -63,8 +64,6 @@ const IDLE_POLL_MS = Number(process.env.IDLE_POLL_MS ?? 300_000);
  * idle rate.
  */
 const PUMP_POLL_MS = Number(process.env.PUMP_POLL_MS ?? 30_000);
-/** The heat pump's Tuya category (see dpmap.ts). */
-const PUMP_CATEGORY = 'znrb';
 /** How long after a request we still consider someone to be watching. */
 const ACTIVE_WINDOW_MS = 120_000;
 /**
@@ -298,48 +297,14 @@ async function refreshAutomationSettings() {
   }
 }
 
-const tenths = (v: unknown) => (typeof v === 'number' ? v / 10 : undefined);
-
 const automate = createAutomation(async (deviceId, commands, reason) => {
   await runCommand(deviceId, commands, 'automation', reason ?? null);
 }, readJson<AutomationMemory>(AUTOMATION_MEMORY_FILE));
 let automating = false;
 let savedMemory = JSON.stringify(automate.memory());
 
-/** The thermostats and the pump, as the automation and the climate history read them. */
-function heatingReadings() {
-  const zones: ZoneReading[] = [];
-  let pump: PumpReading | undefined;
-  for (const d of state.devices) {
-    const s = new Map(d.status.map(x => [x.code, x.value]));
-    if (s.has('p02_heating')) {
-      pump = {
-        id: d.id,
-        online: d.online,
-        on: s.get('switch') === true,
-        fault: PUMP_FAULT_CODES.some(c => Number(s.get(c) ?? 0) !== 0),
-        // The pump's own outdoor sensor (`temp_top` — see README, "Heat pump").
-        outdoor: tenths(s.get('temp_top')),
-        flowSetpoint: typeof s.get('p02_heating') === 'number' ? (s.get('p02_heating') as number) : undefined,
-        // Same datapoints as the incident samples (watchPump).
-        hz: typeof s.get('temp_current') === 'number' ? (s.get('temp_current') as number) : undefined,
-        waterOut: tenths(s.get('venting_temp')),
-        waterIn: tenths(s.get('coiler_temp')),
-      };
-    } else if (s.has('temp_set')) {
-      zones.push({
-        id: d.id,
-        name: d.name,
-        online: d.online,
-        current: tenths(s.get('temp_current')),
-        target: tenths(s.get('temp_set')),
-        mode: typeof s.get('mode') === 'string' ? (s.get('mode') as string) : undefined,
-        valveOpen: s.get('valve_state') === 'open',
-      });
-    }
-  }
-  return { zones, pump };
-}
+/** The thermostats and the pump, as the automation and the climate history read them (readings.ts). */
+const heatingReadings = () => readHeating(state.devices);
 
 /**
  * One automation step on the freshest state. Runs after every poll.
@@ -475,30 +440,10 @@ async function watchPump(pumpFresh: boolean): Promise<SwitchSource | undefined> 
   let sample: PumpSample | undefined;
   let switchedBy: SwitchSource | undefined;
   if (pumpFresh && pump.online) {
-    const s = new Map(pump.status.map(x => [x.code, x.value]));
-    const whole = (code: string) => (typeof s.get(code) === 'number' ? (s.get(code) as number) : undefined);
-    const zones = state.devices.filter(d => d.category === 'wk' && d.online);
-    sample = {
-      t: now,
-      on: s.get('switch') === true,
-      hz: whole('temp_current') ?? 0,
-      sp: whole('p02_heating'),
-      out: tenths(s.get('venting_temp')),
-      inn: tenths(s.get('coiler_temp')),
-      dis: tenths(s.get('compressor_strength')),
-      outdoor: tenths(s.get('temp_top')),
-      coil: tenths(s.get('power_consumption')),
-      suct: tenths(s.get('temp_bottom')),
-      faults: decodeFaults(code => s.get(code)),
-      valves: zones.filter(z => z.status.some(x => x.code === 'valve_state' && x.value === 'open')).length,
-      zones: zones.length,
-    };
+    const read = readPumpSample(pump, state.devices, now);
+    sample = read.sample;
     recorded = false;
-    const dps: PumpDps = {};
-    for (const { code, value } of pump.status) {
-      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') dps[code] = value;
-    }
-    switchedBy = recorder.observe({ id: pump.id, name: pump.name }, sample, dps);
+    switchedBy = recorder.observe({ id: pump.id, name: pump.name }, sample, read.dps);
     if (recorded) writeJson(INCIDENTS_STATE_FILE, recorder.snapshot());
   } else {
     recorder.gap();

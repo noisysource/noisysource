@@ -319,9 +319,15 @@ export interface PumpReading {
   online: boolean;
   on: boolean;
   fault: boolean;
+  /**
+   * The pump isn't reporting (all of) its fault bitmaps, so `fault: false` is
+   * "none seen", not "none": a lockout wouldn't show. Said in the status; the
+   * pump is still switched by the plan (readings.ts).
+   */
+  faultsUnknown?: boolean;
   /** The pump's own outdoor sensor, °C. */
   outdoor?: number;
-  /** Current heating water setpoint, °C. */
+  /** Current heating water setpoint, °C. Undefined when the pump doesn't report it: the water is then left alone. */
   flowSetpoint?: number;
   /** Compressor, Hz. */
   hz?: number;
@@ -480,6 +486,8 @@ export interface AutomationStatus {
   shortfall?: number;
   /** Set when the pump is left alone (fault, offline). */
   pumpHold?: string;
+  /** The pump isn't reporting its faults and/or its water setpoint: what that means, one line (also in `reasons`). */
+  pumpBlind?: string;
   /** Live only: asks the E13 guard to keep its rest going, since the plan has the pump off. */
   holdRest?: boolean;
   /** The automation's own rest at the setpoint (guard off), until when. */
@@ -880,6 +888,19 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
     let flowManual = false;
     let holdRest = false;
     let doing = '';
+    // Datapoints the pump isn't reporting. Said, never guessed: no fault is
+    // made up and the pump is still switched by the plan.
+    let pumpBlind: string | undefined;
+    if (p?.online) {
+      const noFaults = !!p.faultsUnknown;
+      const noSp = p.flowSetpoint === undefined;
+      const water = cfg.flow.enabled ? 'a automação não mexe na temperatura da água' : '';
+      pumpBlind = noFaults && noSp
+        ? `Atenção: a bomba não está a reportar avarias nem a temperatura da água pedida — um bloqueio (E13) não se vê aqui${water ? `, e ${water}` : ''}. Liga e desliga pelo plano na mesma.`
+        : noFaults ? 'Atenção: a bomba não está a reportar avarias — um bloqueio (E13) não se vê aqui. Liga e desliga pelo plano na mesma.'
+        : noSp ? `Atenção: a bomba não está a reportar a temperatura da água pedida${water ? ` — ${water}` : ''}. Liga e desliga pelo plano na mesma.`
+        : undefined;
+    }
     if (!p) pumpHold = 'bomba não encontrada';
     else if (!p.online) pumpHold = 'bomba sem ligação';
     else if (p.fault || (guardOn && g!.mode === 'lockout')) pumpHold = 'bomba em avaria — a automação não lhe mexe';
@@ -907,7 +928,11 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       // Water temperature from the pump's own outdoor sensor, with a correction
       // while the rooms stay short of target — or the top of the range while
       // recovering or warming up.
-      if (cfg.flow.enabled && p.outdoor !== undefined) {
+      // Without the pump's own setpoint nothing is sent: it would be sent blind
+      // every 15 min, over a value someone may have set by hand, and raising
+      // it with the compressor at its minimum is what precedes an E13 (the
+      // check below needs the setpoint too). `pumpBlind` says so.
+      if (cfg.flow.enabled && p.outdoor !== undefined && sp !== undefined) {
         if (waterDrive) {
           // Frozen meanwhile: it says how wrong the curve is, which the top of the range says nothing about.
           deficitSince = null;
@@ -1040,6 +1065,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       doing = `Bomba: ${pumpHold}.`;
       reasons.push(doing);
     }
+    if (pumpBlind) reasons.push(pumpBlind);
     if (warmBy && pumpHold && (warmBy.phase === 'waiting' || warmBy.phase === 'heating')) {
       warmBy = { ...warmBy, note: `${warmBy.note} Atenção: ${pumpHold}, assim não aquece.` };
     }
@@ -1066,6 +1092,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       recovery,
       shortfall: Math.round(shortfall * 10) / 10,
       pumpHold,
+      pumpBlind,
       holdRest,
       restUntil: ownRest ?? undefined,
       switchOns24h: ons.length,
