@@ -2,7 +2,19 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-16
+**Last updated:** 2026-11-20
+
+## ⚠️ 20/11: the automation couldn't see the heat pump. Fixed in code (PR #164 into `staging`), **not on the Pi yet: waiting for Renato's go**
+- **What happened:** since about 19/11 the bridge's automation said `Bomba: bomba não encontrada` and switched the pump neither on nor off (Renato saw it running at 23:55 on 19/11, after the warm hours). The thermostats' targets and the plan kept working. The pump has been running on its own controller and whoever switched it by hand.
+- **Cause:** the bridge recognised the pump by one datapoint, `p02_heating` (the water setpoint). Since about 19/11 (probably the power cut that morning restarted it) the pump's Tuya module answers a full read with only 9 datapoints: on/off, compressor Hz and the temperatures (dps 1, 16, 18, 20–25). The mode, the three setpoints and the six fault bitmaps are missing, and asking for them again brings nothing back (checked from the Mac on 20/11, read-only). Everything else in the bridge found the pump by its category (`znrb`), which still works.
+- **The fix (branch `agent/bridge-pump-partial-dps`):**
+  - The pump is found by its category. The reading code moved to `domotics-bridge/src/readings.ts` so it has tests (`test/readings.test.cjs`, with the 9 datapoints as read on 20/11).
+  - **Missing fault datapoints are "no reading", not "no faults".** The automation still switches the pump by the plan, and adds one line to its reasons: "Atenção: a bomba não está a reportar avarias nem a temperatura da água pedida — um bloqueio (E13) não se vê aqui…". The E13 guard says the same in its note. The pump's card in Clima shows "Sem leitura de avarias" (amber) instead of "Sem avarias". A fault incident open at the moment the datapoints disappear is closed as "end not known", not as "cleared by itself".
+  - **Without the water setpoint, the automation doesn't send one.** Before, a pump found without it would have been sent the curve's value blind every 15 minutes, over whatever was set on the panel. So while this lasts the water stays at what the pump holds (44 °C when last seen).
+- **While the datapoints are missing, even after the Pi deploy:** an E13 or a lockout does not show anywhere (app, Relatórios, guard); the rest at the setpoint (the guard's, and the automation's own) can't happen, since it needs the setpoint; the guard's early warning (discharge temperature) still works. The guard was off on the Pi on 19/11.
+- **Next step, Renato:** review and merge the PR (the merge deploys the app to `noisysource-prod`: only the "Sem leitura de avarias" label changes there). Then the bridge, by hand, `domotics-bridge/deploy/README.md` → "Updating an existing install": `pnpm build`, back up `lib` on the Pi, rsync, restart, check 7/7 and that `GET /state` → `automation.doing` no longer says "bomba não encontrada". **Expect the automation to switch the pump right after the restart** if the plan disagrees with how it finds it (off outside the warm hours, on inside them when a zone asks for heat).
+- **Still open, Renato's call:** making the module report everything again (untried: change the water setpoint on the panel or in SmartLife, or power-cycle the module). If it never does, the water curve and the rest at the setpoint are gone for good and need another way.
+- **Not changed, on purpose:** the guard still leaves a lockout as soon as it sees the pump on with no fault reported, which with the bitmaps missing is "none seen". The climate history's `fault` flag per slot is likewise "none seen".
 
 ## ▶️ 16/11: Atlas can see and run the house (branch `agent/atlas-house`, PR into `staging`)
 Atlas is Renato's assistant (repo `noisysource/Atlas`, on his Mac). With this change it **reads the whole house and, after Renato's OK on a card in Atlas, changes what the app changes, except bridge admin**. Nothing changes in the app itself.

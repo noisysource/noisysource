@@ -91,6 +91,12 @@ export interface HeatPumpState {
   dhwSetpoint?: number;
   /** Active fault codes, e.g. ['E13']; empty when healthy. */
   faults: string[];
+  /**
+   * The pump isn't reporting (all of) its fault bitmaps, so an empty `faults`
+   * means "none seen", not "healthy". Its Tuya module has done this since
+   * 19/11/2026 (see apps/noisysource/domotics-bridge/src/readings.ts).
+   */
+  faultsUnknown?: boolean;
 }
 
 export interface HeatPumpDevice extends DeviceBase {
