@@ -42,3 +42,28 @@ export function requireOwnerOrAgent(
   }
   throw new HttpsError("permission-denied", "Only the owner or Atlas can use this");
 }
+
+/**
+ * Claude Code, the coding agent, when it works the Tasks kanban through the
+ * kanban MCP server (mcp/kanban). Its own account, created verified like
+ * Atlas's (domotics-bridge/deploy/create-agent-user.sh). It may use the
+ * kanban callables and nothing else: no rule and no other callable knows it.
+ */
+export const CODE_AGENT_EMAIL = "claude-code@kidclub.pt";
+
+/**
+ * For the kanban callables (tasks/): Renato, Atlas or Claude Code, each with
+ * a verified address. Returns who called, which the cards record.
+ */
+export function requireKanbanCaller(
+  auth: { token?: { email?: string; email_verified?: boolean } } | undefined,
+): "renato" | "atlas" | "claude-code" {
+  if (!auth) throw new HttpsError("unauthenticated", "Sign-in required");
+  const email = auth.token?.email;
+  if (auth.token?.email_verified === true) {
+    if (email === OWNER_EMAIL) return "renato";
+    if (email === AGENT_EMAIL) return "atlas";
+    if (email === CODE_AGENT_EMAIL) return "claude-code";
+  }
+  throw new HttpsError("permission-denied", "Only Renato, Atlas or Claude Code can use the kanban");
+}

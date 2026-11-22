@@ -190,5 +190,22 @@ service cloud.firestore {
       // The bridge reads requests and writes the answer back onto the document.
       allow read, update, delete: if isBridge();
     }
+
+    // ── Tasks app (kanban) ────────────────────────────────────────────────────
+    // apps/noisysource/tasks: one board per app plus "All systems". Renato's
+    // alone from a client. The agents (Atlas, Claude Code through mcp/kanban)
+    // never touch these collections directly: they go through the kanban*
+    // callables (functions/src/tasks/callables.ts), which check every field and
+    // can't delete. So no isAtlas() here, on purpose.
+    match /tasks_boards/{boardId} {
+      allow read, write: if isDomoticsOwner();
+    }
+    match /tasks_cards/{cardId} {
+      allow read, write: if isDomoticsOwner();
+      // History: added to, never edited; deleted with its card.
+      match /activity/{entryId} {
+        allow read, create, delete: if isDomoticsOwner();
+      }
+    }
   }
 }
