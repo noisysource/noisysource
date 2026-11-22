@@ -32,6 +32,8 @@ To stop it: **Pausar** in the app (2 h / until 19:00 / until 09:00). To end the 
 
 ## What is recorded
 
+> **2026-11-22: the E13 guard was removed from the bridge** (Renato: the pump was fixed; the guard had been off since 28/10). From then on the slots in `domotics_climate` have no `guard` field and no switch in `domotics_incidents` has source `guard`; the days and incidents before keep them, as described below.
+
 **`domotics_climate/{yyyy-mm-dd}`** (new; owner read, bridge write, `firestore.rules`) is written by `domotics-bridge/src/climate.ts` from the bridge's normal polls. That's LAN only: no cloud reads, no metered API, ~24 writes a day like the energy history.
 
 - **`q00`…`q95`**: one field per 15-min slot, the same slots as `domotics_energy`.
