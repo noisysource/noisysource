@@ -1,18 +1,19 @@
 # App: Domotics
 
-> **Context**: See root `../../../CLAUDE.md` for group architecture. Backend logic lives in `../../../functions/src/domotics/`.
+> **Context**: See root `../../../CLAUDE.md` for group architecture. Backend logic (the callables) lives in `../../../firebase/noisysource/functions/src/domotics/`; the Pi bridge in `../domotics-bridge/`. Everything runs in the NoisySource projects (`noisysource-prod` is the live house, `noisysource-dev` the preview) since 2026-11-16.
 
 ## Purpose
 Home automation for Renato's house: lights, blinds, and climate control, plus a live dashboard. Two separate device ecosystems, both behind cloud APIs with a local bridge in front for speed:
-- **Legrand** (lights, blinds) — via the **Netatmo API** (`functions/src/domotics/legrand.ts`)
-- **Tuya/SmartLife** (thermostats, heat pump) — via the **Tuya Cloud API**, EU data centre (`functions/src/domotics/tuya.ts`)
+- **Legrand** (lights, blinds) — via the **Netatmo API** (`firebase/noisysource/functions/src/domotics/legrand.ts`)
+- **Tuya/SmartLife** (thermostats, heat pump) — via the **Tuya Cloud API**, EU data centre (`firebase/noisysource/functions/src/domotics/tuya.ts`)
   - The heat pump (Zantia Vancouver 13) is **dedicated to underfloor heating**. Domestic hot water (AQS) comes from a separate heat pump that is not integrated, so this pump's DHW tank reading and DHW setpoint mean nothing — mode "Heating" is correct, and a cold DHW tank is not a fault (Renato, 2026-10-19).
 
 There is no Shelly integration and no per-circuit (amps/watts) monitoring — despite earlier planning docs, those were never built. Energy comes from the RENAC inverter alone: the bridge reads it over local Modbus (read-only) for the live figures, and records kWh history in 15-minute slots for the **Energia** page (`src/components/energy/`, cost maths in `packages/shared/lib/energyBill.ts`, mirrored in `functions/src/domotics/energyBill.ts`). That history only exists from when a bridge with `src/energy.ts` runs on the Pi. The page's "Custos" chart (`components/energy/CostChart.tsx`, logic in `costTimeline.ts`) shows what varies with the energy bought as € bars, and adds up to the bill's total to the cent; the pump strip under it says when the pump ran, not what it used, since the inverter only measures the whole house.
 
 ## Visibility & Access
 - **Not behind GCP IAP** — no IAP setup exists for this app (unlike Finances/Tasks).
-- On the house LAN, the app talks straight to the local bridge (see below) and requires no sign-in — the whole point is being able to control your own house during an internet outage.
+- A copy of the app **served from the LAN** (a dev server on a computer in the house: `pnpm dev:domotics`, opened at `http://localhost:5173` or the computer's `192.168.x.x` address) talks straight to the local bridge (see below) and requires no sign-in.
+- **That is the only way to control the heating during an internet outage, and nothing serves the app on the LAN permanently.** The hosted app (`*.web.app`, also when installed on a phone) can't call the bridge even from inside the house: it is an `https://` page and the bridge is `http://` on a private address, which browsers block. It always goes through Firestore, so with the internet down it shows the house as offline (seen 2026-11-19, when the fibre was cut: WiFi and LAN were fine, the app reached nothing). Lights and blinds need the internet in any case (Netatmo cloud). Without the app, the bridge still answers on the LAN: `curl http://192.168.1.125:8787/state`. Serving the built app from the Pi would close this gap; not built.
 - Off the LAN (hosted build), the app requires **Firebase Auth (Google sign-in)** — `requiresSignIn()` in `src/lib/auth.ts` gates the UI, but the real enforcement is `firestore.rules`, since `domotics_commands`/`domotics_state` are reachable from the public internet once the relay is in play.
 
 ## Status
@@ -30,7 +31,7 @@ A Raspberry Pi on the house LAN (`192.168.1.125`) runs a bridge service that tal
 | Layer | Technology |
 |---|---|
 | Frontend | React + Vite, TypeScript, Tailwind |
-| Backend | Firebase Cloud Functions (shared `/functions`), local bridge on the Pi |
+| Backend | Firebase Cloud Functions (`firebase/noisysource/functions`), local bridge on the Pi |
 | Database | Firestore (`(default)` database, `domotics_*` collections) |
 | Realtime | Poll-based today; no WebSocket yet (root CLAUDE.md's Phase 2 WebSocket plan hasn't started) |
 | Auth | Firebase Auth (Google), gated by `firestore.rules` — no IAP |
@@ -39,11 +40,11 @@ A Raspberry Pi on the house LAN (`192.168.1.125`) runs a bridge service that tal
 ## Firestore Collections
 Prefixed `domotics_`:
 - `domotics_config/netatmo`, `domotics_config/tuya` — OAuth credentials for each cloud API (sensitive — see Notes)
-- `domotics_config/automation` — heating automation settings, incl. the app's "Pausar" (`pauseUntil`, ms) (owner read/write, bridge read). Plan since 2026-10-26: warm floor 19:00–09:00, by day only on spare sun; see `HANDOFF-heating-automation.md`. Several windows possible (`windows`; 29–31/10 experiment: 19–23 and 06–10, `HANDOFF-comfort-experiment.md`)
-- `domotics_config/guard` — E13 guard on/off (owner read/write, bridge read)
-- `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. automation and guard status)
+- `domotics_config/automation` — heating automation settings, incl. the app's "Pausar" (`pauseUntil`, ms) (owner read/write, bridge read). The plan: warm hours (`windows`; 17:00–23:00 and 06:00–08:00 at 24 °C as of 2026-11-22), by day only on spare sun; see `HANDOFF-heating-automation.md` and, for how the windows came about, `HANDOFF-comfort-experiment.md`. The live values are in this document and in `STATUS.md`, not here
+- `domotics_config/guard` — **unused since 2026-11-22**: the E13 guard was removed from the bridge (Renato: the E13 problem is fixed). The document and its rule may still exist; nothing reads it
+- `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. the automation's status; `guard` is `null` once the Pi runs a build without the guard)
 - `domotics_commands` — command queue the bridge drains when off-LAN
-- `domotics_incidents` — heat pump faults and on/off transitions, written by the bridge, read by the Reports page and the heating timeline (owner read, bridge create/update, no deletes)
+- `domotics_incidents` — heat pump faults and on/off transitions (older records include switches made by the guard), written by the bridge, read by the Reports page and the heating timeline (owner read, bridge create/update, no deletes)
 - `domotics_energy/{yyyy-mm-dd}` — kWh per 15-minute slot (`q00`…), written by the bridge, read by the Energia page (owner read, bridge create/update under date ids, no deletes)
 - `domotics_config/tariff` — electricity prices for the Energia page (owner read/write; the bridge never reads it)
 - `domotics_climate/{yyyy-mm-dd}` — room/pump temperatures per 15-minute slot (`q00`…, same slots as `domotics_energy`) and people's interventions (`x_…`), written by the bridge (`climate.ts`), for working out how the house cools and warms up, and read by the heating timeline in the automation card and the Energia page's pump strip and row (`src/data/heatingHistory.ts`, cached per day) (owner read, bridge create/update under date ids, no deletes). See `HANDOFF-comfort-experiment.md`

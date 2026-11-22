@@ -2,19 +2,40 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-20
+**Last updated:** 2026-11-22
 
-## ⚠️ 20/11: the automation couldn't see the heat pump. Fixed in code (PR #164 into `staging`), **not on the Pi yet: waiting for Renato's go**
-- **What happened:** since about 19/11 the bridge's automation said `Bomba: bomba não encontrada` and switched the pump neither on nor off (Renato saw it running at 23:55 on 19/11, after the warm hours). The thermostats' targets and the plan kept working. The pump has been running on its own controller and whoever switched it by hand.
-- **Cause:** the bridge recognised the pump by one datapoint, `p02_heating` (the water setpoint). Since about 19/11 (probably the power cut that morning restarted it) the pump's Tuya module answers a full read with only 9 datapoints: on/off, compressor Hz and the temperatures (dps 1, 16, 18, 20–25). The mode, the three setpoints and the six fault bitmaps are missing, and asking for them again brings nothing back (checked from the Mac on 20/11, read-only). Everything else in the bridge found the pump by its category (`znrb`), which still works.
-- **The fix (branch `agent/bridge-pump-partial-dps`):**
-  - The pump is found by its category. The reading code moved to `domotics-bridge/src/readings.ts` so it has tests (`test/readings.test.cjs`, with the 9 datapoints as read on 20/11).
-  - **Missing fault datapoints are "no reading", not "no faults".** The automation still switches the pump by the plan, and adds one line to its reasons: "Atenção: a bomba não está a reportar avarias nem a temperatura da água pedida — um bloqueio (E13) não se vê aqui…". The E13 guard says the same in its note. The pump's card in Clima shows "Sem leitura de avarias" (amber) instead of "Sem avarias". A fault incident open at the moment the datapoints disappear is closed as "end not known", not as "cleared by itself".
-  - **Without the water setpoint, the automation doesn't send one.** Before, a pump found without it would have been sent the curve's value blind every 15 minutes, over whatever was set on the panel. So while this lasts the water stays at what the pump holds (44 °C when last seen).
-- **While the datapoints are missing, even after the Pi deploy:** an E13 or a lockout does not show anywhere (app, Relatórios, guard); the rest at the setpoint (the guard's, and the automation's own) can't happen, since it needs the setpoint; the guard's early warning (discharge temperature) still works. The guard was off on the Pi on 19/11.
-- **Next step, Renato:** review and merge the PR (the merge deploys the app to `noisysource-prod`: only the "Sem leitura de avarias" label changes there). Then the bridge, by hand, `domotics-bridge/deploy/README.md` → "Updating an existing install": `pnpm build`, back up `lib` on the Pi, rsync, restart, check 7/7 and that `GET /state` → `automation.doing` no longer says "bomba não encontrada". **Expect the automation to switch the pump right after the restart** if the plan disagrees with how it finds it (off outside the warm hours, on inside them when a zone asks for heat).
-- **Still open, Renato's call:** making the module report everything again (untried: change the water setpoint on the panel or in SmartLife, or power-cycle the module). If it never does, the water curve and the rest at the setpoint are gone for good and need another way.
-- **Not changed, on purpose:** the guard still leaves a lockout as soon as it sees the pump on with no fault reported, which with the bitmaps missing is "none seen". The climate history's `fault` flag per slot is likewise "none seen".
+## ▶️ Now (22/11): the automation switches the pump again; the pump's module still reports only part of its data
+**Where things are**
+- **The fix is live on the Pi since 21/11 00:09** and merged (PR #164 → `staging`, 22/11). The bridge finds the pump by its device type, so the automation switches it by the plan again. Checked right after the restart: 7/7 devices, `automation.doing` = "Bomba desligada — de dia só com sol…", no `pumpHold`.
+- **Not yet seen: the automation actually switching the pump** (the 05:30 and 17:00 starts). Nobody has looked since the deploy; Renato was away from the house on 22/11. Look in the app (Clima → Automação), or on the LAN: `curl http://192.168.1.125:8787/state` → `automation.actions`, `switchOns24h`.
+- **Settings in force** (Pi's `automation-config.json`, written 17/11 20:30): thermostats 24 °C, warm hours 17:00–23:00 and 06:00–08:00, by day only on sun (battery ≥ 40 %, then 25 °C) or below 21 °C. Wherever this file says 25, 23 or other hours further down, that is history (on 13/11 the target was put to 23 in `kidclub-dev`, before the move to `noisysource-prod`).
+- **The E13 guard is removed from the code** (Renato, 22/11: "we won't need the guard anymore, it seems the problem was fixed"): PR #165, `guard.ts` and the early warning (`preempt.ts`) deleted, the automation alone owns on/off. Old incidents and climate slots made by the guard still show in Relatórios and the timeline. **The Pi keeps running the 21/11 build, which still contains the guard, switched off, until the next bridge deploy.** That deploy needs someone on the house LAN: `domotics-bridge/deploy/README.md` → "Updating an existing install" (it also says which leftover files to delete on the Pi). Nothing changes in how the pump is switched; `domotics_state/tuya.guard` becomes `null` and `domotics_config/guard` is no longer read (Atlas's contract in root `CLAUDE.md` says so). Left for later: the `domotics_config/guard` rule in `firebase/noisysource/firestore.rules` and its test (`scripts/rules-tests/domotics-incidents.rules-test.cjs`), and the early-warning analysis in the Reports page, which only reads old records. Wherever this file describes the guard, "Proteção E13" or the early warning as something that exists, that was true until 22/11.
+
+**What happened, 19–21/11**
+- **19/11, the fibre was cut outside the house** (Renato). The bridge had no internet from 10:42 to 16:56 (`fetch failed` on every Firestore call) and signed in again by itself. WiFi and LAN kept working. The Pi's own uptime showed it had started at 08:51 that morning; Renato says nothing was rebooted, so why is not known.
+- **Since about then the pump's Tuya module answers with only 9 datapoints**: on/off, compressor Hz and the temperatures (dps 1, 16, 18, 20–25). Missing: mode, the three setpoints, the six fault bitmaps. Asked directly on 20/11 (read-only `get`, then a refresh request for the missing ones): none came back. When exactly it started and why are not known; the Pi's log only went back to 08:51 on 19/11.
+- **The bridge recognised the pump by its water setpoint (`p02_heating`)**, so from then the automation said `Bomba: bomba não encontrada` and switched it neither on nor off. Renato saw it running at 23:55 on 19/11, after the warm hours.
+- **The pump's switches on 20/11** (off 00:29, on 07:53, off 09:16, on 17:37) were Renato, testing Atlas. Who switched it on at 19:27 on 19/11 wasn't looked up (incident `switch-2026-11-19T19-27-12Z-on`).
+- **20/11 ~23:55** the pump was switched off through the bridge (Renato's go); **21/11 00:09** the fix was deployed (backup of the previous build on the Pi: `~/domotics-bridge/lib.bak-20261121-pump`).
+
+**What the fix does (#164)**
+- The pump is found by its category (`znrb`). The reading code is in `domotics-bridge/src/readings.ts`, with tests on the 9 datapoints (`test/readings.test.cjs`).
+- **Missing fault datapoints are "no reading", not "no faults".** The automation still switches by the plan and adds one line to its reasons ("Atenção: a bomba não está a reportar avarias…"). The pump's card in Clima shows "Sem leitura de avarias" (amber).
+- **Without the water setpoint, the automation doesn't send one.** Otherwise it would have sent the curve's value blind every 15 minutes, over whatever is set on the panel. The water stays at what the pump holds (44 °C when last seen).
+
+**Open: get the pump's module to report everything again** (needs someone at the house)
+- **Why it matters:** until it does, the automation can't manage the water temperature or rest the pump at the setpoint, and the app can't say "no faults".
+- **The idea:** the module only passes on what the pump's controller has told it since the module last started, and the controller tells it a value when that value changes. So make the values change once, cheapest first:
+  1. Change the water setpoint by one degree and back (44 → 45 → 44), on the panel or in SmartLife. Same for the mode if it's still missing.
+  2. Or send it through the bridge from the LAN: `POST /command` with `p02_heating` at the value it already has.
+  3. If neither brings them back: switch the pump off at its breaker for a minute, so controller and module start together and exchange everything.
+- **Check after each:** `curl http://192.168.1.125:8787/state`: the pump should list `mode`, `p02_heating`, `fault` and the rest (about 19 codes, not 9), and the "Atenção" line should leave the automation's reasons.
+- **The fault fields may only come back when a fault happens** (they change only then). That would be enough: a trip would then show. Not verified.
+- None of this was tried: nobody was at the house.
+
+**Open: the app can't reach the house when the internet is down, even from inside it**
+- Seen on 19/11. The hosted app is an `https://` page and the bridge is `http://` on a private address, so the browser blocks the direct call; the app always goes through Firestore, which needs the internet. Only a copy served from the LAN (a dev server, `pnpm dev:domotics`) talks to the bridge directly. Details in `CLAUDE.md` → "Visibility & Access".
+- A fix would be the Pi serving the built app on the LAN (heating only; lights and blinds need Netatmo's cloud). Not built, not asked for yet.
 
 ## ▶️ 16/11: Atlas can see and run the house (branch `agent/atlas-house`, PR into `staging`)
 Atlas is Renato's assistant (repo `noisysource/Atlas`, on his Mac). With this change it **reads the whole house and, after Renato's OK on a card in Atlas, changes what the app changes, except bridge admin**. Nothing changes in the app itself.
@@ -59,7 +80,7 @@ Renato looked at them on dev and said "it looks good, we can merge them all" (5/
 
 **Still open:**
 - Confirm the panel rating, from a panel's label or the installer's invoice. At 500 W the array is 7000 Wp, above the 6500 Wp maximum recommended array in the ESC5000-DS datasheet, so it's worth asking the installer if that's confirmed. The peak seen, 6,56 kW, works out at about 470 W a panel, which fits.
-- Removing the guard code from the bridge: later, only if asked. It needs a Pi deploy, and `CLAUDE.md`'s `domotics_config/guard` entry goes with it.
+- Removing the guard code from the bridge: done on 22/11 (PR #165); the Pi deploy is pending, see the top of this file.
 
 ## Earlier, 4/11 night: Energia has a cost timeline (step 3 of 3)
 **Why:** Renato, 4/11: "in the energy, to see the costs, I also would like to have a timeline to see when we're spending and how much. Maybe that could also help to select the period that we want to see." The test: open Energia and see at a glance when money was spent, how much, and why that hour was dear; tap a bar to go into that period.
@@ -535,7 +556,7 @@ Also seen: **Master bedroom (since overnight) and Quarto thermostat (since 08:33
 - A fault only shows while the app is open. If you want to be told when one appears (push/email), that's a new feature — say so.
 
 ## Anything risky in flight
-- **Current, 4/11: the automation is live since 3/11 09:40 and switches the heat pump by itself, with the guard off.** An E13 lockout means no heat until someone resets it, with no alert. To stop the automation: Pausar. The bullets below are older: the ones about dry-run or a "Proteção E13" switch in the app no longer apply.
+- **Current: the automation is live since 3/11 09:40 and switches the heat pump by itself. There is no guard any more (removed from the code on 22/11, see the top of this file).** An E13 lockout means no heat until someone resets it, with no alert. To stop the automation: Pausar. The bullets below are older: the ones about dry-run or a "Proteção E13" switch in the app no longer apply.
 - **(Old, 27/10.) PR #123 (E13 early warning) is unmerged and not on the Pi.** Once deployed it's **on by default**: the bridge will switch the pump off and on by itself, roughly every 15 min while the fault lasts (8–9 min runs + 5 min rest + the pump's 2-min restart delay). If technicians come, switch "Proteção E13" off in the app first, as before. Deploy steps and roll back: ⚠️ section at the top.
 - **(Old: live since 3/11 09:40.) The Pi ran `agent/domotics-solar-heating` (PR #120, unmerged) in dry-run** from 2026-10-26 17:37 UTC. Roll back: `cd ~/domotics-bridge && cp -a lib.bak-20261026-solar/. lib/ && sudo systemctl restart domotics-bridge` (back to #119's build). In dry-run the guard behaves exactly as with #119 (re-on 5 min after an outside off), except that a pause now stops it.
 - **Going live (one tap) changes three things at once:** the thermostats go 26 → 24 °C; the bridge switches the pump off by day when there's no sun (the house will be a bit colder in the afternoon, by design); and the guard no longer undoes outside offs, the automation does after 15 min. If the house is cold the first evening, check the card's "Agora" and Detalhes → Últimas ações first.
