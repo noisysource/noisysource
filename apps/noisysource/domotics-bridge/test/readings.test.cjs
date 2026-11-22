@@ -1,14 +1,13 @@
 // The pump answering with only some of its datapoints, as its Tuya module has
 // since 19/11/2026: on/off, compressor Hz and the temperatures (dps 1, 16, 18,
 // 20–25), with no mode, no setpoints and no fault bitmaps. From the raw dps to
-// what the automation, the recorder and the guard do with them — no house
+// what the automation and the recorder do with them — no house
 // attached. Run: pnpm --filter domotics-bridge test (builds first).
 const assert = require('node:assert/strict');
 const { dpsToStatus } = require('../lib/dpmap.js');
 const { readHeating, readPumpSample } = require('../lib/readings.js');
 const { createAutomation, parseConfig } = require('../lib/automation.js');
 const { createRecorder } = require('../lib/incidents.js');
-const { createGuard, INITIAL_GUARD } = require('../lib/guard.js');
 
 const MIN = 60_000;
 /** What a full `get({schema: true})` brought on 20/11 (39 Hz, water 35 → 37.5 °C). */
@@ -61,7 +60,7 @@ const blind = s => s.reasons.filter(r => /não está a reportar/.test(r));
     // A thermostat is never taken for the pump, nor the pump for a thermostat.
     assert.equal(readHeating([zoneDevice(1)]).pump, undefined);
 
-    // The recorder's and the guard's sample.
+    // The recorder's sample.
     const { sample, dps } = readPumpSample(pumpDevice(PARTIAL), house(PARTIAL, { open: false }), 1000);
     assert.equal(sample.faultsUnknown, true);
     assert.deepEqual(sample.faults, []);
@@ -182,30 +181,6 @@ const blind = s => s.reasons.filter(r => /não está a reportar/.test(r));
     // On/off is still recorded.
     rec.observe(dev, reading(20, { on: false, hz: 0, sp: undefined, faultsUnknown: true }));
     assert.equal([...docs.values()].filter(x => x.kind === 'switch').length, 1);
-  }
-
-  // --- Guard -------------------------------------------------------------------
-  {
-    const T0 = Date.UTC(2026, 10, 20, 18, 0);
-    const on = { enabled: true, preempt: true };
-    const p = (over = {}) => ({ on: true, hz: 39, out: 37.5, dis: 72, coil: 6.5, faults: [], faultsUnknown: true, ...over });
-    const guard = createGuard({ ...INITIAL_GUARD });
-    let d = guard.decide(on, { now: T0, pump: p() });
-    assert.equal(d.action, undefined, 'nothing switched because datapoints are missing');
-    assert.equal(d.status.mode, 'watch');
-    assert.match(d.status.note, /não está a reportar avarias/);
-    assert.match(d.status.note, /temperatura da água pedida/);
-    assert.equal(guard.state().lastSeenFault, null, 'not known, rather than "no fault"');
-    // 39 Hz near where the setpoint was: without the setpoint the idle rule can't fire.
-    d = guard.decide(on, { now: T0 + 10 * MIN, pump: p() });
-    assert.equal(d.action, undefined);
-    // Everything reported again: the note goes back to normal.
-    d = guard.decide(on, { now: T0 + 11 * MIN, pump: p({ sp: 44, hz: 60, out: 38, faultsUnknown: false }) });
-    assert.ok(!/não está a reportar/.test(d.status.note));
-    assert.equal(guard.state().lastSeenFault, false);
-    // Switched off in the app: it says only that.
-    d = createGuard({ ...INITIAL_GUARD }).decide({ enabled: false, preempt: true }, { now: T0, pump: p() });
-    assert.equal(d.status.note, 'Desligada');
   }
 
   console.log('readings.test.cjs: ok');

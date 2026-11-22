@@ -9,14 +9,15 @@
  *   temperature (last, lowest, highest), its thermostat's target and how much
  *   of the slot its valve was open; the pump's on and compressor shares, its
  *   Hz, water out/in, setpoint and outdoor sensor; the battery; what the
- *   automation and the E13 guard were doing.
+ *   automation was doing. (Days up to 2026-11-22 also carry `guard`, the mode
+ *   of the E13 guard the bridge had then.)
  * - `x_HHMMSS_…`: a person's intervention, with the rooms at that moment. The
  *   pump switched on by hand says the house felt cold (Renato, 28/10: "if I
  *   switch it on during the night then it's because it's cold"); off, warm
  *   enough. A switch-on also carries who switched it off before and how long
  *   ago, so an on straight after the controller's timer can be told apart. A
  *   thermostat target changed from the app or at the thermostat says which way
- *   and by how much. The automation's and the guard's own switches are already
+ *   and by how much. The automation's own switches are already
  *   in `domotics_incidents` and say nothing about comfort, so they are not
  *   here; neither are its own target changes. The controller's nightly timer
  *   is recorded, as such (`by: 'timer'`), so it isn't read as a person.
@@ -54,8 +55,6 @@ export interface ClimateReading {
   /** What the automation is doing: its mode, or 'off'; with ' (sim)' in dry-run. */
   plan?: string;
   wantOn?: boolean;
-  /** The E13 guard's mode. */
-  guard?: string;
   /** Who switched the pump, when this reading shows it switched (incidents.ts). */
   switchedBy?: SwitchSource;
 }
@@ -84,7 +83,6 @@ export interface ClimateSlot {
   soc?: number;
   plan?: string;
   want?: boolean;
-  guard?: string;
 }
 
 export interface ClimateEvent {
@@ -96,7 +94,7 @@ export interface ClimateEvent {
   /** What it says about comfort: on → 'cold', off → 'warm-enough', a target up/down → 'warmer'/'cooler'; the timer → 'none'. */
   meaning: 'cold' | 'warm-enough' | 'warmer' | 'cooler' | 'none';
   on?: boolean;
-  /** For a pump on: the last off before it, who did it and how many minutes before. */
+  /** For a pump on: the last off before it, who did it and how many minutes before ('guard': the E13 guard, removed 2026-11-22). */
   offBy?: 'app' | 'outside' | 'timer' | 'automation' | 'guard' | 'unknown';
   offMin?: number;
   zone?: string;
@@ -130,7 +128,6 @@ interface Acc {
   soc?: number;
   plan?: string;
   want?: boolean;
-  guard?: string;
 }
 
 /** What survives a restart. */
@@ -167,7 +164,7 @@ function closeAcc(a: Acc): ClimateSlot {
   }
   const slot: ClimateSlot = { n: a.n, z, pn: a.pn, on: a.pn ? r2(a.on / a.pn) : 0, run: a.pn ? r2(a.run / a.pn) : 0 };
   if (a.run > 0) { slot.hz = Math.round(a.hzSum / a.run); slot.hzMax = a.hzMax; }
-  for (const k of ['out', 'inn', 'outMax', 'sp', 'ext', 'soc', 'plan', 'want', 'guard'] as const) {
+  for (const k of ['out', 'inn', 'outMax', 'sp', 'ext', 'soc', 'plan', 'want'] as const) {
     if (a[k] !== undefined) (slot as unknown as Record<string, unknown>)[k] = a[k];
   }
   if (a.fault) slot.fault = true;
@@ -250,7 +247,6 @@ export function createClimateRecorder(initial?: ClimateSnapshot) {
       if (r.soc !== undefined) a.soc = Math.round(r.soc);
       if (r.plan !== undefined) a.plan = r.plan;
       if (r.wantOn !== undefined) a.want = r.wantOn;
-      if (r.guard !== undefined) a.guard = r.guard;
 
       const out: ClimateEvent[] = [];
       // --- The pump, switched by a person (or the controller's timer) -------

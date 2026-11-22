@@ -114,10 +114,19 @@ rsync -a --exclude 'bridge.env*' package.json lib deploy pi@192.168.1.125:~/domo
 ssh pi@192.168.1.125 'sudo systemctl restart domotics-bridge && sleep 90 && journalctl -u domotics-bridge -n 40 --no-pager'
 ```
 
-State the bridge keeps next to `lib/` (gitignored, safe to delete except while
-the guard is resting): `device-cache.json`, `automation-config.json`,
-`guard-config.json`, `guard-state.json`, `incidents-state.json`,
+State the bridge keeps next to `lib/` (gitignored, safe to delete):
+`device-cache.json`, `automation-config.json`, `incidents-state.json`,
 `incidents-pending.json`.
+
+**Left over from the E13 guard (removed 2026-11-22):** `guard-config.json` and
+`guard-state.json` next to `lib/` are no longer read or written, and can be
+deleted. The rsync above has no `--delete`, so `lib/guard.js` and
+`lib/preempt.js` (with their `.map` files, if any) stay on the Pi from the
+previous build: nothing loads them, so they are harmless, and can be removed too:
+
+```bash
+ssh pi@192.168.1.125 'cd ~/domotics-bridge && rm -f guard-config.json guard-state.json lib/guard.js* lib/preempt.js*'
+```
 
 ## 4. Check it can actually see the devices
 

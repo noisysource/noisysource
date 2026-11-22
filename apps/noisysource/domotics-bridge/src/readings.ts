@@ -1,6 +1,6 @@
 /**
  * The thermostats and the heat pump, read out of the devices' raw status for
- * the automation, the climate history, the incident recorder and the guard.
+ * the automation, the climate history and the incident recorder.
  * Pure, so it is tested without a house (test/readings.test.cjs).
  *
  * The pump is found by its Tuya category, never by a datapoint it happens to
@@ -62,7 +62,7 @@ export function readHeating(devices: DeviceState[]): { zones: ZoneReading[]; pum
   return { zones, pump };
 }
 
-/** One fresh pump reading for the incident recorder and the guard, with every raw datapoint beside it. */
+/** One fresh pump reading for the incident recorder, with every raw datapoint beside it. */
 export function readPumpSample(pump: DeviceState, devices: DeviceState[], now: number): { sample: PumpSample; dps: PumpDps } {
   const s = new Map(pump.status.map(x => [x.code, x.value]));
   const zones = devices.filter(d => d.category === 'wk' && d.online);
