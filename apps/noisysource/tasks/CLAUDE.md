@@ -1,45 +1,47 @@
-# App: Tasks
+# App: Tasks (the kanban)
 
-> **Context**: See root `../../../CLAUDE.md` for group architecture. Backend logic lives in `../../../functions/src/tasks/`.
+> **Context**: see the root `../../../CLAUDE.md`. Read `STATUS.md` in this folder first.
 
 ## Purpose
-Internal tool for managing everyday tasks, tracking events, and organising operational activity across NoisySource.
+The development kanban for every Noisy Source app, shared by Renato and the agents:
+one board per app (KidClub, FinHub, Domotics, Atlas, noisysource.com, Tasks itself, and
+any added in the app) plus **All systems**, the roadmap. The roadmap shows the cards on the
+`systems` board (cross-app work) and every app card marked `roadmap: true`.
 
-## Visibility & Access
-- **Private** — not internet-facing
-- Protected by **GCP Identity-Aware Proxy (IAP)**
-- No Firebase Auth needed (IAP handles identity)
+## Who reaches it, and how
+| Who | How | Can |
+|---|---|---|
+| Renato | this app, Google sign-in as `admin@noisysource.com` | everything, straight to Firestore (rules) |
+| Atlas | callables `kanbanList/Get/Create/Update/Comment`, signed in as `atlas@kidclub.pt` | read, create, edit, move, comment; no delete |
+| Claude Code | `mcp/kanban` (tools `kanban_*`), signed in as `claude-code@kidclub.pt` | same as Atlas |
 
-## Status
-🆕 To be built from scratch
+The agents never read or write `tasks_*` directly: the rules give those collections to the
+owner alone, and the callables check every field.
 
----
+## Code
+- Logic (statuses, priorities, assignees, validation, ordering): `packages/shared/lib/kanban.ts`,
+  mirrored to `firebase/noisysource/functions/src/tasks/kanban.ts` (a test fails when they differ).
+- Callables: `firebase/noisysource/functions/src/tasks/callables.ts`.
+- Rules: `firebase/noisysource/firestore.rules` (Tasks block); test `scripts/rules-tests/tasks-kanban.rules-test.cjs`
+  (`pnpm test:rules:tasks`, needs Java).
+- App: `src/lib/data.ts` (Firestore, live), `src/components/BoardView.tsx` (columns, drag and drop),
+  `src/components/CardDialog.tsx` (details, activity, comments).
 
-## Stack
-| Layer | Technology |
-|---|---|
-| Frontend | React + Vite |
-| Backend | Firebase Cloud Functions (shared `/functions`) |
-| Database | Firestore |
-| Auth | GCP IAP |
-| Hosting | Firebase Hosting (dev environment only) |
+## Firestore (noisysource-dev / noisysource-prod)
+- `tasks_boards/{boardId}`: `{name, color, order, path?}`. The defaults (`DEFAULT_BOARDS`) are
+  created the first time the app or a callable finds none.
+- `tasks_cards/{cardId}`: `{boardId, title, description, status, priority, labels[], assignee,
+  roadmap, links[{label,url}], order, createdBy, updatedBy, createdAt, updatedAt}`.
+  `status`: backlog, todo, in_progress, review, done. `assignee`: renato, marisa, atlas,
+  claude-code or null. `createdBy/updatedBy`: renato, atlas, claude-code.
+- `tasks_cards/{cardId}/activity/{id}`: `{at, by, kind: created|updated|comment, text}`.
 
----
+## Deploy
+NoisySource unit, like Domotics: a PR into `staging` previews on `noisysource-dev-tasks.web.app`;
+**merging into `staging` releases to `noisysource-prod-tasks.web.app`**. `pnpm --filter tasks dev`
+runs it locally on port 5176 against `noisysource-dev` (localhost is an authorized domain).
 
-## Key Features (planned)
-- Task creation, assignment, and tracking
-- Event logging and timeline view
-- Status workflows (to do, in progress, done)
-- Recurring tasks support
-- Activity history / audit trail
-
----
-
-## Firestore Collections
-> To be defined during build. Prefix all collections with `tasks_`.
-
----
-
-## Notes
-- IAP setup reference: `../../../infra/gcp/`
-- Keep it simple — this is an internal ops tool, not a full project management suite
+## Conventions
+- Keep it a kanban: no sprints, estimates or time tracking unless Renato asks.
+- Changing a card's shape, a status, an assignee or a callable means updating the mirror,
+  `mcp/kanban/index.js` (its enums) and telling Atlas (root CLAUDE.md, Cross-App Data Contracts).
