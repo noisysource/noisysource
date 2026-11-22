@@ -1,6 +1,6 @@
 // The 2026-10-26 heating plan: warm floor 19:00–09:00, daytime heating only on
 // spare sun (battery ≥ 90 %), a 21 °C day minimum, the automation owning on/off
-// whoever switched the pump, "Pausar", and the E13 guard first. Against a small
+// whoever switched the pump, and "Pausar". Against a small
 // simulated house — no house attached. Run: pnpm --filter domotics-bridge test
 // (it runs this file under a foreign time zone too: every instant here is UTC,
 // and the automation must find Lisbon's clock by itself).
@@ -8,7 +8,6 @@ const assert = require('node:assert/strict');
 const {
   createAutomation, parseConfig, inWarmWindow, lisbonAt, lisbonClock, nextLisbon, spareSun, MAX_ONS_PER_DAY,
 } = require('../lib/automation.js');
-const { createGuard, INITIAL_GUARD } = require('../lib/guard.js');
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -19,7 +18,7 @@ const dry = parseConfig({ enabled: true, dryRun: true });
 const OFFSETS = [-0.2, 0, 0.1, 0.3];
 
 /**
- * A tiny house. The pump does what it's told (by the automation, the guard or
+ * A tiny house. The pump does what it's told (by the automation or
  * `events`); its compressor runs 2 min after a switch-on. Rooms warm `gain` °C/h
  * through an open valve while it runs and cool `loss` °C/h otherwise; each
  * thermostat opens at 0.3 below its target (24 until the automation sets
@@ -51,8 +50,6 @@ async function simulate(o) {
       if (c.code === 'temp_set' && /^z\d$/.test(id)) st.tgt[Number(id.slice(1))] = c.value / 10;
     }
   }, { flow: { value: 44, at: 0 }, ...(o.memory ?? {}) });
-  const guard = o.guard ? createGuard({ ...INITIAL_GUARD, mode: 'watch', ...o.guard }) : null;
-  let lastOn = st.on;
   let status;
   const statuses = [];
   for (now = o.from; now <= o.to; now += step) {
@@ -86,24 +83,7 @@ async function simulate(o) {
     }
     const pump = { id: 'hp', online: true, on: st.on, fault: false, outdoor: 10, flowSetpoint: st.sp, hz: running ? 60 : 0, waterOut: running ? 38 : 30, waterIn: running ? 34 : 28 };
     const zones = OFFSETS.map((d, i) => ({ id: `z${i}`, name: `z${i}`, online: true, current: Math.round((st.rooms + d) * 10) / 10, target: st.tgt[i], mode: 'manual', valveOpen: st.open[i] }));
-    // The guard first, as in index.ts, with the automation's previous step.
-    let gv;
-    if (guard) {
-      const switchedBy = st.on !== lastOn ? (st.by === 'start' ? undefined : st.by) : undefined;
-      const owns = cfg.enabled && !cfg.dryRun && status?.state === 'running';
-      const pausedUntil = cfg.pauseUntil && now < cfg.pauseUntil ? cfg.pauseUntil : null;
-      const d = guard.decide({ enabled: true }, {
-        now, switchedBy, automationOwns: owns, holdRest: owns && status?.holdRest === true, pausedUntil,
-        pump: { on: st.on, hz: pump.hz, sp: st.sp, out: pump.waterOut, faults: [] },
-      });
-      if (d.action) { sw(d.action.on, 'guard', d.action.reason); guard.commit(d.action.next); }
-      gv = { enabled: true, mode: d.status.mode, restUntil: d.status.restUntil };
-      pump.on = st.on;
-      pump.hz = st.on && now - st.since >= 2 * MIN ? 60 : 0;
-    }
-    lastOn = st.on;
-    status = await tick(cfg, { now: new Date(now), zones, pump, energy, guard: gv });
-    lastOn = st.on;
+    status = await tick(cfg, { now: new Date(now), zones, pump, energy });
     statuses.push({ t: now, s: status, soc: st.soc, rooms: st.rooms, on: st.on, energy, tgt: [...st.tgt] });
   }
   return { log, statuses, st, at: t => statuses.find(x => x.t >= t) };
@@ -184,32 +164,33 @@ const hm = t => lisbonClock(t);
   {
     const r = await simulate({
       cfg: live, from: L(23, 30), to: L(0, 40, 11), on: true, onFor: 120, rooms: 23.5,
-      guard: {}, events: (t, _st, sw) => { if (t === L(23, 54)) sw(false, 'outside'); },
+      events: (t, _st, sw) => { if (t === L(23, 54)) sw(false, 'outside'); },
     });
     const back = ons(r.log);
     assert.equal(back.length, 1);
     assert.equal(back[0].t, L(0, 9, 11), `back on at ${hm(back[0].t)}`);
-    assert.equal(back[0].by, 'automation', 'by the automation; the guard leaves it to it');
+    assert.equal(back[0].by, 'automation', 'by the automation');
     assert.match(r.at(L(23, 56)).s.doing, /liga às 00:09/);
   }
 
   // --- A person switches it off in the warm window: back on — unless paused ---
   {
     const off2030 = (t, _st, sw) => { if (t === L(20, 30)) sw(false, 'outside'); };
-    let r = await simulate({ cfg: live, from: L(20), to: L(21, 30), on: true, onFor: 60, rooms: 23.5, guard: {}, events: off2030 });
+    let r = await simulate({ cfg: live, from: L(20), to: L(21, 30), on: true, onFor: 60, rooms: 23.5, events: off2030 });
     assert.deepEqual(ons(r.log).map(x => [hm(x.t), x.by]), [['20:45', 'automation']]);
-    // Paused at 20:31 until 22:30 (the app writes pauseUntil): stays off until then, by the automation and the guard alike.
+    // Paused at 20:31 until 22:30 (the app writes pauseUntil): stays off until then.
     const until = L(22, 30);
     const cfgAt = t => (t >= L(20, 31) ? parseConfig({ enabled: true, dryRun: false, pauseUntil: until }) : live);
-    r = await simulate({ cfg: cfgAt, from: L(20), to: L(23), on: true, onFor: 60, rooms: 23.5, guard: {}, events: off2030 });
+    r = await simulate({ cfg: cfgAt, from: L(20), to: L(23), on: true, onFor: 60, rooms: 23.5, events: off2030 });
     assert.deepEqual(ons(r.log).map(x => hm(x.t)), ['22:30'], 'back on when the pause ends');
     assert.match(r.at(L(21)).s.doing, /em pausa até às 22:30/);
     assert.match(r.at(L(21)).s.plan, /^Em pausa até às 22:30/);
     assert.equal(r.at(L(21)).s.pausedUntil, until);
-    // In dry-run the guard would undo the off after 5 min; paused, it doesn't.
-    r = await simulate({ cfg: parseConfig({ enabled: true, dryRun: true }), from: L(20), to: L(20, 50), on: true, onFor: 60, rooms: 23.5, guard: {}, events: off2030 });
-    assert.deepEqual(ons(r.log).map(x => [hm(x.t), x.by]), [['20:35', 'guard']]);
-    r = await simulate({ cfg: t => (t >= L(20, 31) ? parseConfig({ enabled: true, dryRun: true, pauseUntil: until }) : dry), from: L(20), to: L(23), on: true, onFor: 60, rooms: 23.5, guard: {}, events: off2030 });
+    // In dry-run nothing is sent, so nobody undoes the off, paused or not.
+    r = await simulate({ cfg: parseConfig({ enabled: true, dryRun: true }), from: L(20), to: L(20, 50), on: true, onFor: 60, rooms: 23.5, events: off2030 });
+    assert.deepEqual(ons(r.log), [], 'dry-run: the automation only simulates');
+    assert.match(r.at(L(20, 46)).s.doing, /^Ligaria a bomba/);
+    r = await simulate({ cfg: t => (t >= L(20, 31) ? parseConfig({ enabled: true, dryRun: true, pauseUntil: until }) : dry), from: L(20), to: L(23), on: true, onFor: 60, rooms: 23.5, events: off2030 });
     assert.deepEqual(ons(r.log), [], 'paused: nobody switches it back on (the dry-run automation only simulates)');
   }
 
@@ -219,26 +200,6 @@ const hm = t => lisbonClock(t);
     const r = await simulate({ cfg: t => (t >= L(21) ? parseConfig({ enabled: true, dryRun: false, pauseUntil: until }) : live), from: L(20, 58), to: L(21, 5), on: true, onFor: 0, rooms: 23 });
     assert.deepEqual(offs(r.log).map(x => hm(x.t)), ['21:00']);
     assert.match(offs(r.log)[0].reason, /em pausa até às 23:00/);
-  }
-
-  // --- The guard's rest is respected: never switched on from here, held while the plan says off ---
-  {
-    // Warm window: the guard rests the pump 21:00–22:00 (idle at the setpoint); the automation wants heat and waits.
-    const t0 = L(21);
-    const r = await simulate({ cfg: live, from: L(21, 1), to: L(22, 10), on: false, onFor: 0, rooms: 23.2,
-      guard: { mode: 'rest', restUntil: L(22), lastAction: { at: t0, what: 'off', reason: 'no setpoint' } } });
-    assert.deepEqual(r.log.map(x => [hm(x.t), x.on, x.by]), [['22:00', true, 'guard']]);
-    assert.match(r.at(L(21, 30)).s.doing, /Proteção E13: bomba em descanso até às 22:00 — liga a seguir/);
-    assert.equal(r.at(L(21, 30)).s.holdRest, false);
-    // By day, a rest that ends at 11:00 carries on while the plan has the pump off (no sun), until the warm-up.
-    const pv = () => 800;
-    const d = await simulate({ cfg: live, from: L(10, 30), to: L(19, 10), on: false, onFor: 0, rooms: 24, loss: 0.12, pv, soc: 40,
-      guard: { mode: 'rest', restUntil: L(11), lastAction: { at: L(10), what: 'off', reason: 'no setpoint' } } });
-    const first = d.log[0];
-    assert.equal(first.by, 'guard');
-    assert.ok(first.t > L(13), `held past 11:00, ended at ${hm(first.t)} when the warm-up wanted heat`);
-    assert.equal(d.at(L(12)).s.holdRest, true);
-    assert.equal(d.at(first.t).s.mode, 'warmup');
   }
 
   // --- The pump's own draw: no flapping on solar ---
@@ -410,7 +371,7 @@ const hm = t => lisbonClock(t);
     assert.equal(s.pausedUntil, null);
     const off = await createAutomation(async () => {})(parseConfig({ pauseUntil: L(18) }), { now: new Date(L(15)), zones: [], pump: undefined });
     assert.equal(off.state, 'off');
-    assert.equal(off.pausedUntil, L(18), 'a pause shows even with the automation off (it holds the guard)');
+    assert.equal(off.pausedUntil, L(18), 'a pause shows even with the automation off');
   }
 
   console.log('all solar-heating scenarios pass');

@@ -39,7 +39,12 @@ export interface PumpSample {
   zones?: number;
 }
 
-/** Who switched the pump. 'outside' = not this bridge: SmartLife, the panel, the technicians, a timer. */
+/**
+ * Who switched the pump. 'outside' = not this bridge: SmartLife, the panel, the
+ * technicians, a timer. 'guard' = the E13 guard, removed 2026-11-22: the bridge
+ * no longer produces it, but the incidents up to then have it (and the backfill
+ * script writes it for the hand-run guard of 23–24/10).
+ */
 export type SwitchSource = 'app' | 'automation' | 'guard' | 'outside' | 'unknown';
 /** 'log' = replayed from the hand-run logger; 'notes' = written down from STATUS.md, no readings. */
 export type IncidentOrigin = 'bridge' | 'log' | 'notes';
