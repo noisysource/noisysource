@@ -3,7 +3,7 @@
  * them without pulling in Firestore.
  */
 
-/** 'guard' = the E13 protection, out of the app since 2026-11-04 and off on the Pi: past records keep it, so it keeps its labels. */
+/** 'guard' = the E13 protection, out of the app since 2026-11-04 and removed from the bridge on 2026-11-22: past records keep it, so it keeps its labels. */
 export type SwitchSource = 'app' | 'automation' | 'guard' | 'outside' | 'unknown';
 
 export const SOURCE_LABEL: Record<SwitchSource, string> = {

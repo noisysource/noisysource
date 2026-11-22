@@ -8,6 +8,8 @@ Read `STATUS.md` first, especially the 2026-10-21 → 10-24 entries on the E13 t
 
 ## 1. Reports page ("Relatórios")
 
+> **2026-11-22: the E13 guard was removed from the bridge** (Renato: the pump was fixed; the guard had been off since 28/10). `src/guard.ts` and the early warning (`src/preempt.ts`) are gone, and so is the hand-run script's successor described here; the Reports page keeps showing the switches the guard made in the past (`source: 'guard'`, "Proteção E13"). The incident recorder is unchanged.
+
 > **Built 2026-10-25** on `agent/domotics-reports` (branched off `agent/domotics-3d`, since #106 wasn't merged yet). What shipped and what's left: `STATUS.md`. The design below is what was built, with the guard inside the bridge (Renato: yes).
 
 ### What Renato asked for
