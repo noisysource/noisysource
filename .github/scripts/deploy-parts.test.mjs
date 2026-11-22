@@ -230,7 +230,7 @@ test('lockfile: anything that could be shared deploys everything', () => {
   orphan@1.0.0:
     resolution: {integrity: sha512-ddd}
 `),
-    'unknown workspace package': LOCK.replace('importers:\n', 'importers:\n\n  apps/noisysource/tasks:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n'),
+    'unknown workspace package': LOCK.replace('importers:\n', 'importers:\n\n  apps/noisysource/social:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n'),
   };
   for (const [name, head] of Object.entries(cases)) {
     assert.ok(lockfileParts(LOCK, head).everything, name);
@@ -315,7 +315,9 @@ test('units: packages/shared is traced through each unit\'s own consumers', () =
   assert.deepEqual(deployedIn('kidclub', ['packages/shared/lib/energyBill.ts']), []);
   // KidClub's and FinHub's models are nobody's in the NoisySource unit.
   assert.deepEqual(deployedIn('noisysource', ['packages/shared/models/Booking.ts']), []);
-  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'functions']);
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'functions', 'tasks']);
+  assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/tasks/src/App.tsx']), ['tasks']);
+  assert.deepEqual(deployedIn('kidclub', ['apps/noisysource/tasks/src/App.tsx']), []);
 });
 
 test('units: lockfile importers map to the unit that deploys them', () => {

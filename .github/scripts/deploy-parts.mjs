@@ -111,14 +111,16 @@ export const UNITS = {
       /^firebase\/noisysource\//,
       /^infra\/gcp\/terraform\/noisysource\//,
       /^apps\/noisysource\/domotics\//,
+      /^apps\/noisysource\/tasks\//,
     ],
   },
   noisysource: {
-    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics'],
+    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'tasks'],
     owned: [
       { dir: 'infra/gcp/terraform/noisysource/', part: 'terraform' },
       { dir: 'firebase/noisysource/functions/', part: 'functions' },
       { dir: 'apps/noisysource/domotics/', part: 'domotics' },
+      { dir: 'apps/noisysource/tasks/', part: 'tasks' },
     ],
     ownedFiles: {
       'firebase/noisysource/firestore.rules': 'firestore_rules',
@@ -126,6 +128,7 @@ export const UNITS = {
     },
     consumers: {
       domotics: 'apps/noisysource/domotics/',
+      tasks: 'apps/noisysource/tasks/',
       functions: 'firebase/noisysource/functions/',
     },
     everything: [/^firebase\/noisysource\/(firebase\.json|\.firebaserc)$/],
@@ -158,6 +161,7 @@ const IMPORTERS = {
   'apps/noisyphocus/kidclub': { kidclub: ['kidclub'] },
   'apps/noisysource/finances': { kidclub: ['finances'] },
   'apps/noisysource/domotics': { noisysource: ['domotics'] },
+  'apps/noisysource/tasks': { noisysource: ['tasks'] },
   functions: { kidclub: ['functions'] },
   'firebase/noisysource/functions': { noisysource: ['functions'] },
   // shared's own dependencies (zod) get bundled into whoever imports it.

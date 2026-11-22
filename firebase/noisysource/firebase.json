@@ -26,6 +26,21 @@
           "destination": "/index.html"
         }
       ]
+    },
+    {
+      "target": "tasks",
+      "public": "hosting/tasks",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
     }
   ],
   "emulators": {

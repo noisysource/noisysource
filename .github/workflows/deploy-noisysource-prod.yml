@@ -43,4 +43,6 @@ jobs:
       # (noisysource-prod). The plain `build` (.env.production) is left alone.
       apps: >-
         [{"part": "domotics", "dir": "apps/noisysource/domotics",
-          "build": "pnpm --filter domotics build:nsprod", "target": "domotics"}]
+          "build": "pnpm --filter domotics build:nsprod", "target": "domotics"},
+         {"part": "tasks", "dir": "apps/noisysource/tasks",
+          "build": "pnpm --filter tasks build:nsprod", "target": "tasks"}]
