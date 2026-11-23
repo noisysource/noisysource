@@ -122,9 +122,7 @@ export interface AutomationStatus {
   /** How far below their targets the rooms are, on average, °C. */
   shortfall?: number;
   pumpHold?: string;
-  /** Asking the E13 guard to keep its rest going (the plan has the pump off). */
-  holdRest?: boolean;
-  /** The automation's own rest at the setpoint (guard off), until when. */
+  /** The automation's rest at the setpoint, until when. */
   restUntil?: number;
   switchOns24h?: number;
   warmBy?: WarmByStatus | null;

@@ -156,7 +156,7 @@ export async function loadSwitchBefore(t: number): Promise<SwitchEvent | undefin
 // What preceded a trip
 // ---------------------------------------------------------------------------
 
-/** The guard's idea of "idling at the setpoint" (domotics-bridge/src/guard.ts). */
+/** "Idling at the setpoint", as the bridge's automation has it (domotics-bridge/src/automation.ts, the rest at the setpoint). */
 const IDLE_HZ = 45;
 const NEAR_SETPOINT = 1.5;
 const MIN = 60_000;
@@ -433,9 +433,10 @@ const SHORT_RUN_MIN = 20;
 const SPELL_GAP = 6 * 60 * MIN;
 
 /**
- * The guard's early-warning stops (domotics-bridge/src/preempt.ts, from
- * 27/10): switched off 1–2 min before an E13 it saw coming. Not a trip, but the
- * same run cut short. Told apart by the reason the bridge writes.
+ * The E13 guard's early-warning stops (27/10 to its removal from the bridge on
+ * 2026-11-22; only in past records now): switched off 1–2 min before an E13 it
+ * saw coming. Not a trip, but the same run cut short. Told apart by the reason
+ * the bridge wrote.
  */
 export function isPreemptStop(i: Incident): i is SwitchEvent {
   return i.kind === 'switch' && !i.on && i.source === 'guard' && /desligada antes do E13/.test(i.reason ?? '');

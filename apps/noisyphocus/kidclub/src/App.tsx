@@ -17,10 +17,8 @@ import FinancialSummaryPage from './pages/admin/FinancialSummaryPage';
 import CalendarPage from './pages/admin/CalendarPage';
 import EmailCenterPage from './pages/admin/EmailCenterPage';
 import TransportationConfigPage from './pages/admin/transport/TransportationConfigPage';
-import CampAdminPage from './pages/admin/CampAdminPage';
 import CampsAdminPage from './pages/admin/CampsAdminPage';
 import EditEmployeePage from './pages/admin/EditEmployeePage';
-import TimesheetsPage from './pages/admin/TimesheetsPage';
 import DataManagementPage from './pages/admin/DataManagementPage';
 import HRPage from './pages/admin/HRPage';
 import SubscriptionsAdminPage from './pages/admin/SubscriptionsAdminPage';
@@ -90,7 +88,6 @@ export default function App() {
           <Route path="transport-config" element={<TransportationConfigPage />} />
           <Route path="transportes" element={<TransportBoardPage />} />
           <Route path="transport-planner" element={<Navigate to="/admin/transportes" replace />} />
-          <Route path="camp" element={<CampAdminPage />} />
           <Route path="camps" element={<CampsAdminPage />} />
           <Route path="eventos" element={<AdhocEventsAdminPage />} />
           <Route path="billing" element={<BillingAdminPage />} />
@@ -105,7 +102,6 @@ export default function App() {
           {/* Owner-only */}
           <Route path="hr" element={<ProtectRoute requiredRole={Role.Owner}><HRPage /></ProtectRoute>} />
           <Route path="hr/edit/:employeeId" element={<ProtectRoute requiredRole={Role.Owner}><EditEmployeePage /></ProtectRoute>} />
-          <Route path="timesheets" element={<ProtectRoute requiredRole={Role.Owner}><TimesheetsPage /></ProtectRoute>} />
           <Route path="data-management" element={<DataManagementPage />} />
           <Route path="client-errors" element={<ClientErrorsPage />} />
         </Route>

@@ -103,7 +103,7 @@ export interface WarmupObservation {
   waterIn?: number;
   /** Zones online with both a reading and a target. */
   zones: Array<{ id: string; current: number; target: number }>;
-  /** The pump can heat: on, or parked by the guard or the automation (not off by hand, not faulted). */
+  /** The pump can heat: on, or resting at the setpoint by the automation (not off by hand, not faulted). */
   available: boolean;
 }
 

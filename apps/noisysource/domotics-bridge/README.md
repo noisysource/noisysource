@@ -128,21 +128,49 @@ The bit → E-code tables for the bitmaps, and what each code means, live in the
 app: `apps/noisysource/domotics/src/data/heatpumpFaults.ts` (a copy of the bit
 tables is in `src/faults.ts`, for the incidents).
 
+**The module doesn't always report all of them.** Since about 19/11/2026
+(probably a power cut that restarted it) a full read brings only dps 1, 16, 18
+and 20–25: on/off, compressor Hz and the temperatures. No `mode`, no setpoints
+(117–119), no fault bitmaps (15, 109, 120–123), and a refresh doesn't bring them
+back. So the bridge finds the pump by its category (`znrb`), never by a
+datapoint, and treats a missing one as not known rather than 0
+(`src/readings.ts`):
+
+- **Faults:** missing bitmaps are "no reading", not "no fault". The automation
+  says so in its status (`pumpBlind`, and a line in `reasons`), the app shows "Sem leitura de avarias" instead of "Sem avarias". No fault
+  is made up and the pump is still switched by the plan. A fault incident open
+  when the bitmaps disappear is closed as "end not known", not as cleared.
+- **Water setpoint:** without `p02_heating` the automation sends no water
+  setpoint (it would be sent blind every 15 min, over whatever was set by hand),
+  and it can't see the compressor idling at the setpoint, so the rest at the
+  setpoint doesn't happen.
+
 ### Incidents and the E13 guard
+
+> **2026-11-22: the E13 guard and its early warning were removed** (Renato: the
+> pump was fixed, the guard had been off since late October). `src/guard.ts`,
+> `src/preempt.ts` and their tests are gone; the bridge no longer reads
+> `domotics_config/guard`, keeps `guard-config.json` / `guard-state.json`, or
+> switches the pump as `guard`, and publishes `guard: null` in
+> `domotics_state/tuya`. The automation alone switches the pump (its own rest
+> at the setpoint, `rest`, is unchanged; a faulted pump is left alone). The
+> "E13 guard" bullet below is kept as the record of what it did: incidents up
+> to that date carry `source: 'guard'`, and `domotics_climate` slots a `guard`
+> field. The code is in git history (last in PR #164).
 
 - **The pump is read every 30 s even when nobody is watching** (`PUMP_POLL_MS`;
   the thermostats keep the 5-min idle rate). Unwatched, the state is still only
-  published every 5 min, unless the pump switches, faults or the guard changes mode.
+  published every 5 min, unless the pump switches or faults.
 - **Incidents** (`src/incidents.ts`) go to `domotics_incidents/{id}` for the app's
   Reports page: a fault with 30 min of readings before it and 5 min after, how it
   ended (`self` / `reset`, lockout = second trip within 20 min or still faulted
   after 10 min), the restart time; and every on/off with who caused it (`app`,
-  `automation`, `guard`, `outside` = not through this bridge) and, since 26/10, every
+  `automation`, `outside` = not through this bridge; `guard` in records up to 22/11) and, since 26/10, every
   raw datapoint in the reading before and the one that showed it (`dps.before` /
   `dps.at`), so anything else an outside off changes is on record. Writes are queued
   in `incidents-pending.json` and retried with backoff, so a network gap or a
   missing rule loses nothing. Ids are stable (`fault-<UTC start>-<code>`).
-- **E13 guard** (`src/guard.ts`, was `deploy/e13-guard.py`): with
+- **E13 guard** (removed 2026-11-22, see the note above; was `src/guard.ts`, and before that `deploy/e13-guard.py`): with
   `domotics_config/guard` `{enabled: true}` (app: Relatórios or Clima → "Proteção
   E13"), switches the pump off for 60 min when it idles at the setpoint (≤ 45 Hz,
   water ≥ setpoint − 1.5) and for 120 min straight after a trip; still faulted
@@ -191,7 +219,8 @@ tables is in `src/faults.ts`, for the incidents).
   plus the pump's ~3.3 kW (its own draw is taken out of the house load while it
   runs, so it doesn't switch itself off), or the rooms' mean is below 21 °C. Live,
   it owns on/off whoever switched the pump (minimum on 30 / off 15 min, at most 12
-  of its own switch-ons a day); `pauseUntil` stops it. The guard comes first.
+  of its own switch-ons a day); `pauseUntil` stops it. A pump in
+  fault is left alone until the fault clears.
   Settings in `domotics_config/automation`, the one-off "warm by HH:MM" in
   `domotics_config/warm_by` (both read every 2 min, cached in
   `automation-config.json` / `warm-by.json`). The warm-up model it learns, the last

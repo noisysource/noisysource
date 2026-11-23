@@ -32,12 +32,19 @@ export interface PumpSample {
   suct?: number;
   /** Active fault codes (E13, ...); empty when none. */
   faults: string[];
+  /** The pump didn't report (all of) its fault bitmaps: `faults` empty means "none seen", not "none". Absent otherwise. */
+  faultsUnknown?: true;
   /** Zone valves open, of `zones` reachable. */
   valves?: number;
   zones?: number;
 }
 
-/** Who switched the pump. 'outside' = not this bridge: SmartLife, the panel, the technicians, a timer. */
+/**
+ * Who switched the pump. 'outside' = not this bridge: SmartLife, the panel, the
+ * technicians, a timer. 'guard' = the E13 guard, removed 2026-11-22: the bridge
+ * no longer produces it, but the incidents up to then have it (and the backfill
+ * script writes it for the hand-run guard of 23–24/10).
+ */
 export type SwitchSource = 'app' | 'automation' | 'guard' | 'outside' | 'unknown';
 /** 'log' = replayed from the hand-run logger; 'notes' = written down from STATUS.md, no readings. */
 export type IncidentOrigin = 'bridge' | 'log' | 'notes';
@@ -264,6 +271,14 @@ export function createRecorder(
           doc.lockoutWhy = `avaria ainda ativa ao fim de ${Math.round(lockoutAfterMs / MIN)} min`;
           dirty = true;
         }
+      } else if (sample.faultsUnknown) {
+        // The pump stopped reporting its fault bitmaps mid-fault: that is not
+        // the fault clearing. The record stops here, its end not known.
+        doc.status = 'unknown';
+        doc.endedHow = 'unknown';
+        doc.note = 'A bomba deixou de reportar avarias durante esta: não se sabe quando acabou.';
+        s.open = null;
+        dirty = true;
       } else {
         doc.status = 'ended';
         doc.endedAt = new Date(t);
