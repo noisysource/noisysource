@@ -196,7 +196,9 @@ service cloud.firestore {
     // alone from a client. The agents (Atlas, Claude Code through mcp/kanban)
     // never touch these collections directly: they go through the kanban*
     // callables (functions/src/tasks/callables.ts), which check every field and
-    // can't delete. So no isAtlas() here, on purpose.
+    // can't delete. So no isAtlas() here, on purpose. `tasks_config` (the
+    // board's GitHub token) has no match at all: closed to every client, the
+    // owner included, and read by the functions (tasks/github.ts) only.
     match /tasks_boards/{boardId} {
       allow read, write: if isDomoticsOwner();
     }

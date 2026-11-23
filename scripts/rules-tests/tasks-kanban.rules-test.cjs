@@ -55,7 +55,11 @@ async function expect(outcome, label, fn) {
     await expect('denied', `${who} lists cards`, () => getDocs(collection(db, 'tasks_cards')));
     await expect('denied', `${who} writes a card`, () => setDoc(doc(db, 'tasks_cards/c2'), { title: 'x' }));
     await expect('denied', `${who} deletes a card`, () => deleteDoc(doc(db, 'tasks_cards/c1')));
+    await expect('denied', `${who} reads the GitHub token`, () => getDoc(doc(db, 'tasks_config/github')));
   }
+  // The GitHub token (kanbanSetGithubToken) is read by the functions alone.
+  await expect('denied', 'owner reads the GitHub token', () => getDoc(doc(owner, 'tasks_config/github')));
+  await expect('denied', 'owner writes the GitHub token', () => setDoc(doc(owner, 'tasks_config/github'), { token: 'x' }));
   await expect('allowed', 'owner deletes a card', () => deleteDoc(doc(owner, 'tasks_cards/c1')));
 
   await Promise.all([owner, ownerUnverified, atlas, code, stranger].map(terminate));

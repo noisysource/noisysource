@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
-  cleanCardFields, cleanComment, describeChange, isOnRoadmap, orderAtEnd, orderBetween, sortCards,
+  checkoutCommands, checksVerdict, cleanCardFields, cleanComment, describeChange, isOnRoadmap, mergeBlocker,
+  mergeWarning, orderAtEnd, orderBetween, parsePrUrl, prRefs, sortCards, type PrStatus,
 } from "./kanban";
 
 const MARKER = "// ---- mirrored below:";
@@ -27,7 +28,7 @@ const err = (fn: () => unknown) => {
 describe("cleanCardFields", () => {
   it("fills the defaults for a new card", () => {
     expect(cleanCardFields({ boardId: "kidclub", title: "  Sibling discount  " })).toEqual({
-      boardId: "kidclub", title: "Sibling discount", description: "", status: "backlog", priority: "p2",
+      boardId: "kidclub", title: "Sibling discount", description: "", testPlan: "", status: "backlog", priority: "p2",
       assignee: null, roadmap: false, labels: [], links: [],
     });
   });
@@ -85,5 +86,57 @@ describe("roadmap and activity", () => {
   it("checks comments", () => {
     expect(cleanComment("  done, PR #12  ")).toBe("done, PR #12");
     expect(err(() => cleanComment(""))).toContain("text");
+  });
+});
+
+describe("pull requests", () => {
+  const pr = (over: Partial<PrStatus> = {}): PrStatus => ({
+    owner: "noisysource", repo: "noisysource", number: 1, url: "", title: "", state: "open", merged: false,
+    draft: false, base: "staging", head: "agent/x", mergeable: true,
+    checks: [{ name: "deploy", status: "completed", conclusion: "success", url: "" }], ...over,
+  });
+  it("reads PR links of the organisation only", () => {
+    expect(parsePrUrl("https://github.com/noisysource/noisysource/pull/168")).toEqual({ owner: "noisysource", repo: "noisysource", number: 168 });
+    expect(parsePrUrl("https://github.com/noisysource/Atlas/pull/12/files")).toEqual({ owner: "noisysource", repo: "Atlas", number: 12 });
+    expect(parsePrUrl("https://github.com/someone/noisysource/pull/1")).toBeNull();
+    expect(parsePrUrl("https://github.com/noisysource/noisysource/issues/1")).toBeNull();
+    const card = { links: [
+      { label: "PR", url: "https://github.com/noisysource/noisysource/pull/168" },
+      { label: "same", url: "https://github.com/noisysource/noisysource/pull/168#discussion" },
+      { label: "docs", url: "https://example.com" },
+    ] };
+    expect(prRefs(card)).toHaveLength(1);
+  });
+  it("checks out in a worktree in the monorepo", () => {
+    expect(checkoutCommands("noisysource", "agent/tasks-kanban")).toContain(
+      "git worktree add .claude/worktrees/test-tasks-kanban origin/agent/tasks-kanban");
+    expect(checkoutCommands("Atlas", "feat/x")).toContain("git switch --track origin/feat/x");
+  });
+  it("judges checks, counting skipped as passed", () => {
+    const c = (status: string, conclusion: string | null) => ({ name: "", status, conclusion, url: "" });
+    expect(checksVerdict(null)).toBe("unknown");
+    expect(checksVerdict([])).toBe("none");
+    expect(checksVerdict([c("completed", "success"), c("completed", "skipped")])).toBe("passed");
+    expect(checksVerdict([c("completed", "success"), c("in_progress", null)])).toBe("pending");
+    expect(checksVerdict([c("completed", "failure"), c("in_progress", null)])).toBe("failed");
+  });
+  it("blocks a merge until it's safe", () => {
+    expect(mergeBlocker(pr())).toBeNull();
+    expect(mergeBlocker(pr({ checks: null }))).toBeNull();
+    expect(mergeBlocker(pr({ merged: true }))).toBe("already merged");
+    expect(mergeBlocker(pr({ draft: true }))).toContain("draft");
+    expect(mergeBlocker(pr({ mergeable: null }))).toContain("refresh");
+    expect(mergeBlocker(pr({ mergeable: false }))).toContain("conflicts");
+    expect(mergeBlocker(pr({ checks: [{ name: "d", status: "completed", conclusion: "failure", url: "" }] }))).toContain("failed");
+  });
+  it("warns what a merge releases", () => {
+    expect(mergeWarning("noisysource", "staging")).toContain("noisysource-prod");
+    expect(mergeWarning("noisysource", "main")).toContain("production");
+    expect(mergeWarning("Atlas", "main")).toBeNull();
+  });
+  it("carries the test plan", () => {
+    expect(cleanCardFields({ boardId: "tasks", title: "x" }).testPlan).toBe("");
+    expect(describeChange(cleanCardFields({ boardId: "tasks", title: "x" }), { testPlan: "open /", status: "testing" }))
+      .toBe("Backlog → Testing, test plan");
   });
 });

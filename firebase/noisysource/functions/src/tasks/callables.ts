@@ -33,7 +33,7 @@ const fail = (e: unknown): never => {
 const ms = (v: unknown): number =>
   v instanceof admin.firestore.Timestamp ? v.toMillis() : typeof v === "number" ? v : 0;
 
-function toCard(snap: admin.firestore.DocumentSnapshot): Card {
+export function toCard(snap: admin.firestore.DocumentSnapshot): Card {
   const d = snap.data() ?? {};
   return {
     id: snap.id,
@@ -46,6 +46,7 @@ function toCard(snap: admin.firestore.DocumentSnapshot): Card {
     assignee: d.assignee ?? null,
     roadmap: d.roadmap === true,
     links: d.links ?? [],
+    testPlan: d.testPlan ?? "",
     order: d.order ?? 0,
     createdBy: d.createdBy,
     updatedBy: d.updatedBy,
@@ -82,13 +83,13 @@ async function endOfColumn(boardId: string, status: Status): Promise<number> {
   return orderAtEnd(snap.docs.map((d) => d.get("order") as number));
 }
 
-function log(cardId: string, by: Actor, kind: "created" | "updated" | "comment", text: string) {
+export function log(cardId: string, by: Actor, kind: "created" | "updated" | "comment", text: string) {
   return db().collection(CARDS).doc(cardId).collection("activity").add({
     at: admin.firestore.FieldValue.serverTimestamp(), by, kind, text,
   });
 }
 
-async function loadCard(cardId: unknown): Promise<admin.firestore.DocumentSnapshot> {
+export async function loadCard(cardId: unknown): Promise<admin.firestore.DocumentSnapshot> {
   if (typeof cardId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(cardId)) fail("cardId: required");
   const snap = await db().collection(CARDS).doc(cardId as string).get();
   if (!snap.exists) throw new HttpsError("not-found", `no card "${cardId}"`);
