@@ -1,7 +1,8 @@
 rules_version = '2';
 // Rules for the NoisySource projects (noisysource-dev, noisysource-prod): the
-// private tools' own Firestore. Today that is Domotics only. KidClub's and
-// FinHub's rules are the repo-root firestore.rules, in KidClub's projects.
+// private tools' own Firestore: Domotics, and FinHub (the Strata app, at the
+// end). KidClub's rules, and the old FinHub's, are the repo-root
+// firestore.rules, in KidClub's projects.
 //
 // The Domotics block is the one from the root file, with one difference:
 // there is no `users` collection here, so the owner is known by email alone
@@ -228,6 +229,932 @@ service cloud.firestore {
     // from his Atlas app. The function re-validates it on every read.
     match /atlas_gate/access {
       allow read, write: if isDomoticsOwner() || isAtlas();
+    }
+
+    // ── FinHub ───────────────────────────────────────────────────────────────
+    // The Strata Treasury app (apps/noisysource/finhub, 2026-11-23). One shared
+    // set of books, finhub_books/{book}, for Noisy Source, the household and
+    // Noisy Phocus. These are Strata's own rules (every document held to its
+    // shape), with these changes:
+    //   - The root is finhub_books/{book} (Strata: users/{uid}). The path
+    //     variable is still called userId, and so is the documents' field
+    //     (Strata's names): both hold the book id, not a person's.
+    //   - Only the one book exists (finhubBook()), and only its members write
+    //     it (isFinhubUser(): Renato, verified; Marisa joins later).
+    //   - Atlas (isAtlas(), Domotics block above) may READ the book, to answer
+    //     money questions. Atlas writing (what it reads in documents) comes with
+    //     its import tool, with its own limits, in a later change.
+    // No AI and no server here: FinHub only reads and writes its book.
+    // Tests: scripts/rules-tests/finhub-strata.rules-test.cjs.
+    // -------------------------------------------------------------------------
+    // Global Hardened Primitives
+    // -------------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // The one set of books (FINHUB_BOOK_ID in apps/noisysource/finhub/src/firebase.ts).
+    function finhubBook() {
+      return 'noisysource-group';
+    }
+
+    // Who keeps the books. Verified addresses only: anyone can create an
+    // account with an address.
+    function isFinhubUser() {
+      return isSignedIn() && request.auth.token.email_verified == true &&
+        request.auth.token.email in ['admin@noisysource.com'];
+    }
+
+    // Write access (Strata's name for it, kept so its rules read unchanged).
+    function isOwner(userId) {
+      return userId == finhubBook() && isFinhubUser();
+    }
+
+    // Read access: the book's keepers, and Atlas.
+    function isBookReader(userId) {
+      return userId == finhubBook() && (isFinhubUser() || isAtlas());
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOptionalId(id) {
+      return id is string && id.size() <= 128 && (id == '' || id.matches('^[a-zA-Z0-9_\\-]+$'));
+    }
+
+    function isValidDateStr(d) {
+      return d is string && d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidMonthStr(m) {
+      return m is string && m.size() == 7 && m.matches('^\\d{4}-\\d{2}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function entityExists(userId, entityId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/entities/$(entityId)) ||
+        existsAfter(/databases/$(database)/documents/users/$(userId)/entities/$(entityId));
+    }
+
+    function accountExists(userId, accountId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/accounts/$(accountId)) ||
+        existsAfter(/databases/$(database)/documents/users/$(userId)/accounts/$(accountId));
+    }
+
+    function batchExists(userId, batchId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/statementBatches/$(batchId)) ||
+        existsAfter(/databases/$(database)/documents/users/$(userId)/statementBatches/$(batchId));
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidWorkspaceProfile(data) {
+      return data.keys().hasAll([
+          'userId', 'currencyCode', 'currencySymbol', 'fiscalStartMonth',
+          'onboardingComplete', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'currencyCode', 'currencySymbol', 'fiscalStartMonth',
+          'onboardingComplete', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        data.currencyCode is string && data.currencyCode.size() == 3 &&
+        data.currencyCode in ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'JPY', 'PLN', 'SEK', 'NOK'] &&
+        data.currencySymbol is string && data.currencySymbol.size() >= 1 && data.currencySymbol.size() <= 4 &&
+        data.fiscalStartMonth is int && data.fiscalStartMonth >= 1 && data.fiscalStartMonth <= 12 &&
+        data.onboardingComplete is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEntity(data) {
+      return data.keys().hasAll([
+          'userId', 'name', 'entityType', 'registrationCode', 'colorHex',
+          'archived', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'name', 'entityType', 'registrationCode', 'colorHex',
+          'archived', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.entityType is string && data.entityType.size() <= 20 && data.entityType in ['personal', 'company'] &&
+        data.registrationCode is string && data.registrationCode.size() <= 40 &&
+        data.colorHex is string && data.colorHex.size() == 7 && data.colorHex.matches('^#[0-9a-fA-F]{6}$') &&
+        data.archived is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAccount(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'name', 'institution', 'accountType',
+          'balance', 'lastReconciledDate', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'name', 'institution', 'accountType', 'accountNumber',
+          'balance', 'lastReconciledDate', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.institution is string && data.institution.size() >= 1 && data.institution.size() <= 80 &&
+        data.accountType is string && data.accountType.size() <= 20 &&
+        data.accountType in ['checking', 'savings', 'treasury', 'cash', 'meal_voucher', 'child_voucher'] &&
+        (!('accountNumber' in data) || (data.accountNumber is string && data.accountNumber.size() <= 34)) &&
+        data.balance is number &&
+        data.lastReconciledDate is string && data.lastReconciledDate.size() <= 20 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCreditFacility(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'fundingAccountId', 'name', 'lender', 'facilityType',
+          'principalOrLimit', 'currentBalance', 'apr', 'monthlyPayment', 'dueDay',
+          'maturityDate', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'fundingAccountId', 'name', 'lender', 'facilityType',
+          'principalOrLimit', 'currentBalance', 'apr', 'monthlyPayment', 'dueDay',
+          'maturityDate', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidOptionalId(data.fundingAccountId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.lender is string && data.lender.size() >= 1 && data.lender.size() <= 80 &&
+        data.facilityType is string && data.facilityType.size() <= 20 &&
+        data.facilityType in ['term_loan', 'credit_line', 'credit_card', 'mortgage', 'equipment_loan'] &&
+        data.principalOrLimit is number && data.principalOrLimit >= 0 &&
+        data.currentBalance is number && data.currentBalance >= 0 &&
+        data.apr is number && data.apr >= 0 && data.apr <= 100 &&
+        data.monthlyPayment is number && data.monthlyPayment >= 0 &&
+        data.dueDay is int && data.dueDay >= 1 && data.dueDay <= 31 &&
+        data.maturityDate is string && data.maturityDate.size() <= 20 &&
+        data.status is string && data.status.size() <= 16 && data.status in ['active', 'paid_off'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLedgerTransaction(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'accountId', 'facilityId', 'payslipId',
+          'date', 'description', 'category', 'type', 'amount', 'status',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'accountId', 'facilityId', 'payslipId',
+          'date', 'description', 'category', 'type', 'amount',
+          'ivaRate', 'ivaAmount', 'ivaDeductible',
+          'invoiceNumber', 'invoiceDocId', 'driveFileId', 'driveWebViewLink', 'driveFolderPath',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidId(data.accountId) &&
+        isValidOptionalId(data.facilityId) &&
+        isValidOptionalId(data.payslipId) &&
+        isValidDateStr(data.date) &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 160 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        data.type is string && data.type.size() <= 20 &&
+        data.type in ['income', 'expense', 'transfer', 'debt_payment', 'payroll'] &&
+        data.amount is number && data.amount >= 0 &&
+        (!('ivaRate' in data) || (data.ivaRate is number && data.ivaRate >= 0 && data.ivaRate <= 30)) &&
+        (!('ivaAmount' in data) || (data.ivaAmount is number && data.ivaAmount >= 0)) &&
+        (!('ivaDeductible' in data) || data.ivaDeductible is bool) &&
+        (!('invoiceNumber' in data) || (data.invoiceNumber is string && data.invoiceNumber.size() <= 60)) &&
+        (!('invoiceDocId' in data) || isValidOptionalId(data.invoiceDocId)) &&
+        (!('driveFileId' in data) || (data.driveFileId is string && data.driveFileId.size() <= 160)) &&
+        (!('driveWebViewLink' in data) || (data.driveWebViewLink is string && data.driveWebViewLink.size() <= 512)) &&
+        (!('driveFolderPath' in data) || (data.driveFolderPath is string && data.driveFolderPath.size() <= 240)) &&
+        data.status is string && data.status.size() <= 20 &&
+        data.status in ['cleared', 'scheduled', 'reconciled'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPayslipRecord(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'employeeName', 'periodStart', 'periodEnd',
+          'payDate', 'taxDueDate', 'grossPay', 'netPay', 'employeeWithholdings',
+          'employerTaxes', 'employerContributions', 'totalCost',
+          'payStatus', 'taxStatus', 'sourceFilename', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'contractId', 'employeeName', 'periodStart', 'periodEnd',
+          'payDate', 'taxDueDate', 'grossPay', 'netPay', 'employeeWithholdings',
+          'employerTaxes', 'employerContributions', 'totalCost',
+          'payStatus', 'taxStatus', 'sourceFilename', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        (!('contractId' in data) || isValidOptionalId(data.contractId)) &&
+        data.employeeName is string && data.employeeName.size() >= 1 && data.employeeName.size() <= 100 &&
+        isValidDateStr(data.periodStart) &&
+        isValidDateStr(data.periodEnd) &&
+        isValidDateStr(data.payDate) &&
+        isValidDateStr(data.taxDueDate) &&
+        data.grossPay is number && data.grossPay >= 0 &&
+        data.netPay is number && data.netPay >= 0 &&
+        data.employeeWithholdings is number && data.employeeWithholdings >= 0 &&
+        data.employerTaxes is number && data.employerTaxes >= 0 &&
+        data.employerContributions is number && data.employerContributions >= 0 &&
+        data.totalCost is number && data.totalCost >= 0 &&
+        data.payStatus is string && data.payStatus.size() <= 16 && data.payStatus in ['scheduled', 'paid'] &&
+        data.taxStatus is string && data.taxStatus.size() <= 16 && data.taxStatus in ['scheduled', 'paid'] &&
+        data.sourceFilename is string && data.sourceFilename.size() <= 140 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidForecastItem(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'name', 'direction', 'category',
+          'monthlyAmount', 'startMonth', 'endMonth', 'annualGrowthRate',
+          'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'name', 'direction', 'category',
+          'monthlyAmount', 'startMonth', 'endMonth', 'annualGrowthRate',
+          'active', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.direction is string && data.direction.size() <= 16 && data.direction in ['inflow', 'outflow'] &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        data.monthlyAmount is number && data.monthlyAmount >= 0 &&
+        isValidMonthStr(data.startMonth) &&
+        (data.endMonth is string && data.endMonth.size() <= 7 && (data.endMonth == '' || data.endMonth.matches('^\\d{4}-\\d{2}$'))) &&
+        data.annualGrowthRate is number && data.annualGrowthRate >= -100 && data.annualGrowthRate <= 500 &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStatementBatch(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'accountId', 'filename', 'statementPeriod',
+          'openingBalance', 'closingBalance', 'lineCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'accountId', 'filename', 'statementPeriod',
+          'openingBalance', 'closingBalance', 'lineCount', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidId(data.accountId) &&
+        data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 140 &&
+        data.statementPeriod is string && data.statementPeriod.size() >= 1 && data.statementPeriod.size() <= 60 &&
+        data.openingBalance is number &&
+        data.closingBalance is number &&
+        data.lineCount is int && data.lineCount >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStatementLine(data) {
+      return data.keys().hasAll([
+          'userId', 'batchId', 'entityId', 'accountId', 'date', 'description',
+          'amount', 'direction', 'reconciliationStatus', 'matchedTransactionId',
+          'discrepancyNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'batchId', 'entityId', 'accountId', 'date', 'description',
+          'amount', 'direction', 'reconciliationStatus', 'matchedTransactionId',
+          'discrepancyNote', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.batchId) &&
+        isValidId(data.entityId) &&
+        isValidId(data.accountId) &&
+        isValidDateStr(data.date) &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 200 &&
+        data.amount is number && data.amount >= 0 &&
+        data.direction is string && data.direction.size() <= 10 && data.direction in ['credit', 'debit'] &&
+        data.reconciliationStatus is string && data.reconciliationStatus.size() <= 20 &&
+        data.reconciliationStatus in ['unmatched', 'suggested', 'reconciled', 'discrepancy'] &&
+        isValidOptionalId(data.matchedTransactionId) &&
+        data.discrepancyNote is string && data.discrepancyNote.size() <= 200 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPersonalIncome(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'accountId', 'title', 'payerName',
+          'incomeCategory', 'frequency', 'grossAmount', 'irsWithheldRate',
+          'ssRate', 'countsTowardsIrs', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'accountId', 'title', 'payerName',
+          'incomeCategory', 'frequency', 'grossAmount', 'irsWithheldRate',
+          'ssRate', 'countsTowardsIrs', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidOptionalId(data.accountId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+        data.payerName is string && data.payerName.size() >= 1 && data.payerName.size() <= 100 &&
+        data.incomeCategory is string && data.incomeCategory.size() <= 30 &&
+        data.incomeCategory in ['cat_a_dependent', 'cat_b_independent', 'cat_e_capital', 'cat_f_rental', 'other'] &&
+        data.frequency is string && data.frequency.size() <= 20 &&
+        data.frequency in ['monthly', '14_months', 'annual', 'one_off'] &&
+        data.grossAmount is number && data.grossAmount >= 0 &&
+        data.irsWithheldRate is number && data.irsWithheldRate >= 0 && data.irsWithheldRate <= 100 &&
+        data.ssRate is number && data.ssRate >= 0 && data.ssRate <= 100 &&
+        data.countsTowardsIrs is bool &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTaxSetting(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'region', 'isPme', 'ivaPeriodicity',
+          'derramaRate', 'ircPaymentsOnAccount', 'irsMaritalStatus',
+          'irsDependents', 'irsDeductions', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'region', 'isPme', 'ivaPeriodicity',
+          'derramaRate', 'ircPaymentsOnAccount', 'irsMaritalStatus',
+          'irsDependents', 'irsDeductions', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        data.region is string && data.region.size() <= 20 && data.region in ['continente', 'madeira', 'acores'] &&
+        data.isPme is bool &&
+        data.ivaPeriodicity is string && data.ivaPeriodicity.size() <= 20 && data.ivaPeriodicity in ['monthly', 'quarterly', 'exempt'] &&
+        data.derramaRate is number && data.derramaRate >= 0 && data.derramaRate <= 5 &&
+        data.ircPaymentsOnAccount is number && data.ircPaymentsOnAccount >= 0 &&
+        data.irsMaritalStatus is string && data.irsMaritalStatus.size() <= 20 && data.irsMaritalStatus in ['single', 'married_joint'] &&
+        data.irsDependents is int && data.irsDependents >= 0 && data.irsDependents <= 20 &&
+        data.irsDeductions is number && data.irsDeductions >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEmploymentContract(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'fundingAccountId', 'workerName', 'roleTitle',
+          'isOwnerIncome', 'personalEntityId', 'paySchedule', 'baseGrossMonthly',
+          'irsRate', 'employeeSsRate', 'employerSsRate', 'mealAllowanceDaily',
+          'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
+          'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
+          'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'active',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'fundingAccountId', 'workerName', 'roleTitle',
+          'isOwnerIncome', 'personalEntityId', 'paySchedule', 'baseGrossMonthly',
+          'irsRate', 'employeeSsRate', 'employerSsRate', 'mealAllowanceDaily',
+          'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
+          'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
+          'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'active',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidOptionalId(data.fundingAccountId) &&
+        data.workerName is string && data.workerName.size() >= 1 && data.workerName.size() <= 100 &&
+        data.roleTitle is string && data.roleTitle.size() >= 1 && data.roleTitle.size() <= 80 &&
+        data.isOwnerIncome is bool &&
+        isValidOptionalId(data.personalEntityId) &&
+        data.paySchedule is string && data.paySchedule.size() <= 20 && data.paySchedule in ['14_months', '12_months'] &&
+        data.baseGrossMonthly is number && data.baseGrossMonthly >= 0 &&
+        data.irsRate is number && data.irsRate >= 0 && data.irsRate <= 100 &&
+        data.employeeSsRate is number && data.employeeSsRate >= 0 && data.employeeSsRate <= 100 &&
+        data.employerSsRate is number && data.employerSsRate >= 0 && data.employerSsRate <= 100 &&
+        data.mealAllowanceDaily is number && data.mealAllowanceDaily >= 0 &&
+        data.mealPaymentMethod is string && data.mealPaymentMethod.size() <= 12 && data.mealPaymentMethod in ['card', 'cash', 'none'] &&
+        data.childVoucherMonthly is number && data.childVoucherMonthly >= 0 &&
+        data.childVoucherSubjectToIrs is bool &&
+        data.childVoucherSubjectToSs is bool &&
+        data.otherBenefitName is string && data.otherBenefitName.size() <= 60 &&
+        data.otherBenefitMonthly is number && data.otherBenefitMonthly >= 0 &&
+        data.otherBenefitSubjectToIrs is bool &&
+        data.otherBenefitSubjectToSs is bool &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidRecurringExpense(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'paidByAccountId', 'paidByEntityId', 'creditFacilityId',
+          'name', 'vendor', 'category', 'amount', 'frequency', 'billingDay', 'billingMonth',
+          'ivaRate', 'ivaDeductible', 'hasInvoice', 'requiresReimbursement', 'lastPostedDate',
+          'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'paidByAccountId', 'paidByEntityId', 'creditFacilityId',
+          'name', 'vendor', 'category', 'amount', 'frequency', 'billingDay', 'billingMonth',
+          'ivaRate', 'ivaDeductible', 'hasInvoice', 'requiresReimbursement', 'lastPostedDate',
+          'active', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidId(data.paidByAccountId) &&
+        isValidId(data.paidByEntityId) &&
+        isValidOptionalId(data.creditFacilityId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.vendor is string && data.vendor.size() >= 1 && data.vendor.size() <= 80 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        data.amount is number && data.amount >= 0 &&
+        data.frequency is string && data.frequency.size() <= 16 && data.frequency in ['monthly', 'annual'] &&
+        data.billingDay is int && data.billingDay >= 1 && data.billingDay <= 31 &&
+        data.billingMonth is int && data.billingMonth >= 1 && data.billingMonth <= 12 &&
+        data.ivaRate is number && data.ivaRate >= 0 && data.ivaRate <= 30 &&
+        data.ivaDeductible is bool &&
+        data.hasInvoice is bool &&
+        data.requiresReimbursement is bool &&
+        data.lastPostedDate is string && data.lastPostedDate.size() <= 20 &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidExpenseReimbursement(data) {
+      return data.keys().hasAll([
+          'userId', 'owedByEntityId', 'owedToEntityId', 'paidByAccountId',
+          'recurringExpenseId', 'transactionId', 'date', 'vendor', 'description',
+          'invoiceNumber', 'hasInvoice', 'amount', 'ivaRate', 'ivaAmount',
+          'ivaDeductible', 'status', 'settledDate', 'settledFromAccountId',
+          'settledToAccountId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'owedByEntityId', 'owedToEntityId', 'paidByAccountId',
+          'recurringExpenseId', 'transactionId', 'date', 'vendor', 'description',
+          'invoiceNumber', 'hasInvoice', 'amount', 'ivaRate', 'ivaAmount',
+          'ivaDeductible', 'driveFileId', 'driveWebViewLink', 'driveFolderPath',
+          'status', 'settledDate', 'settledFromAccountId',
+          'settledToAccountId', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.owedByEntityId) &&
+        isValidId(data.owedToEntityId) &&
+        data.owedByEntityId != data.owedToEntityId &&
+        isValidOptionalId(data.paidByAccountId) &&
+        isValidOptionalId(data.recurringExpenseId) &&
+        isValidOptionalId(data.transactionId) &&
+        isValidDateStr(data.date) &&
+        data.vendor is string && data.vendor.size() >= 1 && data.vendor.size() <= 80 &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 160 &&
+        data.invoiceNumber is string && data.invoiceNumber.size() <= 60 &&
+        data.hasInvoice is bool &&
+        data.amount is number && data.amount >= 0 &&
+        data.ivaRate is number && data.ivaRate >= 0 && data.ivaRate <= 30 &&
+        data.ivaAmount is number && data.ivaAmount >= 0 &&
+        data.ivaDeductible is bool &&
+        (!('driveFileId' in data) || (data.driveFileId is string && data.driveFileId.size() <= 160)) &&
+        (!('driveWebViewLink' in data) || (data.driveWebViewLink is string && data.driveWebViewLink.size() <= 512)) &&
+        (!('driveFolderPath' in data) || (data.driveFolderPath is string && data.driveFolderPath.size() <= 240)) &&
+        data.status is string && data.status.size() <= 16 && data.status in ['open', 'settled'] &&
+        data.settledDate is string && data.settledDate.size() <= 20 &&
+        isValidOptionalId(data.settledFromAccountId) &&
+        isValidOptionalId(data.settledToAccountId) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidInvoiceDocument(data) {
+      return data.keys().hasAll([
+          'userId', 'entityId', 'accountId', 'transactionId', 'statementLineId',
+          'reimbursementId', 'source', 'vendor', 'vendorNif', 'invoiceNumber',
+          'date', 'amount', 'ivaRate', 'ivaAmount', 'ivaDeductible', 'filename',
+          'driveFileId', 'driveWebViewLink', 'driveFolderId', 'driveFolderPath',
+          'gmailMessageId', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'entityId', 'accountId', 'transactionId', 'statementLineId',
+          'reimbursementId', 'source', 'vendor', 'vendorNif', 'invoiceNumber',
+          'date', 'amount', 'ivaRate', 'ivaAmount', 'ivaDeductible', 'filename',
+          'driveFileId', 'driveWebViewLink', 'driveFolderId', 'driveFolderPath',
+          'gmailMessageId', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == finhubBook() &&
+        isValidId(data.entityId) &&
+        isValidOptionalId(data.accountId) &&
+        isValidOptionalId(data.transactionId) &&
+        isValidOptionalId(data.statementLineId) &&
+        isValidOptionalId(data.reimbursementId) &&
+        data.source is string && data.source.size() <= 16 && data.source in ['gmail', 'drive', 'upload'] &&
+        data.vendor is string && data.vendor.size() >= 1 && data.vendor.size() <= 80 &&
+        data.vendorNif is string && data.vendorNif.size() <= 40 &&
+        data.invoiceNumber is string && data.invoiceNumber.size() <= 60 &&
+        isValidDateStr(data.date) &&
+        data.amount is number && data.amount >= 0 &&
+        data.ivaRate is number && data.ivaRate >= 0 && data.ivaRate <= 30 &&
+        data.ivaAmount is number && data.ivaAmount >= 0 &&
+        data.ivaDeductible is bool &&
+        data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 140 &&
+        data.driveFileId is string && data.driveFileId.size() <= 160 &&
+        data.driveWebViewLink is string && data.driveWebViewLink.size() <= 512 &&
+        data.driveFolderId is string && data.driveFolderId.size() <= 160 &&
+        data.driveFolderPath is string && data.driveFolderPath.size() <= 240 &&
+        data.gmailMessageId is string && data.gmailMessageId.size() <= 160 &&
+        data.status is string && data.status.size() <= 20 && data.status in ['inbox', 'filed', 'reconciled'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Match Rules
+    // -------------------------------------------------------------------------
+    match /finhub_books/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isBookReader(userId);
+      allow list: if false;
+      allow create: if isVerified() && isValidId(userId) && isOwner(userId) &&
+        isValidWorkspaceProfile(incoming()) &&
+        incoming().userId == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() && isValidId(userId) && isOwner(userId) &&
+        isValidWorkspaceProfile(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'currencyCode', 'currencySymbol', 'fiscalStartMonth', 'onboardingComplete', 'updatedAt'
+        ]);
+      allow delete: if false;
+
+      match /entities/{entityId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(entityId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(entityId) && isOwner(userId) &&
+          isValidEntity(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidId(userId) && isValidId(entityId) && isOwner(userId) &&
+          isValidEntity(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'entityType', 'registrationCode', 'colorHex', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['archived', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(entityId) && isOwner(userId);
+      }
+
+      match /accounts/{accountId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(accountId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(accountId) && isOwner(userId) &&
+          isValidAccount(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(accountId) && isOwner(userId) &&
+          isValidAccount(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'institution', 'accountType', 'accountNumber', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['lastReconciledDate', 'balance', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(accountId) && isOwner(userId);
+      }
+
+      match /creditFacilities/{facilityId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(facilityId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(facilityId) && isOwner(userId) &&
+          isValidCreditFacility(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(facilityId) && isOwner(userId) &&
+          isValidCreditFacility(incoming()) &&
+          existing().status == 'active' &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'lender', 'facilityType', 'fundingAccountId',
+              'principalOrLimit', 'apr', 'monthlyPayment', 'dueDay', 'maturityDate', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['currentBalance', 'status', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(facilityId) && isOwner(userId);
+      }
+
+      match /transactions/{transactionId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(transactionId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(transactionId) && isOwner(userId) &&
+          isValidLedgerTransaction(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId) &&
+          accountExists(userId, incoming().accountId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(transactionId) && isOwner(userId) &&
+          isValidLedgerTransaction(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            (
+              existing().status != 'reconciled' && (
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'date', 'description', 'category', 'type', 'amount',
+                  'ivaRate', 'ivaAmount', 'ivaDeductible', 'invoiceNumber',
+                  'invoiceDocId', 'driveFileId', 'driveWebViewLink', 'driveFolderPath',
+                  'updatedAt'
+                ]) ||
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+            ) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'invoiceNumber', 'invoiceDocId', 'driveFileId', 'driveWebViewLink', 'driveFolderPath', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(transactionId) && isOwner(userId) &&
+          existing().status != 'reconciled';
+      }
+
+      match /payslips/{payslipId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(payslipId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(payslipId) && isOwner(userId) &&
+          isValidPayslipRecord(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(payslipId) && isOwner(userId) &&
+          isValidPayslipRecord(incoming()) &&
+          !(existing().payStatus == 'paid' && existing().taxStatus == 'paid') &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['payStatus', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['taxStatus', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'employeeName', 'periodStart', 'periodEnd', 'payDate', 'taxDueDate',
+              'grossPay', 'netPay', 'employeeWithholdings', 'employerTaxes',
+              'employerContributions', 'totalCost', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(payslipId) && isOwner(userId);
+      }
+
+      match /forecastItems/{itemId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(itemId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(itemId) && isOwner(userId) &&
+          isValidForecastItem(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(itemId) && isOwner(userId) &&
+          isValidForecastItem(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'direction', 'category', 'monthlyAmount', 'startMonth',
+              'endMonth', 'annualGrowthRate', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(itemId) && isOwner(userId);
+      }
+
+      match /statementBatches/{batchId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(batchId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(batchId) && isOwner(userId) &&
+          isValidStatementBatch(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId) &&
+          accountExists(userId, incoming().accountId);
+        allow update: if false;
+        allow delete: if isVerified() && isValidId(userId) && isValidId(batchId) && isOwner(userId);
+      }
+
+      match /statementLines/{lineId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(lineId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(lineId) && isOwner(userId) &&
+          isValidStatementLine(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId) &&
+          accountExists(userId, incoming().accountId) &&
+          batchExists(userId, incoming().batchId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(lineId) && isOwner(userId) &&
+          isValidStatementLine(incoming()) &&
+          existing().reconciliationStatus != 'reconciled' &&
+          incoming().userId == existing().userId &&
+          incoming().batchId == existing().batchId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['reconciliationStatus', 'matchedTransactionId', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['reconciliationStatus', 'discrepancyNote', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(lineId) && isOwner(userId) &&
+          existing().reconciliationStatus != 'reconciled';
+      }
+
+      match /personalIncomes/{incomeId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(incomeId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(incomeId) && isOwner(userId) &&
+          isValidPersonalIncome(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(incomeId) && isOwner(userId) &&
+          isValidPersonalIncome(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'entityId', 'accountId', 'title', 'payerName', 'incomeCategory',
+              'frequency', 'grossAmount', 'irsWithheldRate', 'ssRate',
+              'countsTowardsIrs', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(incomeId) && isOwner(userId);
+      }
+
+      match /taxSettings/{settingId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(settingId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(settingId) && isOwner(userId) &&
+          isValidTaxSetting(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(settingId) && isOwner(userId) &&
+          isValidTaxSetting(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().entityId == existing().entityId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'region', 'isPme', 'ivaPeriodicity', 'derramaRate',
+            'ircPaymentsOnAccount', 'irsMaritalStatus', 'irsDependents',
+            'irsDeductions', 'updatedAt'
+          ]);
+        allow delete: if isVerified() && isValidId(userId) && isValidId(settingId) && isOwner(userId);
+      }
+
+      match /employmentContracts/{contractId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(contractId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId) &&
+          isValidEmploymentContract(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId) &&
+          isValidEmploymentContract(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'entityId', 'fundingAccountId', 'workerName', 'roleTitle',
+              'isOwnerIncome', 'personalEntityId', 'paySchedule', 'baseGrossMonthly',
+              'irsRate', 'employeeSsRate', 'employerSsRate', 'mealAllowanceDaily',
+              'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
+              'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
+              'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId);
+      }
+
+      match /recurringExpenses/{expenseId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(expenseId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
+          isValidRecurringExpense(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId) &&
+          entityExists(userId, incoming().paidByEntityId) &&
+          accountExists(userId, incoming().paidByAccountId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
+          isValidRecurringExpense(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'entityId', 'paidByAccountId', 'paidByEntityId', 'creditFacilityId',
+              'name', 'vendor', 'category', 'amount', 'frequency', 'billingDay',
+              'billingMonth', 'ivaRate', 'ivaDeductible', 'hasInvoice',
+              'requiresReimbursement', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['lastPostedDate', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(expenseId) && isOwner(userId);
+      }
+
+      match /reimbursements/{reimbursementId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(reimbursementId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(reimbursementId) && isOwner(userId) &&
+          isValidExpenseReimbursement(incoming()) &&
+          incoming().status == 'open' &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().owedByEntityId) &&
+          entityExists(userId, incoming().owedToEntityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(reimbursementId) && isOwner(userId) &&
+          isValidExpenseReimbursement(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            (
+              existing().status == 'open' && (
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'owedByEntityId', 'owedToEntityId', 'date', 'vendor', 'description',
+                  'invoiceNumber', 'hasInvoice', 'amount', 'ivaRate', 'ivaAmount',
+                  'ivaDeductible', 'driveFileId', 'driveWebViewLink', 'driveFolderPath', 'updatedAt'
+                ]) ||
+                (
+                  incoming().status == 'settled' &&
+                  isValidDateStr(incoming().settledDate) &&
+                  isValidId(incoming().settledFromAccountId) &&
+                  isValidId(incoming().settledToAccountId) &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'status', 'settledDate', 'settledFromAccountId', 'settledToAccountId', 'updatedAt'
+                  ])
+                )
+              )
+            ) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'driveFileId', 'driveWebViewLink', 'driveFolderPath', 'invoiceNumber', 'hasInvoice', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(reimbursementId) && isOwner(userId);
+      }
+
+      match /invoiceDocuments/{docId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(docId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(docId) && isOwner(userId) &&
+          isValidInvoiceDocument(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(docId) && isOwner(userId) &&
+          isValidInvoiceDocument(incoming()) &&
+          existing().status != 'reconciled' &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'entityId', 'accountId', 'transactionId', 'statementLineId', 'reimbursementId',
+              'vendor', 'vendorNif', 'invoiceNumber', 'date', 'amount', 'ivaRate',
+              'ivaAmount', 'ivaDeductible', 'driveFileId', 'driveWebViewLink',
+              'driveFolderId', 'driveFolderPath', 'status', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'driveFileId', 'driveWebViewLink', 'driveFolderId', 'driveFolderPath', 'status', 'updatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'transactionId', 'statementLineId', 'reimbursementId', 'status', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerified() && isValidId(userId) && isValidId(docId) && isOwner(userId) &&
+          existing().status != 'reconciled';
+      }
     }
   }
 }

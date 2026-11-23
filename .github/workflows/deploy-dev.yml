@@ -79,4 +79,6 @@ jobs:
          {"part": "tasks", "dir": "apps/noisysource/tasks",
           "build": "pnpm --filter tasks build:nsdev", "target": "tasks"},
          {"part": "website", "dir": "apps/noisysource/website",
-          "build": "pnpm --filter website build:nsdev", "target": "website", "firebase": false}]
+          "build": "pnpm --filter website build:nsdev", "target": "website", "firebase": false},
+         {"part": "finhub", "dir": "apps/noisysource/finhub",
+          "build": "pnpm --filter finhub build:nsdev", "target": "finhub"}]

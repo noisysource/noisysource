@@ -178,8 +178,9 @@ jobs:
 
       # A bundle built in the wrong mode deploys fine and then breaks login.
       # Each Vite bundle contains its Firebase config once as
-      # projectId:"<id>"; refuse to go on unless it's this project. An app
-      # marked "firebase": false has no Firebase config to check.
+      # projectId:"<id>" (Vite 8's minifier writes projectId:`<id>`, FinHub);
+      # refuse to go on unless it's this project. An app marked
+      # "firebase": false has no Firebase config to check.
       - name: Build the apps and check they target ${{ inputs.environment }}
         if: steps.apps.outputs.hosting != '[]'
         env:
@@ -195,7 +196,7 @@ jobs:
             if [ "$firebase" = "false" ]; then
               test -f "$dir/dist/index.html"
               echo "$part: no Firebase SDK in the bundle, projectId check skipped"
-            elif ! grep -rqF "projectId:\"$PROJECT\"" "$dir/dist/assets"; then
+            elif ! grep -rqE "projectId:[\"\`]$PROJECT[\"\`]" "$dir/dist/assets"; then
               echo "::error::$dir was built for another Firebase project (expected $PROJECT). Check its build command and its .env.<mode> file."
               exit 1
             fi

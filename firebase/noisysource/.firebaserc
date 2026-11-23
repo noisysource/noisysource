@@ -8,7 +8,8 @@
       "hosting": {
         "domotics": ["noisysource-dev-domotics"],
         "tasks": ["noisysource-dev-board"],
-        "website":  ["noisysource-dev-web"]
+        "website":  ["noisysource-dev-web"],
+        "finhub": ["noisysource-dev-strata"]
       }
     },
     "noisysource-prod": {

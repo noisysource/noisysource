@@ -71,6 +71,7 @@ const LABELS = {
   finances: 'FinHub hosting',
   domotics: 'Domotics hosting',
   website: 'Website hosting (noisysource.com)',
+  finhub: 'FinHub hosting (Strata, NoisySource projects)',
 };
 
 // Code that ends up in a deploy, and which part it belongs to. `dir` is
@@ -115,16 +116,18 @@ export const UNITS = {
       /^apps\/noisysource\/domotics\//,
       /^apps\/noisysource\/tasks\//,
       /^apps\/noisysource\/website\//,
+      /^apps\/noisysource\/finhub\//,
     ],
   },
   noisysource: {
-    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'tasks', 'website'],
+    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'tasks', 'website', 'finhub'],
     owned: [
       { dir: 'infra/gcp/terraform/noisysource/', part: 'terraform' },
       { dir: 'firebase/noisysource/functions/', part: 'functions' },
       { dir: 'apps/noisysource/domotics/', part: 'domotics' },
       { dir: 'apps/noisysource/tasks/', part: 'tasks' },
       { dir: 'apps/noisysource/website/', part: 'website' },
+      { dir: 'apps/noisysource/finhub/', part: 'finhub' },
     ],
     ownedFiles: {
       'firebase/noisysource/firestore.rules': 'firestore_rules',
@@ -133,6 +136,7 @@ export const UNITS = {
     consumers: {
       domotics: 'apps/noisysource/domotics/',
       tasks: 'apps/noisysource/tasks/',
+      finhub: 'apps/noisysource/finhub/',
       functions: 'firebase/noisysource/functions/',
     },
     everything: [/^firebase\/noisysource\/(firebase\.json|\.firebaserc)$/],
@@ -167,6 +171,7 @@ const IMPORTERS = {
   'apps/noisysource/domotics': { noisysource: ['domotics'] },
   'apps/noisysource/tasks': { noisysource: ['tasks'] },
   'apps/noisysource/website': { noisysource: ['website'] },
+  'apps/noisysource/finhub': { noisysource: ['finhub'] },
   functions: { kidclub: ['functions'] },
   'firebase/noisysource/functions': { noisysource: ['functions'] },
   // shared's own dependencies (zod) get bundled into whoever imports it.
