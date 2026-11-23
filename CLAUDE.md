@@ -78,7 +78,8 @@ GitHub: `github.com/noisysource/noisysource`
 | App | Company | Visibility | Auth | Status |
 |---|---|---|---|---|
 | KidClub | Noisy Phocus | Public | None | ✅ Live — refactor in progress |
-| Finances | NoisySource | Private (IAP) | GCP IAP | ⚠️ Migrated, needs refactor |
+| Finances | NoisySource | Private (IAP) | GCP IAP | ⚠️ Old UI, replaced by FinHub (Strata); removed once Strata works |
+| FinHub (Strata) | NoisySource | Private | Google sign-in, `admin@noisysource.com` | 🚧 Dev only (`noisysource-dev-finhub`), see `apps/noisysource/finhub/STATUS.md` |
 | Domotics | NoisySource | Private | Google sign-in, owner only (`admin@noisysource.com`) | ✅ Live on `noisysource-prod` |
 | Tasks | NoisySource | Private (IAP) | GCP IAP | 🆕 To build |
 | Social | NoisySource | Public | Firebase Auth | 🆕 To build |
