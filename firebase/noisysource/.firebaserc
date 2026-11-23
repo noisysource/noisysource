@@ -7,7 +7,7 @@
     "noisysource-dev": {
       "hosting": {
         "domotics": ["noisysource-dev-domotics"],
-        "tasks": ["noisysource-dev-tasks"]
+        "tasks": ["noisysource-dev-kanban"]
       }
     },
     "noisysource-prod": {

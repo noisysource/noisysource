@@ -20,7 +20,7 @@ _Last updated: 2026-11-23, branch `agent/tasks-kanban` (PR #168)._
 ## Before it works end to end (Renato)
 1. **Run the rules test**: `pnpm test:rules:tasks` (needs Java; couldn't run where this was built).
 2. **Authorize the new domains** in Firebase Auth (Console → Authentication → Settings →
-   Authorized domains): `noisysource-dev-tasks.web.app` and `noisysource-prod-tasks.web.app`.
+   Authorized domains): `noisysource-dev-kanban.web.app` (the dev site's name since 2026-11-23: `noisysource-dev-tasks` was deleted by another PR's Terraform run, and Firebase never gives a deleted name back) and `noisysource-prod-tasks.web.app`.
    Without it Google sign-in answers `auth/unauthorized-domain`.
 3. **Create Claude Code's account** in each project you want it on (prod for the real boards):
    `apps/noisysource/domotics-bridge/deploy/create-agent-user.sh noisysource-prod claude-code@kidclub.pt`

@@ -55,7 +55,7 @@ owner alone, and the callables check every field.
 - `tasks_config/github`: `{token, login, setAt}`, functions only.
 
 ## Deploy
-NoisySource unit, like Domotics: a PR into `staging` previews on `noisysource-dev-tasks.web.app`;
+NoisySource unit, like Domotics: a PR into `staging` previews on `noisysource-dev-kanban.web.app`;
 **merging into `staging` releases to `noisysource-prod-tasks.web.app`**. `pnpm --filter tasks dev`
 runs it locally on port 5176 against `noisysource-dev` (localhost is an authorized domain).
 
