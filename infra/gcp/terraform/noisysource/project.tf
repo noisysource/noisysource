@@ -56,6 +56,20 @@ resource "google_firebase_hosting_site" "sites" {
   depends_on = [google_firebase_project.default]
 }
 
+# Custom domains (prod: noisysource.com on the website). Creating one doesn't
+# touch DNS: Firebase waits for the records in output custom_domain_dns_records,
+# then issues the certificate. Nothing breaks while they're missing.
+resource "google_firebase_hosting_custom_domain" "domains" {
+  provider              = google-beta
+  for_each              = var.custom_domains
+  project               = var.project_id
+  site_id               = each.value.site
+  custom_domain         = each.key
+  redirect_target       = each.value.redirect_target
+  wait_dns_verification = false
+  depends_on            = [google_firebase_hosting_site.sites]
+}
+
 resource "google_firebase_web_app" "apps" {
   provider        = google-beta
   for_each        = var.web_apps
