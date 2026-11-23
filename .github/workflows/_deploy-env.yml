@@ -238,6 +238,9 @@ jobs:
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          # Plain output, so `terraform show -json` is JSON and nothing else.
+          terraform_wrapper: false
 
       - name: Terraform init
         working-directory: ${{ inputs.tf_dir }}
@@ -246,9 +249,37 @@ jobs:
       # The deploy service account can't change IAM (on purpose). A change to
       # the root's iam.tf fails here until Renato has applied it by hand; see
       # the README in the Terraform root.
+      # A pull request applies only what it creates or changes; what its plan
+      # would delete or replace is left for staging (pr-safe.mjs says why).
+      - name: Terraform plan
+        working-directory: ${{ inputs.tf_dir }}
+        run: terraform plan -var-file="${{ inputs.tf_var_file }}" -input=false -out=tfplan
+
       - name: Terraform apply
         working-directory: ${{ inputs.tf_dir }}
-        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -auto-approve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            terraform apply -input=false -auto-approve tfplan
+            exit 0
+          fi
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/.github/scripts/pr-safe.mjs" terraform plan.json > safe.json
+          kept=$(jq -r '.kept | join(", ")' safe.json)
+          if [ -n "$kept" ]; then
+            echo "::warning title=Terraform: kept for staging::This PR's plan would delete or replace $kept on a shared dev project. A PR never removes things; merge into staging to do that."
+          fi
+          if [ "$(jq '.targets | length' safe.json)" = "0" ]; then
+            echo "Nothing for a PR to apply."
+            exit 0
+          fi
+          if [ -z "$kept" ]; then
+            terraform apply -input=false -auto-approve tfplan
+            exit 0
+          fi
+          mapfile -t targets < <(jq -r '.targets[] | "-target=" + .' safe.json)
+          terraform apply -var-file="${{ inputs.tf_var_file }}" -input=false -auto-approve "${targets[@]}"
 
   rules:
     name: "Rules + indexes (${{ inputs.environment }})"
@@ -338,9 +369,22 @@ jobs:
       - name: Export access token
         run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
 
+      # A pull request deploys only the functions its own code exports, so it
+      # never tries to delete another open PR's functions on dev (pr-safe.mjs).
       - name: Deploy Cloud Functions
         working-directory: ${{ inputs.firebase_dir }}
-        run: firebase deploy --only functions --project=${{ inputs.environment }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          only=functions
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            pnpm --dir functions run build
+            codebase=$(jq -r '.functions.codebase // empty' firebase.json)
+            # Loading the code only to read its names: without the deploy's credentials,
+            # which firebase-admin can't read at start-up (it runs initializeApp on load).
+            only=$(env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE -u GOOGLE_GHA_CREDS_PATH node "$GITHUB_WORKSPACE/.github/scripts/pr-safe.mjs" functions "$PWD/functions/lib/index.js" "$codebase")
+          fi
+          firebase deploy --only "$only" --project=${{ inputs.environment }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
 
   # One job per app, each with its own concurrency group, so one app's deploy
   # never waits on or cancels another's.
