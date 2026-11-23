@@ -32,11 +32,11 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
 - `src/lib/api.ts`: Strata's old server calls (Gemini parsing, Gmail/Drive scans, AI match
   suggestions) all answer "moved to Atlas". The buttons still exist; they get replaced by
   "what Atlas imported" as the Atlas side is built.
-- Site (dev): `https://noisysource-dev-finhub.web.app`. **Not in prod yet.** No functions.
+- Site (dev): `https://noisysource-dev-strata.web.app` (its first name, `noisysource-dev-finhub`, was deleted on 2026-11-23 by the Terraform run of #160's merge into `staging`, and Firebase never gives a deleted name back). **Not in prod yet.** No functions.
 
 ## Before Renato can test on dev (his, once)
 1. After the PR's first deploy creates the site: Firebase console → `noisysource-dev` →
-   Authentication → Settings → Authorised domains → add `noisysource-dev-finhub.web.app`.
+   Authentication → Settings → Authorised domains → add `noisysource-dev-strata.web.app`.
 2. Open the site, sign in as `admin@noisysource.com`. In the first screen choose the
    **blank** start, not "Load Sample Portfolio" (that fills the book with a made-up company).
    The entities it creates are placeholders until the Atlas import.
@@ -62,7 +62,8 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
   **everything** in both units (the other apps get `staging`'s code).
 - Merging changes the rules in `noisysource-prod` too (one rules file): the FinHub block is
   added beside Domotics', nothing of Domotics changes.
-- The FinHub rules test (`pnpm test:rules:finhub`) was written but not run: the emulator
-  couldn't be downloaded in the session that wrote it. Run it once locally.
+- The FinHub rules test (`pnpm test:rules:finhub`) ran on 2026-11-23 with `staging` (#160,
+  #168) merged in: it passes, and so do `test:rules:tasks` and `test:rules:domotics` on the
+  same rules file (the FinHub block sits after the Tasks and Atlas-gate blocks).
 - The original repo `noisysource/Finhub` still has two real payslips in its history
   (`public/assets/aistudio/`). Archive or delete it now that the code lives here.

@@ -21,3 +21,10 @@ output "web_app_config" {
     }
   }
 }
+
+# The DNS records to add at the registrar for each custom domain (prod).
+output "custom_domain_dns_records" {
+  value = {
+    for domain, d in google_firebase_hosting_custom_domain.domains : domain => d.required_dns_updates
+  }
+}

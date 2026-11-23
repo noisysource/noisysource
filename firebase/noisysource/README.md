@@ -1,6 +1,6 @@
 # Firebase project folder: NoisySource
 
-The Firebase config of the NoisySource projects (`noisysource-dev`, `noisysource-prod`):
+The Firebase config of the NoisySource projects (`noisysource-dev`, `noisysource-prod`), home of Domotics and the Tasks kanban:
 rules, indexes and, as they arrive, functions and hosting. Run `firebase` from this folder
 and it acts on these projects only; the repo root's `firebase.json` is KidClub's.
 
@@ -11,6 +11,11 @@ changes here to `noisysource-dev`; merging it deploys the same to `noisysource-p
 ## Hosting
 `firebase deploy` only serves folders inside this one, so each hosting target's `public` is
 `hosting/<target>` (gitignored). CI copies the app's build there. By hand:
+
+Targets: `domotics` and `website` (noisysource.com; its custom domain is Terraform's,
+`custom_domains` in `infra/gcp/terraform/noisysource/env/prod.tfvars`). The website rewrites
+`/api/atlas` to the `atlasGate` function, the one public function here (setup and limits:
+`apps/noisysource/website/STATUS.md`).
 
 ```bash
 pnpm --filter domotics build:nsdev

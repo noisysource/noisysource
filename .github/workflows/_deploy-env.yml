@@ -60,7 +60,9 @@ on:
           The unit's hosted apps, as a JSON list of
           {"part": the app's part name in deploy-parts.mjs,
            "dir": the app folder, "build": the build command for this
-           environment, "target": its hosting target in firebase.json}.
+           environment, "target": its hosting target in firebase.json,
+           optional "firebase": false for an app with no Firebase SDK in its
+           bundle, so no projectId to check (the public website)}.
         required: false
         type: string
         default: '[]'
@@ -177,7 +179,8 @@ jobs:
       # A bundle built in the wrong mode deploys fine and then breaks login.
       # Each Vite bundle contains its Firebase config once as
       # projectId:"<id>" (Vite 8's minifier writes projectId:`<id>`, FinHub);
-      # refuse to go on unless it's this project.
+      # refuse to go on unless it's this project. An app marked
+      # "firebase": false has no Firebase config to check.
       - name: Build the apps and check they target ${{ inputs.environment }}
         if: steps.apps.outputs.hosting != '[]'
         env:
@@ -186,16 +189,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dists"
-          while IFS=$'\t' read -r part dir build; do
+          while IFS=$'\t' read -r part dir build firebase; do
             echo "::group::Build $part"
             bash -euo pipefail -c "$build"
             echo "::endgroup::"
-            if ! grep -rqE "projectId:[\"\`]$PROJECT[\"\`]" "$dir/dist/assets"; then
+            if [ "$firebase" = "false" ]; then
+              test -f "$dir/dist/index.html"
+              echo "$part: no Firebase SDK in the bundle, projectId check skipped"
+            elif ! grep -rqE "projectId:[\"\`]$PROJECT[\"\`]" "$dir/dist/assets"; then
               echo "::error::$dir was built for another Firebase project (expected $PROJECT). Check its build command and its .env.<mode> file."
               exit 1
             fi
             tar -czf "$RUNNER_TEMP/dists/$part.tgz" -C "$dir" dist
-          done < <(jq -r '.[] | [.part, .dir, .build] | @tsv' <<<"$HOSTING")
+          done < <(jq -r '.[] | [.part, .dir, .build, (if .firebase == false then "false" else "true" end)] | @tsv' <<<"$HOSTING")
 
       # A compile error stops the run here, before terraform or rules deploy.
       - name: Build the functions

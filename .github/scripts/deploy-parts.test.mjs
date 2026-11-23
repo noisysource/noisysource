@@ -230,7 +230,7 @@ test('lockfile: anything that could be shared deploys everything', () => {
   orphan@1.0.0:
     resolution: {integrity: sha512-ddd}
 `),
-    'unknown workspace package': LOCK.replace('importers:\n', 'importers:\n\n  apps/noisysource/tasks:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n'),
+    'unknown workspace package': LOCK.replace('importers:\n', 'importers:\n\n  apps/noisysource/social:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n'),
   };
   for (const [name, head] of Object.entries(cases)) {
     assert.ok(lockfileParts(LOCK, head).everything, name);
@@ -292,6 +292,8 @@ test('units: each NoisySource path deploys only its own part there', () => {
   assert.deepEqual(deployedIn('noisysource', ['firebase/noisysource/firestore.indexes.json']), ['firestore_indexes']);
   assert.deepEqual(deployedIn('noisysource', ['firebase/noisysource/functions/src/index.ts']), ['functions']);
   assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/domotics/src/App.tsx']), ['domotics']);
+  assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/website/src/cosmos.js']), ['website']);
+  assert.deepEqual(deployedIn('kidclub', ['apps/noisysource/website/src/cosmos.js']), []);
   assert.equal(deployedIn('noisysource', ['firebase/noisysource/firebase.json']), 'everything');
   assert.equal(deployedIn('noisysource', ['firebase/noisysource/.firebaserc']), 'everything');
   // unknown file inside the unit's folder: safe default
@@ -315,7 +317,9 @@ test('units: packages/shared is traced through each unit\'s own consumers', () =
   assert.deepEqual(deployedIn('kidclub', ['packages/shared/lib/energyBill.ts']), []);
   // KidClub's and FinHub's models are nobody's in the NoisySource unit.
   assert.deepEqual(deployedIn('noisysource', ['packages/shared/models/Booking.ts']), []);
-  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'finhub', 'functions']);
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'finhub', 'functions', 'tasks']);
+  assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/tasks/src/App.tsx']), ['tasks']);
+  assert.deepEqual(deployedIn('kidclub', ['apps/noisysource/tasks/src/App.tsx']), []);
 });
 
 test('units: lockfile importers map to the unit that deploys them', () => {
@@ -326,6 +330,9 @@ test('units: lockfile importers map to the unit that deploys them', () => {
   const nsFunctions = LOCK.replace('importers:\n', 'importers:\n\n  firebase/noisysource/functions:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n');
   assert.deepEqual(lockfileParts(LOCK, nsFunctions, 'noisysource').parts, ['functions']);
   assert.deepEqual(lockfileParts(LOCK, nsFunctions, 'kidclub').parts, []);
+  const website = LOCK.replace('importers:\n', 'importers:\n\n  apps/noisysource/website: {}\n');
+  assert.deepEqual(lockfileParts(LOCK, website, 'noisysource').parts, ['website']);
+  assert.deepEqual(lockfileParts(LOCK, website, 'kidclub').parts, []);
 });
 
 test('units: an unknown unit is an error, not an empty plan', () => {

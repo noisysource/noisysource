@@ -2,9 +2,28 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-17 (camp days section just below; the rest is as of 2026-11-11), after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
+**Last updated:** 2026-11-18 (the promotion note just below; camp sections as of 2026-11-17; the rest is as of 2026-11-11), after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
 
-## ⛺ 2026-11-17: camp seats, waiting list and deposit reminders — PR #162 open into `staging`, not in prod
+## 🚀 2026-11-18: camps (#158, #162) and the timesheets removal (#161) are in prod (promotion #159). `main` = `staging`
+
+#161 and #162 merged into `staging`, then #159 promoted `staging` → `main`: prod deploy green before the merge and
+again after it (Rules + indexes, Functions, KidClub and FinHub hosting; `sync-staging` green). The promotion also
+carried the repo restructure (Domotics out of the KidClub unit). Checked after the deploy: `kidclub.pt` answers, and
+prod lists `createCampSubscription`, `getCampAvailability`, `onCampDepositPaid`, `confirmCampSubscription`,
+`cancelCampSubscription`, `createCampBalanceBillings`. **Not checked in prod:** a real sign-up or deposit payment
+(nobody signed in there); Renato tested the flows on dev. Worktrees for the three PRs are removed.
+
+- **Dev has a test camp:** "Campo de Natal 2026", 21–31 Dec, €25/day, capacity 3, 25 Dec inactive (placeholder values).
+  **Prod already has its camps** ("Atividades Natal", 21–23 Dec; "Atividades Fim de Ano", 28–30 Dec), created by
+  Renato before this change; their days and any sign-ups were not checked against the new rules.
+- **Stale page after a deploy** (seen 2026-11-18, `/admin` blank until a hard refresh): `index.html` is cached for an
+  hour and a request for the previous bundle gets `index.html` back. Fix if it recurs: `Cache-Control: no-cache` on
+  `index.html` in `firebase.json`.
+- **Open:** the first run of the 09:00 job with the new reminder/waiting-list step hasn't been looked at;
+  `onCampSubscriptionCreated` emails the admin once per sign-up document, so a mixed sign-up (week + days + waiting
+  list) sends up to three admin emails.
+
+## ⛺ 2026-11-17: camp seats, waiting list and deposit reminders — #162, in prod since 2026-11-18 (#159)
 
 Branch `agent/kidclub-camp-waitlist` (worktree `.claude/worktrees/kidclub-camp-waitlist`), built **on top of #158**
 (its commits are in #162 until #158 merges). The rules are Renato's (2026-11-17) and live, with tests, in
@@ -58,7 +77,7 @@ Reminders and day 7 only happen at the 09:00 run.
 2. With a week taking a single day's held seat, the family that loses it has done nothing wrong and may have been
    about to pay. Renato chose this; the email explains it.
 
-## 🏕️ 2026-11-17: camp days "not saving" in admin — fix in PR #158 (open, into `staging`, not in prod)
+## 🏕️ 2026-11-17: camp days "not saving" in admin — fixed in #158, in prod since 2026-11-18 (#159)
 
 **Problem (reported by Renato, on prod).** In Admin → Campos (`/admin/camps`), a day added to a camp disappeared
 after a refresh. The days **were saved** (`_apps/arcoiris/campDays`); loading them failed. `CampsAdminPage.tsx`
@@ -73,7 +92,7 @@ only, sort in the browser, show an error if the load fails. Not built or typeche
 Days saved on prod while it was broken will show up once the fix is there, so expect duplicates if the same day was
 entered several times: delete the extras from the list. Remove the worktree after the merge.
 
-## 🗑️ 2026-11-17: Registo de Horas (timesheets page) removed — PR open into `staging`, not in prod
+## 🗑️ 2026-11-17: Registo de Horas (timesheets page) removed — #161, in prod since 2026-11-18 (#159)
 
 Renato: not in use, delete it for now. The page (`/admin/timesheets`) was broken anyway: its monthly query needed a
 composite index that doesn't exist, and its "generate" buttons read/wrote `dailySchedules` and `timesheets` at the

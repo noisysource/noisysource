@@ -24,8 +24,9 @@ case "$PROJECT" in
   noisysource-prod | noisysource-dev) ;;
   *) echo "usage: $0 <noisysource-prod | noisysource-dev> [email]"; exit 1 ;;
 esac
-# The rules and the callables know Atlas by this one address.
-if [ "$EMAIL" != "atlas@kidclub.pt" ]; then
+# The rules and the callables know Atlas by this one address. Claude Code's
+# kanban account (mcp/kanban) is the other one the callables know.
+if [ "$EMAIL" != "atlas@kidclub.pt" ] && [ "$EMAIL" != "claude-code@kidclub.pt" ]; then
   echo "note: the rules (isAtlas) and the callables (AGENT_EMAIL) only know atlas@kidclub.pt;"
   echo "      $EMAIL will be able to sign in and do nothing until they are changed."
 fi

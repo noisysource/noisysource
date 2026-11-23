@@ -192,6 +192,45 @@ service cloud.firestore {
       allow read, update, delete: if isBridge();
     }
 
+    // ── Tasks app (kanban) ────────────────────────────────────────────────────
+    // apps/noisysource/tasks: one board per app plus "All systems". Renato's
+    // alone from a client. The agents (Atlas, Claude Code through mcp/kanban)
+    // never touch these collections directly: they go through the kanban*
+    // callables (functions/src/tasks/callables.ts), which check every field and
+    // can't delete. So no isAtlas() here, on purpose. `tasks_config` (the
+    // board's GitHub token) has no match at all: closed to every client, the
+    // owner included, and read by the functions (tasks/github.ts) only.
+    match /tasks_boards/{boardId} {
+      allow read, write: if isDomoticsOwner();
+    }
+    match /tasks_cards/{cardId} {
+      allow read, write: if isDomoticsOwner();
+      // History: added to, never edited; deleted with its card.
+      match /activity/{entryId} {
+        allow read, create, delete: if isDomoticsOwner();
+      }
+    }
+
+    // Awakenings of Atlas on noisysource.com: who woke it, why, how they found
+    // it, and the conversation. Written only by the atlasGate function (Admin
+    // SDK; functions/src/website/atlasGate.ts). Renato and his Atlas read them
+    // ("somebody's trying to reach you") and may mark one seen, nothing else.
+    // atlas_gate/config (the Gemini key, the shared phrase, the panel token)
+    // and atlas_gate_usage (the shared counter and the quiet hours) have no
+    // rule: no client, Atlas included, can read or write them.
+    match /atlas_awakenings/{id} {
+      allow read: if isDomoticsOwner() || isAtlas();
+      allow update: if (isDomoticsOwner() || isAtlas())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen']);
+    }
+
+    // What Atlas may talk about, per role, and the personal keys: edited by
+    // Renato (the maker panel on the site, through the function) and, later,
+    // from his Atlas app. The function re-validates it on every read.
+    match /atlas_gate/access {
+      allow read, write: if isDomoticsOwner() || isAtlas();
+    }
+
     // ── FinHub ───────────────────────────────────────────────────────────────
     // The Strata Treasury app (apps/noisysource/finhub, 2026-11-23). One shared
     // set of books, finhub_books/{book}, for Noisy Source, the household and

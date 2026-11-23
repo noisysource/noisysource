@@ -6,19 +6,17 @@
   "targets": {
     "noisysource-dev": {
       "hosting": {
-        "domotics": [
-          "noisysource-dev-domotics"
-        ],
-        "finhub": [
-          "noisysource-dev-finhub"
-        ]
+        "domotics": ["noisysource-dev-domotics"],
+        "tasks": ["noisysource-dev-board"],
+        "website":  ["noisysource-dev-web"],
+        "finhub": ["noisysource-dev-strata"]
       }
     },
     "noisysource-prod": {
       "hosting": {
-        "domotics": [
-          "noisysource-prod-domotics"
-        ]
+        "domotics": ["noisysource-prod-domotics"],
+        "tasks": ["noisysource-prod-tasks"],
+        "website":  ["noisysource-prod-website"]
       }
     }
   },

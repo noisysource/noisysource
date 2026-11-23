@@ -16,7 +16,8 @@
 //                and the root rules.
 //   noisysource  noisysource-dev / noisysource-prod: firebase/noisysource/,
 //                infra/gcp/terraform/noisysource/ and the apps that have moved
-//                (Domotics, which left the kidclub unit on 2026-11-16).
+//                (Domotics, which left the kidclub unit on 2026-11-16), plus
+//                the public website (noisysource.com, since 2026-11-17).
 // A path that belongs only to the other unit deploys nothing in this one.
 // Without --unit the unit is kidclub, so the existing workflow is unchanged.
 //
@@ -69,6 +70,7 @@ const LABELS = {
   kidclub: 'KidClub hosting',
   finances: 'FinHub hosting',
   domotics: 'Domotics hosting',
+  website: 'Website hosting (noisysource.com)',
   finhub: 'FinHub hosting (Strata, NoisySource projects)',
 };
 
@@ -112,15 +114,19 @@ export const UNITS = {
       /^firebase\/noisysource\//,
       /^infra\/gcp\/terraform\/noisysource\//,
       /^apps\/noisysource\/domotics\//,
+      /^apps\/noisysource\/tasks\//,
+      /^apps\/noisysource\/website\//,
       /^apps\/noisysource\/finhub\//,
     ],
   },
   noisysource: {
-    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'finhub'],
+    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'tasks', 'website', 'finhub'],
     owned: [
       { dir: 'infra/gcp/terraform/noisysource/', part: 'terraform' },
       { dir: 'firebase/noisysource/functions/', part: 'functions' },
       { dir: 'apps/noisysource/domotics/', part: 'domotics' },
+      { dir: 'apps/noisysource/tasks/', part: 'tasks' },
+      { dir: 'apps/noisysource/website/', part: 'website' },
       { dir: 'apps/noisysource/finhub/', part: 'finhub' },
     ],
     ownedFiles: {
@@ -129,6 +135,7 @@ export const UNITS = {
     },
     consumers: {
       domotics: 'apps/noisysource/domotics/',
+      tasks: 'apps/noisysource/tasks/',
       finhub: 'apps/noisysource/finhub/',
       functions: 'firebase/noisysource/functions/',
     },
@@ -162,6 +169,8 @@ const IMPORTERS = {
   'apps/noisyphocus/kidclub': { kidclub: ['kidclub'] },
   'apps/noisysource/finances': { kidclub: ['finances'] },
   'apps/noisysource/domotics': { noisysource: ['domotics'] },
+  'apps/noisysource/tasks': { noisysource: ['tasks'] },
+  'apps/noisysource/website': { noisysource: ['website'] },
   'apps/noisysource/finhub': { noisysource: ['finhub'] },
   functions: { kidclub: ['functions'] },
   'firebase/noisysource/functions': { noisysource: ['functions'] },
