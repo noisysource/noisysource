@@ -46,13 +46,18 @@ const ensureSignedIn = () => (signedIn ??= signInWithEmailAndPassword(auth, EMAI
 }));
 
 // Keep in step with packages/shared/lib/kanban.ts.
-const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'];
+const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'testing', 'done'];
 const PRIORITIES = ['p0', 'p1', 'p2', 'p3'];
 const ASSIGNEES = ['renato', 'marisa', 'atlas', 'claude-code'];
 
 const cardFields = {
   title: { type: 'string', description: 'Short, imperative. At most 200 characters.' },
   description: { type: 'string', description: 'Markdown: context, acceptance criteria, notes.' },
+  testPlan: {
+    type: 'string',
+    description:
+      'How Renato tests it, in Markdown: where (dev preview URL, local), setup (seed data, env, accounts), numbered steps with the expected result, and what must still work. The board adds the checkout commands from the linked PR itself.',
+  },
   status: { type: 'string', enum: STATUSES },
   priority: { type: 'string', enum: PRIORITIES, description: 'p0 urgent … p3 low. Default p2.' },
   assignee: { type: ['string', 'null'], enum: [...ASSIGNEES, null] },
@@ -94,12 +99,18 @@ const TOOLS = [
   {
     name: 'kanban_update',
     description:
-      'Change a card: only the fields given. Moving it (status or boardId) puts it at the bottom of the new column. Use it to take a card (assignee claude-code, status in_progress), hand it for review (status review, add the PR link), or finish it.',
+      'Change a card: only the fields given. Moving it (status or boardId) puts it at the bottom of the new column. Flow: take a card (assignee claude-code, status in_progress); open the PR and add it to links (status review); once the dev preview is deployed, write testPlan and move it to testing, assigned to renato. Renato merges from the board, which moves it to done.',
     inputSchema: {
       type: 'object',
       required: ['cardId'],
       properties: { cardId: { type: 'string' }, boardId: { type: 'string' }, ...cardFields },
     },
+  },
+  {
+    name: 'kanban_prs',
+    description:
+      'The pull requests linked to a card: state, base and head branch, conflicts, and every check run (the deploy jobs). Use it to see whether the dev preview deployed before moving a card to testing. Read only: merging is Renato\'s, from the board.',
+    inputSchema: { type: 'object', required: ['cardId'], properties: { cardId: { type: 'string' } } },
   },
   {
     name: 'kanban_comment',
@@ -114,6 +125,7 @@ const CALLABLE = {
   kanban_create: 'kanbanCreate',
   kanban_update: 'kanbanUpdate',
   kanban_comment: 'kanbanComment',
+  kanban_prs: 'kanbanPrs',
 };
 
 const server = new Server({ name: `kanban-${PROJECT}`, version: '1.0.0' }, { capabilities: { tools: {} } });

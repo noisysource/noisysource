@@ -1,7 +1,7 @@
 # kanban MCP server
 
 Lets Claude Code read and work the Tasks kanban (`apps/noisysource/tasks`): tools
-`kanban_list`, `kanban_get`, `kanban_create`, `kanban_update`, `kanban_comment`. It signs
+`kanban_list`, `kanban_get`, `kanban_create`, `kanban_update`, `kanban_comment`, `kanban_prs`. It signs
 in as `claude-code@kidclub.pt` and calls the kanban callables; that account can do nothing
 else in the project, and can't delete cards or boards.
 
@@ -24,6 +24,11 @@ else in the project, and can't delete cards or boards.
    Use `noisysource-dev` to try it against the dev boards first.
 
 ## How agents should use it
-Pick a card (`kanban_list`), take it (`kanban_update` with `assignee: "claude-code"`,
-`status: "in_progress"`), comment on progress or questions, and when the PR is open move it
-to `review` with the PR in `links`.
+1. Pick a card (`kanban_list`) and take it: `kanban_update` with `assignee: "claude-code"`,
+   `status: "in_progress"`. Comment on progress or questions as you go.
+2. Open the PR, add it to the card's `links`, move it to `review`.
+3. When `kanban_prs` shows the dev deploy green, write the card's `testPlan` (where to test,
+   setup, numbered steps with expected results, what must still work) and move it to
+   `testing`, `assignee: "renato"`. The board shows the checkout commands from the PR itself.
+4. Renato tests, then merges from the card; the board moves it to `done`. Agents never merge
+   through the board (`kanban_prs` is read-only).
