@@ -71,7 +71,9 @@ EXISTING=$(curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts:query" \
 
 if [ -n "$EXISTING" ]; then
   echo "2. it exists: setting its password and marking it verified"
-  UID_OUT=$(body "$EXISTING" | curl -s --max-time 30 "${AUTH[@]}" -X PATCH "$API/accounts" -d @- | node -e "$local_id")
+  # accounts:update (POST) is the admin update. A PATCH on /accounts isn't an
+  # endpoint: Google answers with an HTML 404, so the password was never set.
+  UID_OUT=$(body "$EXISTING" | curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts:update" -d @- | node -e "$local_id")
 else
   echo "2. creating it, verified"
   UID_OUT=$(body "" | curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts" -d @- | node -e "$local_id")
