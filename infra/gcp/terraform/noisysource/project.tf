@@ -18,12 +18,6 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "eventarc.googleapis.com",
     "pubsub.googleapis.com",
-    # Gemini, for FinHub's document reading (firebase/noisysource/functions/src/finhub).
-    # Metered. Its cap is in code: every call is counted before it is made,
-    # and FINHUB_AI_DAILY_CAP (default 400/day) refuses the rest. Gemini 2.x
-    # on Vertex AI runs on Google's shared quota, with no per-project daily
-    # limit to lower here; see apps/noisysource/finhub/STATUS.md, "Before prod".
-    "aiplatform.googleapis.com",
     # No metered third-party API (Maps, Routes, Places...) belongs here without
     # its quota cap in the same change: root CLAUDE.md, "Cost & Production Safety".
   ])

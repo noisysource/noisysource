@@ -1,7 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
-import { getFunctions } from 'firebase/functions';
 
 // The NoisySource project's web config, from .env.<mode> (public by design).
 const app = initializeApp({
@@ -14,11 +13,16 @@ const app = initializeApp({
 });
 export const db = getFirestore(app);
 export const auth = getAuth(app);
-// Same region as every function in firebase/noisysource/functions (options.ts).
-export const functions = getFunctions(app, 'europe-west3');
+
+// One shared set of books (Noisy Source, the household, Noisy Phocus) for
+// everyone FinHub lets in: Renato now, Marisa later, Atlas reading and, later,
+// writing. Strata kept a set per signed-in user, under their uid; here every
+// path is finhub_books/{FINHUB_BOOK_ID}/..., and the documents' `userId` field
+// (Strata's name, kept) holds this id, not a person's.
+export const FINHUB_BOOK_ID = 'noisysource-group';
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.addScope('https://www.googleapis.com/auth/gmail.readonly');
-googleProvider.addScope('https://www.googleapis.com/auth/drive');
+// Plain Google sign-in. FinHub reads no Gmail or Drive itself: Atlas reads the
+// documents and writes what it finds into FinHub (STATUS.md).
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export enum OperationType {

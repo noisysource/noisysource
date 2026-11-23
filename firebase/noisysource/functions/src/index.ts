@@ -10,4 +10,3 @@ export { legrandGetHome, legrandGetStatus, legrandSetState } from "./domotics/le
 export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
 export { domoticsWarmBy } from "./domotics/warmBy";
 export { domoticsEnergyBill } from "./domotics/energyBillCallable";
-export { finhubApi } from "./finhub/api";

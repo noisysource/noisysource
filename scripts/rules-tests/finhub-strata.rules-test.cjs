@@ -1,10 +1,11 @@
 // Firestore rules test for WHO may use FinHub (the Strata app) in the
 // NoisySource projects (firebase/noisysource/firestore.rules, FinHub block).
 //
-// FinHub is private: only FinHub's users (isFinhubUser: admin@noisysource.com,
-// verified) may touch finhub_users/{their uid}, and nobody may touch another
-// user's tree. Anyone can create an account, so a signed-in stranger with
-// their own uid must be refused too, not just someone else's uid.
+// One shared book, finhub_books/noisysource-group. Its keepers
+// (isFinhubUser: admin@noisysource.com, verified) read and write it; Atlas
+// (atlas@kidclub.pt, verified) reads it; nobody else gets in, and no other
+// book can be created. Anyone can create an account, so a verified stranger
+// must be refused too.
 // Run: pnpm test:rules:finhub (needs Java).
 const { initializeApp } = require('firebase/app');
 const {
@@ -14,6 +15,8 @@ const {
 const PROJECT = 'demo-kidclub-rules';
 const HOST = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
 const OWNER = 'admin@noisysource.com';
+const ATLAS = 'atlas@kidclub.pt';
+const BOOK = 'finhub_books/noisysource-group';
 
 function client(name, email, verified) {
   const db = getFirestore(initializeApp({ projectId: PROJECT, apiKey: 'test' }, name));
@@ -53,27 +56,28 @@ async function expect(outcome, label, fn) {
 (async () => {
   const owner = client('owner', OWNER, true);
   const ownerUnverified = client('owner-unverified', OWNER, false);
+  const atlas = client('atlas', ATLAS, true);
+  const atlasUnverified = client('atlas-unverified', ATLAS, false);
   const stranger = client('stranger', 'someone@gmail.com', true);
   const anon = anonymous();
 
-  await expect('allowed', 'owner creates their own profile', () =>
-    setDoc(doc(owner, 'finhub_users/owner-uid'), profile('owner-uid')));
-  await expect('allowed', 'owner reads their own profile', () =>
-    getDoc(doc(owner, 'finhub_users/owner-uid')));
-  await expect('denied', 'owner with an unverified address reads the profile', () =>
-    getDoc(doc(ownerUnverified, 'finhub_users/owner-unverified-uid')));
-  await expect('denied', 'a verified stranger creates a profile under their own uid', () =>
-    setDoc(doc(stranger, 'finhub_users/stranger-uid'), profile('stranger-uid')));
-  await expect('denied', 'a verified stranger reads the owner\'s profile', () =>
-    getDoc(doc(stranger, 'finhub_users/owner-uid')));
-  await expect('denied', 'anonymous reads the owner\'s profile', () =>
-    getDoc(doc(anon, 'finhub_users/owner-uid')));
-  await expect('denied', 'owner writes another uid\'s profile', () =>
-    setDoc(doc(owner, 'finhub_users/other-uid'), profile('other-uid')));
-  await expect('denied', 'owner reads the AI usage counter (functions only)', () =>
-    getDoc(doc(owner, 'finhub_usage/2026-11-23')));
+  await expect('allowed', 'owner creates the book', () => setDoc(doc(owner, BOOK), profile('noisysource-group')));
+  await expect('allowed', 'owner reads the book', () => getDoc(doc(owner, BOOK)));
+  await expect('denied', 'owner creates another book', () =>
+    setDoc(doc(owner, 'finhub_books/other'), profile('other')));
+  await expect('denied', 'owner writes the book with a person\'s id in userId', () =>
+    setDoc(doc(owner, BOOK), profile('owner-uid')));
+  await expect('denied', 'owner with an unverified address reads the book', () => getDoc(doc(ownerUnverified, BOOK)));
+  await expect('allowed', 'Atlas reads the book', () => getDoc(doc(atlas, BOOK)));
+  await expect('denied', 'Atlas writes the book (its import comes later)', () =>
+    setDoc(doc(atlas, BOOK), profile('noisysource-group')));
+  await expect('denied', 'Atlas with an unverified address reads the book', () => getDoc(doc(atlasUnverified, BOOK)));
+  await expect('denied', 'a verified stranger reads the book', () => getDoc(doc(stranger, BOOK)));
+  await expect('denied', 'a verified stranger creates a book of their own', () =>
+    setDoc(doc(stranger, 'finhub_books/stranger-uid'), profile('stranger-uid')));
+  await expect('denied', 'anonymous reads the book', () => getDoc(doc(anon, BOOK)));
 
-  for (const db of [owner, ownerUnverified, stranger, anon]) await terminate(db);
+  for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {
     console.error(`\n${failures} rule test(s) failed`);
     process.exit(1);

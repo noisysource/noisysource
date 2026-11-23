@@ -11,7 +11,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, FINHUB_BOOK_ID, handleFirestoreError, OperationType } from '../firebase';
 import {
   CURRENCY_OPTIONS,
   VALIDATION_BOUNDS,
@@ -443,11 +443,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     }
 
     setLoading(true);
-    const uid = user.uid;
+    const uid = FINHUB_BOOK_ID;
     let profileLoaded = false;
 
     const unsubProfile = onSnapshot(
-      doc(db, 'finhub_users', uid),
+      doc(db, 'finhub_books', uid),
       (snap) => {
         if (snap.exists()) {
           const data = snap.data();
@@ -467,7 +467,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       },
       (err) => {
         if (!profileLoaded) setLoading(false);
-        handleFirestoreError(err, OperationType.GET, `finhub_users/${uid}`);
+        handleFirestoreError(err, OperationType.GET, `finhub_books/${uid}`);
       }
     );
 
@@ -476,7 +476,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       setter: React.Dispatch<React.SetStateAction<T[]>>,
       sortFn?: (a: T, b: T) => number
     ) => {
-      const path = `finhub_users/${uid}/${colName}`;
+      const path = `finhub_books/${uid}/${colName}`;
       const q = query(collection(db, path), where('userId', '==', uid));
       return onSnapshot(
         q,
@@ -584,7 +584,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const requireUid = () => {
     if (!user) throw new Error('Not authenticated');
-    return user.uid;
+    return FINHUB_BOOK_ID;
   };
 
   const completeOnboarding = async ({
@@ -598,10 +598,10 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   }) => {
     const uid = requireUid();
     const curOpt = CURRENCY_OPTIONS.find((c) => c.code === chosenCode) ?? CURRENCY_OPTIONS[0];
-    const profilePath = `finhub_users/${uid}`;
+    const profilePath = `finhub_books/${uid}`;
 
     try {
-      await setDoc(doc(db, 'finhub_users', uid), {
+      await setDoc(doc(db, 'finhub_books', uid), {
         userId: uid,
         currencyCode: curOpt.code,
         currencySymbol: curOpt.symbol,
@@ -620,7 +620,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const entBatch = writeBatch(db);
-      entBatch.set(doc(db, `finhub_users/${uid}/entities`, entPersonalId), {
+      entBatch.set(doc(db, `finhub_books/${uid}/entities`, entPersonalId), {
         userId: uid,
         name: 'Personal Household',
         entityType: 'personal',
@@ -630,7 +630,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      entBatch.set(doc(db, `finhub_users/${uid}/entities`, entAlphaId), {
+      entBatch.set(doc(db, `finhub_books/${uid}/entities`, entAlphaId), {
         userId: uid,
         name: loadSampleData ? 'Northstar Labs Lda' : 'Primary Operating Co',
         entityType: 'company',
@@ -641,7 +641,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         updatedAt: serverTimestamp(),
       });
       if (loadSampleData) {
-        entBatch.set(doc(db, `finhub_users/${uid}/entities`, entHoldingsId), {
+        entBatch.set(doc(db, `finhub_books/${uid}/entities`, entHoldingsId), {
           userId: uid,
           name: 'Northstar Imobiliária Lda',
           entityType: 'company',
@@ -654,7 +654,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       await entBatch.commit();
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/entities`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/entities`);
     }
 
     if (!loadSampleData) {
@@ -673,7 +673,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const accBatch = writeBatch(db);
-      accBatch.set(doc(db, `finhub_users/${uid}/accounts`, accPersonalChk), {
+      accBatch.set(doc(db, `finhub_books/${uid}/accounts`, accPersonalChk), {
         userId: uid,
         entityId: entPersonalId,
         name: 'Conta Ordem Pessoal',
@@ -685,7 +685,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      accBatch.set(doc(db, `finhub_users/${uid}/accounts`, accPersonalSav), {
+      accBatch.set(doc(db, `finhub_books/${uid}/accounts`, accPersonalSav), {
         userId: uid,
         entityId: entPersonalId,
         name: 'Poupança & Reserva IRS',
@@ -697,7 +697,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      accBatch.set(doc(db, `finhub_users/${uid}/accounts`, accLabsOp), {
+      accBatch.set(doc(db, `finhub_books/${uid}/accounts`, accLabsOp), {
         userId: uid,
         entityId: entAlphaId,
         name: 'Operating Treasury',
@@ -709,7 +709,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      accBatch.set(doc(db, `finhub_users/${uid}/accounts`, accLabsTax), {
+      accBatch.set(doc(db, `finhub_books/${uid}/accounts`, accLabsTax), {
         userId: uid,
         entityId: entAlphaId,
         name: 'IVA & IRC Tax Reserve',
@@ -721,7 +721,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      accBatch.set(doc(db, `finhub_users/${uid}/accounts`, accHoldings), {
+      accBatch.set(doc(db, `finhub_books/${uid}/accounts`, accHoldings), {
         userId: uid,
         entityId: entHoldingsId,
         name: 'Rental Escrow & Reserve',
@@ -735,13 +735,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
       await accBatch.commit();
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/accounts`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/accounts`);
     }
 
     try {
       const dataBatch = writeBatch(db);
       // Credit Facilities
-      dataBatch.set(doc(db, `finhub_users/${uid}/creditFacilities`, 'fac_sba_term'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/creditFacilities`, 'fac_sba_term'), {
         userId: uid,
         entityId: entAlphaId,
         fundingAccountId: accLabsOp,
@@ -758,7 +758,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/creditFacilities`, 'fac_corp_revolver'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/creditFacilities`, 'fac_corp_revolver'), {
         userId: uid,
         entityId: entAlphaId,
         fundingAccountId: accLabsOp,
@@ -775,7 +775,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/creditFacilities`, 'fac_personal_mortgage'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/creditFacilities`, 'fac_personal_mortgage'), {
         userId: uid,
         entityId: entPersonalId,
         fundingAccountId: accPersonalChk,
@@ -874,14 +874,14 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       for (const ctr of sampleContracts) {
         const { id: ctrId, ...ctrFields } = ctr;
-        dataBatch.set(doc(db, `finhub_users/${uid}/employmentContracts`, ctrId), {
+        dataBatch.set(doc(db, `finhub_books/${uid}/employmentContracts`, ctrId), {
           ...ctrFields,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
 
         const brk = computeContractMonthlyBreakdown(ctr, thisMonth);
-        dataBatch.set(doc(db, `finhub_users/${uid}/payslips`, `pay_${ctrId}_${thisMonth}`), {
+        dataBatch.set(doc(db, `finhub_books/${uid}/payslips`, `pay_${ctrId}_${thisMonth}`), {
           userId: uid,
           entityId: ctr.entityId,
           contractId: ctrId,
@@ -905,7 +905,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
 
       // External Personal Jobs & Side Incomes counting toward IRS
-      dataBatch.set(doc(db, `finhub_users/${uid}/personalIncomes`, 'pinc_job_consulting'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/personalIncomes`, 'pinc_job_consulting'), {
         userId: uid,
         entityId: entPersonalId,
         accountId: accPersonalChk,
@@ -923,7 +923,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
 
       // Tax Settings per Entity
-      dataBatch.set(doc(db, `finhub_users/${uid}/taxSettings`, `tax_${entPersonalId}`), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/taxSettings`, `tax_${entPersonalId}`), {
         userId: uid,
         entityId: entPersonalId,
         region: 'continente',
@@ -937,7 +937,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/taxSettings`, `tax_${entAlphaId}`), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/taxSettings`, `tax_${entAlphaId}`), {
         userId: uid,
         entityId: entAlphaId,
         region: 'continente',
@@ -953,7 +953,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
 
       // Forecast Assumptions
-      dataBatch.set(doc(db, `finhub_users/${uid}/forecastItems`, 'fc_labs_retainers'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/forecastItems`, 'fc_labs_retainers'), {
         userId: uid,
         entityId: entAlphaId,
         name: 'B2B Software & Retainers (Net)',
@@ -967,7 +967,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/forecastItems`, 'fc_labs_cloud'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/forecastItems`, 'fc_labs_cloud'), {
         userId: uid,
         entityId: entAlphaId,
         name: 'Cloud Infrastructure & Suppliers',
@@ -981,7 +981,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/forecastItems`, 'fc_holdings_rent'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/forecastItems`, 'fc_holdings_rent'), {
         userId: uid,
         entityId: entHoldingsId,
         name: 'Commercial Suite Lease',
@@ -995,7 +995,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/forecastItems`, 'fc_personal_living'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/forecastItems`, 'fc_personal_living'), {
         userId: uid,
         entityId: entPersonalId,
         name: 'Household Living & Utilities',
@@ -1011,7 +1011,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
 
       // Ledger Transactions with Portuguese IVA tags
-      dataBatch.set(doc(db, `finhub_users/${uid}/transactions`, 'tx_sample_1'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/transactions`, 'tx_sample_1'), {
         userId: uid,
         entityId: entAlphaId,
         accountId: accLabsOp,
@@ -1029,7 +1029,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/transactions`, 'tx_sample_2'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/transactions`, 'tx_sample_2'), {
         userId: uid,
         entityId: entAlphaId,
         accountId: accLabsOp,
@@ -1047,7 +1047,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/transactions`, 'tx_sample_3'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/transactions`, 'tx_sample_3'), {
         userId: uid,
         entityId: entPersonalId,
         accountId: accPersonalChk,
@@ -1065,7 +1065,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      dataBatch.set(doc(db, `finhub_users/${uid}/transactions`, 'tx_sample_4'), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/transactions`, 'tx_sample_4'), {
         userId: uid,
         entityId: entAlphaId,
         accountId: accLabsOp,
@@ -1085,7 +1085,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
 
       const batchId = 'stmt_bpi_sample';
-      dataBatch.set(doc(db, `finhub_users/${uid}/statementBatches`, batchId), {
+      dataBatch.set(doc(db, `finhub_books/${uid}/statementBatches`, batchId), {
         userId: uid,
         entityId: entAlphaId,
         accountId: accLabsOp,
@@ -1100,7 +1100,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       await dataBatch.commit();
 
       const lineBatch = writeBatch(db);
-      lineBatch.set(doc(db, `finhub_users/${uid}/statementLines`, 'sline_1'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/statementLines`, 'sline_1'), {
         userId: uid,
         batchId,
         entityId: entAlphaId,
@@ -1115,7 +1115,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      lineBatch.set(doc(db, `finhub_users/${uid}/statementLines`, 'sline_2'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/statementLines`, 'sline_2'), {
         userId: uid,
         batchId,
         entityId: entAlphaId,
@@ -1130,7 +1130,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      lineBatch.set(doc(db, `finhub_users/${uid}/statementLines`, 'sline_3'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/statementLines`, 'sline_3'), {
         userId: uid,
         batchId,
         entityId: entAlphaId,
@@ -1148,7 +1148,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       const currentMonthNum = Number(thisMonth.slice(5, 7));
       // Recurring Subscriptions (Monthly, Annual, Credit-linked, Cross-entity Invoiced)
-      lineBatch.set(doc(db, `finhub_users/${uid}/recurringExpenses`, 'sub_google_ws'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/recurringExpenses`, 'sub_google_ws'), {
         userId: uid,
         entityId: entAlphaId,
         paidByAccountId: accPersonalChk,
@@ -1170,7 +1170,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      lineBatch.set(doc(db, `finhub_users/${uid}/recurringExpenses`, 'sub_figma_org'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/recurringExpenses`, 'sub_figma_org'), {
         userId: uid,
         entityId: entAlphaId,
         paidByAccountId: accLabsOp,
@@ -1192,7 +1192,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      lineBatch.set(doc(db, `finhub_users/${uid}/recurringExpenses`, 'sub_netflix_personal'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/recurringExpenses`, 'sub_netflix_personal'), {
         userId: uid,
         entityId: entPersonalId,
         paidByAccountId: accPersonalChk,
@@ -1216,7 +1216,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
 
       // Open Inter-Entity Reimbursements (Company owes Personal for Invoiced Outlays)
-      lineBatch.set(doc(db, `finhub_users/${uid}/reimbursements`, 'reimb_google_ws'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/reimbursements`, 'reimb_google_ws'), {
         userId: uid,
         owedByEntityId: entAlphaId,
         owedToEntityId: entPersonalId,
@@ -1239,7 +1239,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      lineBatch.set(doc(db, `finhub_users/${uid}/reimbursements`, 'reimb_office_hardware'), {
+      lineBatch.set(doc(db, `finhub_books/${uid}/reimbursements`, 'reimb_office_hardware'), {
         userId: uid,
         owedByEntityId: entAlphaId,
         owedToEntityId: entPersonalId,
@@ -1271,16 +1271,16 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         'success'
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}`);
     }
   };
 
   const updateCurrencyPreference = async (nextCode: CurrencyCode) => {
     const uid = requireUid();
     const curOpt = CURRENCY_OPTIONS.find((c) => c.code === nextCode) ?? CURRENCY_OPTIONS[0];
-    const path = `finhub_users/${uid}`;
+    const path = `finhub_books/${uid}`;
     try {
-      await updateDoc(doc(db, 'finhub_users', uid), {
+      await updateDoc(doc(db, 'finhub_books', uid), {
         currencyCode: curOpt.code,
         currencySymbol: curOpt.symbol,
         updatedAt: serverTimestamp(),
@@ -1294,7 +1294,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addEntity = async (input: Omit<Entity, 'id' | 'userId' | 'archived'>) => {
     const uid = requireUid();
     const id = makeId('ent');
-    const path = `finhub_users/${uid}/entities/${id}`;
+    const path = `finhub_books/${uid}/entities/${id}`;
     const color = VALIDATION_BOUNDS.COLOR_PATTERN.test(input.colorHex) ? input.colorHex : '#3B82F6';
     try {
       await setDoc(doc(db, path), {
@@ -1319,7 +1319,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     input: Pick<Entity, 'name' | 'entityType' | 'registrationCode' | 'colorHex'>
   ) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/entities/${id}`;
+    const path = `finhub_books/${uid}/entities/${id}`;
     const color = VALIDATION_BOUNDS.COLOR_PATTERN.test(input.colorHex) ? input.colorHex : '#3B82F6';
     try {
       await updateDoc(doc(db, path), {
@@ -1337,7 +1337,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const deleteEntity = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/entities/${id}`;
+    const path = `finhub_books/${uid}/entities/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Entity removed', undefined, 'info');
@@ -1349,7 +1349,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addAccount = async (input: Omit<Account, 'id' | 'userId'>) => {
     const uid = requireUid();
     const id = makeId('acc');
-    const path = `finhub_users/${uid}/accounts/${id}`;
+    const path = `finhub_books/${uid}/accounts/${id}`;
     try {
       await setDoc(doc(db, path), {
         userId: uid,
@@ -1375,7 +1375,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     input: Pick<Account, 'name' | 'institution' | 'accountType' | 'accountNumber'>
   ) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/accounts/${id}`;
+    const path = `finhub_books/${uid}/accounts/${id}`;
     try {
       await updateDoc(doc(db, path), {
         name: clampString(input.name, VALIDATION_BOUNDS.MAX_NAME_LEN) || 'Account',
@@ -1392,7 +1392,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const updateAccountBalance = async (id: string, balance: number) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/accounts/${id}`;
+    const path = `finhub_books/${uid}/accounts/${id}`;
     try {
       await updateDoc(doc(db, path), {
         balance: Number(balance) || 0,
@@ -1439,15 +1439,15 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const wb = writeBatch(db);
-      wb.update(doc(db, `finhub_users/${uid}/accounts`, fromAccount.id), {
+      wb.update(doc(db, `finhub_books/${uid}/accounts`, fromAccount.id), {
         balance: Number((fromAccount.balance - amt).toFixed(2)),
         updatedAt: serverTimestamp(),
       });
-      wb.update(doc(db, `finhub_users/${uid}/accounts`, toAccount.id), {
+      wb.update(doc(db, `finhub_books/${uid}/accounts`, toAccount.id), {
         balance: Number((toAccount.balance + amt).toFixed(2)),
         updatedAt: serverTimestamp(),
       });
-      wb.set(doc(db, `finhub_users/${uid}/transactions`, txOutId), {
+      wb.set(doc(db, `finhub_books/${uid}/transactions`, txOutId), {
         userId: uid,
         entityId: fromAccount.entityId,
         accountId: fromAccount.id,
@@ -1468,7 +1468,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      wb.set(doc(db, `finhub_users/${uid}/transactions`, txInId), {
+      wb.set(doc(db, `finhub_books/${uid}/transactions`, txInId), {
         userId: uid,
         entityId: toAccount.entityId,
         accountId: toAccount.id,
@@ -1492,13 +1492,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       await wb.commit();
       pushToast('Transfer completed', `${fromAccount.name} → ${toAccount.name}`, 'success');
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/accounts`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/accounts`);
     }
   };
 
   const deleteAccount = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/accounts/${id}`;
+    const path = `finhub_books/${uid}/accounts/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Account removed', undefined, 'info');
@@ -1510,7 +1510,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addCreditFacility = async (input: Omit<CreditFacility, 'id' | 'userId' | 'status'>) => {
     const uid = requireUid();
     const id = makeId('fac');
-    const path = `finhub_users/${uid}/creditFacilities/${id}`;
+    const path = `finhub_books/${uid}/creditFacilities/${id}`;
     const bal = Math.max(0, Number(input.currentBalance) || 0);
     try {
       await setDoc(doc(db, path), {
@@ -1562,17 +1562,17 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, `finhub_users/${uid}/creditFacilities`, facility.id), {
+      batch.update(doc(db, `finhub_books/${uid}/creditFacilities`, facility.id), {
         currentBalance: nextBalance,
         status: nextStatus,
         updatedAt: serverTimestamp(),
       });
       if (account) {
-        batch.update(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+        batch.update(doc(db, `finhub_books/${uid}/accounts`, account.id), {
           balance: Number((account.balance - payAmt).toFixed(2)),
           updatedAt: serverTimestamp(),
         });
-        batch.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        batch.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: facility.entityId,
           accountId: account.id,
@@ -1598,13 +1598,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         'success'
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/creditFacilities/${facility.id}`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/creditFacilities/${facility.id}`);
     }
   };
 
   const deleteCreditFacility = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/creditFacilities/${id}`;
+    const path = `finhub_books/${uid}/creditFacilities/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Facility removed', undefined, 'info');
@@ -1619,7 +1619,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   ) => {
     const uid = requireUid();
     const id = makeId('tx');
-    const path = `finhub_users/${uid}/transactions/${id}`;
+    const path = `finhub_books/${uid}/transactions/${id}`;
     const amt = Math.max(0, Number(input.amount) || 0);
     const ivaRate = Math.min(30, Math.max(0, Number(input.ivaRate) || 0));
     const ivaAmount =
@@ -1658,7 +1658,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       if (shouldAdjust && account && input.status === 'cleared') {
         const delta = input.type === 'income' ? amt : -amt;
-        batch.update(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+        batch.update(doc(db, `finhub_books/${uid}/accounts`, account.id), {
           balance: Number((account.balance + delta).toFixed(2)),
           updatedAt: serverTimestamp(),
         });
@@ -1722,7 +1722,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       if (voucherAcc && voucherPaid > 0) {
         const txId = makeId('tx');
-        batch.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        batch.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: voucherAcc.entityId || entityId,
           accountId: voucherAcc.id,
@@ -1749,7 +1749,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
         if (adjustAccountBalance) {
-          batch.update(doc(db, `finhub_users/${uid}/accounts`, voucherAcc.id), {
+          batch.update(doc(db, `finhub_books/${uid}/accounts`, voucherAcc.id), {
             balance: Number((voucherAcc.balance - voucherPaid).toFixed(2)),
             updatedAt: serverTimestamp(),
           });
@@ -1758,7 +1758,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       if (fallbackAcc && primaryPaid > 0) {
         const txId = makeId('tx');
-        batch.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        batch.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: fallbackAcc.entityId || entityId,
           accountId: fallbackAcc.id,
@@ -1785,7 +1785,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
         if (adjustAccountBalance) {
-          batch.update(doc(db, `finhub_users/${uid}/accounts`, fallbackAcc.id), {
+          batch.update(doc(db, `finhub_books/${uid}/accounts`, fallbackAcc.id), {
             balance: Number((fallbackAcc.balance - primaryPaid).toFixed(2)),
             updatedAt: serverTimestamp(),
           });
@@ -1793,7 +1793,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       } else if (!fallbackAcc && primaryPaid > 0 && voucherAcc) {
         // No liquid fallback account configured; charge remainder to selected voucher account
         const txId = makeId('tx');
-        batch.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        batch.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: voucherAcc.entityId || entityId,
           accountId: voucherAcc.id,
@@ -1817,7 +1817,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
         if (adjustAccountBalance) {
-          batch.update(doc(db, `finhub_users/${uid}/accounts`, voucherAcc.id), {
+          batch.update(doc(db, `finhub_books/${uid}/accounts`, voucherAcc.id), {
             balance: Number((voucherAcc.balance - voucherPaid - primaryPaid).toFixed(2)),
             updatedAt: serverTimestamp(),
           });
@@ -1836,14 +1836,14 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       return { voucherPaid, primaryPaid };
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `finhub_users/${uid}/transactions`);
+      handleFirestoreError(err, OperationType.CREATE, `finhub_books/${uid}/transactions`);
       return { voucherPaid: 0, primaryPaid: 0 };
     }
   };
 
   const deleteTransaction = async (tx: LedgerTransaction) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/transactions/${tx.id}`;
+    const path = `finhub_books/${uid}/transactions/${tx.id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Transaction deleted', undefined, 'info');
@@ -1855,7 +1855,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addPayslip = async (input: Omit<PayslipRecord, 'id' | 'userId' | 'totalCost'>) => {
     const uid = requireUid();
     const id = makeId('pay');
-    const path = `finhub_users/${uid}/payslips/${id}`;
+    const path = `finhub_books/${uid}/payslips/${id}`;
     const today = todayIsoDate();
     const netPay = Math.max(0, Number(input.netPay) || 0);
     const empWith = Math.max(0, Number(input.employeeWithholdings) || 0);
@@ -1899,7 +1899,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     accountId?: string
   ) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/payslips/${payslip.id}`;
+    const path = `finhub_books/${uid}/payslips/${payslip.id}`;
     const nextVal = 'paid';
     const amount =
       field === 'payStatus'
@@ -1933,7 +1933,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       if (account && amount > 0) {
         const txId = makeId('tx');
-        batch.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        batch.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: payslip.entityId,
           accountId: account.id,
@@ -1989,7 +1989,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
             : 0;
 
           if (mealAcc && mealCredited > 0) {
-            batch.set(doc(db, `finhub_users/${uid}/transactions`, makeId('tx')), {
+            batch.set(doc(db, `finhub_books/${uid}/transactions`, makeId('tx')), {
               userId: uid,
               entityId: contract.personalEntityId,
               accountId: mealAcc.id,
@@ -2014,7 +2014,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           }
 
           if (childAcc && childCredited > 0) {
-            batch.set(doc(db, `finhub_users/${uid}/transactions`, makeId('tx')), {
+            batch.set(doc(db, `finhub_books/${uid}/transactions`, makeId('tx')), {
               userId: uid,
               entityId: contract.personalEntityId,
               accountId: childAcc.id,
@@ -2039,7 +2039,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           }
 
           if (primaryCashAcc && cashCredited > 0) {
-            batch.set(doc(db, `finhub_users/${uid}/transactions`, makeId('tx')), {
+            batch.set(doc(db, `finhub_books/${uid}/transactions`, makeId('tx')), {
               userId: uid,
               entityId: contract.personalEntityId,
               accountId: primaryCashAcc.id,
@@ -2071,7 +2071,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       for (const { acc, delta } of balanceDeltas.values()) {
         if (Math.abs(delta) < 0.001) continue;
-        batch.update(doc(db, `finhub_users/${uid}/accounts`, acc.id), {
+        batch.update(doc(db, `finhub_books/${uid}/accounts`, acc.id), {
           balance: Number((acc.balance + delta).toFixed(2)),
           updatedAt: serverTimestamp(),
         });
@@ -2090,7 +2090,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const deletePayslip = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/payslips/${id}`;
+    const path = `finhub_books/${uid}/payslips/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Payslip removed', undefined, 'info');
@@ -2102,7 +2102,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addForecastItem = async (input: Omit<ForecastItem, 'id' | 'userId'>) => {
     const uid = requireUid();
     const id = makeId('fc');
-    const path = `finhub_users/${uid}/forecastItems/${id}`;
+    const path = `finhub_books/${uid}/forecastItems/${id}`;
     const curMonth = currentMonthKey();
     try {
       await setDoc(doc(db, path), {
@@ -2128,7 +2128,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const toggleForecastItem = async (id: string, active: boolean) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/forecastItems/${id}`;
+    const path = `finhub_books/${uid}/forecastItems/${id}`;
     try {
       await updateDoc(doc(db, path), {
         active,
@@ -2141,7 +2141,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const deleteForecastItem = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/forecastItems/${id}`;
+    const path = `finhub_books/${uid}/forecastItems/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Forecast driver removed', undefined, 'info');
@@ -2153,7 +2153,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addPersonalIncome = async (input: Omit<PersonalIncome, 'id' | 'userId'>) => {
     const uid = requireUid();
     const id = makeId('pinc');
-    const path = `finhub_users/${uid}/personalIncomes/${id}`;
+    const path = `finhub_books/${uid}/personalIncomes/${id}`;
     try {
       await setDoc(doc(db, path), {
         userId: uid,
@@ -2183,7 +2183,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     input: Omit<PersonalIncome, 'id' | 'userId' | 'active'>
   ) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/personalIncomes/${id}`;
+    const path = `finhub_books/${uid}/personalIncomes/${id}`;
     try {
       await updateDoc(doc(db, path), {
         entityId: input.entityId,
@@ -2206,7 +2206,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const togglePersonalIncome = async (id: string, active: boolean) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/personalIncomes/${id}`;
+    const path = `finhub_books/${uid}/personalIncomes/${id}`;
     try {
       await updateDoc(doc(db, path), {
         active,
@@ -2219,7 +2219,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const deletePersonalIncome = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/personalIncomes/${id}`;
+    const path = `finhub_books/${uid}/personalIncomes/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Income source removed', undefined, 'info');
@@ -2231,7 +2231,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addEmploymentContract = async (input: Omit<EmploymentContract, 'id' | 'userId'>) => {
     const uid = requireUid();
     const id = makeId('ctr');
-    const path = `finhub_users/${uid}/employmentContracts/${id}`;
+    const path = `finhub_books/${uid}/employmentContracts/${id}`;
     try {
       await setDoc(doc(db, path), {
         userId: uid,
@@ -2271,7 +2271,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     input: Omit<EmploymentContract, 'id' | 'userId' | 'active'>
   ) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/employmentContracts/${id}`;
+    const path = `finhub_books/${uid}/employmentContracts/${id}`;
     try {
       await updateDoc(doc(db, path), {
         entityId: input.entityId,
@@ -2304,7 +2304,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const toggleEmploymentContract = async (id: string, active: boolean) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/employmentContracts/${id}`;
+    const path = `finhub_books/${uid}/employmentContracts/${id}`;
     try {
       await updateDoc(doc(db, path), {
         active,
@@ -2317,7 +2317,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const deleteEmploymentContract = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/employmentContracts/${id}`;
+    const path = `finhub_books/${uid}/employmentContracts/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Employment contract removed', undefined, 'info');
@@ -2398,7 +2398,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         const chunk = toCreate.slice(i, i + chunkSize);
         const wb = writeBatch(db);
         for (const item of chunk) {
-          wb.set(doc(db, `finhub_users/${uid}/payslips`, item.id), item.payload);
+          wb.set(doc(db, `finhub_books/${uid}/payslips`, item.id), item.payload);
         }
         await wb.commit();
       }
@@ -2409,7 +2409,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       );
       return toCreate.length;
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/payslips`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/payslips`);
     }
   };
 
@@ -2453,7 +2453,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     let hasWrites = false;
 
     if (!existingCompany) {
-      wb.set(doc(db, `finhub_users/${uid}/entities`, companyId), {
+      wb.set(doc(db, `finhub_books/${uid}/entities`, companyId), {
         userId: uid,
         name: 'NOISYSOURCE - LDA',
         entityType: 'company',
@@ -2467,7 +2467,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (!existingCompanyAcc) {
-      wb.set(doc(db, `finhub_users/${uid}/accounts`, companyAccountId), {
+      wb.set(doc(db, `finhub_books/${uid}/accounts`, companyAccountId), {
         userId: uid,
         entityId: companyId,
         name: 'Noisysource Operating',
@@ -2483,7 +2483,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (!existingPersonal) {
-      wb.set(doc(db, `finhub_users/${uid}/entities`, personalId), {
+      wb.set(doc(db, `finhub_books/${uid}/entities`, personalId), {
         userId: uid,
         name: 'Renato Simão dos Santos Lopes',
         entityType: 'personal',
@@ -2497,7 +2497,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (!existingPersonalChk) {
-      wb.set(doc(db, `finhub_users/${uid}/accounts`, 'acc_renato_chk'), {
+      wb.set(doc(db, `finhub_books/${uid}/accounts`, 'acc_renato_chk'), {
         userId: uid,
         entityId: personalId,
         name: 'Renato Primary Checking',
@@ -2513,7 +2513,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (!existingPersonalChildVoucher) {
-      wb.set(doc(db, `finhub_users/${uid}/accounts`, 'acc_renato_child_voucher'), {
+      wb.set(doc(db, `finhub_books/${uid}/accounts`, 'acc_renato_child_voucher'), {
         userId: uid,
         entityId: personalId,
         name: 'Renato Child Voucher (Vale Infância)',
@@ -2530,7 +2530,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     if (!taxSettings.some((s) => s.entityId === companyId)) {
       const taxCompanyId = `tax_${companyId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-      wb.set(doc(db, `finhub_users/${uid}/taxSettings`, taxCompanyId), {
+      wb.set(doc(db, `finhub_books/${uid}/taxSettings`, taxCompanyId), {
         userId: uid,
         entityId: companyId,
         region: 'continente',
@@ -2549,7 +2549,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     if (!taxSettings.some((s) => s.entityId === personalId)) {
       const taxPersonalId = `tax_${personalId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-      wb.set(doc(db, `finhub_users/${uid}/taxSettings`, taxPersonalId), {
+      wb.set(doc(db, `finhub_books/${uid}/taxSettings`, taxPersonalId), {
         userId: uid,
         entityId: personalId,
         region: 'continente',
@@ -2667,7 +2667,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     let createdContracts = 0;
     for (const spec of contractSpecs) {
       if (!spec.exists) {
-        wb.set(doc(db, `finhub_users/${uid}/employmentContracts`, spec.id), {
+        wb.set(doc(db, `finhub_books/${uid}/employmentContracts`, spec.id), {
           ...spec.payload,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -2784,7 +2784,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     for (const s of slipSpecs) {
       const dupKey = `${companyId}::${s.payDate.slice(0, 7)}::${s.employeeName.toLowerCase()}`;
       if (payslips.some((p) => p.id === s.id) || existingSlipKeys.has(dupKey)) continue;
-      wb.set(doc(db, `finhub_users/${uid}/payslips`, s.id), {
+      wb.set(doc(db, `finhub_books/${uid}/payslips`, s.id), {
         userId: uid,
         entityId: companyId,
         contractId: s.contractId,
@@ -2823,7 +2823,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       );
       return { createdPayslips, createdContracts, entityName: companyName };
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/payslips`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/payslips`);
     }
   };
 
@@ -2831,7 +2831,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     const uid = requireUid();
     const existingSetting = taxSettings.find((s) => s.entityId === input.entityId);
     const id = existingSetting?.id || `tax_${input.entityId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const path = `finhub_users/${uid}/taxSettings/${id}`;
+    const path = `finhub_books/${uid}/taxSettings/${id}`;
 
     try {
       if (existingSetting) {
@@ -2892,7 +2892,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   }) => {
     const uid = requireUid();
     const batchId = makeId('stmt');
-    const batchPath = `finhub_users/${uid}/statementBatches/${batchId}`;
+    const batchPath = `finhub_books/${uid}/statementBatches/${batchId}`;
     const today = todayIsoDate();
 
     try {
@@ -2915,7 +2915,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         const wb = writeBatch(db);
         for (const line of chunk) {
           const lineId = makeId('sline');
-          wb.set(doc(db, `finhub_users/${uid}/statementLines`, lineId), {
+          wb.set(doc(db, `finhub_books/${uid}/statementLines`, lineId), {
             userId: uid,
             batchId,
             entityId,
@@ -2958,13 +2958,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const wb = writeBatch(db);
-      wb.update(doc(db, `finhub_users/${uid}/statementLines`, line.id), {
+      wb.update(doc(db, `finhub_books/${uid}/statementLines`, line.id), {
         reconciliationStatus: 'reconciled',
         matchedTransactionId: transaction.id,
         updatedAt: serverTimestamp(),
       });
       if (transaction.status !== 'reconciled') {
-        wb.update(doc(db, `finhub_users/${uid}/transactions`, transaction.id), {
+        wb.update(doc(db, `finhub_books/${uid}/transactions`, transaction.id), {
           status: 'reconciled',
           ...(linkedDoc
             ? {
@@ -2978,7 +2978,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           updatedAt: serverTimestamp(),
         });
       } else if (linkedDoc) {
-        wb.update(doc(db, `finhub_users/${uid}/transactions`, transaction.id), {
+        wb.update(doc(db, `finhub_books/${uid}/transactions`, transaction.id), {
           invoiceNumber: clampString(linkedDoc.invoiceNumber, VALIDATION_BOUNDS.MAX_INVOICE_LEN),
           invoiceDocId: linkedDoc.id,
           driveFileId: clampString(linkedDoc.driveFileId, 160),
@@ -2988,7 +2988,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         });
       }
       if (linkedDoc && linkedDoc.status !== 'reconciled') {
-        wb.update(doc(db, `finhub_users/${uid}/invoiceDocuments`, linkedDoc.id), {
+        wb.update(doc(db, `finhub_books/${uid}/invoiceDocuments`, linkedDoc.id), {
           transactionId: transaction.id,
           statementLineId: line.id,
           reimbursementId: linkedDoc.reimbursementId || '',
@@ -2997,7 +2997,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         });
       }
       if (account && (!account.lastReconciledDate || line.date > account.lastReconciledDate)) {
-        wb.update(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+        wb.update(doc(db, `finhub_books/${uid}/accounts`, account.id), {
           lastReconciledDate: line.date,
           balance: account.balance,
           updatedAt: serverTimestamp(),
@@ -3006,7 +3006,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       await wb.commit();
       pushToast('Line reconciled', line.description, 'success');
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `finhub_users/${uid}/statementLines/${line.id}`);
+      handleFirestoreError(err, OperationType.UPDATE, `finhub_books/${uid}/statementLines/${line.id}`);
     }
   };
 
@@ -3035,7 +3035,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const wb = writeBatch(db);
-      wb.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+      wb.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
         userId: uid,
         entityId: line.entityId,
         accountId: line.accountId,
@@ -3058,13 +3058,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      wb.update(doc(db, `finhub_users/${uid}/statementLines`, line.id), {
+      wb.update(doc(db, `finhub_books/${uid}/statementLines`, line.id), {
         reconciliationStatus: 'reconciled',
         matchedTransactionId: txId,
         updatedAt: serverTimestamp(),
       });
       if (invDoc && invDoc.status !== 'reconciled') {
-        wb.update(doc(db, `finhub_users/${uid}/invoiceDocuments`, invDoc.id), {
+        wb.update(doc(db, `finhub_books/${uid}/invoiceDocuments`, invDoc.id), {
           transactionId: txId,
           statementLineId: line.id,
           reimbursementId: invDoc.reimbursementId || '',
@@ -3079,13 +3079,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
             : account.lastReconciledDate;
         if (shouldAdjust) {
           const delta = line.direction === 'credit' ? line.amount : -line.amount;
-          wb.update(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+          wb.update(doc(db, `finhub_books/${uid}/accounts`, account.id), {
             balance: Number((account.balance + delta).toFixed(2)),
             lastReconciledDate: nextReconciled,
             updatedAt: serverTimestamp(),
           });
         } else if (nextReconciled !== account.lastReconciledDate) {
-          wb.update(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+          wb.update(doc(db, `finhub_books/${uid}/accounts`, account.id), {
             lastReconciledDate: nextReconciled,
             balance: account.balance,
             updatedAt: serverTimestamp(),
@@ -3095,13 +3095,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       await wb.commit();
       pushToast('Entry created & reconciled', line.description, 'success');
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/transactions/${txId}`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/transactions/${txId}`);
     }
   };
 
   const markLineSuggested = async (lineId: string, matchedTransactionId: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/statementLines/${lineId}`;
+    const path = `finhub_books/${uid}/statementLines/${lineId}`;
     try {
       await updateDoc(doc(db, path), {
         reconciliationStatus: 'suggested',
@@ -3115,7 +3115,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const flagLineDiscrepancy = async (lineId: string, note: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/statementLines/${lineId}`;
+    const path = `finhub_books/${uid}/statementLines/${lineId}`;
     try {
       await updateDoc(doc(db, path), {
         reconciliationStatus: 'discrepancy',
@@ -3134,13 +3134,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     try {
       const wb = writeBatch(db);
       for (const l of lines) {
-        wb.delete(doc(db, `finhub_users/${uid}/statementLines`, l.id));
+        wb.delete(doc(db, `finhub_books/${uid}/statementLines`, l.id));
       }
-      wb.delete(doc(db, `finhub_users/${uid}/statementBatches`, batchId));
+      wb.delete(doc(db, `finhub_books/${uid}/statementBatches`, batchId));
       await wb.commit();
       pushToast('Statement batch removed', undefined, 'info');
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `finhub_users/${uid}/statementBatches/${batchId}`);
+      handleFirestoreError(err, OperationType.DELETE, `finhub_books/${uid}/statementBatches/${batchId}`);
     }
   };
 
@@ -3149,7 +3149,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   ) => {
     const uid = requireUid();
     const id = makeId('sub');
-    const path = `finhub_users/${uid}/recurringExpenses/${id}`;
+    const path = `finhub_books/${uid}/recurringExpenses/${id}`;
     const requiresReimbursement =
       input.entityId !== input.paidByEntityId && Boolean(input.hasInvoice);
     try {
@@ -3187,7 +3187,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     input: Omit<RecurringExpense, 'id' | 'userId' | 'active' | 'requiresReimbursement' | 'lastPostedDate'>
   ) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/recurringExpenses/${id}`;
+    const path = `finhub_books/${uid}/recurringExpenses/${id}`;
     const requiresReimbursement =
       input.entityId !== input.paidByEntityId && Boolean(input.hasInvoice);
     try {
@@ -3217,7 +3217,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const toggleRecurringExpense = async (id: string, active: boolean) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/recurringExpenses/${id}`;
+    const path = `finhub_books/${uid}/recurringExpenses/${id}`;
     try {
       await updateDoc(doc(db, path), {
         active,
@@ -3230,7 +3230,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
   const deleteRecurringExpense = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/recurringExpenses/${id}`;
+    const path = `finhub_books/${uid}/recurringExpenses/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Subscription removed', undefined, 'info');
@@ -3265,7 +3265,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const wb = writeBatch(db);
-      wb.update(doc(db, `finhub_users/${uid}/recurringExpenses`, expense.id), {
+      wb.update(doc(db, `finhub_books/${uid}/recurringExpenses`, expense.id), {
         lastPostedDate: postDate,
         updatedAt: serverTimestamp(),
       });
@@ -3282,11 +3282,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         const primaryIva = Number(Math.max(0, ivaAmt - voucherIva).toFixed(2));
 
         if (voucherPaid > 0) {
-          wb.update(doc(db, `finhub_users/${uid}/accounts`, payerAccount.id), {
+          wb.update(doc(db, `finhub_books/${uid}/accounts`, payerAccount.id), {
             balance: Number((payerAccount.balance - voucherPaid).toFixed(2)),
             updatedAt: serverTimestamp(),
           });
-          wb.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+          wb.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
             userId: uid,
             entityId: payerAccount.entityId,
             accountId: payerAccount.id,
@@ -3310,11 +3310,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (primaryPaid > 0) {
-          wb.update(doc(db, `finhub_users/${uid}/accounts`, fallbackAccount.id), {
+          wb.update(doc(db, `finhub_books/${uid}/accounts`, fallbackAccount.id), {
             balance: Number((fallbackAccount.balance - primaryPaid).toFixed(2)),
             updatedAt: serverTimestamp(),
           });
-          wb.set(doc(db, `finhub_users/${uid}/transactions`, makeId('tx')), {
+          wb.set(doc(db, `finhub_books/${uid}/transactions`, makeId('tx')), {
             userId: uid,
             entityId: fallbackAccount.entityId,
             accountId: fallbackAccount.id,
@@ -3345,11 +3345,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           splitMessage = ` (voucher empty — debited ${fallbackAccount.name})`;
         }
       } else if (payerAccount) {
-        wb.update(doc(db, `finhub_users/${uid}/accounts`, payerAccount.id), {
+        wb.update(doc(db, `finhub_books/${uid}/accounts`, payerAccount.id), {
           balance: Number((payerAccount.balance - expense.amount).toFixed(2)),
           updatedAt: serverTimestamp(),
         });
-        wb.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        wb.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: payerAccount.entityId,
           accountId: payerAccount.id,
@@ -3374,7 +3374,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       if (isCrossEntityInvoiced) {
         const reimbId = makeId('reimb');
-        wb.set(doc(db, `finhub_users/${uid}/reimbursements`, reimbId), {
+        wb.set(doc(db, `finhub_books/${uid}/reimbursements`, reimbId), {
           userId: uid,
           owedByEntityId: expense.entityId,
           owedToEntityId: expense.paidByEntityId,
@@ -3409,7 +3409,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         'success'
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/recurringExpenses/${expense.id}`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/recurringExpenses/${expense.id}`);
     }
   };
 
@@ -3458,11 +3458,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       const wb = writeBatch(db);
 
       if (debitPayerAccount) {
-        wb.update(doc(db, `finhub_users/${uid}/accounts`, payerAccount.id), {
+        wb.update(doc(db, `finhub_books/${uid}/accounts`, payerAccount.id), {
           balance: Number((payerAccount.balance - amt).toFixed(2)),
           updatedAt: serverTimestamp(),
         });
-        wb.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        wb.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: payerAccount.entityId,
           accountId: payerAccount.id,
@@ -3487,7 +3487,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
       if (createClaim) {
         const reimbId = makeId('reimb');
-        wb.set(doc(db, `finhub_users/${uid}/reimbursements`, reimbId), {
+        wb.set(doc(db, `finhub_books/${uid}/reimbursements`, reimbId), {
           userId: uid,
           owedByEntityId: beneficiaryEntityId,
           owedToEntityId: payerAccount.entityId,
@@ -3519,7 +3519,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         'success'
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/reimbursements`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/reimbursements`);
     }
   };
 
@@ -3552,7 +3552,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     try {
       const wb = writeBatch(db);
       for (const claim of openClaims) {
-        wb.update(doc(db, `finhub_users/${uid}/reimbursements`, claim.id), {
+        wb.update(doc(db, `finhub_books/${uid}/reimbursements`, claim.id), {
           status: 'settled',
           settledDate: safeDate,
           settledFromAccountId: fromAccount.id,
@@ -3561,11 +3561,11 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         });
       }
 
-      wb.update(doc(db, `finhub_users/${uid}/accounts`, fromAccount.id), {
+      wb.update(doc(db, `finhub_books/${uid}/accounts`, fromAccount.id), {
         balance: Number((fromAccount.balance - totalAmount).toFixed(2)),
         updatedAt: serverTimestamp(),
       });
-      wb.update(doc(db, `finhub_users/${uid}/accounts`, toAccount.id), {
+      wb.update(doc(db, `finhub_books/${uid}/accounts`, toAccount.id), {
         balance: Number((toAccount.balance + totalAmount).toFixed(2)),
         updatedAt: serverTimestamp(),
       });
@@ -3575,7 +3575,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           ? openClaims[0].description
           : `${openClaims.length} invoiced claims settled`;
 
-      wb.set(doc(db, `finhub_users/${uid}/transactions`, txOutId), {
+      wb.set(doc(db, `finhub_books/${uid}/transactions`, txOutId), {
         userId: uid,
         entityId: fromAccount.entityId,
         accountId: fromAccount.id,
@@ -3597,7 +3597,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         updatedAt: serverTimestamp(),
       });
 
-      wb.set(doc(db, `finhub_users/${uid}/transactions`, txInId), {
+      wb.set(doc(db, `finhub_books/${uid}/transactions`, txInId), {
         userId: uid,
         entityId: toAccount.entityId,
         accountId: toAccount.id,
@@ -3626,13 +3626,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         'success'
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/reimbursements`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/reimbursements`);
     }
   };
 
   const deleteReimbursement = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/reimbursements/${id}`;
+    const path = `finhub_books/${uid}/reimbursements/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Reimbursement claim removed', undefined, 'info');
@@ -3644,7 +3644,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
   const addInvoiceDocument = async (input: Omit<InvoiceDocument, 'id' | 'userId'>) => {
     const uid = requireUid();
     const id = makeId('inv');
-    const path = `finhub_users/${uid}/invoiceDocuments/${id}`;
+    const path = `finhub_books/${uid}/invoiceDocuments/${id}`;
     const amt = Math.max(0, Number(input.amount) || 0);
     const ivaRate = Math.min(30, Math.max(0, Number(input.ivaRate) || 0));
     const ivaAmount =
@@ -3716,7 +3716,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
     try {
       const wb = writeBatch(db);
       if (invoiceDoc.status !== 'reconciled') {
-        wb.update(doc(db, `finhub_users/${uid}/invoiceDocuments`, invoiceDoc.id), {
+        wb.update(doc(db, `finhub_books/${uid}/invoiceDocuments`, invoiceDoc.id), {
           transactionId: effectiveTxId || '',
           statementLineId: targetLineId || '',
           reimbursementId: targetReimbId || '',
@@ -3725,7 +3725,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         });
       }
       if (effectiveTxId) {
-        wb.update(doc(db, `finhub_users/${uid}/transactions`, effectiveTxId), {
+        wb.update(doc(db, `finhub_books/${uid}/transactions`, effectiveTxId), {
           invoiceNumber: clampString(invoiceDoc.invoiceNumber, VALIDATION_BOUNDS.MAX_INVOICE_LEN),
           invoiceDocId: invoiceDoc.id,
           driveFileId: clampString(invoiceDoc.driveFileId, 160),
@@ -3735,7 +3735,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         });
       }
       if (targetReimbId) {
-        wb.update(doc(db, `finhub_users/${uid}/reimbursements`, targetReimbId), {
+        wb.update(doc(db, `finhub_books/${uid}/reimbursements`, targetReimbId), {
           driveFileId: clampString(invoiceDoc.driveFileId, 160),
           driveWebViewLink: clampString(invoiceDoc.driveWebViewLink, 512),
           driveFolderPath: clampString(invoiceDoc.driveFolderPath, 240),
@@ -3747,7 +3747,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       await wb.commit();
       pushToast('Invoice PDF linked', invoiceDoc.filename, 'success');
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `finhub_users/${uid}/invoiceDocuments/${invoiceDoc.id}`);
+      handleFirestoreError(err, OperationType.UPDATE, `finhub_books/${uid}/invoiceDocuments/${invoiceDoc.id}`);
     }
   };
 
@@ -3793,7 +3793,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const wb = writeBatch(db);
-      wb.set(doc(db, `finhub_users/${uid}/invoiceDocuments`, docId), {
+      wb.set(doc(db, `finhub_books/${uid}/invoiceDocuments`, docId), {
         userId: uid,
         entityId: invoiceInput.entityId,
         accountId: account?.id || accountId || '',
@@ -3821,7 +3821,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (account) {
-        wb.set(doc(db, `finhub_users/${uid}/transactions`, txId), {
+        wb.set(doc(db, `finhub_books/${uid}/transactions`, txId), {
           userId: uid,
           entityId: account.entityId,
           accountId: account.id,
@@ -3849,7 +3849,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         });
 
         if (adjustAccountBalance) {
-          wb.update(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+          wb.update(doc(db, `finhub_books/${uid}/accounts`, account.id), {
             balance: Number((account.balance - amt).toFixed(2)),
             updatedAt: serverTimestamp(),
           });
@@ -3857,7 +3857,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (matchedStatementLine && matchedStatementLine.reconciliationStatus !== 'reconciled') {
-        wb.update(doc(db, `finhub_users/${uid}/statementLines`, matchedStatementLine.id), {
+        wb.update(doc(db, `finhub_books/${uid}/statementLines`, matchedStatementLine.id), {
           reconciliationStatus: 'reconciled',
           matchedTransactionId: account ? txId : '',
           updatedAt: serverTimestamp(),
@@ -3865,7 +3865,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (isCrossEntityReimb && createReimbursementToEntityId) {
-        wb.set(doc(db, `finhub_users/${uid}/reimbursements`, reimbId), {
+        wb.set(doc(db, `finhub_books/${uid}/reimbursements`, reimbId), {
           userId: uid,
           owedByEntityId: invoiceInput.entityId,
           owedToEntityId: createReimbursementToEntityId,
@@ -3908,13 +3908,13 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       );
       return { docId, txId };
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/invoiceDocuments/${docId}`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/invoiceDocuments/${docId}`);
     }
   };
 
   const deleteInvoiceDocument = async (id: string) => {
     const uid = requireUid();
-    const path = `finhub_users/${uid}/invoiceDocuments/${id}`;
+    const path = `finhub_books/${uid}/invoiceDocuments/${id}`;
     try {
       await deleteDoc(doc(db, path));
       pushToast('Invoice document removed', undefined, 'info');
@@ -3959,7 +3959,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
             typeof item.ivaAmount === 'number'
               ? Math.max(0, Number(item.ivaAmount))
               : computeTransactionIva(amt, ivaRate);
-          wb.set(doc(db, `finhub_users/${uid}/transactions`, id), {
+          wb.set(doc(db, `finhub_books/${uid}/transactions`, id), {
             userId: uid,
             entityId: item.entityId,
             accountId: item.accountId,
@@ -3995,7 +3995,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         for (const [accId, delta] of accountDeltas.entries()) {
           const acc = accounts.find((a) => a.id === accId);
           if (acc) {
-            balBatch.update(doc(db, `finhub_users/${uid}/accounts`, acc.id), {
+            balBatch.update(doc(db, `finhub_books/${uid}/accounts`, acc.id), {
               balance: Number((acc.balance + delta).toFixed(2)),
               updatedAt: serverTimestamp(),
             });
@@ -4011,7 +4011,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       );
       return items.length;
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}/transactions`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}/transactions`);
     }
   };
 
@@ -4092,7 +4092,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
 
         const cid = makeId('ctr');
         const isOwner = Boolean(c.isOwnerHint && personalEntity);
-        setupWb.set(doc(db, `finhub_users/${uid}/employmentContracts`, cid), {
+        setupWb.set(doc(db, `finhub_books/${uid}/employmentContracts`, cid), {
           userId: uid,
           entityId: resolvedEntityId,
           fundingAccountId: resolvedAccountId,
@@ -4147,7 +4147,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           freq === 'annual' ? Math.min(12, Math.max(1, Math.round(Number(s.billingMonth) || 1))) : 1;
         const ivaRate = Math.min(30, Math.max(0, Number(s.ivaRate) || 0));
 
-        setupWb.set(doc(db, `finhub_users/${uid}/recurringExpenses`, sid), {
+        setupWb.set(doc(db, `finhub_books/${uid}/recurringExpenses`, sid), {
           userId: uid,
           entityId: resolvedEntityId,
           paidByAccountId: resolvedAccountId,
@@ -4198,7 +4198,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         const fType = allowedTypes.includes(f.facilityType) ? f.facilityType : 'term_loan';
         const monthlyPayment = Math.max(0, Number(f.monthlyPayment) || 0);
 
-        setupWb.set(doc(db, `finhub_users/${uid}/creditFacilities`, fid), {
+        setupWb.set(doc(db, `finhub_books/${uid}/creditFacilities`, fid), {
           userId: uid,
           entityId: resolvedEntityId,
           fundingAccountId: resolvedAccountId,
@@ -4273,7 +4273,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         const chunk = slipsToCreate.slice(i, i + 350);
         const pWb = writeBatch(db);
         for (const item of chunk) {
-          pWb.set(doc(db, `finhub_users/${uid}/payslips`, item.id), item.payload);
+          pWb.set(doc(db, `finhub_books/${uid}/payslips`, item.id), item.payload);
         }
         await pWb.commit();
         counts.payslips += chunk.length;
@@ -4286,7 +4286,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       for (const stmt of statements) {
         if (!resolvedAccountId) continue;
         const batchId = makeId('stmt');
-        await setDoc(doc(db, `finhub_users/${uid}/statementBatches`, batchId), {
+        await setDoc(doc(db, `finhub_books/${uid}/statementBatches`, batchId), {
           userId: uid,
           entityId: resolvedEntityId,
           accountId: resolvedAccountId,
@@ -4323,7 +4323,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
                 ? `${line.generatedTx.vendor.trim()} · `
                 : '';
 
-              sWb.set(doc(db, `finhub_users/${uid}/transactions`, matchedTxId), {
+              sWb.set(doc(db, `finhub_books/${uid}/transactions`, matchedTxId), {
                 userId: uid,
                 entityId: resolvedEntityId,
                 accountId: resolvedAccountId,
@@ -4357,7 +4357,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
               }
             }
 
-            sWb.set(doc(db, `finhub_users/${uid}/statementLines`, lineId), {
+            sWb.set(doc(db, `finhub_books/${uid}/statementLines`, lineId), {
               userId: uid,
               batchId,
               entityId: resolvedEntityId,
@@ -4380,7 +4380,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (account && (Math.abs(netBalanceDelta) > 0.001 || (latestStatementDate && latestStatementDate > account.lastReconciledDate))) {
-        await updateDoc(doc(db, `finhub_users/${uid}/accounts`, account.id), {
+        await updateDoc(doc(db, `finhub_books/${uid}/accounts`, account.id), {
           balance: adjustAccountBalance
             ? Number((account.balance + netBalanceDelta).toFixed(2))
             : account.balance,
@@ -4396,7 +4396,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       );
       return counts;
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `finhub_users/${uid}`);
+      handleFirestoreError(err, OperationType.WRITE, `finhub_books/${uid}`);
     }
   };
 
@@ -4451,7 +4451,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           if (inv.entityId) protectedEntityIds.add(inv.entityId);
           if (inv.accountId) protectedAccountIds.add(inv.accountId);
         } else {
-          deletePaths.push(`finhub_users/${uid}/invoiceDocuments/${inv.id}`);
+          deletePaths.push(`finhub_books/${uid}/invoiceDocuments/${inv.id}`);
         }
       }
       for (const l of statementLines) {
@@ -4461,7 +4461,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           protectedAccountIds.add(l.accountId);
           protectedBatchIds.add(l.batchId);
         } else {
-          deletePaths.push(`finhub_users/${uid}/statementLines/${l.id}`);
+          deletePaths.push(`finhub_books/${uid}/statementLines/${l.id}`);
         }
       }
       for (const tx of transactions) {
@@ -4470,55 +4470,55 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           protectedEntityIds.add(tx.entityId);
           protectedAccountIds.add(tx.accountId);
         } else {
-          deletePaths.push(`finhub_users/${uid}/transactions/${tx.id}`);
+          deletePaths.push(`finhub_books/${uid}/transactions/${tx.id}`);
         }
       }
       for (const r of reimbursements) {
-        deletePaths.push(`finhub_users/${uid}/reimbursements/${r.id}`);
+        deletePaths.push(`finhub_books/${uid}/reimbursements/${r.id}`);
       }
       for (const s of recurringExpenses) {
-        deletePaths.push(`finhub_users/${uid}/recurringExpenses/${s.id}`);
+        deletePaths.push(`finhub_books/${uid}/recurringExpenses/${s.id}`);
       }
       for (const p of payslips) {
-        deletePaths.push(`finhub_users/${uid}/payslips/${p.id}`);
+        deletePaths.push(`finhub_books/${uid}/payslips/${p.id}`);
       }
       for (const c of employmentContracts) {
-        deletePaths.push(`finhub_users/${uid}/employmentContracts/${c.id}`);
+        deletePaths.push(`finhub_books/${uid}/employmentContracts/${c.id}`);
       }
       for (const pi of personalIncomes) {
-        deletePaths.push(`finhub_users/${uid}/personalIncomes/${pi.id}`);
+        deletePaths.push(`finhub_books/${uid}/personalIncomes/${pi.id}`);
       }
       for (const f of forecastItems) {
-        deletePaths.push(`finhub_users/${uid}/forecastItems/${f.id}`);
+        deletePaths.push(`finhub_books/${uid}/forecastItems/${f.id}`);
       }
       for (const fac of creditFacilities) {
-        deletePaths.push(`finhub_users/${uid}/creditFacilities/${fac.id}`);
+        deletePaths.push(`finhub_books/${uid}/creditFacilities/${fac.id}`);
       }
       for (const b of statementBatches) {
         if (!protectedBatchIds.has(b.id)) {
-          deletePaths.push(`finhub_users/${uid}/statementBatches/${b.id}`);
+          deletePaths.push(`finhub_books/${uid}/statementBatches/${b.id}`);
         }
       }
       for (const acc of accounts) {
         if (!protectedAccountIds.has(acc.id)) {
-          deletePaths.push(`finhub_users/${uid}/accounts/${acc.id}`);
+          deletePaths.push(`finhub_books/${uid}/accounts/${acc.id}`);
         }
       }
       for (const ts of taxSettings) {
         if (!protectedEntityIds.has(ts.entityId)) {
-          deletePaths.push(`finhub_users/${uid}/taxSettings/${ts.id}`);
+          deletePaths.push(`finhub_books/${uid}/taxSettings/${ts.id}`);
         }
       }
       for (const ent of entities) {
         if (!protectedEntityIds.has(ent.id)) {
-          deletePaths.push(`finhub_users/${uid}/entities/${ent.id}`);
+          deletePaths.push(`finhub_books/${uid}/entities/${ent.id}`);
         }
       }
     } else {
       // sample_only: delete seeded demo artifacts, preserving any real records created by the user
       for (const r of reimbursements) {
         if (SAMPLE_REIMBURSEMENT_IDS.has(r.id)) {
-          deletePaths.push(`finhub_users/${uid}/reimbursements/${r.id}`);
+          deletePaths.push(`finhub_books/${uid}/reimbursements/${r.id}`);
         } else {
           protectedEntityIds.add(r.owedByEntityId);
           protectedEntityIds.add(r.owedToEntityId);
@@ -4527,7 +4527,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       for (const s of recurringExpenses) {
         if (SAMPLE_SUBSCRIPTION_IDS.has(s.id)) {
-          deletePaths.push(`finhub_users/${uid}/recurringExpenses/${s.id}`);
+          deletePaths.push(`finhub_books/${uid}/recurringExpenses/${s.id}`);
         } else {
           protectedEntityIds.add(s.entityId);
           protectedEntityIds.add(s.paidByEntityId);
@@ -4542,7 +4542,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
             protectedAccountIds.add(l.accountId);
             protectedBatchIds.add(l.batchId);
           } else {
-            deletePaths.push(`finhub_users/${uid}/statementLines/${l.id}`);
+            deletePaths.push(`finhub_books/${uid}/statementLines/${l.id}`);
           }
         } else {
           protectedEntityIds.add(l.entityId);
@@ -4552,7 +4552,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       for (const b of statementBatches) {
         if (SAMPLE_STATEMENT_BATCH_IDS.has(b.id) && !protectedBatchIds.has(b.id)) {
-          deletePaths.push(`finhub_users/${uid}/statementBatches/${b.id}`);
+          deletePaths.push(`finhub_books/${uid}/statementBatches/${b.id}`);
         } else {
           protectedEntityIds.add(b.entityId);
           protectedAccountIds.add(b.accountId);
@@ -4565,7 +4565,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
             protectedEntityIds.add(tx.entityId);
             protectedAccountIds.add(tx.accountId);
           } else {
-            deletePaths.push(`finhub_users/${uid}/transactions/${tx.id}`);
+            deletePaths.push(`finhub_books/${uid}/transactions/${tx.id}`);
           }
         } else {
           protectedEntityIds.add(tx.entityId);
@@ -4578,14 +4578,14 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       for (const p of payslips) {
         if (isSamplePayslipId(p.id)) {
-          deletePaths.push(`finhub_users/${uid}/payslips/${p.id}`);
+          deletePaths.push(`finhub_books/${uid}/payslips/${p.id}`);
         } else {
           protectedEntityIds.add(p.entityId);
         }
       }
       for (const c of employmentContracts) {
         if (SAMPLE_CONTRACT_IDS.has(c.id)) {
-          deletePaths.push(`finhub_users/${uid}/employmentContracts/${c.id}`);
+          deletePaths.push(`finhub_books/${uid}/employmentContracts/${c.id}`);
         } else {
           protectedEntityIds.add(c.entityId);
           if (c.fundingAccountId) protectedAccountIds.add(c.fundingAccountId);
@@ -4593,7 +4593,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       for (const pi of personalIncomes) {
         if (SAMPLE_PERSONAL_INCOME_IDS.has(pi.id)) {
-          deletePaths.push(`finhub_users/${uid}/personalIncomes/${pi.id}`);
+          deletePaths.push(`finhub_books/${uid}/personalIncomes/${pi.id}`);
         } else {
           protectedEntityIds.add(pi.entityId);
           if (pi.accountId) protectedAccountIds.add(pi.accountId);
@@ -4601,14 +4601,14 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       for (const f of forecastItems) {
         if (SAMPLE_FORECAST_IDS.has(f.id)) {
-          deletePaths.push(`finhub_users/${uid}/forecastItems/${f.id}`);
+          deletePaths.push(`finhub_books/${uid}/forecastItems/${f.id}`);
         } else {
           protectedEntityIds.add(f.entityId);
         }
       }
       for (const fac of creditFacilities) {
         if (SAMPLE_FACILITY_IDS.has(fac.id)) {
-          deletePaths.push(`finhub_users/${uid}/creditFacilities/${fac.id}`);
+          deletePaths.push(`finhub_books/${uid}/creditFacilities/${fac.id}`);
         } else {
           protectedEntityIds.add(fac.entityId);
           if (fac.fundingAccountId) protectedAccountIds.add(fac.fundingAccountId);
@@ -4616,7 +4616,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       }
       for (const acc of accounts) {
         if (SAMPLE_ACCOUNT_IDS.has(acc.id) && !protectedAccountIds.has(acc.id)) {
-          deletePaths.push(`finhub_users/${uid}/accounts/${acc.id}`);
+          deletePaths.push(`finhub_books/${uid}/accounts/${acc.id}`);
         } else {
           protectedEntityIds.add(acc.entityId);
         }
@@ -4632,12 +4632,12 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
             ent.registrationCode === 'NIF 248190312');
         if (isDemoEnt && !protectedEntityIds.has(ent.id)) {
           deletedDemoEntityIds.add(ent.id);
-          deletePaths.push(`finhub_users/${uid}/entities/${ent.id}`);
+          deletePaths.push(`finhub_books/${uid}/entities/${ent.id}`);
         }
       }
       for (const ts of taxSettings) {
         if (deletedDemoEntityIds.has(ts.entityId)) {
-          deletePaths.push(`finhub_users/${uid}/taxSettings/${ts.id}`);
+          deletePaths.push(`finhub_books/${uid}/taxSettings/${ts.id}`);
         }
       }
     }
@@ -4673,7 +4673,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
       );
       return { deleted: deletePaths.length, lockedCount };
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `finhub_users/${uid}`);
+      handleFirestoreError(err, OperationType.DELETE, `finhub_books/${uid}`);
     }
   };
 

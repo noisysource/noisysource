@@ -193,12 +193,19 @@ service cloud.firestore {
     }
 
     // ── FinHub ───────────────────────────────────────────────────────────────
-    // The Strata Treasury app (apps/noisysource/finhub, 2026-11-23): every
-    // document under finhub_users/{uid}, held to its shape and to its owner.
-    // These are Strata's own rules, with two changes: the root collection is
-    // finhub_users (not users), and isOwner also requires isFinhubUser().
-    // finhub_usage (the daily AI-call count) is written by the finhubApi
-    // function alone (Admin SDK), so no rule opens it.
+    // The Strata Treasury app (apps/noisysource/finhub, 2026-11-23). One shared
+    // set of books, finhub_books/{book}, for Noisy Source, the household and
+    // Noisy Phocus. These are Strata's own rules (every document held to its
+    // shape), with these changes:
+    //   - The root is finhub_books/{book} (Strata: users/{uid}). The path
+    //     variable is still called userId, and so is the documents' field
+    //     (Strata's names): both hold the book id, not a person's.
+    //   - Only the one book exists (finhubBook()), and only its members write
+    //     it (isFinhubUser(): Renato, verified; Marisa joins later).
+    //   - Atlas (isAtlas(), Domotics block above) may READ the book, to answer
+    //     money questions. Atlas writing (what it reads in documents) comes with
+    //     its import tool, with its own limits, in a later change.
+    // No AI and no server here: FinHub only reads and writes its book.
     // Tests: scripts/rules-tests/finhub-strata.rules-test.cjs.
     // -------------------------------------------------------------------------
     // Global Hardened Primitives
@@ -211,16 +218,26 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
-    // FinHub is private: a user's own tree, and only for FinHub's users.
-    // Same list as FINHUB_USERS in functions/src/finhub/access.ts. Verified
-    // addresses only: anyone can create an account with an address.
+    // The one set of books (FINHUB_BOOK_ID in apps/noisysource/finhub/src/firebase.ts).
+    function finhubBook() {
+      return 'noisysource-group';
+    }
+
+    // Who keeps the books. Verified addresses only: anyone can create an
+    // account with an address.
     function isFinhubUser() {
       return isSignedIn() && request.auth.token.email_verified == true &&
         request.auth.token.email in ['admin@noisysource.com'];
     }
 
+    // Write access (Strata's name for it, kept so its rules read unchanged).
     function isOwner(userId) {
-      return isFinhubUser() && request.auth.uid == userId;
+      return userId == finhubBook() && isFinhubUser();
+    }
+
+    // Read access: the book's keepers, and Atlas.
+    function isBookReader(userId) {
+      return userId == finhubBook() && (isFinhubUser() || isAtlas());
     }
 
     function isValidId(id) {
@@ -275,7 +292,7 @@ service cloud.firestore {
           'onboardingComplete', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         data.currencyCode is string && data.currencyCode.size() == 3 &&
         data.currencyCode in ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'JPY', 'PLN', 'SEK', 'NOK'] &&
         data.currencySymbol is string && data.currencySymbol.size() >= 1 && data.currencySymbol.size() <= 4 &&
@@ -295,7 +312,7 @@ service cloud.firestore {
           'archived', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
         data.entityType is string && data.entityType.size() <= 20 && data.entityType in ['personal', 'company'] &&
         data.registrationCode is string && data.registrationCode.size() <= 40 &&
@@ -315,7 +332,7 @@ service cloud.firestore {
           'balance', 'lastReconciledDate', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
         data.institution is string && data.institution.size() >= 1 && data.institution.size() <= 80 &&
@@ -340,7 +357,7 @@ service cloud.firestore {
           'maturityDate', 'status', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidOptionalId(data.fundingAccountId) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
@@ -372,7 +389,7 @@ service cloud.firestore {
           'status', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidId(data.accountId) &&
         isValidOptionalId(data.facilityId) &&
@@ -411,7 +428,7 @@ service cloud.firestore {
           'payStatus', 'taxStatus', 'sourceFilename', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         (!('contractId' in data) || isValidOptionalId(data.contractId)) &&
         data.employeeName is string && data.employeeName.size() >= 1 && data.employeeName.size() <= 100 &&
@@ -444,7 +461,7 @@ service cloud.firestore {
           'active', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
         data.direction is string && data.direction.size() <= 16 && data.direction in ['inflow', 'outflow'] &&
@@ -468,7 +485,7 @@ service cloud.firestore {
           'openingBalance', 'closingBalance', 'lineCount', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidId(data.accountId) &&
         data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 140 &&
@@ -492,7 +509,7 @@ service cloud.firestore {
           'discrepancyNote', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.batchId) &&
         isValidId(data.entityId) &&
         isValidId(data.accountId) &&
@@ -520,7 +537,7 @@ service cloud.firestore {
           'ssRate', 'countsTowardsIrs', 'active', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidOptionalId(data.accountId) &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
@@ -550,7 +567,7 @@ service cloud.firestore {
           'irsDependents', 'irsDeductions', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         data.region is string && data.region.size() <= 20 && data.region in ['continente', 'madeira', 'acores'] &&
         data.isPme is bool &&
@@ -584,7 +601,7 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidOptionalId(data.fundingAccountId) &&
         data.workerName is string && data.workerName.size() >= 1 && data.workerName.size() <= 100 &&
@@ -624,7 +641,7 @@ service cloud.firestore {
           'active', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidId(data.paidByAccountId) &&
         isValidId(data.paidByEntityId) &&
@@ -663,7 +680,7 @@ service cloud.firestore {
           'settledToAccountId', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.owedByEntityId) &&
         isValidId(data.owedToEntityId) &&
         data.owedByEntityId != data.owedToEntityId &&
@@ -706,7 +723,7 @@ service cloud.firestore {
           'gmailMessageId', 'status', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.userId) &&
-        data.userId == request.auth.uid &&
+        data.userId == finhubBook() &&
         isValidId(data.entityId) &&
         isValidOptionalId(data.accountId) &&
         isValidOptionalId(data.transactionId) &&
@@ -735,8 +752,8 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
     // Collection Match Rules
     // -------------------------------------------------------------------------
-    match /finhub_users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && isOwner(userId);
+    match /finhub_books/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isBookReader(userId);
       allow list: if false;
       allow create: if isVerified() && isValidId(userId) && isOwner(userId) &&
         isValidWorkspaceProfile(incoming()) &&
@@ -754,8 +771,8 @@ service cloud.firestore {
       allow delete: if false;
 
       match /entities/{entityId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(entityId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(entityId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(entityId) && isOwner(userId) &&
           isValidEntity(incoming()) &&
           incoming().createdAt == request.time &&
@@ -772,8 +789,8 @@ service cloud.firestore {
       }
 
       match /accounts/{accountId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(accountId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(accountId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(accountId) && isOwner(userId) &&
           isValidAccount(incoming()) &&
           incoming().createdAt == request.time &&
@@ -792,8 +809,8 @@ service cloud.firestore {
       }
 
       match /creditFacilities/{facilityId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(facilityId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(facilityId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(facilityId) && isOwner(userId) &&
           isValidCreditFacility(incoming()) &&
           incoming().createdAt == request.time &&
@@ -815,8 +832,8 @@ service cloud.firestore {
       }
 
       match /transactions/{transactionId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(transactionId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(transactionId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(transactionId) && isOwner(userId) &&
           isValidLedgerTransaction(incoming()) &&
           incoming().createdAt == request.time &&
@@ -848,8 +865,8 @@ service cloud.firestore {
       }
 
       match /payslips/{payslipId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(payslipId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(payslipId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(payslipId) && isOwner(userId) &&
           isValidPayslipRecord(incoming()) &&
           incoming().createdAt == request.time &&
@@ -873,8 +890,8 @@ service cloud.firestore {
       }
 
       match /forecastItems/{itemId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(itemId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(itemId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(itemId) && isOwner(userId) &&
           isValidForecastItem(incoming()) &&
           incoming().createdAt == request.time &&
@@ -895,8 +912,8 @@ service cloud.firestore {
       }
 
       match /statementBatches/{batchId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(batchId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(batchId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(batchId) && isOwner(userId) &&
           isValidStatementBatch(incoming()) &&
           incoming().createdAt == request.time &&
@@ -908,8 +925,8 @@ service cloud.firestore {
       }
 
       match /statementLines/{lineId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(lineId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(lineId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(lineId) && isOwner(userId) &&
           isValidStatementLine(incoming()) &&
           incoming().createdAt == request.time &&
@@ -932,8 +949,8 @@ service cloud.firestore {
       }
 
       match /personalIncomes/{incomeId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(incomeId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(incomeId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(incomeId) && isOwner(userId) &&
           isValidPersonalIncome(incoming()) &&
           incoming().createdAt == request.time &&
@@ -955,8 +972,8 @@ service cloud.firestore {
       }
 
       match /taxSettings/{settingId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(settingId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(settingId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(settingId) && isOwner(userId) &&
           isValidTaxSetting(incoming()) &&
           incoming().createdAt == request.time &&
@@ -977,8 +994,8 @@ service cloud.firestore {
       }
 
       match /employmentContracts/{contractId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(contractId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(contractId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId) &&
           isValidEmploymentContract(incoming()) &&
           incoming().createdAt == request.time &&
@@ -1003,8 +1020,8 @@ service cloud.firestore {
       }
 
       match /recurringExpenses/{expenseId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(expenseId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(expenseId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
           isValidRecurringExpense(incoming()) &&
           incoming().createdAt == request.time &&
@@ -1030,8 +1047,8 @@ service cloud.firestore {
       }
 
       match /reimbursements/{reimbursementId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(reimbursementId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(reimbursementId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(reimbursementId) && isOwner(userId) &&
           isValidExpenseReimbursement(incoming()) &&
           incoming().status == 'open' &&
@@ -1070,8 +1087,8 @@ service cloud.firestore {
       }
 
       match /invoiceDocuments/{docId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(docId) && isOwner(userId);
-        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(docId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
         allow create: if isVerified() && isValidId(userId) && isValidId(docId) && isOwner(userId) &&
           isValidInvoiceDocument(incoming()) &&
           incoming().createdAt == request.time &&
