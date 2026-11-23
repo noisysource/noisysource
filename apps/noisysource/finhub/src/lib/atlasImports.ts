@@ -1,0 +1,276 @@
+// What Atlas imported: finhub_books/{book}/atlas_imports/{id}, one per entity
+// and month (decided with Renato, 2026-11-23). Atlas reads the documents
+// (payslips, bank statements) and writes drafts in the shapes this app's own
+// review workbench uses (DocumentsHubView, "Drive Discovery & Auto-Generation
+// Preview"); nothing reaches the books until Renato commits them there.
+//
+// Atlas is trusted to write here, but not to be right: every draft is
+// coerced to its type and bounded before it reaches the workbench.
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { db, FINHUB_BOOK_ID } from '../firebase';
+import type {
+  BillingFrequency,
+  ContractPaySchedule,
+  FacilityType,
+  MealPaymentMethod,
+  ParsedPayslipDraft,
+  SuggestedContractDraft,
+  SuggestedFacilityDraft,
+  SuggestedSubscriptionDraft,
+  TransactionType,
+} from '../types/finance';
+
+export interface AtlasStatementLine {
+  date: string;
+  description: string;
+  amount: number;
+  direction: 'credit' | 'debit';
+  vendor: string;
+  category: string;
+  type: TransactionType;
+  ivaRate: number;
+  ivaDeductible: boolean;
+}
+
+export interface AtlasStatement {
+  filename: string;
+  statementPeriod: string;
+  openingBalance: number;
+  closingBalance: number;
+  lines: AtlasStatementLine[];
+}
+
+export interface AtlasSource {
+  kind: 'drive' | 'gmail';
+  name: string;
+  id: string;
+  link: string;
+}
+
+export interface AtlasImport {
+  id: string;
+  entityHint: string;
+  month: string;
+  summary: string;
+  sources: AtlasSource[];
+  statements: AtlasStatement[];
+  payslips: ParsedPayslipDraft[];
+  contracts: SuggestedContractDraft[];
+  subscriptions: SuggestedSubscriptionDraft[];
+  facilities: SuggestedFacilityDraft[];
+  createdAtMs: number;
+}
+
+type O = Record<string, unknown>;
+const obj = (v: unknown): O => (v && typeof v === 'object' && !Array.isArray(v) ? (v as O) : {});
+const list = (v: unknown, max: number): unknown[] => (Array.isArray(v) ? v.slice(0, max) : []);
+const str = (v: unknown, max = 300): string => (typeof v === 'string' ? v.slice(0, max) : '');
+const num = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+};
+const bool = (v: unknown): boolean => v === true;
+const isoDate = (v: unknown): string => {
+  const s = str(v, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+};
+const oneOf = <T extends string>(options: readonly T[], v: unknown, fallback: T): T =>
+  typeof v === 'string' && (options as readonly string[]).includes(v) ? (v as T) : fallback;
+
+const TX_TYPES: readonly TransactionType[] = ['income', 'expense', 'transfer', 'debt_payment', 'payroll'];
+const PAY_SCHEDULES: readonly ContractPaySchedule[] = ['14_months', '12_months'];
+const MEAL_METHODS: readonly MealPaymentMethod[] = ['card', 'cash', 'none'];
+const FREQUENCIES: readonly BillingFrequency[] = ['monthly', 'annual'];
+const FACILITY_TYPES: readonly FacilityType[] = ['term_loan', 'credit_line', 'credit_card', 'mortgage', 'equipment_loan'];
+
+const lineOf = (raw: unknown): AtlasStatementLine | undefined => {
+  const l = obj(raw);
+  const date = isoDate(l.date);
+  if (!date) return undefined;
+  const direction = l.direction === 'credit' ? 'credit' : 'debit';
+  return {
+    date,
+    description: str(l.description, 300),
+    amount: Math.abs(num(l.amount)),
+    direction,
+    vendor: str(l.vendor, 120),
+    category: str(l.category, 80) || (direction === 'credit' ? 'Revenue & Inflows' : 'Operating Expense'),
+    type: oneOf(TX_TYPES, l.type, direction === 'credit' ? 'income' : 'expense'),
+    ivaRate: num(l.ivaRate),
+    ivaDeductible: bool(l.ivaDeductible),
+  };
+};
+
+export const statementOf = (raw: unknown): AtlasStatement => {
+  const s = obj(raw);
+  return {
+    filename: str(s.filename, 200),
+    statementPeriod: str(s.statementPeriod, 60),
+    openingBalance: num(s.openingBalance),
+    closingBalance: num(s.closingBalance),
+    lines: list(s.lines, 2000).map(lineOf).filter((l): l is AtlasStatementLine => l !== undefined),
+  };
+};
+
+export const payslipOf = (raw: unknown): ParsedPayslipDraft => {
+  const p = obj(raw);
+  return {
+    employeeName: str(p.employeeName, 120),
+    periodStart: isoDate(p.periodStart),
+    periodEnd: isoDate(p.periodEnd),
+    payDate: isoDate(p.payDate),
+    taxDueDate: isoDate(p.taxDueDate),
+    grossPay: num(p.grossPay),
+    netPay: num(p.netPay),
+    employeeWithholdings: num(p.employeeWithholdings),
+    employerTaxes: num(p.employerTaxes),
+    employerContributions: num(p.employerContributions),
+    notes: str(p.notes, 1000),
+    sourceFilename: str(p.sourceFilename, 200),
+  };
+};
+
+export const contractOf = (raw: unknown): SuggestedContractDraft => {
+  const c = obj(raw);
+  return {
+    workerName: str(c.workerName, 120),
+    roleTitle: str(c.roleTitle, 120),
+    employerName: str(c.employerName, 120),
+    isOwnerHint: bool(c.isOwnerHint),
+    paySchedule: oneOf(PAY_SCHEDULES, c.paySchedule, '14_months'),
+    baseGrossMonthly: num(c.baseGrossMonthly),
+    irsRate: num(c.irsRate),
+    employeeSsRate: num(c.employeeSsRate),
+    employerSsRate: num(c.employerSsRate),
+    mealAllowanceDaily: num(c.mealAllowanceDaily),
+    mealPaymentMethod: oneOf(MEAL_METHODS, c.mealPaymentMethod, 'none'),
+    childVoucherMonthly: num(c.childVoucherMonthly),
+    otherBenefitName: str(c.otherBenefitName, 80),
+    otherBenefitMonthly: num(c.otherBenefitMonthly),
+    notes: str(c.notes, 1000),
+  };
+};
+
+export const subscriptionOf = (raw: unknown): SuggestedSubscriptionDraft => {
+  const s = obj(raw);
+  const day = Math.round(num(s.billingDay));
+  const month = Math.round(num(s.billingMonth));
+  return {
+    name: str(s.name, 120),
+    vendor: str(s.vendor, 120),
+    category: str(s.category, 80) || 'Operating Expense',
+    amount: Math.abs(num(s.amount)),
+    frequency: oneOf(FREQUENCIES, s.frequency, 'monthly'),
+    billingDay: day >= 1 && day <= 31 ? day : 1,
+    billingMonth: month >= 1 && month <= 12 ? month : 1,
+    ivaRate: num(s.ivaRate),
+    ivaDeductible: bool(s.ivaDeductible),
+    hasInvoice: bool(s.hasInvoice),
+    matchCount: Math.max(1, Math.round(num(s.matchCount))),
+    sampleDates: list(s.sampleDates, 24).map(isoDate).filter(Boolean),
+    notes: str(s.notes, 1000),
+  };
+};
+
+export const facilityOf = (raw: unknown): SuggestedFacilityDraft => {
+  const f = obj(raw);
+  const day = Math.round(num(f.dueDay));
+  return {
+    name: str(f.name, 120),
+    lender: str(f.lender, 120),
+    facilityType: oneOf(FACILITY_TYPES, f.facilityType, 'term_loan'),
+    monthlyPayment: Math.abs(num(f.monthlyPayment)),
+    dueDay: day >= 1 && day <= 31 ? day : 1,
+    apr: num(f.apr),
+    matchCount: Math.max(1, Math.round(num(f.matchCount))),
+    notes: str(f.notes, 1000),
+  };
+};
+
+const sourceOf = (raw: unknown): AtlasSource => {
+  const s = obj(raw);
+  const link = str(s.link, 500);
+  return {
+    kind: s.kind === 'gmail' ? 'gmail' : 'drive',
+    name: str(s.name, 200),
+    id: str(s.id, 200),
+    link: /^https:\/\//.test(link) ? link : '',
+  };
+};
+
+const millis = (v: unknown): number => {
+  const t = v as { toMillis?: () => number } | undefined;
+  return typeof t?.toMillis === 'function' ? t.toMillis() : 0;
+};
+
+/** One import as the app may use it, whatever Atlas wrote. */
+export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
+  const d = obj(raw);
+  return {
+    id,
+    entityHint: str(d.entityHint, 100),
+    month: str(d.month, 7),
+    summary: str(d.summary, 4000),
+    sources: list(d.sources, 300).map(sourceOf),
+    statements: list(d.statements, 20).map(statementOf),
+    payslips: list(d.payslips, 60).map(payslipOf),
+    contracts: list(d.contracts, 20).map(contractOf),
+    subscriptions: list(d.subscriptions, 200).map(subscriptionOf),
+    facilities: list(d.facilities, 20).map(facilityOf),
+    createdAtMs: millis(d.createdAt),
+  };
+};
+
+const COLLECTION = `finhub_books/${FINHUB_BOOK_ID}/atlas_imports`;
+
+/** The imports waiting for him, newest month first. */
+export const watchPendingAtlasImports = (
+  onChange: (imports: AtlasImport[]) => void,
+  onError: (err: Error) => void
+): Unsubscribe =>
+  onSnapshot(
+    query(collection(db, COLLECTION), where('status', '==', 'pending')),
+    (snap) =>
+      onChange(
+        snap.docs
+          .map((d) => atlasImportOf(d.id, d.data()))
+          .sort((a, b) => b.month.localeCompare(a.month) || a.entityHint.localeCompare(b.entityHint))
+      ),
+    onError
+  );
+
+/** He committed it in the workbench, or set it aside. */
+export const decideAtlasImport = (id: string, status: 'applied' | 'dismissed') =>
+  updateDoc(doc(db, COLLECTION, id), { status, decidedAt: serverTimestamp() });
+
+/** The entity an import is for: by name, as Atlas named it. */
+export const entityForHint = <E extends { id: string; name: string }>(hint: string, entities: E[]): E | undefined => {
+  const h = hint.trim().toLowerCase();
+  if (!h) return undefined;
+  return (
+    entities.find((e) => e.name.trim().toLowerCase() === h) ??
+    entities.find((e) => e.name.toLowerCase().includes(h) || h.includes(e.name.toLowerCase()))
+  );
+};
+
+/** What an import holds, in a line. */
+export const countsOf = (i: AtlasImport): string => {
+  const lines = i.statements.reduce((n, s) => n + s.lines.length, 0);
+  const parts = [
+    i.statements.length > 0 ? `${i.statements.length} statement${i.statements.length === 1 ? '' : 's'} (${lines} lines)` : '',
+    i.payslips.length > 0 ? `${i.payslips.length} payslip${i.payslips.length === 1 ? '' : 's'}` : '',
+    i.contracts.length > 0 ? `${i.contracts.length} contract${i.contracts.length === 1 ? '' : 's'}` : '',
+    i.subscriptions.length > 0 ? `${i.subscriptions.length} subscription${i.subscriptions.length === 1 ? '' : 's'}` : '',
+    i.facilities.length > 0 ? `${i.facilities.length} loan${i.facilities.length === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : 'nothing found';
+};

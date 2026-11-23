@@ -1,4 +1,5 @@
 import { apiFetch, type ApiResponse } from '../lib/api';
+import { countsOf, decideAtlasImport, entityForHint, watchPendingAtlasImports, type AtlasImport } from '../lib/atlasImports';
 import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -51,7 +52,7 @@ interface DocumentsHubViewProps {
   initialTabNonce?: number;
 }
 
-type HubTab = 'gmail' | 'drive' | 'historical' | 'vault';
+type HubTab = 'atlas' | 'gmail' | 'drive' | 'historical' | 'vault';
 
 interface PendingInvoiceReview {
   source: 'gmail' | 'drive' | 'upload';
@@ -108,7 +109,25 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     pushToast,
   } = useTreasury();
 
-  const [activeTab, setActiveTab] = useState<HubTab>('gmail');
+  // Document reading is Atlas's (STATUS.md): what it imported comes first.
+  const [activeTab, setActiveTab] = useState<HubTab>('atlas');
+  const [atlasImports, setAtlasImports] = useState<AtlasImport[]>([]);
+  const [atlasImportsError, setAtlasImportsError] = useState('');
+  // The import open in the workbench: marked applied once he commits it there.
+  const [loadedAtlasImport, setLoadedAtlasImport] = useState<AtlasImport | null>(null);
+  const [decidingAtlasImport, setDecidingAtlasImport] = useState('');
+
+  React.useEffect(
+    () =>
+      watchPendingAtlasImports(
+        (imports) => {
+          setAtlasImports(imports);
+          setAtlasImportsError('');
+        },
+        (err) => setAtlasImportsError(err.message)
+      ),
+    []
+  );
   const [showPrivacyPanel, setShowPrivacyPanel] = useState(true);
 
   React.useEffect(() => {
@@ -790,7 +809,7 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     }
     setGenSaving(true);
     try {
-      await importDriveGeneratedBundle({
+      const saved = await importDriveGeneratedBundle({
         entityId: resolvedGenEntityId,
         accountId: resolvedGenAccountId,
         adjustAccountBalance: !genPreserveBalance,
@@ -842,6 +861,13 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
             })),
           })),
       });
+      if (saved && loadedAtlasImport) {
+        // Committed: the import has done its job; Atlas won't overwrite it now.
+        await decideAtlasImport(loadedAtlasImport.id, 'applied').catch((err) =>
+          pushToast('Saved, but the import stays pending', err instanceof Error ? err.message : String(err), 'info')
+        );
+        setLoadedAtlasImport(null);
+      }
       setGenStatements([]);
       setGenPayslips([]);
       setGenContracts([]);
@@ -849,6 +875,47 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
       setGenFacilities([]);
     } finally {
       setGenSaving(false);
+    }
+  };
+
+  /** Puts one of Atlas's imports in the review workbench (the Drive tab), replacing what was there. */
+  const openAtlasImport = (imp: AtlasImport) => {
+    const entity = entityForHint(imp.entityHint, entities);
+    if (entity) setGenEntityId(entity.id);
+    setGenStatements(
+      imp.statements.map((st) => ({
+        ...st,
+        selected: true,
+        lines: st.lines.map((l) => ({ ...l, includeTx: true })),
+      }))
+    );
+    setGenPayslips(imp.payslips.map((p) => ({ ...p, selected: true })));
+    setGenContracts(imp.contracts.map((c) => ({ ...c, selected: true })));
+    setGenSubscriptions(imp.subscriptions.map((x) => ({ ...x, selected: true })));
+    setGenFacilities(imp.facilities.map((f) => ({ ...f, selected: true })));
+    setGenWorkbenchTab(
+      imp.contracts.length > 0 ? 'contracts' : imp.payslips.length > 0 ? 'payslips' : imp.subscriptions.length > 0 ? 'subscriptions' : 'expenses'
+    );
+    setLoadedAtlasImport(imp);
+    setActiveTab('drive');
+    pushToast(
+      `Atlas's import for ${imp.entityHint || 'an entity'} · ${imp.month} is in the workbench`,
+      entity
+        ? 'Check the entity and account at the top of the workbench, untick anything wrong, then commit.'
+        : `No entity named "${imp.entityHint}": pick the entity and account at the top of the workbench before committing.`,
+      'info'
+    );
+  };
+
+  const dismissAtlasImport = async (imp: AtlasImport) => {
+    setDecidingAtlasImport(imp.id);
+    try {
+      await decideAtlasImport(imp.id, 'dismissed');
+      if (loadedAtlasImport?.id === imp.id) setLoadedAtlasImport(null);
+    } catch (err) {
+      pushToast('Could not set it aside', err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setDecidingAtlasImport('');
     }
   };
 
@@ -1401,6 +1468,7 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
         <div className="flex flex-wrap items-center gap-1.5 p-1 bg-[#0F172A] border border-slate-800 rounded-lg">
           {(
             [
+              { id: 'atlas', label: `From Atlas (${atlasImports.length})`, icon: Sparkles },
               { id: 'gmail', label: 'Gmail Invoices', icon: Mail },
               { id: 'drive', label: 'Drive Archive & Organizer', icon: Folder },
               { id: 'historical', label: 'Historical Batch Import (2025)', icon: History },
@@ -1431,6 +1499,100 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
           {vaultStats.inbox > 0 && <span className="text-amber-300">{vaultStats.inbox} unlinked</span>}
         </div>
       </div>
+
+      {/* ===================================================================== */}
+      {/* FROM ATLAS: what Atlas read from the documents, waiting for review    */}
+      {/* ===================================================================== */}
+      {activeTab === 'atlas' && (
+        <div className="space-y-5">
+          <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-5 space-y-2">
+            <h3 className="text-base font-semibold text-slate-100">Imports from Atlas</h3>
+            <p className="text-xs text-slate-400">
+              Atlas reads the payslips and bank statements in Drive and Gmail, one entity and month at a time, and
+              proposes what it found: statement lines with their categories, payslips, contracts, subscriptions and
+              loans. Open one in the review workbench, untick anything wrong, and commit: nothing reaches the books
+              before that. Ask Atlas, for example: &ldquo;import March 2026 for Noisy Source&rdquo;.
+            </p>
+            {loadedAtlasImport && (
+              <p className="text-xs text-blue-300">
+                Open in the workbench: {loadedAtlasImport.entityHint} · {loadedAtlasImport.month}.{' '}
+                <button className="underline cursor-pointer" onClick={() => setActiveTab('drive')}>
+                  Go to it
+                </button>
+              </p>
+            )}
+            {atlasImportsError && (
+              <p className="text-xs text-red-400 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5" /> Couldn&rsquo;t read Atlas&rsquo;s imports: {atlasImportsError}
+              </p>
+            )}
+          </div>
+
+          {atlasImports.length === 0 ? (
+            <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-8 text-center text-sm text-slate-400">
+              Nothing waiting. When Atlas imports a month, it appears here.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {atlasImports.map((imp) => {
+                const entity = entityForHint(imp.entityHint, entities);
+                return (
+                  <div key={imp.id} className="bg-[#0F172A] border border-slate-800 rounded-xl p-5 space-y-3">
+                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-100">
+                          {imp.entityHint || 'Unnamed entity'} · {imp.month}
+                          {!entity && (
+                            <span className="ml-2 text-xs font-normal text-amber-300">
+                              no entity with this name: pick one in the workbench
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">{countsOf(imp)}</div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => openAtlasImport(imp)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Review in workbench
+                        </button>
+                        <button
+                          onClick={() => dismissAtlasImport(imp)}
+                          disabled={decidingAtlasImport === imp.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-slate-700 text-slate-300 hover:text-slate-100 cursor-pointer disabled:opacity-50"
+                        >
+                          <X className="w-3.5 h-3.5" /> Set aside
+                        </button>
+                      </div>
+                    </div>
+                    {imp.summary && <p className="text-xs text-slate-300 whitespace-pre-line">{imp.summary}</p>}
+                    {imp.sources.length > 0 && (
+                      <details className="text-xs text-slate-400">
+                        <summary className="cursor-pointer">Read from {imp.sources.length} document{imp.sources.length === 1 ? '' : 's'}</summary>
+                        <ul className="mt-2 space-y-1">
+                          {imp.sources.map((src, i) => (
+                            <li key={`${src.id}-${i}`} className="flex items-center gap-1.5">
+                              {src.kind === 'gmail' ? <Mail className="w-3 h-3" /> : <Folder className="w-3 h-3" />}
+                              {src.link ? (
+                                <a href={src.link} target="_blank" rel="noreferrer" className="underline hover:text-slate-200">
+                                  {src.name || src.id}
+                                </a>
+                              ) : (
+                                <span>{src.name || src.id}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ===================================================================== */}
       {/* TAB 1: GMAIL INVOICES                                                 */}

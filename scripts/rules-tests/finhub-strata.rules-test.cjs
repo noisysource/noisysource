@@ -9,7 +9,7 @@
 // Run: pnpm test:rules:finhub (needs Java).
 const { initializeApp } = require('firebase/app');
 const {
-  getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, serverTimestamp, terminate,
+  getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, terminate,
 } = require('firebase/firestore');
 
 const PROJECT = 'demo-kidclub-rules';
@@ -44,6 +44,25 @@ const profile = (uid) => ({
   updatedAt: serverTimestamp(),
 });
 
+// An import as Atlas writes it (atlas_imports): drafts for the review workbench.
+const atlasImport = (over = {}) => ({
+  entityHint: 'Noisy Source',
+  month: '2026-03',
+  summary: '1 statement, 1 payslip',
+  sources: [{ kind: 'drive', name: 'extrato-marco.pdf', id: 'f1', link: '' }],
+  statements: [{ filename: 'extrato-marco.pdf', statementPeriod: '2026-03', openingBalance: 100, closingBalance: 90, lines: [] }],
+  payslips: [],
+  contracts: [],
+  subscriptions: [],
+  facilities: [],
+  status: 'pending',
+  createdBy: 'atlas',
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+  ...over,
+});
+const IMPORT = `${'finhub_books/noisysource-group'}/atlas_imports/noisysource-2026-03`;
+
 let failures = 0;
 async function expect(outcome, label, fn) {
   let got;
@@ -76,6 +95,30 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'a verified stranger creates a book of their own', () =>
     setDoc(doc(stranger, 'finhub_books/stranger-uid'), profile('stranger-uid')));
   await expect('denied', 'anonymous reads the book', () => getDoc(doc(anon, BOOK)));
+
+  // Atlas's imports: Atlas writes them while pending; the books stay Renato's.
+  await expect('allowed', 'Atlas creates a pending import', () => setDoc(doc(atlas, IMPORT), atlasImport()));
+  await expect('allowed', 'Atlas rewrites its pending import (a re-run)', () =>
+    setDoc(doc(atlas, IMPORT), { ...atlasImport(), summary: 'again' }));
+  await expect('denied', 'Atlas creates an import already applied', () =>
+    setDoc(doc(atlas, `${IMPORT}-b`), atlasImport({ status: 'applied' })));
+  await expect('denied', 'Atlas creates an import with an extra field', () =>
+    setDoc(doc(atlas, `${IMPORT}-c`), atlasImport({ entities: [] })));
+  await expect('denied', 'Atlas creates an import with a bad month', () =>
+    setDoc(doc(atlas, `${IMPORT}-d`), atlasImport({ month: '2026-13' })));
+  await expect('denied', 'a verified stranger creates an import', () =>
+    setDoc(doc(stranger, `${IMPORT}-e`), atlasImport()));
+  await expect('denied', 'Atlas writes an entity in the book', () =>
+    setDoc(doc(atlas, `${BOOK}/entities/e1`), { userId: 'noisysource-group', name: 'X' }));
+  await expect('allowed', 'owner reads the import', () => getDoc(doc(owner, IMPORT)));
+  await expect('denied', 'Atlas deletes its import', () => deleteDoc(doc(atlas, IMPORT)));
+  await expect('denied', 'owner edits the drafts in the import', () =>
+    updateDoc(doc(owner, IMPORT), { summary: 'mine' }));
+  await expect('allowed', 'owner marks the import applied', () =>
+    updateDoc(doc(owner, IMPORT), { status: 'applied', decidedAt: serverTimestamp() }));
+  await expect('denied', 'Atlas rewrites an applied import', () =>
+    setDoc(doc(atlas, IMPORT), atlasImport()));
+  await expect('denied', 'a verified stranger reads the import', () => getDoc(doc(stranger, IMPORT)));
 
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {
