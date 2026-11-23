@@ -1,5 +1,5 @@
 import type { Device } from '@shared/models/Device';
-import { decodeFaults } from './heatpumpFaults';
+import { decodeFaults, faultsReported } from './heatpumpFaults';
 
 /**
  * Maps the Tuya (SmartLife) device list onto our Device model.
@@ -92,6 +92,8 @@ export function buildTuyaDevices(raw: TuyaDevice[]): Device[] {
           coolingSetpoint: num(s.get('p03_cooling')),
           dhwSetpoint: num(s.get('p04_dhw')),
           faults: decodeFaults(code => s.get(code)),
+          // Only for a pump that answered something: one never reached shows as offline.
+          faultsUnknown: (d.status ?? []).length > 0 && !faultsReported(code => s.has(code)),
         },
       });
       continue;

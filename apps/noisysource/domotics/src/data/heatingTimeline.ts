@@ -65,6 +65,7 @@ export interface ClimateSlot {
   /** 'day' | 'warm' | 'warmup', with ' (sim)' in dry-run; 'off' with the automation off. */
   plan?: string;
   want?: boolean;
+  /** The E13 guard's mode: only in slots up to 2026-11-22, when the bridge had one. Not read. */
   guard?: string;
 }
 
@@ -812,7 +813,7 @@ function pumpDetail(ctx: WordsContext, s: PumpStretch): Detail {
         when,
         title: `${verb} ${SOURCE_LABEL.guard}`,
         why: s.text,
-        note: 'Registo antigo: a proteção já não está na app.',
+        note: 'Registo antigo: a proteção E13 foi retirada em 22/11/2026.',
       };
       break;
     default:

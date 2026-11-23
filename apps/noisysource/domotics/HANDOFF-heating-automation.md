@@ -10,6 +10,8 @@ The house: underfloor heating on a heavy screed slab, fed by the Zantia Vancouve
 
 ## Decisions (Renato, 2026-10-26)
 
+> **2026-11-22: the E13 guard was removed from the bridge** (Renato: the pump was fixed; the guard had been off since 28/10). The decision below that "the E13 guard stays and comes first" no longer holds: there is no guard, and the automation alone switches the pump. "Pausar" now only concerns the automation. The rest of this section stands.
+
 - **Warm window 19:00–09:00** (configurable), room temperature **24 °C**.
 - **Evening warm-up**: starts early enough to be warm at 19:00, from the learned warm-up model (`warmby.ts`: floor ~90 min, rooms 0.3 °C/h, + 30 min margin). With the battery ≥ 90 % and sun before then, it may start earlier on solar.
 - **Daytime** (09:00 → warm-up): pump **off by default**. Runs only on solar surplus: **battery ≥ 90 %** and the sun covering the house plus the pump (or power actually going out to the grid). Hysteresis and minimum on/off times, no flapping. **Day minimum 21 °C**: below it, heat regardless of sun.
@@ -41,6 +43,8 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge/src/automation.ts
 
 ## The rules, in order of priority
 
+> **2026-11-22: the E13 guard was removed from the bridge** (Renato: the pump was fixed; the guard had been off since 28/10). Rule 2 is gone (nothing parks the pump but the automation, no `holdRest`), and in rule 7 it is always the automation that rests the pump at the setpoint (`rest`, 60 min by default). In rule 1, "lockout" is simply a fault that stays on.
+
 1. **Fault, lockout, pump offline**: the automation doesn't touch the pump.
 2. **E13 guard resting**: never switched on from here. Live, while the plan has the pump off the automation asks the guard to keep resting (`holdRest`); the guard ends its rest when the plan wants heat.
 3. **Paused**: the plan is "off". Live, the pump is switched off at once.
@@ -52,6 +56,8 @@ In the **bridge on the Pi** (`apps/noisysource/domotics-bridge/src/automation.ts
 9. **Zones**: `temp_set` = 24 (or a "quente às" target, if higher), 10 min apart at most; hand-changed zones respected as above; thermostats on their own program left alone.
 
 ## Safety
+
+> **2026-11-22: the E13 guard was removed from the bridge** (Renato: the pump was fixed; the guard had been off since 28/10). "The guard's rests and lockout come first" below no longer applies; a faulted pump is still never touched.
 
 - Every pump switch respects the minimum on/off times; only a pause switches off at once.
 - Never acts on a faulted pump; the guard's rests and lockout come first.

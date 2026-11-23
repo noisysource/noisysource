@@ -34,9 +34,9 @@
  *   live automation switches it off.
  * - Several warm windows (`windows`; from 2026-10-28 19–23 and 06–10 at 23 °C,
  *   to measure how the house cools between them and warms up for them).
- * - The E13 guard (guard.ts) comes first: its rests and a lockout are never
- *   overridden; while it rests, the automation asks it (`holdRest`) to carry
- *   on whenever the plan has the pump off.
+ * - A pump in fault is left alone (`pumpHold`): nothing is switched until the
+ *   fault clears. There is no separate E13 guard any more (removed 2026-11-22,
+ *   once the pump was fixed): the automation alone switches the pump.
  *
  * Kept from before (the cold morning of 20/10 and the E13 trips of 21–24/10):
  * - the water temperature follows the pump's own outdoor sensor, with a
@@ -46,7 +46,7 @@
  * - a water setpoint or a zone changed by hand is left alone until the plan
  *   moves from day to warm or back;
  * - at the setpoint with the compressor at its minimum the pump is switched
- *   off to rest rather than idle there (by the guard when it is on);
+ *   off to rest rather than idle there (`rest`);
  * - a one-off "warm by HH:MM" request (warmby.ts) heats regardless of the
  *   time of day.
  *
@@ -59,7 +59,6 @@
  * can be reasoned about (and tested) without a house attached.
  */
 
-import { GRACE_MS, IDLE_HZ, NEAR_SETPOINT } from './guard';
 import { lisbonDate, lisbonOffsetMs } from './energy';
 import {
   createWarmupLearner, leadMinutes, parseModel, planWarmBy, WARM_HOLD_MS, WARM_MARGIN_MIN,
@@ -73,8 +72,7 @@ export interface AutomationConfig {
   dryRun: boolean;
   /**
    * A person's pause, set from the app ("Pausar"): until then nothing switches
-   * the pump on by itself (neither this nor the guard), and a live automation
-   * switches it off. ms since the epoch; null = not paused.
+   * the pump on by itself, and a live automation switches it off. ms since the epoch; null = not paused.
    */
   pauseUntil: number | null;
   /** The room temperature, written to the thermostats, °C. */
@@ -319,9 +317,15 @@ export interface PumpReading {
   online: boolean;
   on: boolean;
   fault: boolean;
+  /**
+   * The pump isn't reporting (all of) its fault bitmaps, so `fault: false` is
+   * "none seen", not "none": a lockout wouldn't show. Said in the status; the
+   * pump is still switched by the plan (readings.ts).
+   */
+  faultsUnknown?: boolean;
   /** The pump's own outdoor sensor, °C. */
   outdoor?: number;
-  /** Current heating water setpoint, °C. */
+  /** Current heating water setpoint, °C. Undefined when the pump doesn't report it: the water is then left alone. */
   flowSetpoint?: number;
   /** Compressor, Hz. */
   hz?: number;
@@ -344,13 +348,6 @@ export interface EnergyReading {
   /** > 0 charging, < 0 discharging, W. */
   batteryW?: number;
   soc?: number;
-}
-
-/** What the E13 guard is doing (guard.ts), as far as the automation needs to know. */
-export interface GuardView {
-  enabled: boolean;
-  mode: 'off' | 'watch' | 'rest' | 'lockout';
-  restUntil: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,9 +477,9 @@ export interface AutomationStatus {
   shortfall?: number;
   /** Set when the pump is left alone (fault, offline). */
   pumpHold?: string;
-  /** Live only: asks the E13 guard to keep its rest going, since the plan has the pump off. */
-  holdRest?: boolean;
-  /** The automation's own rest at the setpoint (guard off), until when. */
+  /** The pump isn't reporting its faults and/or its water setpoint: what that means, one line (also in `reasons`). */
+  pumpBlind?: string;
+  /** The automation's rest at the setpoint, until when. */
   restUntil?: number;
   /** Switch-ons the automation sent in the last 24 h (it stops at MAX_ONS_PER_DAY). */
   switchOns24h?: number;
@@ -543,6 +540,17 @@ export const MAX_WARMUP_LEAD_MIN = 6 * 60;
  */
 export const MAX_ONS_PER_DAY = 12;
 const KEEP_ACTIONS = 12;
+/**
+ * The rest at the setpoint (`rest`). Every E13 logged on 21–22/10 came after
+ * the compressor idled at its minimum with the water at the setpoint, then sped
+ * up again; so it is switched off there instead.
+ */
+/** Compressor at or near its minimum, Hz. */
+const IDLE_HZ = 45;
+/** Water out within this of the setpoint, °C. */
+const NEAR_SETPOINT = 1.5;
+/** Not this soon after the pump is switched on. */
+const GRACE_MS = 4 * MIN;
 
 const fmt = (v: number) => `${v.toFixed(1).replace(/\.0$/, '')}°C`;
 const deg = (v: number) => `${v.toFixed(1).replace(/\.0$/, '').replace('.', ',')}°`;
@@ -563,7 +571,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
   let lastSeenSp: number | undefined;
   let flowManualIn: string | null = null;
   let ownFlow = memory?.flow ?? null;
-  /** The automation's own rest at the setpoint (live, guard off), and when it ends. */
+  /** The automation's rest at the setpoint (live), and when it ends. */
   let ownRest: number | null = null;
   /** The warm-by request being worked on. */
   let warm: { at: number; started: boolean; outcome: { mean: number; reached: boolean } | null } | null = null;
@@ -621,7 +629,6 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       zones: ZoneReading[];
       pump?: PumpReading;
       energy?: EnergyReading;
-      guard?: GuardView;
       warmBy?: WarmByRequest | null;
       /**
        * The pump switched on or off this poll by a person (the app, the panel,
@@ -633,9 +640,6 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
   ): Promise<AutomationStatus> {
     const t = input.now.getTime();
     const p = input.pump;
-    const g = input.guard;
-    const guardOn = !!g?.enabled;
-    const guardResting = guardOn && g!.mode === 'rest';
     const paused = pausedUntil(cfg, t);
     ons = ons.filter(x => t - x < DAY);
 
@@ -662,7 +666,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       zones: known,
       // Off is "available" only while it is parked for a rest: off by the plan
       // (daytime) says nothing about how fast the house warms.
-      available: !!p && p.online && !p.fault && (p.on || guardResting || (ownRest !== null && t < ownRest)),
+      available: !!p && p.online && !p.fault && (p.on || (ownRest !== null && t < ownRest)),
     });
     const model = learner.model();
 
@@ -878,11 +882,23 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
     let pumpHold: string | undefined;
     let flowTarget: number | undefined;
     let flowManual = false;
-    let holdRest = false;
     let doing = '';
+    // Datapoints the pump isn't reporting. Said, never guessed: no fault is
+    // made up and the pump is still switched by the plan.
+    let pumpBlind: string | undefined;
+    if (p?.online) {
+      const noFaults = !!p.faultsUnknown;
+      const noSp = p.flowSetpoint === undefined;
+      const water = cfg.flow.enabled ? 'a automação não mexe na temperatura da água' : '';
+      pumpBlind = noFaults && noSp
+        ? `Atenção: a bomba não está a reportar avarias nem a temperatura da água pedida — um bloqueio (E13) não se vê aqui${water ? `, e ${water}` : ''}. Liga e desliga pelo plano na mesma.`
+        : noFaults ? 'Atenção: a bomba não está a reportar avarias — um bloqueio (E13) não se vê aqui. Liga e desliga pelo plano na mesma.'
+        : noSp ? `Atenção: a bomba não está a reportar a temperatura da água pedida${water ? ` — ${water}` : ''}. Liga e desliga pelo plano na mesma.`
+        : undefined;
+    }
     if (!p) pumpHold = 'bomba não encontrada';
     else if (!p.online) pumpHold = 'bomba sem ligação';
-    else if (p.fault || (guardOn && g!.mode === 'lockout')) pumpHold = 'bomba em avaria — a automação não lhe mexe';
+    else if (p.fault) pumpHold = 'bomba em avaria — a automação não lhe mexe';
     else {
       if (!pumpSeen || pumpSeen.on !== p.on) pumpSeen = { on: p.on, since: t };
       if (p.on || (ownRest !== null && t >= ownRest)) ownRest = null;
@@ -907,7 +923,11 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       // Water temperature from the pump's own outdoor sensor, with a correction
       // while the rooms stay short of target — or the top of the range while
       // recovering or warming up.
-      if (cfg.flow.enabled && p.outdoor !== undefined) {
+      // Without the pump's own setpoint nothing is sent: it would be sent blind
+      // every 15 min, over a value someone may have set by hand, and raising
+      // it with the compressor at its minimum is what precedes an E13 (the
+      // check below needs the setpoint too). `pumpBlind` says so.
+      if (cfg.flow.enabled && p.outdoor !== undefined && sp !== undefined) {
         if (waterDrive) {
           // Frozen meanwhile: it says how wrong the curve is, which the top of the range says nothing about.
           deficitSince = null;
@@ -977,16 +997,8 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       const since = (t - pumpSeen.since) / MIN;
       const would = (live: string, sim: string) => (dry ? sim : live);
 
-      if (guardResting) {
-        // The guard parked it: never switched on from here. Live, the rest
-        // carries on past its end while the plan has the pump off.
-        holdRest = !wantOn && !dry;
-        const until = g!.restUntil && g!.restUntil > t ? ` até às ${clock(g!.restUntil)}` : '';
-        doing = `Proteção E13: bomba em descanso${until}${wantOn ? ' — liga a seguir' : ` — ${would('mantém', 'manteria')}-na desligada (${why})`}.`;
-      } else if (p.on && cfg.rest.enabled && idling && since * MIN > GRACE_MS && !paused) {
-        if (guardOn) {
-          doing = 'Bomba no setpoint com o compressor no mínimo: a proteção E13 desliga-a e põe-na a descansar.';
-        } else if (recentlySwitched(false)) {
+      if (p.on && cfg.rest.enabled && idling && since * MIN > GRACE_MS && !paused) {
+        if (recentlySwitched(false)) {
           doing = dry ? `Desligaria a bomba ${cfg.rest.minutes} min: no setpoint com o compressor no mínimo.` : 'Bomba: pedido para desligar enviado, a aguardar.';
         } else {
           const e2 = await act(key, p.id, 'Bomba de calor', `desligar ${cfg.rest.minutes} min (no setpoint a ${p.hz} Hz — não deixa voltar a acelerar)`,
@@ -1040,6 +1052,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       doing = `Bomba: ${pumpHold}.`;
       reasons.push(doing);
     }
+    if (pumpBlind) reasons.push(pumpBlind);
     if (warmBy && pumpHold && (warmBy.phase === 'waiting' || warmBy.phase === 'heating')) {
       warmBy = { ...warmBy, note: `${warmBy.note} Atenção: ${pumpHold}, assim não aquece.` };
     }
@@ -1066,7 +1079,7 @@ export function createAutomation(send: Send, memory?: Partial<AutomationMemory>)
       recovery,
       shortfall: Math.round(shortfall * 10) / 10,
       pumpHold,
-      holdRest,
+      pumpBlind,
       restUntil: ownRest ?? undefined,
       switchOns24h: ons.length,
       zones,

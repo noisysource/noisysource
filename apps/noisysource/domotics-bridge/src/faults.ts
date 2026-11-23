@@ -12,6 +12,16 @@ export const PUMP_FAULT_CODES = [
   'fault', 'smart_system', 'power_system', 'ithium_battery_system', 'electronic_system', 'bcu_com_state',
 ];
 
+/**
+ * Whether the pump reported every fault bitmap. A bitmap that is missing is not
+ * a bitmap at 0: since 19/11/2026 the pump's Tuya module has answered with only
+ * the on/off, the compressor and the temperatures (no fault bitmaps, no mode,
+ * no setpoints), and reading that as "no fault" would hide a lockout.
+ */
+export function faultsReported(has: (code: string) => boolean): boolean {
+  return PUMP_FAULT_CODES.every(has);
+}
+
 const E01_E16 = Array.from({ length: 16 }, (_, i) => `E${String(i + 1).padStart(2, '0')}`);
 
 /** null = bit unused by the model. */

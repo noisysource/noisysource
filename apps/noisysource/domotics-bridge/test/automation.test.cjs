@@ -24,7 +24,6 @@ const at = (h, m, d = 19) => new Date(2026, 9, d, h, m);
 /** An automation that sent the pump's current setpoint itself (otherwise the one found at start-up counts as set by hand). */
 const fresh = (sp = 42) => createAutomation(send, { flow: { value: sp, at: 0 } });
 const reset = () => { sent.length = 0; };
-const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, restUntil });
 (async () => {
   // Warm window and curve.
   for (const [h, m, warm] of [[6, 0, true], [8, 59, true], [9, 0, false], [12, 0, false], [18, 59, false], [19, 0, true], [23, 0, true], [3, 0, true]]) {
@@ -267,7 +266,7 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
   }
 
   // 17. E13: the water is never raised while the compressor idles at the setpoint;
-  // with the guard off, the automation rests the pump itself, raises the water
+  // the automation rests the pump itself, raises the water
   // while it is off, and switches it back on after the rest.
   {
     const tick = fresh(33);
@@ -292,38 +291,13 @@ const guardOn = (mode = 'watch', restUntil = null) => ({ enabled: true, mode, re
     reset();
   }
 
-  // 18. With the guard on, it does the resting: the automation sends no off of its own,
-  // never switches on a pump the guard parked, and (live only) asks the guard to
-  // keep resting while the plan has the pump off (here: no zone wants heat).
-  {
-    const tick = fresh(33);
-    const idle = pump({ flowSetpoint: 33, hz: 40, waterOut: 32.8 });
-    await tick(cfg, { now: at(21, 0), zones: zones(24), pump: idle, guard: guardOn() });
-    let s = await tick(cfg, { now: at(21, 10), zones: zones(24), pump: idle, guard: guardOn() });
-    assert.deepEqual(sent, []);
-    assert.ok(s.reasons.some(r => /proteção E13 desliga-a/.test(r)));
-    const resting = pump({ on: false, hz: 0, flowSetpoint: 33, waterOut: 30 });
-    const closed = zones(24, { open: false });
-    s = await tick(cfg, { now: at(22, 15), zones: closed, pump: resting, guard: guardOn('rest', at(22, 10).getTime()) });
-    assert.equal(s.holdRest, true);
-    assert.deepEqual(sent, []);
-    s = await tick(cfg, { now: at(22, 20), zones: zones(24, { open: true }), pump: resting, guard: guardOn('rest', at(22, 10).getTime()) });
-    assert.equal(s.holdRest, false, 'a zone wants heat: the guard ends its rest');
-    assert.deepEqual(sent, [], 'and switching on is the guard\'s');
-    s = await createAutomation(send)(dryCfg, { now: at(22, 15), zones: closed, pump: resting, guard: guardOn('rest', at(22, 10).getTime()) });
-    assert.equal(s.holdRest, false, 'dry-run never holds the guard');
-    assert.ok(s.reasons.some(r => /manteria/.test(r)));
-  }
-
   // 19. Too few thermostats answering (1 of 4): "all valves closed" means nothing —
-  // the pump isn't switched off for it and the guard isn't asked to hold.
+  // the pump isn't switched off for it.
   {
     const tick = fresh(33);
     const few = zones(24, { open: false, n: 4 }).map((z, i) => ({ ...z, online: i === 0 }));
     for (const m of [0, 25, 50]) await tick(cfg, { now: at(20, m), zones: few, pump: pump({ flowSetpoint: 33 }) });
     assert.ok(!sent.includes('hp:switch=false'));
-    const s = await tick(cfg, { now: at(21, 0), zones: few, pump: pump({ on: false, hz: 0, flowSetpoint: 33 }), guard: guardOn('rest', at(20, 55).getTime()) });
-    assert.equal(s.holdRest, false);
     reset();
   }
 

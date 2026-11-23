@@ -16,7 +16,7 @@ const pump = (on, hz = 0, extra = {}) => ({ online: true, on, fault: false, hz, 
   for (let i = 0; i < 30; i++) {
     const t = L(10, 0, 30 * i);
     rec.observe({
-      t, soc: 41.6, plan: 'day (sim)', wantOn: false, guard: 'off',
+      t, soc: 41.6, plan: 'day (sim)', wantOn: false,
       zones: [zone('a', 22 + i * 0.01, 23, i >= 15), zone('b', 21, 23, false, i % 2 === 0)],
       pump: pump(i >= 15, i >= 15 ? 50 + i : 0, { waterOut: 30 + i }),
     });
@@ -39,7 +39,7 @@ const pump = (on, hz = 0, extra = {}) => ({ online: true, on, fault: false, hz, 
   assert.equal(q.soc, 42);
   assert.equal(q.plan, 'day (sim)');
   assert.equal(q.want, false);
-  assert.equal(q.guard, 'off');
+  assert.equal('guard' in q, false, 'no guard field any more (the E13 guard is gone)');
   assert.equal(q.fault, undefined);
   assert.deepEqual(q.z.a, { t: 22.29, lo: 22, hi: 22.29, s: 23, v: 0.5 });
   assert.equal(q.z.b.v, 0, 'offline readings are left out');
@@ -70,7 +70,7 @@ assert.equal(isControllerTimer(Date.UTC(2026, 9, 28, 0, 9, 0)), false);
   ev = rec.observe({ t: L(20, 0), zones: zones(), pump: pump(false), switchedBy: 'app' });
   assert.equal(ev[0].meaning, 'warm-enough');
   assert.equal(ev[0].by, 'app');
-  // The automation's or the guard's own switches are not interventions.
+  // The automation's own switches are not interventions (nor the old guard's, in a replay).
   assert.equal(rec.observe({ t: L(20, 30), zones: zones(), pump: pump(true), switchedBy: 'automation' }).length, 0);
   assert.equal(rec.observe({ t: L(21, 0), zones: zones(), pump: pump(false), switchedBy: 'guard' }).length, 0);
   // 23:54 UTC off from outside: the controller's timer.

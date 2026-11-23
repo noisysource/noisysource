@@ -94,6 +94,14 @@ function asBitmap(v: unknown): number {
 }
 
 /**
+ * Whether the pump reported every fault bitmap. A missing one is not a bitmap
+ * at 0: it can't be read as "no fault" (the bridge's `faults.ts` has the same).
+ */
+export function faultsReported(has: (code: string) => boolean): boolean {
+  return Object.keys(FAULT_BITMAPS).every(has);
+}
+
+/**
  * Every active fault code across all fault bitmaps, in table order. A set bit
  * the model doesn't name is still reported (as `<code>#<bit>`) rather than
  * swallowed: an unexplained alarm is better than a silent one.
