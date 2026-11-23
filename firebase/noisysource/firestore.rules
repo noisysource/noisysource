@@ -191,6 +191,25 @@ service cloud.firestore {
       allow read, update, delete: if isBridge();
     }
 
+    // ── Tasks app (kanban) ────────────────────────────────────────────────────
+    // apps/noisysource/tasks: one board per app plus "All systems". Renato's
+    // alone from a client. The agents (Atlas, Claude Code through mcp/kanban)
+    // never touch these collections directly: they go through the kanban*
+    // callables (functions/src/tasks/callables.ts), which check every field and
+    // can't delete. So no isAtlas() here, on purpose. `tasks_config` (the
+    // board's GitHub token) has no match at all: closed to every client, the
+    // owner included, and read by the functions (tasks/github.ts) only.
+    match /tasks_boards/{boardId} {
+      allow read, write: if isDomoticsOwner();
+    }
+    match /tasks_cards/{cardId} {
+      allow read, write: if isDomoticsOwner();
+      // History: added to, never edited; deleted with its card.
+      match /activity/{entryId} {
+        allow read, create, delete: if isDomoticsOwner();
+      }
+    }
+
     // Awakenings of Atlas on noisysource.com: who woke it, why, how they found
     // it, and the conversation. Written only by the atlasGate function (Admin
     // SDK; functions/src/website/atlasGate.ts). Renato and his Atlas read them

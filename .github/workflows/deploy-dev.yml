@@ -76,5 +76,7 @@ jobs:
       apps: >-
         [{"part": "domotics", "dir": "apps/noisysource/domotics",
           "build": "pnpm --filter domotics build:nsdev", "target": "domotics"},
+         {"part": "tasks", "dir": "apps/noisysource/tasks",
+          "build": "pnpm --filter tasks build:nsdev", "target": "tasks"},
          {"part": "website", "dir": "apps/noisysource/website",
           "build": "pnpm --filter website build:nsdev", "target": "website", "firebase": false}]

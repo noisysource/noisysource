@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { AGENT_EMAIL, requireOwner, requireOwnerOrAgent } from "./auth";
+import { AGENT_EMAIL, CODE_AGENT_EMAIL, requireKanbanCaller, requireOwner, requireOwnerOrAgent } from "./auth";
 
 const as = (email: string, verified?: boolean) => ({ token: { email, email_verified: verified } });
 const code = (fn: () => unknown) => {
@@ -33,5 +33,22 @@ describe("requireOwner", () => {
   it("still refuses Atlas", () => {
     expect(code(() => requireOwner(as(AGENT_EMAIL, true)))).toBe("permission-denied");
     expect(code(() => requireOwner(as("admin@noisysource.com", true)))).toBe("ok");
+  });
+});
+
+describe("requireKanbanCaller", () => {
+  it("names Renato, Atlas and Claude Code", () => {
+    expect(requireKanbanCaller(as("admin@noisysource.com", true))).toBe("renato");
+    expect(requireKanbanCaller(as(AGENT_EMAIL, true))).toBe("atlas");
+    expect(CODE_AGENT_EMAIL).toBe("claude-code@kidclub.pt");
+    expect(requireKanbanCaller(as(CODE_AGENT_EMAIL, true))).toBe("claude-code");
+  });
+  it("refuses unverified addresses, strangers and no sign-in", () => {
+    expect(code(() => requireKanbanCaller(as(CODE_AGENT_EMAIL, false)))).toBe("permission-denied");
+    expect(code(() => requireKanbanCaller(as("domotics-bridge@kidclub.pt", true)))).toBe("permission-denied");
+    expect(code(() => requireKanbanCaller(undefined))).toBe("unauthenticated");
+  });
+  it("keeps Claude Code out of the house callables", () => {
+    expect(code(() => requireOwnerOrAgent(as(CODE_AGENT_EMAIL, true)))).toBe("permission-denied");
   });
 });

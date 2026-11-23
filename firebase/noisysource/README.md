@@ -1,6 +1,6 @@
 # Firebase project folder: NoisySource
 
-The Firebase config of the NoisySource projects (`noisysource-dev`, `noisysource-prod`):
+The Firebase config of the NoisySource projects (`noisysource-dev`, `noisysource-prod`), home of Domotics and the Tasks kanban:
 rules, indexes and, as they arrive, functions and hosting. Run `firebase` from this folder
 and it acts on these projects only; the repo root's `firebase.json` is KidClub's.
 

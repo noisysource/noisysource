@@ -1,6 +1,6 @@
 project_id = "noisysource-prod"
 
-hosting_site_ids = ["noisysource-prod-domotics", "noisysource-prod-website"]
+hosting_site_ids = ["noisysource-prod-domotics", "noisysource-prod-tasks", "noisysource-prod-website"]
 
 # noisysource.com serves the website; www redirects to it. Each goes live once
 # its DNS records (output custom_domain_dns_records) are added at the registrar.

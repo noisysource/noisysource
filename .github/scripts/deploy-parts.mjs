@@ -113,15 +113,17 @@ export const UNITS = {
       /^firebase\/noisysource\//,
       /^infra\/gcp\/terraform\/noisysource\//,
       /^apps\/noisysource\/domotics\//,
+      /^apps\/noisysource\/tasks\//,
       /^apps\/noisysource\/website\//,
     ],
   },
   noisysource: {
-    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'website'],
+    parts: ['terraform', 'firestore_rules', 'firestore_indexes', 'functions', 'domotics', 'tasks', 'website'],
     owned: [
       { dir: 'infra/gcp/terraform/noisysource/', part: 'terraform' },
       { dir: 'firebase/noisysource/functions/', part: 'functions' },
       { dir: 'apps/noisysource/domotics/', part: 'domotics' },
+      { dir: 'apps/noisysource/tasks/', part: 'tasks' },
       { dir: 'apps/noisysource/website/', part: 'website' },
     ],
     ownedFiles: {
@@ -130,6 +132,7 @@ export const UNITS = {
     },
     consumers: {
       domotics: 'apps/noisysource/domotics/',
+      tasks: 'apps/noisysource/tasks/',
       functions: 'firebase/noisysource/functions/',
     },
     everything: [/^firebase\/noisysource\/(firebase\.json|\.firebaserc)$/],
@@ -162,6 +165,7 @@ const IMPORTERS = {
   'apps/noisyphocus/kidclub': { kidclub: ['kidclub'] },
   'apps/noisysource/finances': { kidclub: ['finances'] },
   'apps/noisysource/domotics': { noisysource: ['domotics'] },
+  'apps/noisysource/tasks': { noisysource: ['tasks'] },
   'apps/noisysource/website': { noisysource: ['website'] },
   functions: { kidclub: ['functions'] },
   'firebase/noisysource/functions': { noisysource: ['functions'] },

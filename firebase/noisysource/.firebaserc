@@ -7,12 +7,14 @@
     "noisysource-dev": {
       "hosting": {
         "domotics": ["noisysource-dev-domotics"],
+        "tasks": ["noisysource-dev-board"],
         "website":  ["noisysource-dev-web"]
       }
     },
     "noisysource-prod": {
       "hosting": {
         "domotics": ["noisysource-prod-domotics"],
+        "tasks": ["noisysource-prod-tasks"],
         "website":  ["noisysource-prod-website"]
       }
     }
