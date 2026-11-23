@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { LayoutGrid, LogIn, LogOut, Map as MapIcon, Plus, Search, X } from 'lucide-react';
+import { Github, LayoutGrid, LogIn, LogOut, Map as MapIcon, Plus, Search, X } from 'lucide-react';
 import { ASSIGNEES, SYSTEMS_BOARD_ID, isOnRoadmap, type Card } from '@shared/lib/kanban';
 import { describeSignInError, signIn, signOutUser, watchAuth } from './lib/auth';
 import { OWNER_EMAIL, PROJECT_ID } from './lib/firebase';
 import { createBoard, useBoards, useCards } from './lib/data';
 import { BoardView, type Filters } from './components/BoardView';
 import { CardDialog } from './components/CardDialog';
+import { GithubSettings } from './components/GithubSettings';
 
 const COLORS = ['#f472b6', '#34d399', '#fbbf24', '#818cf8', '#38bdf8', '#fb923c', '#f87171', '#a3e635'];
 
@@ -42,6 +43,7 @@ function Boards() {
   const [filters, setFilters] = useState<Filters>({ text: '', assignee: '', apps: [] });
   const [error, setError] = useState<string | null>(null);
   const [newBoard, setNewBoard] = useState<string | null>(null);
+  const [showGithub, setShowGithub] = useState(false);
 
   useEffect(() => {
     window.location.hash = `/${boardId}`;
@@ -112,7 +114,10 @@ function Boards() {
             onBlur={() => void addBoard()} placeholder="App name"
             className="mt-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm outline-none" />
         )}
-        <button onClick={() => void signOutUser()} className="mt-auto flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-zinc-500 hover:text-zinc-300">
+        <button onClick={() => setShowGithub(true)} className="mt-auto flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-zinc-500 hover:text-zinc-300">
+          <Github size={13} /> GitHub
+        </button>
+        <button onClick={() => void signOutUser()} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-zinc-500 hover:text-zinc-300">
           <LogOut size={13} /> Sign out
         </button>
       </nav>
@@ -163,6 +168,7 @@ function Boards() {
         </div>
       </main>
 
+      {showGithub && <GithubSettings onClose={() => setShowGithub(false)} />}
       {open && <CardDialog key={open.id} card={open} boards={boards} onClose={() => setOpenId(null)} onError={setError} />}
       {error && (
         <div className="fixed bottom-4 right-4 z-30 flex max-w-md items-start gap-2 rounded-xl border border-red-500/30 bg-zinc-900 px-4 py-3 text-sm text-red-300 shadow-xl">

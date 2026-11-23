@@ -1,7 +1,7 @@
 import { useMemo, useState, type DragEvent } from 'react';
-import { Plus, Map as MapIcon, Bot, User } from 'lucide-react';
+import { Plus, Map as MapIcon, Bot, User, GitPullRequest, FlaskConical } from 'lucide-react';
 import {
-  STATUSES, STATUS_LABEL, SYSTEMS_BOARD_ID, isOnRoadmap, orderBetween, sortCards,
+  STATUSES, STATUS_LABEL, SYSTEMS_BOARD_ID, isOnRoadmap, orderBetween, prRefs, sortCards,
   type Board, type Card, type Status,
 } from '@shared/lib/kanban';
 import { createCard, moveCard } from '../lib/data';
@@ -97,12 +97,12 @@ export function BoardView({ board, boards, cards, filters, onOpen, onError }: Pr
               if (target?.status !== status || target.beforeId !== null) setTarget({ status, beforeId: null });
             }}
             onDrop={drop}
-            className={`flex flex-col w-72 shrink-0 rounded-xl border ${
+            className={`flex flex-col w-64 shrink-0 rounded-xl border ${
               over ? 'border-zinc-600 bg-zinc-900' : 'border-zinc-800/80 bg-zinc-900/50'
             }`}
           >
             <header className="flex items-center justify-between px-3 pt-3 pb-2">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">{STATUS_LABEL[status]}</h2>
+              <h2 className={`text-xs font-semibold uppercase tracking-wide ${status === 'testing' ? 'text-amber-300' : 'text-zinc-400'}`}>{STATUS_LABEL[status]}</h2>
               <span className="text-xs text-zinc-500">{col.length}</span>
             </header>
             <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2 min-h-[3rem]">
@@ -145,6 +145,14 @@ export function BoardView({ board, boards, cards, filters, onOpen, onError }: Pr
                         <span className="inline-flex items-center gap-1 rounded bg-zinc-800 px-1.5 py-0.5" title="On the All systems roadmap">
                           <MapIcon size={10} /> roadmap
                         </span>
+                      )}
+                      {prRefs(card).length > 0 && (
+                        <span className="inline-flex items-center gap-0.5 text-zinc-400" title="Linked pull requests">
+                          <GitPullRequest size={11} />{prRefs(card).length}
+                        </span>
+                      )}
+                      {card.status === 'testing' && card.testPlan.trim() && (
+                        <span className="inline-flex items-center gap-0.5 text-amber-300" title="Has a test plan"><FlaskConical size={11} /></span>
                       )}
                       {card.labels.map((l) => (
                         <span key={l} className="rounded bg-zinc-800 px-1.5 py-0.5">{l}</span>

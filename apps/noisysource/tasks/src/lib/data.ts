@@ -31,6 +31,7 @@ function toCard(id: string, d: DocumentData): Card {
     assignee: d.assignee ?? null,
     roadmap: d.roadmap === true,
     links: d.links ?? [],
+    testPlan: d.testPlan ?? '',
     order: d.order ?? 0,
     createdBy: d.createdBy ?? 'renato',
     updatedBy: d.updatedBy ?? 'renato',

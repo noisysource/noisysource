@@ -2,6 +2,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { getFunctions } from 'firebase/functions';
 
 // The NoisySource project's web config (.env.nsdev / .env.nsprod), the same
 // one Domotics uses. Public by design; the Firestore rules protect the data.
@@ -18,6 +19,7 @@ const app = getApps().length
 
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const fns = getFunctions(app, 'europe-west3');
 export const PROJECT_ID = import.meta.env.VITE_FIREBASE_PROJECT_ID as string;
 
 /** The only account the rules let in (firebase/noisysource/firestore.rules). */

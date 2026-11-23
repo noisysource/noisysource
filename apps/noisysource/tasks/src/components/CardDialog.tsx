@@ -5,6 +5,7 @@ import {
   type Board, type Card, type CardLink,
 } from '@shared/lib/kanban';
 import { commentOn, deleteCard, updateCard, useActivity } from '../lib/data';
+import { PullRequests } from './PullRequests';
 
 const field = 'w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600';
 const lbl = 'block text-[11px] font-medium uppercase tracking-wide text-zinc-500 mb-1';
@@ -34,6 +35,7 @@ export function CardDialog({ card, boards, onClose, onError }: {
   const activity = useActivity(card.id);
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+  const [testPlan, setTestPlan] = useState(card.testPlan);
   const [status, setStatus] = useState(card.status);
   const [priority, setPriority] = useState(card.priority);
   const [assignee, setAssignee] = useState<string>(card.assignee ?? '');
@@ -48,7 +50,7 @@ export function CardDialog({ card, boards, onClose, onError }: {
     setBusy(true);
     try {
       await updateCard(card, {
-        title, description, status, priority, boardId, roadmap,
+        title, description, testPlan, status, priority, boardId, roadmap,
         assignee: (assignee || null) as Card['assignee'],
         labels: labels.split(',').map((s) => s.trim()).filter(Boolean),
         links: textToLinks(links),
@@ -113,6 +115,19 @@ export function CardDialog({ card, boards, onClose, onError }: {
                   ))}
                 </div>
               )}
+            </div>
+
+            <div className={`rounded-xl border p-3 ${status === 'testing' ? 'border-amber-500/40 bg-amber-500/5' : 'border-zinc-800'}`}>
+              <label className={lbl}>Testing: how to test it</label>
+              <textarea value={testPlan} onChange={(e) => setTestPlan(e.target.value)} rows={status === 'testing' ? 8 : 4}
+                placeholder={'Where: dev preview https://noisysource-dev-….web.app (or local)\nSetup: …\n1. Do … → expect …\n2. …\nStill works: …'}
+                className={`${field} font-mono text-[12.5px]`} />
+              <p className="mt-1 text-[11px] text-zinc-500">The checkout commands come from the linked PR, below.</p>
+            </div>
+
+            <div>
+              <label className={lbl}>Pull requests</label>
+              <PullRequests card={card} onError={onError} />
             </div>
 
             <div>
