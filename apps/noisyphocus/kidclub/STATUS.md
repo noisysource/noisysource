@@ -19,9 +19,6 @@ prod lists `createCampSubscription`, `getCampAvailability`, `onCampDepositPaid`,
 - **Stale page after a deploy** (seen 2026-11-18, `/admin` blank until a hard refresh): `index.html` is cached for an
   hour and a request for the previous bundle gets `index.html` back. Fix if it recurs: `Cache-Control: no-cache` on
   `index.html` in `firebase.json`.
-- **Dev still has `offerCampSeat`** (2026-11-23): an earlier version of #162 deployed it to `kidclub-dev`, and it's no
-  longer in the code. PR runs leave it alone now (#169), but a full functions deploy from `staging` stops on it. Delete
-  it once: `firebase functions:delete offerCampSeat --region europe-west3 --project kidclub-dev`.
 - **Open:** the first run of the 09:00 job with the new reminder/waiting-list step hasn't been looked at;
   `onCampSubscriptionCreated` emails the admin once per sign-up document, so a mixed sign-up (week + days + waiting
   list) sends up to three admin emails.
