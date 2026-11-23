@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task.
 
-**Last updated:** 2026-11-23 (step 1: Strata in the monorepo, no AI, shared book; dev only)
+**Last updated:** 2026-11-23 (step 2: Atlas's imports inbox and the "From Atlas" tab; dev only)
 
 ## What this is
 FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google AI Studio
@@ -13,11 +13,14 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
   (it already has Drive and Gmail): it reads the documents and **writes the data into
   Firebase**; FinHub reads and shows it. AI costs stay in one place, Atlas's costs panel.
   Atlas also uses the same data to answer money questions.
-- What Atlas writes: **facts** from documents (payslips, bank lines, invoices) as data, each
-  with its source Drive file and an id derived from it (re-reading never duplicates); and
-  what it **infers** (contracts, salaries, the loan, recurring expenses) as real records
-  marked "to confirm", which Renato confirms in FinHub. Atlas can't delete, and can't change
-  what he confirmed or reconciled (rules, not trust). One OK per import batch in Atlas.
+- What Atlas writes (changed 2026-11-23, once Strata's code showed it already has a review
+  workbench): **one import per entity and month**, `finhub_books/{book}/atlas_imports/{id}`,
+  holding drafts in the workbench's own shapes: statements with their lines categorised,
+  payslips, and the contracts, subscriptions and loans Atlas found. Renato opens one in the
+  workbench ("From Atlas" tab → Review in workbench), unticks what's wrong and commits; that
+  commit (Strata's own `importDriveGeneratedBundle`) writes the books and marks the import
+  applied. Atlas writes nothing else: not entities, not records, and can't delete. One OK in
+  Atlas per import, then one commit here.
 - **One shared book** for Noisy Source, the household and Noisy Phocus, not one per person.
 
 ## How it's built
@@ -39,15 +42,22 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
    Authentication → Settings → Authorised domains → add `noisysource-dev-strata.web.app`.
 2. Open the site, sign in as `admin@noisysource.com`. In the first screen choose the
    **blank** start, not "Load Sample Portfolio" (that fills the book with a made-up company).
-   The entities it creates are placeholders until the Atlas import.
+   The entities it creates are placeholders: name them as Atlas will (e.g. "Noisy Source"),
+   and add the bank accounts, before opening an import (the workbench needs an entity and an
+   account).
+3. **Atlas needs its own user in `noisysource-dev`** for FinHub (its house user is in
+   `noisysource-prod`): `./apps/noisysource/domotics-bridge/deploy/create-agent-user.sh
+   noisysource-dev atlas@kidclub.pt`, then in Atlas `npm run finhub:connect` (Atlas repo). When
+   FinHub reaches prod, Atlas's FinHub user moves to `noisysource-prod`.
 
 ## Next steps (agreed order, 2026-11-23)
-1. ✅ This PR: Strata in the monorepo on `noisysource-dev`, no AI, shared book, Atlas reads.
-2. **Atlas import** (repo `noisysource/Atlas`): read a month folder of the Noisy Source Drive
-   `2026` folder (Jan–Sep subfolders, plus Tesla invoices), extract, write the facts, propose
-   the plan items "to confirm", one OK per batch. Here: the "to confirm" fields on the
-   collections it writes, and the rules that let Atlas write them with the limits above.
-   Atlas reads PDFs as text; scans/JPEGs (car invoice, IMT) need image reading added to it.
+1. ✅ #171: Strata in the monorepo on `noisysource-dev`, no AI, shared book, Atlas reads.
+   ✅ Atlas imports inbox: rules for `atlas_imports`, the "From Atlas" tab, the hand-off to the
+   workbench and "applied" on commit.
+2. **Atlas import** (repo `noisysource/Atlas`): `finhub_inventory` and `finhub_import`, which
+   write the imports above. Atlas reads PDFs as text; scans/JPEGs (car invoice, IMT) need image
+   reading added to it. Invoices as documents (the Invoice Vault) aren't in an import yet:
+   their lines arrive through the statements.
 3. Confirming in FinHub; the forecast counts confirmed items (provisional ones shown apart).
    Then decide how the v2 engine (`packages/shared/finhub`, cent-exact matching) sits
    behind these screens.

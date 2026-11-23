@@ -321,6 +321,26 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
     // Validation Blueprints
     // -------------------------------------------------------------------------
+    // An import as Atlas writes it (atlas_imports above): its envelope, held
+    // to its keys, types and sizes; always pending, always Atlas's.
+    function isValidAtlasImport(data) {
+      return data.keys().hasOnly(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
+          'contracts', 'subscriptions', 'facilities', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasAll(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
+          'contracts', 'subscriptions', 'facilities', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.status == 'pending' && data.createdBy == 'atlas' &&
+        data.entityHint is string && data.entityHint.size() <= 100 &&
+        data.month is string && data.month.matches('^20[0-9]{2}-(0[1-9]|1[0-2])$') &&
+        data.summary is string && data.summary.size() <= 4000 &&
+        data.sources is list && data.sources.size() <= 300 &&
+        data.statements is list && data.statements.size() <= 20 &&
+        data.payslips is list && data.payslips.size() <= 60 &&
+        data.contracts is list && data.contracts.size() <= 20 &&
+        data.subscriptions is list && data.subscriptions.size() <= 200 &&
+        data.facilities is list && data.facilities.size() <= 20 &&
+        data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
     function isValidWorkspaceProfile(data) {
       return data.keys().hasAll([
           'userId', 'currencyCode', 'currencySymbol', 'fiscalStartMonth',
@@ -808,6 +828,28 @@ service cloud.firestore {
           'currencyCode', 'currencySymbol', 'fiscalStartMonth', 'onboardingComplete', 'updatedAt'
         ]);
       allow delete: if false;
+
+      // What Atlas read from the documents (payslips, statements, and the
+      // contracts, subscriptions and loans it found in them), one import per
+      // entity and month, waiting for Renato (apps/noisysource/finhub/STATUS.md).
+      // Atlas writes only here, and only while an import is pending; FinHub
+      // opens one in its review workbench, and the books change only when he
+      // commits it there, as if he had read the files himself. The drafts'
+      // inner fields are re-checked and coerced by the app when it opens one.
+      match /atlas_imports/{importId} {
+        allow get, list: if isSignedIn() && isBookReader(userId);
+        allow create: if isAtlas() && userId == finhubBook() && isValidId(importId) &&
+          isValidAtlasImport(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time;
+        allow update: if (isAtlas() && userId == finhubBook() &&
+            existing().status == 'pending' &&
+            isValidAtlasImport(incoming()) && incoming().updatedAt == request.time) ||
+          (isOwner(userId) && existing().status == 'pending' &&
+            incoming().status in ['applied', 'dismissed'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'decidedAt']) &&
+            incoming().decidedAt == request.time);
+        allow delete: if isOwner(userId);
+      }
 
       match /entities/{entityId} {
         allow get: if isSignedIn() && isValidId(userId) && isValidId(entityId) && isBookReader(userId);
