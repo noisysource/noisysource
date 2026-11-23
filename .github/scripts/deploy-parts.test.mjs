@@ -315,7 +315,7 @@ test('units: packages/shared is traced through each unit\'s own consumers', () =
   assert.deepEqual(deployedIn('kidclub', ['packages/shared/lib/energyBill.ts']), []);
   // KidClub's and FinHub's models are nobody's in the NoisySource unit.
   assert.deepEqual(deployedIn('noisysource', ['packages/shared/models/Booking.ts']), []);
-  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'functions']);
+  assert.deepEqual(deployedIn('noisysource', ['packages/shared/tsconfig.json']), ['domotics', 'finhub', 'functions']);
 });
 
 test('units: lockfile importers map to the unit that deploys them', () => {
@@ -330,4 +330,11 @@ test('units: lockfile importers map to the unit that deploys them', () => {
 
 test('units: an unknown unit is an error, not an empty plan', () => {
   assert.throws(() => planFromFiles(['x'], { unit: 'nope' }), /unknown unit/);
+});
+
+test('units: FinHub (Strata) deploys in the NoisySource unit only', () => {
+  assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/finhub/src/App.tsx']), ['finhub']);
+  assert.deepEqual(deployedIn('kidclub', ['apps/noisysource/finhub/src/App.tsx']), []);
+  // The old FinHub stays the KidClub unit's until it is removed.
+  assert.deepEqual(deployedIn('noisysource', ['apps/noisysource/finances/src/App.tsx']), []);
 });

@@ -52,6 +52,10 @@ resource "google_project_iam_member" "functions_runtime" {
   for_each = toset([
     "roles/datastore.user",
     "roles/logging.logWriter",
+    # FinHub reads documents with Gemini on Vertex AI as this account: no API
+    # key to keep anywhere. Added 2026-11-23; like every change here, applied
+    # by Renato first (CI can't set IAM).
+    "roles/aiplatform.user",
   ])
   project = var.project_id
   role    = each.key

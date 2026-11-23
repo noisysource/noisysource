@@ -75,4 +75,6 @@ jobs:
       # build:staging stays kidclub-dev's, for the job above, until the cutover.
       apps: >-
         [{"part": "domotics", "dir": "apps/noisysource/domotics",
-          "build": "pnpm --filter domotics build:nsdev", "target": "domotics"}]
+          "build": "pnpm --filter domotics build:nsdev", "target": "domotics"},
+         {"part": "finhub", "dir": "apps/noisysource/finhub",
+          "build": "pnpm --filter finhub build:nsdev", "target": "finhub"}]
