@@ -139,7 +139,7 @@ jobs:
       # silently never deploys. Cheap enough to test on every run.
       - name: Test the change detection
         if: inputs.only_changed
-        run: node --test .github/scripts/deploy-parts.test.mjs
+        run: node --test .github/scripts/deploy-parts.test.mjs .github/scripts/pr-safe.test.mjs
 
       - name: Work out which parts to deploy
         id: parts
@@ -299,6 +299,9 @@ jobs:
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          # Plain output, so `terraform show -json` is JSON and nothing else.
+          terraform_wrapper: false
 
       - name: Terraform init
         working-directory: infra/gcp/terraform
@@ -314,9 +317,37 @@ jobs:
       # itself only exists where manage_combined_budget is true. Comes from
       # a repo secret, not committed — it's not highly sensitive, but
       # there's no reason to put it in a file either.
+      # A pull request applies only what it creates or changes; what its plan
+      # would delete or replace is left for staging (pr-safe.mjs says why).
+      - name: Terraform plan
+        working-directory: infra/gcp/terraform
+        run: terraform plan -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -input=false -out=tfplan
+
       - name: Terraform apply
         working-directory: infra/gcp/terraform
-        run: terraform apply -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -auto-approve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            terraform apply -input=false -auto-approve tfplan
+            exit 0
+          fi
+          terraform show -json tfplan > plan.json
+          node "$GITHUB_WORKSPACE/.github/scripts/pr-safe.mjs" terraform plan.json > safe.json
+          kept=$(jq -r '.kept | join(", ")' safe.json)
+          if [ -n "$kept" ]; then
+            echo "::warning title=Terraform: kept for staging::This PR's plan would delete or replace $kept on a shared dev project. A PR never removes things; merge into staging to do that."
+          fi
+          if [ "$(jq '.targets | length' safe.json)" = "0" ]; then
+            echo "Nothing for a PR to apply."
+            exit 0
+          fi
+          if [ -z "$kept" ]; then
+            terraform apply -input=false -auto-approve tfplan
+            exit 0
+          fi
+          mapfile -t targets < <(jq -r '.targets[] | "-target=" + .' safe.json)
+          terraform apply -var-file="${{ inputs.tf_var_file }}" -var="billing_account_id=${{ secrets.BILLING_ACCOUNT_ID }}" -input=false -auto-approve "${targets[@]}"
 
   rules:
     name: "Rules + indexes (${{ inputs.environment }})"
@@ -411,8 +442,18 @@ jobs:
       - name: Export access token
         run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)" >> "$GITHUB_ENV"
 
+      # A pull request deploys only the functions its own code exports, so it
+      # never tries to delete another open PR's functions on dev (pr-safe.mjs).
       - name: Deploy Cloud Functions
-        run: firebase deploy --only functions --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          only=functions
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            pnpm --filter @shared build && pnpm --filter functions build
+            only=$(node .github/scripts/pr-safe.mjs functions "$PWD/functions/lib/index.js")
+          fi
+          firebase deploy --only "$only" --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
 
   # The two hosting jobs below are the same apart from the app. They're
   # separate jobs (not steps of one) on purpose: one concurrency group per
