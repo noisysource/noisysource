@@ -7,7 +7,7 @@
     "noisysource-dev": {
       "hosting": {
         "domotics": ["noisysource-dev-domotics"],
-        "website":  ["noisysource-dev-website"]
+        "website":  ["noisysource-dev-web"]
       }
     },
     "noisysource-prod": {

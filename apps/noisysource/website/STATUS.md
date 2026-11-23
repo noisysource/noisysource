@@ -74,7 +74,7 @@ The page teases Atlas (Renato's assistant, repo `noisysource/Atlas`) without ann
 
 ## Where it runs
 - Deploy unit `noisysource`, hosting target `website` (`firebase/noisysource/firebase.json`).
-- Dev: site `noisysource-dev-website` (https://noisysource-dev-website.web.app). A PR into
+- Dev: site `noisysource-dev-web` (renamed 2026-11-23: `noisysource-dev-website` was deleted by another PR's Terraform run, and Firebase never gives a deleted name back) (https://noisysource-dev-web.web.app). A PR into
   `staging` that touches this folder deploys its preview there.
 - Prod: site `noisysource-prod-website` (https://noisysource-prod-website.web.app). A merge into
   `staging` deploys it (the NoisySource unit releases on merge into staging, not on the
@@ -98,7 +98,7 @@ Once inside the door, what Atlas may talk about depends on the visitor's **role*
 - **Where it lives**: `atlas_gate/access` (`{topics, roles, keys}`), readable/writable by the owner
   and Atlas (rules), validated by the function on every read (`cleanAccess`).
 - **The maker panel**: open the site with **`#maker`** (e.g.
-  https://noisysource-dev-website.web.app/#maker), enter the token: switch grid, topic texts,
+  https://noisysource-dev-web.web.app/#maker), enter the token: switch grid, topic texts,
   personal keys, save, and **talk as** any role (test sessions: inside the door, not counted
   towards the 49, saved with `test: true, seen: true`). Later this moves into the Atlas app,
   which can edit the same doc directly.
@@ -132,7 +132,7 @@ Without the doc, Atlas just answers "...atlas is asleep." Clients can't read `at
 ## In progress
 - PR #160 into `staging`, **kept as a draft on purpose: Renato isn't ready to launch.** Merging
   it releases to `noisysource-prod` (and creates the noisysource.com custom domain). Pushes to
-  the branch only update the dev preview: https://noisysource-dev-website.web.app
+  the branch only update the dev preview: https://noisysource-dev-web.web.app
 - Last done: intro rebuilt around the new logo (brain removed).
 
 ## Next step
