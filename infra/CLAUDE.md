@@ -14,8 +14,8 @@ Reorganised on 2026-11-10 into one folder per company; the plan and what's left 
 |---|---|---|---|
 | Noisy Phocus | `rainbow-prod-2454b` | KidClub Prod | KidClub live. **Still also hosts FinHub prod** until it moves |
 | Noisy Phocus | `kidclub-dev` | KidClub Dev | KidClub dev. Still also hosts FinHub dev, the Terraform state bucket, the GitHub WIF pool and the billing cutoff |
-| NoisySource | `noisysource-prod` | NoisySource Prod | Prod of the private tools. Domotics runs here with the house's live data (since 2026-11-16); FinHub and Tasks follow |
-| NoisySource | `noisysource-dev` | NoisySource Dev | Same, dev. Domotics runs here (rules, five functions, site `noisysource-dev-domotics`) |
+| NoisySource | `noisysource-prod` | NoisySource Prod | Prod of the private tools. Domotics runs here with the house's live data (since 2026-11-16); FinHub and Tasks follow. Also the public website (site `noisysource-prod-website`, custom domain `noisysource.com`) |
+| NoisySource | `noisysource-dev` | NoisySource Dev | Same, dev. Domotics runs here (rules, five functions, site `noisysource-dev-domotics`); website preview on `noisysource-dev-web` |
 | NoisySource | `noisysource-agent` | Jarvis | Renato's NoisySource agent: Workspace APIs, SA `noisysource-agent@noisysource-agent.iam.gserviceaccount.com`, **no billing** |
 
 > Project IDs can't be renamed; KidClub keeps `kidclub-dev` / `rainbow-prod-2454b` for good (display names say what they are).

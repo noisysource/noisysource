@@ -23,3 +23,12 @@ variable "deploy_wif_members" {
   type        = set(string)
   description = "GitHub Actions identities (from the WIF pool in kidclub-dev) allowed to act as the deploy service account."
 }
+
+variable "custom_domains" {
+  type = map(object({
+    site            = string
+    redirect_target = optional(string)
+  }))
+  description = "Custom domains on hosting sites: domain -> {site, redirect_target}. Only prod has any."
+  default     = {}
+}

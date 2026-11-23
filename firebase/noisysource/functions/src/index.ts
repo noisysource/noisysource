@@ -1,5 +1,6 @@
 // Cloud Functions of the NoisySource projects (noisysource-dev,
-// noisysource-prod): the private tools' backend. KidClub's functions are the
+// noisysource-prod): the private tools' backend, plus atlasGate, the one
+// public function (Atlas's voice on noisysource.com, website/atlasGate.ts). KidClub's functions are the
 // repo-root /functions codebase, in KidClub's projects.
 import "./options"; // must stay the first import: see options.ts
 import * as admin from "firebase-admin";
@@ -12,3 +13,4 @@ export { domoticsWarmBy } from "./domotics/warmBy";
 export { domoticsEnergyBill } from "./domotics/energyBillCallable";
 export { kanbanList, kanbanGet, kanbanCreate, kanbanUpdate, kanbanComment } from "./tasks/callables";
 export { kanbanPrs, kanbanMergePr, kanbanSetGithubToken, kanbanGithubInfo } from "./tasks/github";
+export { atlasGate } from "./website/atlasGate";
