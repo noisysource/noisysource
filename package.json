@@ -10,6 +10,7 @@
     "dev:finances:prod": "pnpm --filter finances dev:prod",
     "dev:domotics": "pnpm --filter domotics dev",
     "dev:domotics:prod": "pnpm --filter domotics dev:prod",
+    "dev:finhub": "pnpm --filter finhub dev",
     "build": "pnpm run -r build",
     "lint": "pnpm -r lint",
     "test:rules:client-errors": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-client-errors.rules-test.cjs\"",
@@ -21,7 +22,8 @@
     "terraform:plan": "cd infra/gcp/terraform && terraform plan",
     "terraform:apply": "cd infra/gcp/terraform && terraform apply",
     "test:rules": "firebase emulators:exec --only firestore --project demo-kidclub-rules \"node scripts/rules-tests/kidclub-parent-portal.rules-test.cjs\"",
-    "test:rules:domotics": "cd firebase/noisysource && firebase emulators:exec --only firestore --project demo-kidclub-rules \"node ../../scripts/rules-tests/domotics-automation.rules-test.cjs && node ../../scripts/rules-tests/domotics-incidents.rules-test.cjs && node ../../scripts/rules-tests/domotics-energy.rules-test.cjs && node ../../scripts/rules-tests/domotics-climate.rules-test.cjs && node ../../scripts/rules-tests/domotics-identity.rules-test.cjs && node ../../scripts/rules-tests/domotics-atlas.rules-test.cjs\""
+    "test:rules:domotics": "cd firebase/noisysource && firebase emulators:exec --only firestore --project demo-kidclub-rules \"node ../../scripts/rules-tests/domotics-automation.rules-test.cjs && node ../../scripts/rules-tests/domotics-incidents.rules-test.cjs && node ../../scripts/rules-tests/domotics-energy.rules-test.cjs && node ../../scripts/rules-tests/domotics-climate.rules-test.cjs && node ../../scripts/rules-tests/domotics-identity.rules-test.cjs && node ../../scripts/rules-tests/domotics-atlas.rules-test.cjs\"",
+    "test:rules:finhub": "cd firebase/noisysource && firebase emulators:exec --only firestore --project demo-kidclub-rules \"node ../../scripts/rules-tests/finhub-strata.rules-test.cjs\""
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

@@ -26,6 +26,21 @@
           "destination": "/index.html"
         }
       ]
+    },
+    {
+      "target": "finhub",
+      "public": "hosting/finhub",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
     }
   ],
   "emulators": {

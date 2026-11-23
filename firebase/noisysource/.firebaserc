@@ -6,12 +6,19 @@
   "targets": {
     "noisysource-dev": {
       "hosting": {
-        "domotics": ["noisysource-dev-domotics"]
+        "domotics": [
+          "noisysource-dev-domotics"
+        ],
+        "finhub": [
+          "noisysource-dev-finhub"
+        ]
       }
     },
     "noisysource-prod": {
       "hosting": {
-        "domotics": ["noisysource-prod-domotics"]
+        "domotics": [
+          "noisysource-prod-domotics"
+        ]
       }
     }
   },
