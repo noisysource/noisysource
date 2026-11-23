@@ -451,7 +451,9 @@ jobs:
           only=functions
           if [ "$EVENT_NAME" = "pull_request" ]; then
             pnpm --filter @shared build && pnpm --filter functions build
-            only=$(node .github/scripts/pr-safe.mjs functions "$PWD/functions/lib/index.js")
+            # Loading the code only to read its names: without the deploy's credentials,
+            # which firebase-admin can't read at start-up (it runs initializeApp on load).
+            only=$(env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE -u GOOGLE_GHA_CREDS_PATH node .github/scripts/pr-safe.mjs functions "$PWD/functions/lib/index.js")
           fi
           firebase deploy --only "$only" --project=${{ inputs.firebase_project }} --token "$GOOGLE_OAUTH_ACCESS_TOKEN"
 
