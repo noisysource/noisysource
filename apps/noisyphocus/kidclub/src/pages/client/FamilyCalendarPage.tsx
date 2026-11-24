@@ -4,6 +4,7 @@ import { useUser } from '@shared/hooks';
 import { getDocs, query, where } from 'firebase/firestore';
 import { col } from '../../lib/db';
 import { callable } from '../../lib/callable';
+import { isClubClosedEvent } from '../../lib/closures';
 import { familyService } from '../../services/familyService';
 import { coerceSubscriptionDate } from '../../lib/utils';
 import type { Child, StudyRoomEntry, TransportationSubscription } from '@shared/models';
@@ -50,6 +51,8 @@ interface EventRow {
   subscriptionId: string;
   type: 'study' | 'transport';
   status: 'EXPECTED' | 'CANCELLED' | 'VOIDED';
+  /** A day KidClub is closed for everyone (lib/closures.ts): shown as closed, not changeable. */
+  clubClosed?: boolean;
   legIndex?: number;
   time?: string;
   label?: string;
@@ -129,7 +132,7 @@ export default function FamilyCalendarPage() {
         }
         return {
           id: d.id, date: e.date, childId: e.childId, subscriptionId: e.subscriptionId,
-          type: e.subscriptionType, status: e.status, legIndex: e.legIndex, time, label,
+          type: e.subscriptionType, status: e.status, clubClosed: isClubClosedEvent(e), legIndex: e.legIndex, time, label,
         };
       });
       rows.sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''));
@@ -217,7 +220,8 @@ export default function FamilyCalendarPage() {
 
   const counts = useMemo(() => ({
     expected: visible.filter(e => e.status === 'EXPECTED' && isSameMonth(new Date(`${e.date}T12:00:00`), month)).length,
-    cancelled: visible.filter(e => e.status === 'CANCELLED' && isSameMonth(new Date(`${e.date}T12:00:00`), month)).length,
+    cancelled: visible.filter(e => e.status === 'CANCELLED' && !e.clubClosed && isSameMonth(new Date(`${e.date}T12:00:00`), month)).length,
+    closed: visible.filter(e => e.clubClosed && isSameMonth(new Date(`${e.date}T12:00:00`), month)).length,
   }), [visible, month]);
 
   const toggleIn = (set: Set<string>, key: string, apply: (s: Set<string>) => void) => {
@@ -283,7 +287,7 @@ export default function FamilyCalendarPage() {
           Só faltas
         </button>
         <span className="ml-auto text-xs text-gray-500">
-          {counts.expected} previsto(s) · {counts.cancelled} falta(s) neste mês
+          {counts.expected} previsto(s) · {counts.cancelled} falta(s){counts.closed ? ` · ${counts.closed} com o KidClub encerrado` : ''} neste mês
         </span>
       </div>
 
@@ -326,6 +330,18 @@ export default function FamilyCalendarPage() {
                     const i = childIndex.get(e.childId) ?? 0;
                     const c = CHILD_COLOURS[i];
                     const cancelled = e.status === 'CANCELLED';
+                    // KidClub closed that day: nothing to cancel or restore, and it's already credited.
+                    if (e.clubClosed) {
+                      return (
+                        <div key={e.id}
+                          title={`${childName.get(e.childId)} · ${e.type === 'study' ? 'Sala de Estudo' : 'Transporte'}`
+                            + '\nKidClub encerrado neste dia. Já está creditado na fatura do mês.'}
+                          className="w-full text-left text-[10px] leading-tight px-1.5 py-1 rounded border bg-amber-50 border-amber-200 text-amber-800">
+                          <span className="block truncate font-medium">Encerrado</span>
+                          <span className="block truncate opacity-75">{childName.get(e.childId)}</span>
+                        </div>
+                      );
+                    }
                     return (
                       <button key={e.id}
                         onClick={() => toggle(e)}
@@ -353,6 +369,7 @@ export default function FamilyCalendarPage() {
 
       <p className="mt-3 text-xs text-gray-400">
         As faltas contam para o crédito mensal a partir de 3 faltas no mesmo serviço.
+        Os dias em que o KidClub está encerrado são sempre creditados e não contam como faltas.
         Se o mês já estiver pago, o crédito é descontado na fatura do mês seguinte.
         Precisa de alterar horários ou cancelar uma inscrição?{' '}
         <Link to="/client/subscriptions" className="text-blue-600 hover:underline">Ver inscrições</Link>.

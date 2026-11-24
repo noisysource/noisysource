@@ -12,6 +12,8 @@ export interface BillLine {
   title?: string;
   amount: number;
   absenceCreditAmount: number;
+  /** Credit for days the club was closed this month (0 when there were none). */
+  closureCreditAmount: number;
   /** Net credit carried in from paid months (positive lowers `amount`). */
   carriedCredit: number;
   grossAmount: number;
@@ -28,6 +30,7 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
     title: l.title,
     amount: l.amount ?? 0,
     absenceCreditAmount: l.absenceCreditAmount ?? 0,
+    closureCreditAmount: l.closureCreditAmount ?? 0,
     carriedCredit: (l.carriedAbsenceCredits ?? []).reduce((n: number, c: any) => n + (c?.amount ?? 0), 0),
     grossAmount: l.grossAmount ?? l.amount ?? 0,
     multiTripDiscountAmount: l.multiTripDiscountAmount ?? 0,
@@ -36,8 +39,8 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
     legacyPricing: !!l.legacyPricing,
   }));
 
-/** The standard monthly amount: net of discounts, before absence credits (this month's and any carried in). */
-export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount + l.carriedCredit) * 100) / 100;
+/** The standard monthly amount: net of discounts, before absence and closure credits (this month's and any carried in). */
+export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount + l.closureCreditAmount + l.carriedCredit) * 100) / 100;
 
 const MONTHS_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
@@ -52,11 +55,26 @@ export function periodLabelPt(period: string): string {
  * taken off this line. Negative: "Acerto de faltas", days restored after the
  * credit was paid out. Same wording as the payment email (billing.ts).
  */
-export function carriedCreditText(c: { fromPeriod: string; amount: number }): string {
+export function carriedCreditText(c: { fromPeriod: string; amount: number; closure?: boolean }): string {
   const label = periodLabelPt(c.fromPeriod);
+  // A credit that comes (at least in part) from days the club was closed says so.
+  if (c.amount >= 0 && c.closure) return `Crédito de ${label} (KidClub encerrado): −€${c.amount.toFixed(2)}`;
   return c.amount >= 0
     ? `Crédito de faltas de ${label}: −€${c.amount.toFixed(2)}`
     : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
+}
+
+/**
+ * "KidClub encerrado (Férias de Natal), 12 dias: −€57.60" — the credit for
+ * days the club itself was closed, under the line it lowered. Transport counts
+ * trips. Empty when the month had no closed day. Same wording as the payment
+ * email (closureCreditText in functions/src/kidclub/billing.ts).
+ */
+export function closureCreditText(li: { type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }): string {
+  const n = li.closureCount ?? 0;
+  if (!n) return '';
+  const unit = li.type === 'transport' ? (n === 1 ? 'viagem' : 'viagens') : (n === 1 ? 'dia' : 'dias');
+  return `KidClub encerrado${li.closureLabel ? ` (${li.closureLabel})` : ''}, ${n} ${unit}: −€${(li.closureCreditAmount ?? 0).toFixed(2)}`;
 }
 
 /** yyyy-mm of a billing doc, from periodStart (Timestamp/Date/string) or the `_yyyy-mm` id suffix. */

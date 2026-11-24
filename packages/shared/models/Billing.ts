@@ -43,6 +43,13 @@ export interface BillingLineItem {
   absenceDates?: string[];              // "yyyy-mm-dd" — every CANCELLED date this period, credited or not
   absenceCreditDates?: string[];        // "yyyy-mm-dd" — every CANCELLED date credited once the 3-absence threshold was reached (uncapped)
   notionalOccurrences?: number;         // scheduleLength x activeWeeks behind grossAmount (lines written from 2026-10-31)
+  /** Days the club itself was closed (config/closures; functions/src/kidclub/closureLogic.ts).
+   *  Credited in full, apart from the family's absences above (not in absenceCount).
+   *  Only present when the month has such days; already included in `amount`. */
+  closureCount?: number;                // occurrences of this subscription on closed days (transport: trips)
+  closureDates?: string[];              // "yyyy-mm-dd", one per occurrence
+  closureCreditAmount?: number;
+  closureLabel?: string;                // the closure's label(s), e.g. "Férias de Natal"
   /** Absence credit carried in from a paid month of the same subscription
    *  (functions/src/kidclub/absenceCarryOver.ts). Already included in `amount`.
    *  Positive = credit, negative = charge-back for days restored after payment. */
@@ -52,6 +59,7 @@ export interface BillingLineItem {
 export interface CarriedAbsenceCredit {
   fromPeriod: string; // "yyyy-mm" of the paid month the credit comes from
   amount: number;     // euros
+  closure?: boolean;  // the paid month had days on which the club was closed: (part of) this is a closure credit
 }
 
 export interface BillingRecord {

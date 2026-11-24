@@ -17,6 +17,7 @@ import { Event, partyVatBreakdown } from '@shared/models';
 import { ChevronLeft, ChevronRight, PartyPopper, BookOpen, Bus, EuroIcon, X, Pencil, Check } from 'lucide-react';
 import { eventService, schoolCalendarService } from '../../services/eventService';
 import Notification from '../Notification';
+import ClosuresPanel from './ClosuresPanel';
 
 interface AugmentedEvent extends Event {
   booking?: any;
@@ -470,6 +471,9 @@ export default function AdminCalendar() {
             </>
           )}
         </div>
+
+        {/* Club-wide closures: saving applies them to every family's days and bills. */}
+        <ClosuresPanel onChanged={() => setRefreshEvents(p => !p)} />
 
         {/* Filters + generate */}
         <div className="flex justify-between items-center mb-4">
