@@ -66,6 +66,37 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
 5. Prod: `noisysource-prod-finhub` in `env/prod.tfvars`, its `.firebaserc` target,
    `.env.nsprod`, the app in `deploy-noisysource-prod.yml`, its authorised domain.
 
+## Planned (agreed 2026-11-24, after the contracts and month imports are settled)
+
+Each is its own session and its own PR(s); put them on the kanban (FinHub board) when one starts.
+
+1. **FinHub is the source of truth for Atlas.** Before the year pass or a month import,
+   Atlas reads the contracts already saved in the book and gives them to the extraction as
+   known facts; it proposes only what the payslips change. Merging flips: what Renato saved
+   wins over an import's version for the same month (today the import wins,
+   `mergeVersions` in `src/utils/contractVersions.ts`). So a correction made once in FinHub
+   (14 payments, per-diem rate, part-time hours) sticks, with no need to repeat it to Atlas.
+2. **Trips.** Per diems (ajudas de custo) are a fixed daily rate per person (Renato:
+   €175.42/day, from the Sep/Oct 2026 payslips: 3 and 4 days) times the days of a trip.
+   - The rate becomes a contract term (a version field, like the meal allowance).
+   - A trip in the book: who, entity, where, from–to, purpose, calendar event, expected
+     flight + hotel + per diem (days × rate), status planned → booked → paid → reconciled.
+   - The forecast shows flight/hotel when booked and the per diem in the next salary.
+   - Atlas plans it ("plan a trip to Brussels for Renato, 3–6 Dec": calendar event + a trip
+     draft for his OK) and reconciles it afterwards (invoices from Gmail, the payslip's
+     per-diem line, the bank lines): planned vs real per trip.
+   - Rules: Atlas would need to propose trips (like `atlas_imports`, pending until his OK).
+3. **A FinHub MCP** (`mcp/finhub`, like `mcp/kanban`) so Claude Code and other agents can
+   use the book. Open question for Renato: read-only (entities, accounts, contracts,
+   payslips, cash-flow, a month's summary), or also proposing changes as pending imports
+   for his OK in FinHub's "From Atlas" tab. Needs a reader in the rules (`isBookReader()`
+   has Atlas only) and its own Firebase user; never direct writes to the real book.
+
+Facts learnt on the way (2026-11-24): every Noisy Source contract is 14 payments; only
+Bernardo gets a separate holiday-subsidy slip (`…_M06P2_…`, a second run); Marisa and
+Bernardo are part-time (20h/week); Renato has a meal card (€10.20/day) and a €420 child
+voucher; Renato was on leave in January 2026.
+
 ## Risky / in flight
 - This PR changes `pnpm-lock.yaml` peer entries for other packages (Tailwind 4 brings
   `lightningcss`/`jiti@2`), root `package.json` and `.github/`, so its dev deploy is
