@@ -8,7 +8,7 @@
 
 Branch `agent/kidclub-closures`, worktree `.claude/worktrees/kidclub-closures`. Two changes Renato decided on
 2026-11-24, in one PR. The PR body has the click-through test steps. **Nothing was clicked through and nothing ran
-against a real Firestore**; functions tests (553) and typecheck pass, the app builds.
+against a real Firestore**; functions tests (572) and typecheck pass, the app builds.
 
 ### 1. Elapsed days follow a schedule edit
 **Problem (prod, 2026-11-24).** A transport subscription went from 8 trips a week to 5. The pending November and
@@ -40,19 +40,30 @@ a creation, approval, reactivation, or a start/end date change alone.
   a closure, reopens events of a removed/shortened closure, then recomputes each affected family's bills once (4 at a
   time). `onReservationEventBillingSync` skips writes whose `closureSyncId` changed. New and edited subscriptions get
   closed days from the generators.
-- **Credit** (`reconcileService` step 4): each closed day/trip = one notional occurrence (price after discounts ÷
-  schedule length × weeks), always, with no 3-absence minimum, and not counted in `absenceCount`. On the line:
-  `closureCount`, `closureDates`, `closureCreditAmount`, `closureLabel` (only when the month has closed days). Shown as
-  "KidClub encerrado (label), N dias: −€X" in Faturação, Pagamentos and the notice email.
-- **Month already paid/invoiced/processing:** the bill is not touched. `absenceCarryOver.ts` now carries the closure
-  credit in full onto the next open bill of the same subscription ("Crédito de Dezembro 2026 (KidClub encerrado)").
+- **Credit** (Renato's second decision, 2026-11-24: "the admin types the percentage"; `closureCredit` in
+  `closureLogic.ts`, used by `reconcileService` step 4 and by the carry-over). Per line, per month, on the price after
+  discounts: a closure with `percent` credits that percentage to every subscription with at least one scheduled
+  day/trip inside it, whatever its days (16-31 Dec at 50 = half of December); with no percentage it credits closed
+  days ÷ the subscription's real scheduled days that calendar month (Mon-Fri over 16-31 Dec 2026 = 12/23; the notional
+  20-day month is NOT used for closures, only for ordinary absences). Nothing inside the closure → nothing. No
+  3-absence minimum, not counted in `absenceCount`. Several closures in a month add up; closure + absence credits are
+  capped at the month. On the line: `closureCount`, `closureDates`, `closureCreditAmount`, `closureLabel`,
+  `closureParts[{label, from, to, count, percent?, amount}]` (only when the month has closed days). Shown as
+  "KidClub encerrado (label), 16–31 Dez, N dias, 50%: −€X" in Faturação, Pagamentos and the notice email.
+- **Refused when saving:** a percentage on a closure that crosses two months (one closure per month instead), and
+  overlapping closures. **A change of percentage or label alone** changes no event but recomputes each family with a
+  day in that closure once.
+- **Start/end inside the month:** days outside the contract stay "not enrolled" absences (ordinary credit) and count
+  in the month's real days; with a percentage the subscription gets it in full if one in-contract day is inside.
+- **Month already paid/invoiced/processing:** the bill is not touched. `absenceCarryOver.ts` now carries what the
+  bill would have shown (same rule) onto the next open bill of the same subscription ("Crédito de Dezembro 2026 (KidClub encerrado)").
   Before this it only carried when the month had ≥3 cancelled days.
 - **Nobody can change a closed day** (`setReservationEventStatus` refuses both directions, for staff too).
 - No rule or index change. Camps, parties, one-off events and enrollment fees are unaffected. The transport board is a
   weekly plan and doesn't show closures; the admin calendar shows closed days as cancelled.
 
-**The real case (KidClub closed 16-31 Dec 2026) is NOT entered anywhere.** After this is in prod, Renato adds it in
-Admin → Calendário. On dev, saving a closure rewrites dev's December events and bills for every family (undone by
+**The real case (KidClub closed 16-31 Dec 2026, 50%) is NOT entered anywhere.** After this is in prod, Renato adds it
+in Admin → Calendário with 50 in "Crédito (% do mês)". On dev, saving a closure rewrites dev's December events and bills for every family (undone by
 removing the closure).
 
 ### Next step
@@ -63,8 +74,8 @@ worktree after the merge.
 ### Open questions for Renato (also in the PR)
 1. Confirm rule 1 as written, especially: an added day creates its elapsed records as attended; date-only changes are
    left out.
-2. A closed day is worth the notional rate: 16-31 Dec is 60% off a Mon-Fri subscription (12 of a notional 20), not
-   12/23. It also credits 25 Dec, a public holiday that is otherwise billed like any day. Intended?
+2. Closure credit is decided (see above). Left to confirm: a subscription that starts inside the closure gets the full
+   percentage; with a blank percentage, 25 Dec (a public holiday otherwise billed like any day) counts as a closed day.
 3. A closed month already paid with no later open bill of that subscription (it ended or was cancelled): the credit is
    left unapplied and logged (`[billing] … has no open bill`). No refund flow was built. Wanted?
 4. Removing a closure after a credited month was paid charges it back on the next bill ("Acerto de faltas"). Keep?
