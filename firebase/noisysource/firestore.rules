@@ -304,18 +304,18 @@ service cloud.firestore {
     }
 
     function entityExists(userId, entityId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/entities/$(entityId)) ||
-        existsAfter(/databases/$(database)/documents/users/$(userId)/entities/$(entityId));
+      return exists(/databases/$(database)/documents/finhub_books/$(userId)/entities/$(entityId)) ||
+        existsAfter(/databases/$(database)/documents/finhub_books/$(userId)/entities/$(entityId));
     }
 
     function accountExists(userId, accountId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/accounts/$(accountId)) ||
-        existsAfter(/databases/$(database)/documents/users/$(userId)/accounts/$(accountId));
+      return exists(/databases/$(database)/documents/finhub_books/$(userId)/accounts/$(accountId)) ||
+        existsAfter(/databases/$(database)/documents/finhub_books/$(userId)/accounts/$(accountId));
     }
 
     function batchExists(userId, batchId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/statementBatches/$(batchId)) ||
-        existsAfter(/databases/$(database)/documents/users/$(userId)/statementBatches/$(batchId));
+      return exists(/databases/$(database)/documents/finhub_books/$(userId)/statementBatches/$(batchId)) ||
+        existsAfter(/databases/$(database)/documents/finhub_books/$(userId)/statementBatches/$(batchId));
     }
 
     // -------------------------------------------------------------------------
@@ -657,8 +657,11 @@ service cloud.firestore {
           'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
           'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
           'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'active',
-          'createdAt', 'updatedAt'
+          'createdAt', 'updatedAt', 'versions'
         ]) &&
+        // Terms over time (apps/noisysource/finhub/src/utils/contractVersions.ts): the app keeps
+        // them sorted, one per month, the latest's terms on top; the rules bound their number.
+        (!('versions' in data) || (data.versions is list && data.versions.size() <= 36)) &&
         isValidId(data.userId) &&
         data.userId == finhubBook() &&
         isValidId(data.entityId) &&
@@ -1093,7 +1096,7 @@ service cloud.firestore {
               'irsRate', 'employeeSsRate', 'employerSsRate', 'mealAllowanceDaily',
               'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
               'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
-              'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'updatedAt'
+              'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'versions', 'updatedAt'
             ]) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
           );

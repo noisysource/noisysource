@@ -2,7 +2,28 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task.
 
-**Last updated:** 2026-11-23 (step 2: Atlas's imports inbox and the "From Atlas" tab; dev only)
+**Last updated:** 2026-11-24 (contract versions; rules path fix; dev only)
+
+## In progress (2026-11-24)
+- **Contracts have versions** (branch `agent/finhub-contract-versions`): a contract's terms
+  are a list of versions, each from a month on (`src/utils/contractVersions.ts`, tests
+  `pnpm --filter finhub test`). Payroll for a month uses the version in force; the top-level
+  terms mirror the latest, so old code and old contracts work unchanged (a contract without
+  versions has the same terms every month). Editing asks "changes from which month" or "fix a
+  mistake in the latest terms"; the Contracts tab shows the terms in force in the selected
+  month and a history with Remove. Leave, bonuses and pro-rata months are not versions: they
+  go on that month's payslip (Renato was on leave in January 2026, which is why January's
+  payslip looked like a different contract).
+- **Rules fix in the same PR:** `entityExists` / `accountExists` / `batchExists` looked under
+  `users/{id}/...`, but the book is `finhub_books/{id}/...`, so every write that checks one
+  (contracts, accounts, statement imports) was refused. Now `finhub_books`.
+- **Rules tests not run here** (the emulator can't be downloaded in the cloud session): run
+  `pnpm test:rules:finhub` before merging.
+- **Next:** Atlas's year pass (`finhub_contracts`, Atlas repo) proposes each person's
+  contracts with versions from all the year's payslips; the import commit merges them into
+  contracts he already has (the import's months win). Then the monthly imports.
+- January 2026's first import (Noisy Source) is in "From Atlas": discard it and re-run after
+  the year pass.
 
 ## What this is
 FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google AI Studio

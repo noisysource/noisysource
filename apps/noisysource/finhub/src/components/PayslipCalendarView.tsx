@@ -16,6 +16,18 @@ import {
   X,
 } from 'lucide-react';
 import { useTreasury } from '../contexts/TreasuryContext';
+import {
+  addVersion,
+  isMonthKey,
+  monthLabel,
+  removeVersion,
+  sortedVersions,
+  START_MONTH,
+  termsAt,
+  termsOf,
+  versionAt,
+  withVersions,
+} from '../utils/contractVersions';
 import type {
   ContractPaySchedule,
   EmploymentContract,
@@ -167,6 +179,11 @@ export function PayslipCalendarView({
   const [ctrOtherIrs, setCtrOtherIrs] = useState(false);
   const [ctrOtherSs, setCtrOtherSs] = useState(false);
   const [savingContract, setSavingContract] = useState(false);
+  // Versions: an edit is a change from a month on ("from"), or a fix to the latest terms ("fix").
+  const [ctrChange, setCtrChange] = useState<'from' | 'fix'>('from');
+  const [ctrFrom, setCtrFrom] = useState(monthKey);
+  const [ctrNote, setCtrNote] = useState('');
+  const [historyOpen, setHistoryOpen] = useState<string | null>(null);
 
   const entityMap = useMemo(() => new Map(entities.map((e) => [e.id, e.name])), [entities]);
   const accountMap = useMemo(() => new Map(accounts.map((a) => [a.id, a.name])), [accounts]);
@@ -526,6 +543,9 @@ export function PayslipCalendarView({
     setCtrOtherMonthly('0');
     setCtrOtherIrs(false);
     setCtrOtherSs(false);
+    setCtrChange('from');
+    setCtrFrom(monthKey);
+    setCtrNote('');
     setContractModalOpen(true);
   };
 
@@ -551,6 +571,9 @@ export function PayslipCalendarView({
     setCtrOtherMonthly(String(c.otherBenefitMonthly));
     setCtrOtherIrs(c.otherBenefitSubjectToIrs);
     setCtrOtherSs(c.otherBenefitSubjectToSs);
+    setCtrChange('from');
+    setCtrFrom(monthKey);
+    setCtrNote('');
     setContractModalOpen(true);
   };
 
@@ -582,10 +605,33 @@ export function PayslipCalendarView({
         otherBenefitSubjectToIrs: ctrOtherIrs,
         otherBenefitSubjectToSs: ctrOtherSs,
       };
+      const terms = termsOf(payload);
+      const from = isMonthKey(ctrFrom) ? ctrFrom : monthKey;
+      const note = ctrNote.trim().slice(0, 200);
       if (editingContract) {
-        await updateEmploymentContract(editingContract.id, payload);
+        const versions = sortedVersions(editingContract.versions);
+        if (ctrChange === 'from') {
+          // A change from a month on: the months before keep their terms.
+          await updateEmploymentContract(editingContract.id, {
+            ...payload,
+            ...addVersion(editingContract, { effectiveFrom: from, note: note || 'Changed', terms }, START_MONTH),
+          });
+        } else if (versions.length > 0) {
+          // A fix: the latest version's terms were wrong, not changed.
+          const last = versions[versions.length - 1];
+          await updateEmploymentContract(editingContract.id, {
+            ...payload,
+            ...withVersions([...versions.slice(0, -1), { ...last, terms, note: note || last.note }]),
+          });
+        } else {
+          await updateEmploymentContract(editingContract.id, payload);
+        }
       } else {
-        await addEmploymentContract({ ...payload, active: true });
+        await addEmploymentContract({
+          ...payload,
+          versions: [{ effectiveFrom: from, note: note || 'Start', terms }],
+          active: true,
+        });
       }
       setContractModalOpen(false);
       setEditingContract(null);
@@ -1090,9 +1136,12 @@ export function PayslipCalendarView({
                   {filteredEmploymentContracts.map((c) => {
                     const brk = computeContractMonthlyBreakdown(c, monthKey);
                     const annual = computeContractAnnualTotals(c);
+                    const versions = sortedVersions(c.versions);
+                    const inForce = versionAt(c, monthKey);
+                    const t = { ...c, ...termsAt(c, monthKey) };
                     return (
+                      <React.Fragment key={c.id}>
                       <tr
-                        key={c.id}
                         className={`hover:bg-slate-800/40 transition-colors ${c.active ? '' : 'opacity-50'}`}
                       >
                         <td className="py-3.5 px-6">
@@ -1122,37 +1171,48 @@ export function PayslipCalendarView({
                         </td>
                         <td className="py-3.5 px-4 text-xs">
                           <p className="font-mono tabular-nums text-slate-200 font-medium">
-                            {formatMoney(c.baseGrossMonthly, currencyCode)} / mo ·{' '}
-                            {c.paySchedule === '14_months' ? '14x' : '12x'}
+                            {formatMoney(t.baseGrossMonthly, currencyCode)} / mo ·{' '}
+                            {t.paySchedule === '14_months' ? '14x' : '12x'}
                           </p>
                           <p className="text-slate-400 font-mono tabular-nums mt-0.5">
-                            IRS {c.irsRate.toFixed(1)}% · SS {c.employeeSsRate.toFixed(1)}% · TSU{' '}
-                            {c.employerSsRate.toFixed(2)}%
+                            IRS {t.irsRate.toFixed(1)}% · SS {t.employeeSsRate.toFixed(1)}% · TSU{' '}
+                            {t.employerSsRate.toFixed(2)}%
                           </p>
+                          {versions.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setHistoryOpen(historyOpen === c.id ? null : c.id)}
+                              className="text-[11px] text-blue-400 hover:text-blue-300 mt-0.5 cursor-pointer"
+                            >
+                              {inForce ? `In ${monthLabel(monthKey)}: from ${monthLabel(inForce.effectiveFrom)}` : `Not yet in force in ${monthLabel(monthKey)}`}
+                              {' · '}
+                              {versions.length} version{versions.length === 1 ? '' : 's'}
+                            </button>
+                          )}
                         </td>
                         <td className="py-3.5 px-4 text-xs text-slate-300 space-y-0.5">
                           <p>
-                            {c.mealPaymentMethod === 'none' || c.mealAllowanceDaily <= 0
+                            {t.mealPaymentMethod === 'none' || t.mealAllowanceDaily <= 0
                               ? 'No meal allowance'
-                              : `Meal ${c.mealPaymentMethod === 'card' ? 'Card' : 'Cash'} €${c.mealAllowanceDaily.toFixed(2)}/d (${
+                              : `Meal ${t.mealPaymentMethod === 'card' ? 'Card' : 'Cash'} €${t.mealAllowanceDaily.toFixed(2)}/d (${
                                   brk.mealTaxable > 0
                                     ? `${formatMoney(brk.mealExempt, currencyCode)} exempt · ${formatMoney(brk.mealTaxable, currencyCode)} taxable`
                                     : '100% exempt'
                                 })`}
                           </p>
-                          {c.childVoucherMonthly > 0 && (
+                          {t.childVoucherMonthly > 0 && (
                             <p className="text-slate-400">
-                              Child Voucher {formatMoney(c.childVoucherMonthly, currencyCode)}/mo (
-                              {c.childVoucherSubjectToIrs ? 'Taxable IRS' : 'Exempt IRS'},{' '}
-                              {c.childVoucherSubjectToSs ? 'Taxable SS' : 'Exempt SS'})
+                              Child Voucher {formatMoney(t.childVoucherMonthly, currencyCode)}/mo (
+                              {t.childVoucherSubjectToIrs ? 'Taxable IRS' : 'Exempt IRS'},{' '}
+                              {t.childVoucherSubjectToSs ? 'Taxable SS' : 'Exempt SS'})
                             </p>
                           )}
-                          {c.otherBenefitMonthly > 0 && (
+                          {t.otherBenefitMonthly > 0 && (
                             <p className="text-slate-400">
-                              {c.otherBenefitName || 'Benefit'}{' '}
-                              {formatMoney(c.otherBenefitMonthly, currencyCode)}/mo (
-                              {c.otherBenefitSubjectToIrs ? 'IRS' : 'Ex. IRS'},{' '}
-                              {c.otherBenefitSubjectToSs ? 'SS' : 'Ex. SS'})
+                              {t.otherBenefitName || 'Benefit'}{' '}
+                              {formatMoney(t.otherBenefitMonthly, currencyCode)}/mo (
+                              {t.otherBenefitSubjectToIrs ? 'IRS' : 'Ex. IRS'},{' '}
+                              {t.otherBenefitSubjectToSs ? 'SS' : 'Ex. SS'})
                             </p>
                           )}
                         </td>
@@ -1208,6 +1268,41 @@ export function PayslipCalendarView({
                           </div>
                         </td>
                       </tr>
+                      {historyOpen === c.id && versions.length > 0 && (
+                        <tr className="bg-slate-900/60">
+                          <td colSpan={99} className="px-6 py-3">
+                            <p className="text-xs font-medium text-slate-300 mb-2">
+                              Terms over time · each applies from its month until the next
+                            </p>
+                            <ul className="space-y-1.5">
+                              {[...versions].reverse().map((v) => (
+                                <li key={v.effectiveFrom} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                                  <span className="w-24 text-slate-200 font-medium">From {monthLabel(v.effectiveFrom)}</span>
+                                  <span className="font-mono tabular-nums text-slate-300">
+                                    {formatMoney(v.terms.baseGrossMonthly, currencyCode)} · IRS {v.terms.irsRate.toFixed(1)}% · SS{' '}
+                                    {v.terms.employeeSsRate.toFixed(1)}% · TSU {v.terms.employerSsRate.toFixed(2)}%
+                                    {v.terms.childVoucherMonthly > 0 ? ` · child ${formatMoney(v.terms.childVoucherMonthly, currencyCode)}` : ''}
+                                  </span>
+                                  <span className="text-slate-500">{v.note}</span>
+                                  {versions.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const next = removeVersion(c, v.effectiveFrom);
+                                        if (next) void updateEmploymentContract(c.id, { ...c, ...next });
+                                      }}
+                                      className="text-slate-500 hover:text-rose-400 cursor-pointer"
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -1319,6 +1414,51 @@ export function PayslipCalendarView({
               >
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3 space-y-2">
+              {editingContract ? (
+                <div className="flex flex-wrap gap-4 text-xs text-slate-200">
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={ctrChange === 'from'} onChange={() => setCtrChange('from')} />
+                    The terms change from a month on (the months before keep theirs)
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={ctrChange === 'fix'} onChange={() => setCtrChange('fix')} />
+                    Fix a mistake in the latest terms
+                  </label>
+                </div>
+              ) : null}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(!editingContract || ctrChange === 'from') && (
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1">
+                      {editingContract ? 'Changes from' : 'Starts in'}
+                    </label>
+                    <input
+                      type="month"
+                      value={ctrFrom}
+                      onChange={(e) => setCtrFrom(e.target.value)}
+                      required
+                      className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100"
+                    />
+                  </div>
+                )}
+                <div className={!editingContract || ctrChange === 'from' ? 'sm:col-span-2' : 'sm:col-span-3'}>
+                  <label className="block text-xs text-slate-300 mb-1">Why (optional)</label>
+                  <input
+                    type="text"
+                    value={ctrNote}
+                    maxLength={200}
+                    placeholder={editingContract ? 'Raise, new IRS table, voucher added…' : 'Start of contract'}
+                    onChange={(e) => setCtrNote(e.target.value)}
+                    className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                A month on leave, a bonus or a pro-rata month isn&apos;t a change of contract: record it on that month&apos;s payslip.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

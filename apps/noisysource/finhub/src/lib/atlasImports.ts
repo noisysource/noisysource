@@ -17,8 +17,11 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db, FINHUB_BOOK_ID } from '../firebase';
+import { isMonthKey, MAX_CONTRACT_VERSIONS } from '../utils/contractVersions';
 import type {
   BillingFrequency,
+  ContractTerms,
+  ContractVersion,
   ContractPaySchedule,
   FacilityType,
   MealPaymentMethod,
@@ -157,8 +160,31 @@ export const contractOf = (raw: unknown): SuggestedContractDraft => {
     otherBenefitName: str(c.otherBenefitName, 80),
     otherBenefitMonthly: num(c.otherBenefitMonthly),
     notes: str(c.notes, 1000),
+    versions: list(c.versions, MAX_CONTRACT_VERSIONS).flatMap((v): ContractVersion[] => {
+      const x = obj(v);
+      if (!isMonthKey(x.effectiveFrom)) return [];
+      return [{ effectiveFrom: x.effectiveFrom, note: str(x.note, 200), terms: termsDraftOf(obj(x.terms)) }];
+    }),
   };
 };
+
+/** A version's terms from Atlas: the voucher and benefit tax flags are FinHub's (off), as for new contracts. */
+const termsDraftOf = (t: O): ContractTerms => ({
+  paySchedule: oneOf(PAY_SCHEDULES, t.paySchedule, '14_months'),
+  baseGrossMonthly: num(t.baseGrossMonthly),
+  irsRate: Math.min(100, num(t.irsRate)),
+  employeeSsRate: Math.min(100, num(t.employeeSsRate)),
+  employerSsRate: Math.min(100, num(t.employerSsRate)),
+  mealAllowanceDaily: num(t.mealAllowanceDaily),
+  mealPaymentMethod: oneOf(MEAL_METHODS, t.mealPaymentMethod, 'none'),
+  childVoucherMonthly: num(t.childVoucherMonthly),
+  childVoucherSubjectToIrs: false,
+  childVoucherSubjectToSs: false,
+  otherBenefitName: str(t.otherBenefitName, 60),
+  otherBenefitMonthly: num(t.otherBenefitMonthly),
+  otherBenefitSubjectToIrs: false,
+  otherBenefitSubjectToSs: false,
+});
 
 export const subscriptionOf = (raw: unknown): SuggestedSubscriptionDraft => {
   const s = obj(raw);

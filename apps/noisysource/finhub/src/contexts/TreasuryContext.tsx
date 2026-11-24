@@ -44,6 +44,7 @@ import {
   isVoucherAccountType,
   todayIsoDate,
 } from '../utils/financeMath';
+import { mergeVersions, sortedVersions } from '../utils/contractVersions';
 import { useAuth } from './AuthContext';
 
 export interface ToastItem {
@@ -2255,6 +2256,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         otherBenefitMonthly: Math.max(0, Number(input.otherBenefitMonthly) || 0),
         otherBenefitSubjectToIrs: Boolean(input.otherBenefitSubjectToIrs),
         otherBenefitSubjectToSs: Boolean(input.otherBenefitSubjectToSs),
+        ...(input.versions && input.versions.length > 0 ? { versions: sortedVersions(input.versions) } : {}),
         active: Boolean(input.active),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -2294,6 +2296,7 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         otherBenefitMonthly: Math.max(0, Number(input.otherBenefitMonthly) || 0),
         otherBenefitSubjectToIrs: Boolean(input.otherBenefitSubjectToIrs),
         otherBenefitSubjectToSs: Boolean(input.otherBenefitSubjectToSs),
+        ...(input.versions ? { versions: sortedVersions(input.versions) } : {}),
         updatedAt: serverTimestamp(),
       });
       pushToast('Contract updated', input.workerName, 'success');
@@ -4088,7 +4091,20 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
         const cleanName = clampString(c.workerName, VALIDATION_BOUNDS.MAX_EMP_LEN);
         if (!cleanName) continue;
         const key = cleanName.toLowerCase();
-        if (contractIdByWorker.has(key)) continue;
+        const draftVersions = sortedVersions(c.versions);
+        if (contractIdByWorker.has(key)) {
+          // Atlas's year pass: his terms over time land on the contract he already has.
+          const existing = employmentContracts.find((x) => x.id === contractIdByWorker.get(key));
+          if (existing && draftVersions.length > 0) {
+            setupWb.update(doc(db, `finhub_books/${uid}/employmentContracts`, existing.id), {
+              ...mergeVersions(existing, draftVersions),
+              updatedAt: serverTimestamp(),
+            });
+            counts.contracts += 1;
+            setupWrites += 1;
+          }
+          continue;
+        }
 
         const cid = makeId('ctr');
         const isOwner = Boolean(c.isOwnerHint && personalEntity);
@@ -4117,6 +4133,8 @@ export function TreasuryProvider({ children }: { children: React.ReactNode }) {
           otherBenefitMonthly: Math.max(0, Number(c.otherBenefitMonthly) || 0),
           otherBenefitSubjectToIrs: false,
           otherBenefitSubjectToSs: false,
+          // The year pass's versions: the latest's terms on top.
+          ...(draftVersions.length > 0 ? mergeVersions(undefined, draftVersions) : {}),
           active: true,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
