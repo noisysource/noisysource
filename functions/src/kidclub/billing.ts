@@ -10,6 +10,7 @@ import { ensurePartyDeposit } from "./partyDeposit";
 import { familyInvoiceNif, realNif } from "./vendusClientLogic";
 import { retryInvoiceRefusal } from "./retryInvoiceLogic";
 import { eventLineId } from "./adhocEventLogic";
+import { isRecomputableBill } from "./repricedMonths";
 import { CLOSED_STATUSES, CarriedAbsenceCredit, CarryApplier, MonthEvents, LedgerBill, createCarryApplier, isServiceLine, outstandingCarryOver, periodLabelPt } from "./absenceCarryOver";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -1332,9 +1333,9 @@ export const setPaymentMethod = onCall(
 // subscription after a stretch with none active would leave every affected
 // period's record stuck "cancelled" forever, since nothing else ever
 // revisits a non-pending record.
-function isRecomputable(data: any): boolean {
-  return data?.status === "pending" || (data?.status === "cancelled" && data?.autoCancelled === true);
-}
+// The rule itself lives in repricedMonths.ts, shared with reservationEvents.ts
+// (which months' elapsed days follow a schedule edit).
+const isRecomputable = isRecomputableBill;
 
 // Months to recompute for a family: every month from the current one to the
 // school-year end (as before), PLUS any earlier month whose bill is still
