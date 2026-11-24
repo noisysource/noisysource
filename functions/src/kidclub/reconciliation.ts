@@ -29,11 +29,21 @@
 //          final total never goes negative. Using the notional rather than
 //          the real occurrence count is what keeps the value of one absence
 //          identical in every month, consistent with a flat price.
+//          CLUB CLOSURE days (events flagged `closed`, closureLogic.ts) are
+//          a separate credit at the same notional rate: always given, from
+//          the first day, and never counted among the family's own absences
+//          (so they neither help nor hinder the 3-absence gate).
 
 export interface ReservationEventLite {
   date: string; // yyyy-mm-dd
   basePriceCents: number;
   status: "EXPECTED" | "CANCELLED" | "VOIDED";
+  /**
+   * A CANCELLED day on which the club itself was closed for everyone
+   * (system absence with REASON_CLOSED). Credited in full, outside the
+   * 3-absence rule.
+   */
+  closed?: boolean;
 }
 
 export interface SubscriptionForReconciliation {
@@ -104,11 +114,16 @@ export interface ReconciledLineItem {
   institutionalDiscountPct: number;
   institutionalDiscountCents: number;
   netBeforeAbsenceCents: number;
+  /** The family's own absences (and boundary-month system absences). Closure days are NOT included. */
   absenceCount: number;
   absenceCreditCents: number;
-  /** Every CANCELLED date this period, credited or not — what actually happened. */
+  /** Every CANCELLED date this period, credited or not — what actually happened. Closure days excluded. */
   absenceDates: string[];
   absenceCreditDates: string[];
+  /** Occurrences that fell on a day the club was closed, and what they take off the price. */
+  closureCount: number;
+  closureCreditCents: number;
+  closureDates: string[];
   finalCents: number;
   /** scheduleLength x activeWeeks: the denominator behind gross and the per-absence credit. */
   notionalOccurrences: number;
@@ -352,16 +367,25 @@ export function reconcileService(
 
   // ── Step 4: absence credit, uncapped once the 3-absence gate is reached ──
   return step3.map(item => {
-    const cancelled = item.events.filter(e => e.status === "CANCELLED").sort((a, b) => a.date.localeCompare(b.date));
+    const allCancelled = item.events.filter(e => e.status === "CANCELLED").sort((a, b) => a.date.localeCompare(b.date));
+    const closedDays = allCancelled.filter(e => e.closed);
+    const cancelled = allCancelled.filter(e => !e.closed);
     const absenceCount = cancelled.length;
+    const closureCount = closedDays.length;
     // NOTIONAL rate, not net / real-occurrences-this-period: the flat price
     // buys a notional `scheduleLength x activeWeeks` occurrences, so one
     // missed day is worth the same in a 4-Monday month as in a 5-Monday one.
     // Using the real count here would put back exactly the calendar variance
     // the flat gross above removes.
     const perOccurrenceRateCents = item.notionalOccurrences > 0 ? item.netBeforeAbsence / item.notionalOccurrences : 0;
+    // Closure first: it is owed whatever else happened that month. The
+    // ordinary absence credit then takes what is left, so the two together
+    // can never exceed the month.
+    const closureCreditCents = closureCount > 0
+      ? Math.min(item.netBeforeAbsence, Math.round(closureCount * perOccurrenceRateCents)) : 0;
     const qualifies = absenceCount >= 3;
-    const absenceCreditCents = qualifies ? Math.min(item.netBeforeAbsence, Math.round(absenceCount * perOccurrenceRateCents)) : 0;
+    const absenceCreditCents = qualifies
+      ? Math.min(item.netBeforeAbsence - closureCreditCents, Math.round(absenceCount * perOccurrenceRateCents)) : 0;
 
     return {
       subscriptionId: item.sub.id,
@@ -380,7 +404,10 @@ export function reconcileService(
       // a sub-threshold absence invisible to staff.
       absenceDates: cancelled.map(c => c.date),
       absenceCreditDates: qualifies ? cancelled.map(c => c.date) : [],
-      finalCents: Math.max(0, item.netBeforeAbsence - absenceCreditCents),
+      closureCount,
+      closureCreditCents,
+      closureDates: closedDays.map(c => c.date),
+      finalCents: Math.max(0, item.netBeforeAbsence - absenceCreditCents - closureCreditCents),
       notionalOccurrences: item.notionalOccurrences,
     };
   });

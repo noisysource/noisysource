@@ -64,7 +64,7 @@ vi.mock("firebase-admin", () => ({
 }));
 vi.mock("./db", () => ({ appCol: (c: string) => fake.collection(c) }));
 
-import { autoCreateBillingSchedule, carriedCreditText } from "./billing";
+import { autoCreateBillingSchedule, carriedCreditText, closureCreditText } from "./billing";
 
 const { state, ts, clone } = fake;
 
@@ -171,5 +171,94 @@ describe("autoCreateBillingSchedule — absences in a paid month carry to the ne
   it("formats the credit the way the bill shows it", () => {
     expect(carriedCreditText({ fromPeriod: "2026-10", amount: 24 })).toBe("Crédito de faltas de Outubro 2026: −€24.00");
     expect(carriedCreditText({ fromPeriod: "2026-10", amount: -6 })).toBe("Acerto de faltas de Outubro 2026: +€6.00");
+  });
+});
+
+// ── Club closure on the bill (2026-11-24) ──────────────────────────────────
+// KidClub closes after 15 December 2026. Rita's December (Mon/Fri): Fri 4, 11,
+// 18, 25; Mon 7, 14, 21, 28. Closed 16-31 = 18, 21, 25, 28: 4 of a notional 8.
+describe("autoCreateBillingSchedule — a club closure is credited on the bill", () => {
+  const DEC_DAYS = ["04", "07", "11", "14", "18", "21", "25", "28"].map(d => `2026-12-${d}`);
+  const CLOSED = ["2026-12-18", "2026-12-21", "2026-12-25", "2026-12-28"];
+  const close = (dates: string[]) => {
+    for (const d of dates) Object.assign(state.docs[`reservationEvents/s1_${d}`], { status: "CANCELLED", changedByRole: "system", reason: "club closed" });
+  };
+
+  beforeEach(() => {
+    vi.setSystemTime(new Date(2026, 10, 24, 10, 0)); // 24 Nov 2026
+    state.docs["config/closures"] = { closures: [{ id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" }] };
+    for (const date of DEC_DAYS) {
+      state.docs[`reservationEvents/s1_${date}`] = {
+        subscriptionId: "s1", subscriptionType: "study", familyId: "famA", childId: "c1", date, basePriceCents: 600, status: "EXPECTED",
+      };
+    }
+  });
+
+  it("December still open: half the month off, shown as a closure and not as absences", async () => {
+    close(CLOSED);
+    await autoCreateBillingSchedule("famA");
+
+    expect(bill("2026-12")).toMatchObject({ status: "pending", total: 24 });
+    expect(studyLine("2026-12")).toMatchObject({
+      amount: 24, grossAmount: 48,
+      closureCount: 4, closureCreditAmount: 24, closureDates: CLOSED, closureLabel: "Férias de Natal",
+      absenceCount: 0, absenceCreditAmount: 0,
+      title: "Sala de Estudo — Rita (2ª, 6ª) — Dezembro 2026", // unchanged: Vendus maps products by title
+    });
+    expect(studyLine("2026-12").absenceDates).toBeUndefined();
+    expect(closureCreditText(studyLine("2026-12"))).toBe("KidClub encerrado (Férias de Natal), 4 dias: −€24.00");
+    // Other months are untouched.
+    expect(studyLine("2026-11").amount).toBe(48);
+    expect(studyLine("2026-11").closureCount).toBeUndefined();
+    expect(studyLine("2027-01").amount).toBe(48);
+  });
+
+  it("an absence of the family's own in the same month is still just an absence (under 3: no credit)", async () => {
+    close(CLOSED);
+    setDay("2026-12-04", "CANCELLED");
+    await autoCreateBillingSchedule("famA");
+    expect(studyLine("2026-12")).toMatchObject({ amount: 24, closureCount: 4, closureCreditAmount: 24, absenceCount: 1, absenceCreditAmount: 0 });
+  });
+
+  it("December already paid when the closure is entered: the paid bill stays, January carries the credit", async () => {
+    await autoCreateBillingSchedule("famA");
+    bill("2026-12").status = "paid";
+    const decPaid = clone(bill("2026-12"));
+    expect(decPaid.total).toBe(48);
+
+    close(CLOSED);
+    await autoCreateBillingSchedule("famA");
+
+    expect(bill("2026-12")).toEqual(decPaid);
+    expect(studyLine("2027-01")).toMatchObject({ amount: 24, carriedAbsenceCredits: [{ fromPeriod: "2026-12", amount: 24, closure: true }] });
+    expect(bill("2027-01").total).toBe(24);
+    expect(carriedCreditText(studyLine("2027-01").carriedAbsenceCredits[0])).toBe("Crédito de Dezembro 2026 (KidClub encerrado): −€24.00");
+    expect(studyLine("2027-02").amount).toBe(48);
+
+    const snapshot = clone(state.docs);
+    await autoCreateBillingSchedule("famA");
+    expect(state.docs).toEqual(snapshot);
+  });
+
+  for (const status of ["invoiced", "processing"]) {
+    it(`December ${status}: same, the bill is not touched`, async () => {
+      await autoCreateBillingSchedule("famA");
+      bill("2026-12").status = status;
+      const before = clone(bill("2026-12"));
+      close(CLOSED);
+      await autoCreateBillingSchedule("famA");
+      expect(bill("2026-12")).toEqual(before);
+      expect(studyLine("2027-01").carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 24, closure: true }]);
+    });
+  }
+
+  it("the closure is removed again while December is open: the bill goes back to the full month", async () => {
+    close(CLOSED);
+    await autoCreateBillingSchedule("famA");
+    for (const d of CLOSED) state.docs[`reservationEvents/s1_${d}`] = { subscriptionId: "s1", subscriptionType: "study", familyId: "famA", childId: "c1", date: d, basePriceCents: 600, status: "EXPECTED" };
+    await autoCreateBillingSchedule("famA");
+    expect(studyLine("2026-12").amount).toBe(48);
+    expect(studyLine("2026-12").closureCount).toBeUndefined();
+    expect(studyLine("2026-12").closureCreditAmount).toBeUndefined();
   });
 });

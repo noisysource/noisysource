@@ -11,6 +11,7 @@ import { familyInvoiceNif, realNif } from "./vendusClientLogic";
 import { retryInvoiceRefusal } from "./retryInvoiceLogic";
 import { eventLineId } from "./adhocEventLogic";
 import { isRecomputableBill } from "./repricedMonths";
+import { Closure, closureLabelFor, isClosureAbsence, readClosures } from "./closureLogic";
 import { CLOSED_STATUSES, CarriedAbsenceCredit, CarryApplier, MonthEvents, LedgerBill, createCarryApplier, isServiceLine, outstandingCarryOver, periodLabelPt } from "./absenceCarryOver";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -126,7 +127,8 @@ async function fetchReservationEventsForPeriod(
     for (const doc of snap.docs) {
       const data = doc.data();
       const list = bySub.get(data.subscriptionId) ?? [];
-      list.push({ date: data.date, basePriceCents: data.basePriceCents, status: data.status });
+      // A day the club was closed is credited on its own terms (reconcileService step 4).
+      list.push({ date: data.date, basePriceCents: data.basePriceCents, status: data.status, ...(isClosureAbsence(data) ? { closed: true } : {}) });
       bySub.set(data.subscriptionId, list);
     }
   }
@@ -423,13 +425,32 @@ export interface BillingLineItem {
   absenceCreditAmount?: number;
   absenceCreditDates?: string[]; // ISO yyyy-mm-dd — every CANCELLED date credited once the 3-absence threshold was reached (uncapped, not just the first 3)
   notionalOccurrences?: number;  // scheduleLength x activeWeeks behind gross; lets a later carry-over price this month's absences on this line's own terms
+  // Days the club itself was closed (config/closures, closureLogic.ts): always
+  // credited in full, apart from the family's own absences above. Only present
+  // when the month has such days. Already included in `amount`.
+  closureCount?: number;         // occurrences of this subscription on closed days
+  closureDates?: string[];       // ISO yyyy-mm-dd, one per occurrence (a two-trip day appears twice)
+  closureCreditAmount?: number;
+  closureLabel?: string;         // the closure's label(s), e.g. "Férias de Natal"
   // Credit (or charge) carried in from a closed month of the SAME subscription
   // (absenceCarryOver.ts). Already included in `amount`; the title is never
   // changed, because Vendus products are mapped by title.
   carriedAbsenceCredits?: CarriedAbsenceCredit[];
 }
 
-interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules: any[] }
+interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules: any[]; closures?: Closure[] }
+
+// The closure part of a study/transport line, empty when the month has no closed day.
+function closureFields(r: { closureCount: number; closureCreditCents: number; closureDates: string[] }, closures: Closure[] | undefined) {
+  if (!r.closureCount) return {};
+  const closureLabel = closureLabelFor(r.closureDates, closures);
+  return {
+    closureCount: r.closureCount,
+    closureDates: r.closureDates,
+    closureCreditAmount: r.closureCreditCents / 100,
+    ...(closureLabel ? { closureLabel } : {}),
+  };
+}
 
 // existingLineItems (previous version of this specific billing record, if any)
 // carries forward each subscription's registration/insurance enrollment fee
@@ -626,6 +647,7 @@ async function computeLineItems(
         ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
         ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
+        ...closureFields(r, configs.closures),
         notionalOccurrences: r.notionalOccurrences,
       });
       total += amount;
@@ -669,6 +691,7 @@ async function computeLineItems(
         ...(r.absenceDates.length ? { absenceDates: r.absenceDates } : {}),
         absenceCreditAmount: r.absenceCreditCents / 100,
         ...(r.absenceCreditDates.length ? { absenceCreditDates: r.absenceCreditDates } : {}),
+        ...closureFields(r, configs.closures),
         notionalOccurrences: r.notionalOccurrences,
       });
       total += amount;
@@ -695,15 +718,18 @@ async function markEnrollmentFeeBilled(subs: { collection: "studyroom" | "transp
 }
 
 async function loadBillingConfigs(): Promise<BillingConfigs> {
-  const [studySnap, transportSnap, discountsSnap] = await Promise.all([
+  const [studySnap, transportSnap, discountsSnap, closuresSnap] = await Promise.all([
     appCol("config").doc("studyCenter").get(),
     appCol("config").doc("transportation").get(),
     appCol("config").doc("discounts").get(),
+    appCol("config").doc("closures").get(),
   ]);
   return {
     studyConfig: studySnap.data() ?? {},
     transportConfig: transportSnap.data() ?? {},
     discountRules: discountsSnap.data()?.rules ?? [],
+    // Only for the label on the bill: which days are closed is read off the events.
+    closures: readClosures(closuresSnap.data()?.closures),
   };
 }
 
@@ -1394,7 +1420,8 @@ async function loadAbsenceCarryOver(familyId: string): Promise<CarryApplier> {
     for (const [subId, list] of bySub) {
       events.set(`${b.period}|${subId}`, {
         total: list.length,
-        cancelled: list.filter(e => e.status === "CANCELLED").length,
+        cancelled: list.filter(e => e.status === "CANCELLED" && !e.closed).length,
+        closed: list.filter(e => e.status === "CANCELLED" && e.closed).length,
         rateCents: list.find(e => e.basePriceCents > 0)?.basePriceCents,
       });
     }
@@ -1680,16 +1707,25 @@ export const onTransportBillingSync = onDocumentWritten(
 // reservationEvents.ts always sets correctly — unlike the old
 // eventModifications collection, whose four separate client write sites
 // didn't all populate familyId consistently.
+// A club closure (closures.ts) changes the status of every family's events in
+// one go, and recomputes each affected family once itself, after its writes.
+// Those writes carry a new `closureSyncId`; reacting to them here would run
+// one recompute per event, for every family at once.
+export function eventChangeNeedsBillingSync(before: any, after: any): boolean {
+  if (!after || !before) return false; // creation and deletion aren't status transitions
+  if (before.status === after.status) return false;
+  if (!after.familyId) return false;
+  if ((after.closureSyncId ?? null) !== (before.closureSyncId ?? null)) return false;
+  return true;
+}
+
 export const onReservationEventBillingSync = onDocumentWritten(
   { document: "_apps/arcoiris/reservationEvents/{eventId}", region: "europe-west3" },
   async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-    if (!after || !before) return; // creation and deletion aren't status transitions
-    if (before.status === after.status) return;
-    const familyId: string = after.familyId;
-    if (!familyId) return;
-    await autoCreateBillingSchedule(familyId);
+    if (!eventChangeNeedsBillingSync(before, after)) return;
+    await autoCreateBillingSchedule(after!.familyId);
   }
 );
 
@@ -1716,12 +1752,12 @@ function buildPaymentNoticeEmail(opts: {
   clientName: string;
   periodLabel: string;
   total: number;
-  lineItems: { title: string; amount: number; carriedAbsenceCredits?: CarriedAbsenceCredit[] }[];
+  lineItems: { title: string; amount: number; type?: string; carriedAbsenceCredits?: CarriedAbsenceCredit[]; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }[];
   billingId: string;
 }): string {
   const { clientName, periodLabel, total, lineItems } = opts;
   const rows = lineItems.map(li =>
-    `<tr><td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#374151;">${li.title}${carriedCreditsHtml(li.carriedAbsenceCredits)}</td>
+    `<tr><td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#374151;">${li.title}${closureCreditHtml(li)}${carriedCreditsHtml(li.carriedAbsenceCredits)}</td>
      <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;text-align:right;color:#374151;">€${li.amount.toFixed(2)}</td></tr>`
   ).join("");
 
@@ -1760,11 +1796,29 @@ function buildPaymentNoticeEmail(opts: {
 // "Crédito de faltas de Outubro 2026: −€12.00" under the line it lowered (a
 // charge for days restored after payment reads "Acerto de faltas", +€).
 // Exported for billingCarryOver.test.ts.
+// A credit that comes (at least in part) from days the club was closed in
+// that month says so, so it doesn't read as the family's own absences.
 export function carriedCreditText(c: CarriedAbsenceCredit): string {
   const label = periodLabelPt(c.fromPeriod);
+  if (c.amount >= 0 && c.closure) return `Crédito de ${label} (KidClub encerrado): −€${c.amount.toFixed(2)}`;
   return c.amount >= 0
     ? `Crédito de faltas de ${label}: −€${c.amount.toFixed(2)}`
     : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
+}
+
+// "KidClub encerrado (Férias de Natal), 12 dias: −€57.60" under the line it
+// lowered. Transport counts trips, not days. Exported for billing.test.ts;
+// the app has the same wording in lib/billingLines.ts.
+export function closureCreditText(li: { type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }): string {
+  const n = li.closureCount ?? 0;
+  if (!n) return "";
+  const unit = li.type === "transport" ? (n === 1 ? "viagem" : "viagens") : (n === 1 ? "dia" : "dias");
+  return `KidClub encerrado${li.closureLabel ? ` (${li.closureLabel})` : ""}, ${n} ${unit}: −€${(li.closureCreditAmount ?? 0).toFixed(2)}`;
+}
+
+function closureCreditHtml(li: { type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }): string {
+  const text = closureCreditText(li);
+  return text ? `<br><span style="font-size:12px;color:#6b7280;">${escapeHtml(text)}</span>` : "";
 }
 
 function carriedCreditsHtml(credits: CarriedAbsenceCredit[] | undefined): string {

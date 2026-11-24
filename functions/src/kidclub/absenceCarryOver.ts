@@ -11,9 +11,12 @@
 // closed month M and a subscription S on M's bill:
 //   should(M)  the credit M's line would get with M's CURRENT events, on M's own
 //              stored price: net-before-absence = amount + absenceCreditAmount
-//              + whatever M itself received from earlier months; same >=3 gate
-//              and same formula as reconcileService step 4.
-//   granted(M) the credit M's line was actually given (absenceCreditAmount).
+//              + closureCreditAmount + whatever M itself received from earlier
+//              months; same formula as reconcileService step 4: the club's
+//              closure days in full, then the family's absences behind the
+//              >=3 gate.
+//   granted(M) the credit M's line was actually given (absenceCreditAmount +
+//              closureCreditAmount).
 //   carried(M) what other closed bills already carry from M.
 //   outstanding = should - granted - carried
 // Positive: a credit, taken off the next open lines of S, never below EUR 0,
@@ -29,6 +32,8 @@ export interface CarriedAbsenceCredit {
   fromPeriod: string;
   /** Euros. Positive = credit (lowers this line), negative = charge (raises it). */
   amount: number;
+  /** The source month has days on which the club was closed, so (part of) this is a closure credit. */
+  closure?: boolean;
 }
 
 /** The subset of a billing line item the ledger reads and writes. */
@@ -39,6 +44,8 @@ export interface LedgerLine {
   grossAmount?: number;
   absenceCount?: number;
   absenceCreditAmount?: number;
+  /** Credit for days the club was closed (lines written from 2026-11-24). */
+  closureCreditAmount?: number;
   notionalOccurrences?: number;
   carriedAbsenceCredits?: CarriedAbsenceCredit[];
 }
@@ -54,7 +61,10 @@ export interface LedgerBill {
 export interface MonthEvents {
   /** Every event, any status. 0 means the month can't be evaluated. */
   total: number;
+  /** CANCELLED events that are NOT closure days: the family's absences and boundary-month ones. */
   cancelled: number;
+  /** CANCELLED events on days the club was closed (closureLogic.ts). Credited without the >=3 gate. */
+  closed?: number;
   /** The frozen per-occurrence price (basePriceCents) of the month's events. */
   rateCents?: number;
 }
@@ -67,7 +77,7 @@ export interface MonthEvents {
  */
 export const CLOSED_STATUSES = new Set(["paid", "invoiced", "processing", "failed"]);
 
-export interface Outstanding { subscriptionId: string; fromPeriod: string; cents: number }
+export interface Outstanding { subscriptionId: string; fromPeriod: string; cents: number; closure?: boolean }
 export interface SkippedSource { subscriptionId: string; fromPeriod: string; reason: string }
 
 const cents = (eur: number | undefined) => Math.round((eur ?? 0) * 100);
@@ -83,6 +93,17 @@ export function absenceCreditCents(netBeforeCents: number, notional: number, can
   if (cancelled < 3 || notional <= 0 || netBeforeCents <= 0) return 0;
   const perOccurrenceRateCents = netBeforeCents / notional;
   return Math.min(netBeforeCents, Math.round(cancelled * perOccurrenceRateCents));
+}
+
+/**
+ * reconcileService step 4 in full, on cents: closure days first, always, then
+ * the ordinary absence credit on what is left.
+ */
+export function monthCreditCents(netBeforeCents: number, notional: number, cancelled: number, closed: number): { closure: number; absence: number } {
+  if (notional <= 0 || netBeforeCents <= 0) return { closure: 0, absence: 0 };
+  const closure = closed > 0 ? Math.min(netBeforeCents, Math.round(closed * (netBeforeCents / notional))) : 0;
+  const absence = Math.min(netBeforeCents - closure, absenceCreditCents(netBeforeCents, notional, cancelled));
+  return { closure, absence };
 }
 
 /**
@@ -142,12 +163,14 @@ export function outstandingCarryOver(
       const notional = notionalFor(l, ev);
       if (!notional) { skip("notional occurrences unknown (rate changed since, or gross is 0)"); continue; }
 
-      const granted = cents(l.absenceCreditAmount);
+      const granted = cents(l.absenceCreditAmount) + cents(l.closureCreditAmount);
       const netBefore = cents(l.amount) + granted + carriedInCents(l);
-      const should = absenceCreditCents(netBefore, notional, ev.cancelled);
+      const credit = monthCreditCents(netBefore, notional, ev.cancelled, ev.closed ?? 0);
+      const should = credit.closure + credit.absence;
       outstanding.push({
         subscriptionId, fromPeriod: b.period,
         cents: should - granted - (delivered.get(key(subscriptionId, b.period)) ?? 0),
+        ...(credit.closure > 0 ? { closure: true } : {}),
       });
     }
   }
@@ -196,7 +219,7 @@ export function createCarryApplier(outstanding: Outstanding[]) {
           amount -= take;
           r.cents -= take;
           deltaCents -= take;
-          entries.push({ fromPeriod: r.fromPeriod, amount: take / 100 });
+          entries.push({ fromPeriod: r.fromPeriod, amount: take / 100, ...(r.closure && take > 0 ? { closure: true } : {}) });
         }
         if (!entries.length) return base;
         entries.sort((a, b) => a.fromPeriod.localeCompare(b.fromPeriod));

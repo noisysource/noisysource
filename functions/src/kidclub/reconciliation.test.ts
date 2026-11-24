@@ -771,3 +771,78 @@ describe("old pricing: legacyFlatPct bills the flat model the subscription card 
     expect(r.finalCents).toBe(0);
   });
 });
+
+// ── Club closures (2026-11-24) ─────────────────────────────────────────────
+// A day the club itself is closed is credited in full, from the first day,
+// and is not one of the family's absences: it neither counts towards the
+// 3-absence minimum nor is held back by it.
+describe("club closure days are credited in full, apart from the family's absences", () => {
+  const closedOn = (count: number, startDay = 16): ReservationEventLite[] =>
+    Array.from({ length: count }, (_, i) => ({ date: `2026-12-${startDay + i}`, basePriceCents: 600, status: "CANCELLED" as const, closed: true }));
+  const one = (events: ReservationEventLite[], o: Partial<SubscriptionForReconciliation> = {}) =>
+    reconcileService([sub({ id: "s1", ...o })], new Map([["s1", events]]), NO_DISCOUNTS)[0];
+
+  it("16-31 December, Mon-Fri: 12 closed days of a notional 20 take 60% off", () => {
+    const r = one([...occurrences(11), ...closedOn(12)]);
+    expect(r.grossCents).toBe(12000);
+    expect(r.closureCount).toBe(12);
+    expect(r.closureCreditCents).toBe(7200);
+    expect(r.closureDates).toHaveLength(12);
+    expect(r.finalCents).toBe(4800);
+    // Not absences.
+    expect(r.absenceCount).toBe(0);
+    expect(r.absenceDates).toEqual([]);
+    expect(r.absenceCreditCents).toBe(0);
+  });
+
+  it("a single closed day is credited: no 3-day minimum", () => {
+    const r = one([...occurrences(19), ...closedOn(1)]);
+    expect(r.closureCreditCents).toBe(600);
+    expect(r.finalCents).toBe(11400);
+  });
+
+  it("closed days don't help the family reach its own 3 absences", () => {
+    const r = one([...occurrences(10), ...cancelledOn(2, 1), ...closedOn(5)]);
+    expect(r.absenceCount).toBe(2);
+    expect(r.absenceCreditCents).toBe(0);
+    expect(r.closureCreditCents).toBe(3000);
+    expect(r.finalCents).toBe(9000);
+  });
+
+  it("with 3 own absences as well, both credits apply", () => {
+    const r = one([...occurrences(10), ...cancelledOn(3, 1), ...closedOn(5)]);
+    expect(r.absenceCreditCents).toBe(1800);
+    expect(r.absenceCreditDates).toHaveLength(3);
+    expect(r.closureCreditCents).toBe(3000);
+    expect(r.finalCents).toBe(7200);
+  });
+
+  it("the credit is on the price after discounts, like any absence", () => {
+    const r = one([...occurrences(11), ...closedOn(12)], { manualDiscountPct: 0.5 });
+    expect(r.netBeforeAbsenceCents).toBe(6000);
+    expect(r.closureCreditCents).toBe(3600);
+    expect(r.finalCents).toBe(2400);
+  });
+
+  it("never below zero: a month closed throughout (23 working days) bills nothing", () => {
+    const r = one(closedOn(23, 1).map((e, i) => ({ ...e, date: `2026-12-${String(i + 1).padStart(2, "0")}` })));
+    expect(r.closureCreditCents).toBe(12000);
+    expect(r.finalCents).toBe(0);
+  });
+
+  it("closure + absences together never exceed the month", () => {
+    const r = one([...closedOn(18, 1).map((e, i) => ({ ...e, date: `2026-12-${String(i + 1).padStart(2, "0")}` })), ...cancelledOn(5, 24)]);
+    expect(r.closureCreditCents).toBe(10800);
+    expect(r.absenceCreditCents).toBe(1200); // 5 absences would be 3000; only 1200 is left
+    expect(r.finalCents).toBe(0);
+  });
+
+  it("a month with no closed day is exactly as before", () => {
+    const r = one([...occurrences(16), ...cancelledOn(4)]);
+    expect(r.closureCount).toBe(0);
+    expect(r.closureCreditCents).toBe(0);
+    expect(r.closureDates).toEqual([]);
+    expect(r.absenceCreditCents).toBe(2400);
+    expect(r.finalCents).toBe(9600);
+  });
+});

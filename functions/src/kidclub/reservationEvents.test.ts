@@ -913,3 +913,40 @@ describe("elapsed days follow a schedule edit in the months whose bill is repric
     });
   });
 });
+
+// ── Club closures in generation (2026-11-24) ───────────────────────────────
+describe("generators know about club closures", () => {
+  const XMAS = [{ id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" }];
+  const YEAR_END = new Date(2027, 6, 15, 23, 59, 59);
+  const closed = (e: { data: any }) => e.data.status === "CANCELLED" && e.data.changedByRole === "system" && e.data.reason === "club closed";
+
+  it("study: days inside a closure are system absences, the rest EXPECTED", () => {
+    const sub = { familyId: "f", childId: "c", days: [{ day: "monday" }, { day: "friday" }], weekPattern: "all" };
+    const events = generateStudyEvents(sub, "s1", 6, new Date(2026, 11, 1), new Date(2027, 0, 10), undefined, XMAS);
+    expect(events.filter(closed).map(e => e.data.date)).toEqual(["2026-12-18", "2026-12-21", "2026-12-25", "2026-12-28"]);
+    expect(events.filter(e => !closed(e)).every(e => e.data.status === "EXPECTED" && e.data.changedByRole === undefined)).toBe(true);
+  });
+
+  it("transport: every trip of a closed day", () => {
+    const sub = { familyId: "f", childId: "c", schedule: [{ dayOfWeek: "monday" }, { dayOfWeek: "monday" }], weekPattern: "all" };
+    const events = generateTransportEvents(sub, "t1", 4, new Date(2026, 11, 14), new Date(2026, 11, 22), undefined, XMAS);
+    expect(events.map(e => [e.id, closed(e)])).toEqual([["t1_2026-12-14_0", false], ["t1_2026-12-14_1", false], ["t1_2026-12-21_0", true], ["t1_2026-12-21_1", true]]);
+  });
+
+  it("outside the contract wins over closed: a pre-start day stays 'before subscription start'", () => {
+    const sub = { familyId: "f", childId: "c", days: [{ day: "monday" }], weekPattern: "all", startDate: "2026-12-28" };
+    const events = generateStudyEvents(sub, "s1", 6, new Date(2026, 11, 1), new Date(2026, 11, 31), { start: coerceStartDate(sub.startDate) }, XMAS);
+    expect(events.find(e => e.data.date === "2026-12-21")!.data.reason).toBe(REASON_BEFORE_START);
+    expect(closed(events.find(e => e.data.date === "2026-12-28")!)).toBe(true);
+  });
+
+  it("planRegeneration counts the closure absences it creates, and none on a rerun", () => {
+    const sub = { familyId: "f", childId: "c", days: [{ day: "monday" }, { day: "friday" }], weekPattern: "all" };
+    const input = { sub, subId: "s1", type: "study" as const, rate: 6, today: new Date(2026, 10, 24), contractEnd: YEAR_END, windowEnd: YEAR_END, closures: XMAS };
+    const first = planRegeneration({ ...input, existing: [] });
+    expect(first.newClosureAbsences).toBe(4);
+    const again = planRegeneration({ ...input, existing: first.toCreate.map(e => ({ id: e.id, date: e.data.date, status: e.data.status, changedByRole: e.data.changedByRole, reason: e.data.reason })) });
+    expect(again.newClosureAbsences).toBe(0);
+    expect(again.toVoid).toEqual([]);
+  });
+});

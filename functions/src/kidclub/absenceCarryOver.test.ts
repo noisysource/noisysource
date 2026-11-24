@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  absenceCreditCents, outstandingCarryOver, createCarryApplier, notionalFor, periodLabelPt,
+  absenceCreditCents, monthCreditCents, outstandingCarryOver, createCarryApplier, notionalFor, periodLabelPt,
   LedgerBill, LedgerLine, MonthEvents,
 } from "./absenceCarryOver";
 import { reconcileService } from "./reconciliation";
@@ -216,5 +216,73 @@ describe("old and odd line shapes", () => {
   it("labels a period the way bills do", () => {
     expect(periodLabelPt("2026-10")).toBe("Outubro 2026");
     expect(periodLabelPt("2027-03")).toBe("Março 2027");
+  });
+});
+
+// ── Club closures (2026-11-24) ─────────────────────────────────────────────
+// A closure entered after the month's bill was paid: the paid bill is not
+// touched, and the closure credit goes on the next open bill of the same
+// subscription, like any other credit from a closed month. December 2026 for
+// Mon/Fri: Fri 4, 11, 18, 25; Mon 7, 14, 21, 28. Closed 16-31 = 4 occurrences.
+describe("closure days in a paid month carry to the next open bill", () => {
+  const dec = (cancelled: number, closed: number) => (period: string, subId: string): MonthEvents | undefined =>
+    subId === S && period === "2026-12" ? { total: 8, cancelled, closed, rateCents: 600 } : undefined;
+  const run = (decLine: LedgerLine, ev: ReturnType<typeof dec>, open: [string, LedgerLine[]][]) => {
+    const { outstanding } = outstandingCarryOver([bill("2026-12", "paid", [decLine])], ev);
+    const carry = createCarryApplier(outstanding);
+    return { outstanding, applied: open.map(([period, lines]) => carry.apply(period, lines)), unapplied: carry.unapplied() };
+  };
+
+  it("December paid in full, then closed 16-31: EUR 24 comes off January, flagged as a closure credit", () => {
+    const { outstanding, applied } = run(line(), dec(0, 4), [["2027-01", [line()]]]);
+    expect(outstanding).toEqual([{ subscriptionId: S, fromPeriod: "2026-12", cents: 2400, closure: true }]);
+    expect(applied[0].lines[0].amount).toBe(24);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 24, closure: true }]);
+  });
+
+  it("even one or two closed days carry: the 3-absence minimum doesn't apply to a closure", () => {
+    const { applied } = run(line(), dec(0, 2), [["2027-01", [line()]]]);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 12, closure: true }]);
+    // The same two days as the family's own absences earn nothing.
+    expect(run(line(), dec(2, 0), [["2027-01", [line()]]]).applied[0].lines[0].carriedAbsenceCredits).toBeUndefined();
+  });
+
+  it("a bill that already gave the closure credit owes nothing more", () => {
+    const paidWithCredit = line({ amount: 24, closureCreditAmount: 24 });
+    const { outstanding, applied } = run(paidWithCredit, dec(0, 4), [["2027-01", [line()]]]);
+    expect(outstanding[0].cents).toBe(0);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toBeUndefined();
+  });
+
+  it("the closure is removed after a credited December was paid: the credit is charged back", () => {
+    const paidWithCredit = line({ amount: 24, closureCreditAmount: 24 });
+    const { applied } = run(paidWithCredit, dec(0, 0), [["2027-01", [line()]]]);
+    expect(applied[0].lines[0].amount).toBe(72);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: -24 }]);
+  });
+
+  it("no later open bill of that subscription: left unapplied, for the caller to report", () => {
+    const { unapplied } = run(line(), dec(0, 4), []);
+    expect(unapplied).toEqual([{ subscriptionId: S, fromPeriod: "2026-12", cents: 2400, closure: true }]);
+  });
+
+  it("agrees with reconcileService for every mix of closed days and absences", () => {
+    for (let closed = 0; closed <= 9; closed++) {
+      for (let cancelled = 0; closed + cancelled <= 9; cancelled++) {
+        const evs = Array.from({ length: 9 }, (_, i) => ({
+          date: `2026-12-${String(i + 1).padStart(2, "0")}`, basePriceCents: 600,
+          status: (i < closed + cancelled ? "CANCELLED" : "EXPECTED") as "CANCELLED" | "EXPECTED",
+          ...(i < closed ? { closed: true } : {}),
+        }));
+        const [r] = reconcileService(
+          [{ id: S, childId: "c", manualDiscountPct: 0.15, enrollmentDate: new Date(2026, 8, 1),
+            scheduleWeekdays: ["monday", "friday"], weekPattern: "all", ratePerOccurrenceCents: 600, coversPeriod: true }],
+          new Map([[S, evs]]),
+          { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0 },
+        );
+        expect(monthCreditCents(r.netBeforeAbsenceCents, r.notionalOccurrences, cancelled, closed))
+          .toEqual({ closure: r.closureCreditCents, absence: r.absenceCreditCents });
+      }
+    }
   });
 });

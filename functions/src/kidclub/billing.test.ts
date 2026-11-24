@@ -100,7 +100,7 @@ vi.mock("./vendus", async (importOriginal) => ({
   findOrCreateClientByNif: vi.fn(),
 }));
 
-import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId, onAdhocRegistrationBillingSync } from "./billing";
+import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId, onAdhocRegistrationBillingSync, eventChangeNeedsBillingSync, closureCreditText, carriedCreditText } from "./billing";
 import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, PRODUCT_STUDY } from "./vendus";
 
 const { state } = fake;
@@ -535,5 +535,52 @@ describe("one-off events on the monthly bill (onAdhocRegistrationBillingSync →
     await run(undefined, reg({ payment: "now" }));
     await run(reg(), reg({ pickupNotes: "Avó" }));
     expect(state.docs[billId]).toBeUndefined();
+  });
+});
+
+// A club closure (closures.ts) rewrites many events of many families at once
+// and recomputes each family itself; the per-event trigger must not join in.
+describe("eventChangeNeedsBillingSync — which event writes recompute a family's bills", () => {
+  const e = (o: Record<string, any> = {}) => ({ familyId: "fam1", status: "EXPECTED", ...o });
+
+  it("a status change does, as before", () => {
+    expect(eventChangeNeedsBillingSync(e(), e({ status: "CANCELLED", changedByRole: "parent" }))).toBe(true);
+    expect(eventChangeNeedsBillingSync(e({ status: "CANCELLED" }), e({ status: "VOIDED" }))).toBe(true);
+  });
+
+  it("creation, deletion, an unchanged status and an event with no family don't", () => {
+    expect(eventChangeNeedsBillingSync(undefined, e())).toBe(false);
+    expect(eventChangeNeedsBillingSync(e(), undefined)).toBe(false);
+    expect(eventChangeNeedsBillingSync(e(), e({ reason: "x" }))).toBe(false);
+    expect(eventChangeNeedsBillingSync(e({ familyId: "" }), e({ familyId: "", status: "CANCELLED" }))).toBe(false);
+  });
+
+  it("a write made by a closure sync doesn't: closing a day, and reopening it", () => {
+    const closed = e({ status: "CANCELLED", changedByRole: "system", reason: "club closed", closureSyncId: "run1" });
+    expect(eventChangeNeedsBillingSync(e(), closed)).toBe(false);
+    expect(eventChangeNeedsBillingSync(closed, e({ closureSyncId: "run2" }))).toBe(false);
+  });
+
+  it("a later change to an event a sync once touched does again", () => {
+    const reopened = e({ closureSyncId: "run2" });
+    expect(eventChangeNeedsBillingSync(reopened, { ...reopened, status: "CANCELLED", changedByRole: "parent" })).toBe(true);
+    expect(eventChangeNeedsBillingSync({ ...reopened, status: "CANCELLED" }, { ...reopened, status: "VOIDED" })).toBe(true);
+  });
+});
+
+describe("closure wording on the bill", () => {
+  it("study counts days, transport counts trips", () => {
+    expect(closureCreditText({ type: "study", closureCount: 12, closureCreditAmount: 57.6, closureLabel: "Férias de Natal" }))
+      .toBe("KidClub encerrado (Férias de Natal), 12 dias: −€57.60");
+    expect(closureCreditText({ type: "transport", closureCount: 1, closureCreditAmount: 4 })).toBe("KidClub encerrado, 1 viagem: −€4.00");
+    expect(closureCreditText({ type: "study", closureCount: 1, closureCreditAmount: 6 })).toBe("KidClub encerrado, 1 dia: −€6.00");
+  });
+  it("nothing when the month has no closed day", () => {
+    expect(closureCreditText({ type: "study" })).toBe("");
+    expect(closureCreditText({ type: "study", closureCount: 0, closureCreditAmount: 0 })).toBe("");
+  });
+  it("a credit carried from a closed month says the club was closed; a charge-back keeps the old wording", () => {
+    expect(carriedCreditText({ fromPeriod: "2026-12", amount: 24, closure: true })).toBe("Crédito de Dezembro 2026 (KidClub encerrado): −€24.00");
+    expect(carriedCreditText({ fromPeriod: "2026-12", amount: -24 })).toBe("Acerto de faltas de Dezembro 2026: +€24.00");
   });
 });
