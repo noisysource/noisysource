@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  absenceCreditCents, outstandingCarryOver, createCarryApplier, notionalFor, periodLabelPt,
+  absenceCreditCents, monthCreditCents, outstandingCarryOver, createCarryApplier, notionalFor, periodLabelPt,
   LedgerBill, LedgerLine, MonthEvents,
 } from "./absenceCarryOver";
 import { reconcileService } from "./reconciliation";
@@ -216,5 +216,89 @@ describe("old and odd line shapes", () => {
   it("labels a period the way bills do", () => {
     expect(periodLabelPt("2026-10")).toBe("Outubro 2026");
     expect(periodLabelPt("2027-03")).toBe("Março 2027");
+  });
+});
+
+// ── Club closures (2026-11-24) ─────────────────────────────────────────────
+// A closure entered after the month's bill was paid: the paid bill is not
+// touched, and the credit the bill WOULD have shown goes on the next open bill
+// of the same subscription. December 2026 for Mon/Fri: Fri 4, 11, 18, 25;
+// Mon 7, 14, 21, 28 = 8 real days. Closed 16-31 = 18, 21, 25, 28.
+describe("a closure in a paid month carries to the next open bill", () => {
+  const XMAS = { id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" };
+  const CLOSED4 = ["2026-12-18", "2026-12-21", "2026-12-25", "2026-12-28"];
+  const dec = (cancelled: number, closedDates: string[]) => (period: string, subId: string): MonthEvents | undefined =>
+    subId === S && period === "2026-12" ? { total: 8, scheduled: 8, cancelled, closedDates, rateCents: 600 } : undefined;
+  const run = (decLine: LedgerLine, ev: ReturnType<typeof dec>, open: [string, LedgerLine[]][], closures: any[] = [XMAS]) => {
+    const { outstanding } = outstandingCarryOver([bill("2026-12", "paid", [decLine])], ev, closures);
+    const carry = createCarryApplier(outstanding);
+    return { outstanding, applied: open.map(([period, lines]) => carry.apply(period, lines)), unapplied: carry.unapplied() };
+  };
+
+  it("no percentage: 4 of December's 8 real days come off January, flagged as a closure credit", () => {
+    const { outstanding, applied } = run(line(), dec(0, CLOSED4), [["2027-01", [line()]]]);
+    expect(outstanding).toEqual([{ subscriptionId: S, fromPeriod: "2026-12", cents: 2400, closure: true }]);
+    expect(applied[0].lines[0].amount).toBe(24);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 24, closure: true }]);
+  });
+
+  it("a typed percentage carries as that percentage, however few days were closed", () => {
+    const { applied } = run(line(), dec(0, ["2026-12-28"]), [["2027-01", [line()]]], [{ ...XMAS, percent: 25 }]);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 12, closure: true }]);
+  });
+
+  it("one or two closed days carry: the 3-absence minimum doesn't apply to a closure", () => {
+    const { applied } = run(line(), dec(0, CLOSED4.slice(2)), [["2027-01", [line()]]]);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 12, closure: true }]);
+    // The same two days as the family's own absences earn nothing.
+    expect(run(line(), dec(2, []), [["2027-01", [line()]]]).applied[0].lines[0].carriedAbsenceCredits).toBeUndefined();
+  });
+
+  it("a bill that already gave the closure credit owes nothing more", () => {
+    const paidWithCredit = line({ amount: 24, closureCreditAmount: 24 });
+    const { outstanding, applied } = run(paidWithCredit, dec(0, CLOSED4), [["2027-01", [line()]]]);
+    expect(outstanding[0].cents).toBe(0);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toBeUndefined();
+  });
+
+  it("the percentage is changed after December was paid with it: only the difference moves", () => {
+    const paidAt25 = line({ amount: 36, closureCreditAmount: 12 });
+    const { applied } = run(paidAt25, dec(0, CLOSED4), [["2027-01", [line()]]], [{ ...XMAS, percent: 50 }]);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: 12, closure: true }]);
+  });
+
+  it("the closure is removed after a credited December was paid: the credit is charged back", () => {
+    const paidWithCredit = line({ amount: 24, closureCreditAmount: 24 });
+    const { applied } = run(paidWithCredit, dec(0, []), [["2027-01", [line()]]], []);
+    expect(applied[0].lines[0].amount).toBe(72);
+    expect(applied[0].lines[0].carriedAbsenceCredits).toEqual([{ fromPeriod: "2026-12", amount: -24 }]);
+  });
+
+  it("no later open bill of that subscription: left unapplied, for the caller to report", () => {
+    const { unapplied } = run(line(), dec(0, CLOSED4), []);
+    expect(unapplied).toEqual([{ subscriptionId: S, fromPeriod: "2026-12", cents: 2400, closure: true }]);
+  });
+
+  it("agrees with reconcileService for every mix of closed days and absences, with and without a percentage", () => {
+    for (const closures of [[{ id: "a", from: "2026-12-01", to: "2026-12-31", label: "A" }], [{ id: "a", from: "2026-12-01", to: "2026-12-31", label: "A", percent: 35 }]]) {
+      for (let closed = 0; closed <= 9; closed++) {
+        for (let cancelled = 0; closed + cancelled <= 9; cancelled++) {
+          const evs = Array.from({ length: 9 }, (_, i) => ({
+            date: `2026-12-${String(i + 1).padStart(2, "0")}`, basePriceCents: 600,
+            status: (i < closed + cancelled ? "CANCELLED" : "EXPECTED") as "CANCELLED" | "EXPECTED",
+            ...(i < closed ? { closed: true } : {}),
+          }));
+          const [r] = reconcileService(
+            [{ id: S, childId: "c", manualDiscountPct: 0.15, enrollmentDate: new Date(2026, 8, 1),
+              scheduleWeekdays: ["monday", "friday"], weekPattern: "all", ratePerOccurrenceCents: 600, coversPeriod: true }],
+            new Map([[S, evs]]),
+            { multiTripDiscountPct: 0, minTripsPerDay: 2, siblingDiscountPct: 0, schoolDiscounts: [], returningStudentDiscountPct: 0, closures },
+          );
+          expect(monthCreditCents(r.netBeforeAbsenceCents, r.notionalOccurrences, cancelled,
+            { dates: evs.filter(e => "closed" in e).map(e => e.date), scheduled: 9, closures }))
+            .toEqual({ closure: r.closureCreditCents, absence: r.absenceCreditCents });
+        }
+      }
+    }
   });
 });

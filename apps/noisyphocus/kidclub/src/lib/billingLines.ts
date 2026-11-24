@@ -12,6 +12,8 @@ export interface BillLine {
   title?: string;
   amount: number;
   absenceCreditAmount: number;
+  /** Credit for days the club was closed this month (0 when there were none). */
+  closureCreditAmount: number;
   /** Net credit carried in from paid months (positive lowers `amount`). */
   carriedCredit: number;
   grossAmount: number;
@@ -28,6 +30,7 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
     title: l.title,
     amount: l.amount ?? 0,
     absenceCreditAmount: l.absenceCreditAmount ?? 0,
+    closureCreditAmount: l.closureCreditAmount ?? 0,
     carriedCredit: (l.carriedAbsenceCredits ?? []).reduce((n: number, c: any) => n + (c?.amount ?? 0), 0),
     grossAmount: l.grossAmount ?? l.amount ?? 0,
     multiTripDiscountAmount: l.multiTripDiscountAmount ?? 0,
@@ -36,8 +39,8 @@ export const toBillLines = (raw: any[] | undefined): BillLine[] =>
     legacyPricing: !!l.legacyPricing,
   }));
 
-/** The standard monthly amount: net of discounts, before absence credits (this month's and any carried in). */
-export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount + l.carriedCredit) * 100) / 100;
+/** The standard monthly amount: net of discounts, before absence and closure credits (this month's and any carried in). */
+export const lineNet = (l: BillLine) => Math.round((l.amount + l.absenceCreditAmount + l.closureCreditAmount + l.carriedCredit) * 100) / 100;
 
 const MONTHS_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
@@ -52,11 +55,47 @@ export function periodLabelPt(period: string): string {
  * taken off this line. Negative: "Acerto de faltas", days restored after the
  * credit was paid out. Same wording as the payment email (billing.ts).
  */
-export function carriedCreditText(c: { fromPeriod: string; amount: number }): string {
+export function carriedCreditText(c: { fromPeriod: string; amount: number; closure?: boolean }): string {
   const label = periodLabelPt(c.fromPeriod);
+  // A credit that comes (at least in part) from days the club was closed says so.
+  if (c.amount >= 0 && c.closure) return `Crédito de ${label} (KidClub encerrado): −€${c.amount.toFixed(2)}`;
   return c.amount >= 0
     ? `Crédito de faltas de ${label}: −€${c.amount.toFixed(2)}`
     : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
+}
+
+const MONTHS_SHORT_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+function closureRangeText(from: string | undefined, to: string | undefined): string {
+  if (!from || !to) return '';
+  const month = MONTHS_SHORT_PT[Number(from.slice(5, 7)) - 1] ?? '';
+  const a = Number(from.slice(8, 10)), b = Number(to.slice(8, 10));
+  return a === b ? `${a} ${month}` : `${a}–${b} ${month}`;
+}
+
+interface ClosureTextLine {
+  type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string;
+  closureParts?: { label: string; from?: string; to?: string; count: number; percent?: number; amount: number }[];
+}
+
+/**
+ * One text per closure credited on a line, to show under it:
+ * "KidClub encerrado (Férias de Natal), 16–31 Dez, 4 dias, 50%: −€24.00".
+ * The days closed are always there (transport counts trips); the percentage
+ * only when one was typed on the closure. Empty when the month had no closed
+ * day. Same wording as the payment email (closureCreditTexts in
+ * functions/src/kidclub/billing.ts).
+ */
+export function closureCreditTexts(li: ClosureTextLine): string[] {
+  if (!li.closureCount) return [];
+  const parts: NonNullable<ClosureTextLine['closureParts']> = li.closureParts?.length
+    ? li.closureParts
+    : [{ label: li.closureLabel ?? '', count: li.closureCount, amount: li.closureCreditAmount ?? 0 }];
+  return parts.map(p => {
+    const unit = li.type === 'transport' ? (p.count === 1 ? 'viagem' : 'viagens') : (p.count === 1 ? 'dia' : 'dias');
+    const bits = [closureRangeText(p.from, p.to), `${p.count} ${unit}`, p.percent !== undefined ? `${p.percent}%` : ''].filter(Boolean);
+    return `KidClub encerrado${p.label ? ` (${p.label})` : ''}, ${bits.join(', ')}: −€${p.amount.toFixed(2)}`;
+  });
 }
 
 /** yyyy-mm of a billing doc, from periodStart (Timestamp/Date/string) or the `_yyyy-mm` id suffix. */

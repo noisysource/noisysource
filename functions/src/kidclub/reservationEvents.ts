@@ -3,6 +3,8 @@ import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { appCol } from "./db";
 import { autoCreateBillingSchedule } from "./billing";
+import { Closure, REASON_CLOSED, closureFor, isClosureAbsence, readClosures } from "./closureLogic";
+import { MonthlyBillLite, repricedMonths } from "./repricedMonths";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -203,13 +205,19 @@ export interface ContractBounds {
   end?: Date | null;
 }
 
-function boundaryStatus(dateIso: string, bounds?: ContractBounds):
+// Order matters: a day outside the contract is "not enrolled" whether or not
+// the club was open, so a club-wide closure (closureLogic.ts) only applies to
+// days the subscription would otherwise have been served.
+function boundaryStatus(dateIso: string, bounds?: ContractBounds, closures?: Closure[]):
   { status: "EXPECTED" } | { status: "CANCELLED"; changedByRole: "system"; reason: string } {
   if (bounds?.start && dateIso < isoDate(bounds.start)) {
     return { status: "CANCELLED", changedByRole: "system", reason: REASON_BEFORE_START };
   }
   if (bounds?.end && dateIso > isoDate(bounds.end)) {
     return { status: "CANCELLED", changedByRole: "system", reason: REASON_AFTER_END };
+  }
+  if (closureFor(dateIso, closures)) {
+    return { status: "CANCELLED", changedByRole: "system", reason: REASON_CLOSED };
   }
   return { status: "EXPECTED" };
 }
@@ -264,10 +272,19 @@ interface NewEvent {
   legIndex?: number;
   basePriceCents: number;
   status: "EXPECTED" | "CANCELLED";
-  /** Only set on system-written boundary absences — never on a human's. */
-  changedByRole?: "system";
-  /** REASON_BEFORE_START / REASON_AFTER_END, on system-written absences only. */
+  /**
+   * "system" on the absences generation writes itself (boundary months, club
+   * closures). "parent"/"staff" only when a schedule edit moves a recorded
+   * absence onto its occurrence's new id (see planWindow).
+   */
+  changedByRole?: "system" | "parent" | "staff";
+  /** REASON_BEFORE_START / REASON_AFTER_END / REASON_CLOSED on system absences; a human's own reason when moved. */
   reason?: string;
+  /** Transport only: which version of the schedule `legIndex` points into (scheduleKeyOf). */
+  scheduleKey?: string;
+  /** Only when a human-recorded event is moved: who changed it, and when. */
+  changedBy?: string;
+  changedAt?: unknown;
   createdAt: admin.firestore.FieldValue;
 }
 
@@ -304,7 +321,7 @@ function hasFamilyId(sub: any, subId: string, type: "study" | "transport"): bool
   return false;
 }
 
-export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date, bounds?: ContractBounds): { id: string; data: NewEvent }[] {
+export function generateStudyEvents(sub: any, subId: string, ratePerDay: number, from: Date, to: Date, bounds?: ContractBounds, closures?: Closure[]): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
   if (!hasFamilyId(sub, subId, "study")) return out;
   const days: { day: string; hour: string }[] = sub.days ?? [];
@@ -319,7 +336,7 @@ export function generateStudyEvents(sub: any, subId: string, ratePerDay: number,
         data: {
           subscriptionId: subId, subscriptionType: "study", familyId: sub.familyId, childId: sub.childId,
           date, basePriceCents: Math.round(ratePerDay * 100),
-          ...boundaryStatus(date, bounds),
+          ...boundaryStatus(date, bounds, closures),
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         },
       });
@@ -329,7 +346,7 @@ export function generateStudyEvents(sub: any, subId: string, ratePerDay: number,
   return out;
 }
 
-export function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date, bounds?: ContractBounds): { id: string; data: NewEvent }[] {
+export function generateTransportEvents(sub: any, subId: string, ratePerTrip: number, from: Date, to: Date, bounds?: ContractBounds, closures?: Closure[]): { id: string; data: NewEvent }[] {
   const out: { id: string; data: NewEvent }[] = [];
   if (!hasFamilyId(sub, subId, "transport")) return out;
   const schedule: { dayOfWeek: string; direction?: string }[] = sub.schedule ?? [];
@@ -337,20 +354,21 @@ export function generateTransportEvents(sub: any, subId: string, ratePerTrip: nu
   // Keep each entry's position in the original schedule array — it's what
   // makes two same-day legs distinguishable (see eventDocId).
   const indexed = schedule.map((s, legIndex) => ({ ...s, legIndex }));
+  const scheduleKey = scheduleKeyOf(schedule);
   const cursor = new Date(from);
   while (cursor <= to) {
     const weekday = NUM_TO_WEEKDAY[cursor.getDay()];
     const matches = indexed.filter(s => s.dayOfWeek === weekday);
     if (matches.length && isActiveThisWeek(cursor, sub.weekPattern ?? "all")) {
       const date = isoDate(cursor);
-      const boundary = boundaryStatus(date, bounds);
+      const boundary = boundaryStatus(date, bounds, closures);
       for (const m of matches) {
         const direction = (m.direction ?? "both") as "pickup" | "dropoff" | "both";
         out.push({
           id: eventDocId(subId, date, m.legIndex),
           data: {
             subscriptionId: subId, subscriptionType: "transport", familyId: sub.familyId, childId: sub.childId,
-            date, direction, legIndex: m.legIndex,
+            date, direction, legIndex: m.legIndex, scheduleKey,
             basePriceCents: Math.round(ratePerTrip * 100),
             ...boundary,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -474,7 +492,7 @@ async function resolveGenerationEnd(sub: any, subId: string, type: string): Prom
 // day back to EXPECTED and wipe real absences.
 async function ensureEventsExist(
   sub: any, subId: string, type: "study" | "transport",
-  configs: { studyConfig: any; transportConfig: any }, requestedFrom: Date,
+  configs: GenerationConfigs, requestedFrom: Date,
 ): Promise<number> {
   const from = resolveGenerationWindowStart(sub, requestedFrom);
   const ends = await resolveGenerationEnd(sub, subId, type);
@@ -483,8 +501,8 @@ async function ensureEventsExist(
   const bounds: ContractBounds = { start: coerceStartDate(sub?.startDate), end: contractEnd };
 
   const events = type === "study"
-    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to, bounds)
-    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to, bounds);
+    ? generateStudyEvents(sub, subId, studyPerDayRate(configs.studyConfig), from, to, bounds, configs.closures)
+    : generateTransportEvents(sub, subId, configs.transportConfig?.flatRatePerTrip ?? 0, from, to, bounds, configs.closures);
   if (!events.length) return 0;
 
   const existing = await appCol("reservationEvents")
@@ -502,43 +520,239 @@ function isPreStartAbsence(e: NewEvent): boolean {
   return e.status === "CANCELLED" && e.changedByRole === "system" && e.reason === REASON_BEFORE_START;
 }
 
-export interface ExistingEventLite { id: string; date: string; changedByRole?: string }
+export interface ExistingEventLite {
+  id: string;
+  date: string;
+  changedByRole?: string;
+  /** Transport: the schedule version the event's leg index was written for. Missing on events older than 2026-11-24. */
+  scheduleKey?: string;
+  /** Missing = live (EXPECTED or CANCELLED). Only "VOIDED" changes anything here. */
+  status?: string;
+  reason?: string;
+  changedBy?: string;
+  changedAt?: unknown;
+}
+
+// ── Leg indexes across a schedule edit ──────────────────────────────────────
+// A transport event id ends in its leg's INDEX in the schedule array
+// (eventDocId). Removing or reordering entries shifts those indexes: with
+// [Mon am, Mon pm, Tue am, Tue pm] -> [Mon am, Tue am], Tuesday morning moves
+// from index 2 to index 1. Matching old and new events by id alone would then
+// treat Tuesday morning's event as stale and its recorded absence would be
+// lost. This maps each OLD index to the NEW index of the same trip, or leaves
+// it out when the trip was removed.
+//   1. an entry that is unchanged (every field equal) is the same trip;
+//   2. else same weekday and same direction (morning/afternoon), in order;
+//   3. else, when a weekday has exactly one old and one new entry left, that
+//      one entry was edited rather than replaced.
+
+function canonical(v: any): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map(k => `${k}:${canonical(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+
+/**
+ * A short fingerprint of a transport schedule, stamped on every event
+ * generated from it. It answers "was this event's leg index written for the
+ * schedule as it is now?", which is what keeps the index mapping below from
+ * being applied twice when a trigger run is delivered again: an event already
+ * carrying the new key is matched by its own id.
+ */
+export function scheduleKeyOf(schedule: any[] | undefined): string {
+  const text = canonical(schedule ?? []);
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+// Same inference as inferDirection in packages/shared/models/Transportation.ts.
+function legDirection(s: any): string {
+  return s?.direction ?? ((s?.pickupTime ?? "08:00") >= "12:00" ? "dropoff" : "pickup");
+}
+
+export function buildLegIndexMap(before: any[] | undefined, after: any[] | undefined): Map<number, number> {
+  const oldS = before ?? [];
+  const newS = after ?? [];
+  const map = new Map<number, number>();
+  const taken = new Set<number>();
+  const pair = (same: (o: any, n: any) => boolean) => {
+    oldS.forEach((o, i) => {
+      if (map.has(i)) return;
+      const j = newS.findIndex((n, k) => !taken.has(k) && same(o, n));
+      if (j >= 0) { map.set(i, j); taken.add(j); }
+    });
+  };
+  pair((o, n) => canonical(o) === canonical(n));
+  pair((o, n) => o?.dayOfWeek === n?.dayOfWeek && legDirection(o) === legDirection(n));
+  const leftOld = oldS.map((o, i) => ({ o, i })).filter(x => !map.has(x.i));
+  const leftNew = newS.map((n, j) => ({ n, j })).filter(x => !taken.has(x.j));
+  for (const x of leftOld) {
+    const sameDayOld = leftOld.filter(y => y.o?.dayOfWeek === x.o?.dayOfWeek);
+    const sameDayNew = leftNew.filter(y => y.n?.dayOfWeek === x.o?.dayOfWeek);
+    if (sameDayOld.length === 1 && sameDayNew.length === 1) { map.set(x.i, sameDayNew[0].j); taken.add(sameDayNew[0].j); }
+  }
+  return map;
+}
+
+// The leg index an existing transport event was written for, read back off
+// its id (`${subId}_${date}_${legIndex}`). Undefined for a study event.
+function legIndexOfId(id: string, subId: string, date: string): number | undefined {
+  const prefix = `${subId}_${date}_`;
+  if (!id.startsWith(prefix)) return undefined;
+  const n = Number(id.slice(prefix.length));
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+/**
+ * Old events against newly generated ones, over one stretch of dates.
+ *
+ * Each live existing event stands for one occurrence of the NEW schedule (its
+ * "target"): its own id, or, across a transport schedule edit, the id its trip
+ * has under the new leg indexes (buildLegIndexMap). No target = the occurrence
+ * is gone.
+ *   - A human-recorded event whose target is its own id is left exactly as it
+ *     is (it keeps its old scheduleKey, which is harmless: an event only stays
+ *     in place when its index maps to itself, so mapping it again changes
+ *     nothing). One whose target is another id is MOVED: the new id is written with
+ *     the recorded status, author and reason, and the old id is voided or
+ *     rewritten like any other.
+ *   - mode "rewrite" (today onward): every other generated event is written.
+ *   - mode "fill" (elapsed days): a generated event is written only when
+ *     nothing live stands for it yet (missing, VOIDED, or its id is held by an
+ *     event of another trip). Elapsed days that already agree are not touched.
+ *   - An existing event whose id the new schedule no longer generates is
+ *     voided ("fill" skips the ones already VOIDED).
+ */
+function planWindow(
+  generated: { id: string; data: NewEvent }[],
+  existing: ExistingEventLite[],
+  opts: { subId: string; mode: "rewrite" | "fill"; legIndexMap?: Map<number, number>; scheduleKey?: string },
+): { toCreate: { id: string; data: NewEvent }[]; toVoid: string[] } {
+  const genById = new Map(generated.map(g => [g.id, g]));
+  const live = (e: ExistingEventLite) => e.status !== "VOIDED";
+  const targetOf = (e: ExistingEventLite): string | null => {
+    let id = e.id;
+    // Only an event written for ANOTHER version of the schedule has an index
+    // to translate (see scheduleKeyOf).
+    if (opts.legIndexMap && e.scheduleKey !== opts.scheduleKey) {
+      const leg = legIndexOfId(e.id, opts.subId, e.date);
+      if (leg !== undefined) {
+        const to = opts.legIndexMap.get(leg);
+        if (to === undefined) return null;
+        id = eventDocId(opts.subId, e.date, to);
+      }
+    }
+    return genById.has(id) ? id : null;
+  };
+
+  const targets = new Map<string, string | null>();
+  const human = new Map<string, ExistingEventLite>(); // target id -> the human-recorded event that stands for it
+  for (const e of existing) {
+    if (!live(e)) continue;
+    const t = targetOf(e);
+    targets.set(e.id, t);
+    if (t && isHumanRecorded(e) && !human.has(t)) human.set(t, e);
+  }
+
+  const existingById = new Map(existing.map(e => [e.id, e]));
+  const toCreate: { id: string; data: NewEvent }[] = [];
+  for (const g of generated) {
+    const h = human.get(g.id);
+    if (h && h.id === g.id) continue; // recorded by a human, still in place
+    // A system absence (outside the contract, club closed) is not something a
+    // recorded status can overrule, so the move only applies to served days.
+    if (h && g.data.changedByRole !== "system" && (h.status === "EXPECTED" || h.status === "CANCELLED")) {
+      toCreate.push({
+        id: g.id,
+        data: {
+          ...g.data, status: h.status, changedByRole: h.changedByRole as "parent" | "staff",
+          ...(h.changedBy ? { changedBy: h.changedBy } : {}),
+          ...(h.changedAt ? { changedAt: h.changedAt } : {}),
+          ...(h.reason ? { reason: h.reason } : {}),
+        },
+      });
+      continue;
+    }
+    if (opts.mode === "rewrite") { toCreate.push(g); continue; }
+    const at = existingById.get(g.id);
+    if (at && live(at) && targets.get(at.id) === g.id) continue; // already agrees
+    toCreate.push(g);
+  }
+  const toVoid = existing
+    .filter(e => !genById.has(e.id) && (opts.mode === "rewrite" || live(e)))
+    .map(e => e.id);
+  return { toCreate, toVoid };
+}
+
+// The first day the elapsed-days pass reads and writes: the 1st of the
+// earliest followed month, but never before the 1st of the subscription's own
+// start month (months wholly before the contract get no events at all). Null
+// when there is nothing before today to follow.
+function resolveFollowStart(sub: any, followMonths: string[], today: Date): Date | null {
+  if (!followMonths.length) return null;
+  const [y, m] = [...followMonths].sort()[0].split("-").map(Number);
+  let start = new Date(y, m - 1, 1);
+  const subStart = coerceStartDate(sub?.startDate);
+  if (subStart && startOfMonth(subStart) > start) start = startOfMonth(subStart);
+  return start < today ? start : null;
+}
 
 /**
  * What one regeneration writes, decided without Firestore so it can be tested.
  *
- * Two parts, with different rules:
- *   1. Today onward: exactly as before. The generated window is rewritten,
- *      human-recorded events are kept, stale ones voided (splitRegenerationWrites).
- *   2. The current start month's already-elapsed pre-start days
- *      (resolvePreStartBackfillWindow): CREATE-ONLY. Only CANCELLED
+ * Three parts, with different rules:
+ *   1. Today onward. The generated window is rewritten, human-recorded events
+ *      are kept (moved to their trip's new id when a schedule edit shifted the
+ *      leg indexes), stale ones voided.
+ *   2. Elapsed days of `followMonths` (a schedule edit only): the months, up
+ *      to the current one, whose bill is repriced with the new schedule
+ *      (repricedMonths.ts). Their day records must agree with that schedule
+ *      too, or the bill's day breakdown contradicts its total. Stale events
+ *      are VOIDED, the same as future ones; occurrences the new schedule adds
+ *      are created; an event that already agrees is never written, so a
+ *      recorded absence on a day still in the schedule stays as it is. Months
+ *      not listed (bill paid, invoiced, processing, failed, admin-cancelled)
+ *      keep their records untouched.
+ *   3. Elapsed pre-start days of a current start month that part 2 does not
+ *      cover (resolvePreStartBackfillWindow): CREATE-ONLY. Only CANCELLED
  *      "before subscription start" system absences, only for occurrences with
  *      no event yet, never a write to an existing past event.
- *      splitRegenerationWrites only protects human-recorded events dated today
- *      or later, so the past must never go through it.
  *
- * `existing` must hold every event of this subscription dated on or after the
- * earlier of today and the backfill window's start (see regenerationQueryStart).
- * `newPreStartAbsences` counts the pre-start absences that did not exist
- * before this run, in either part: that is what decides whether billing must
- * be recomputed, since creating an event never triggers billing on its own.
+ * `existing` must hold every event of this subscription dated on or after
+ * regenerationQueryStart. `newPreStartAbsences` / `newClosureAbsences` count
+ * the system absences that did not exist before this run, and `pastWrites`
+ * the elapsed-day events part 2 creates: together they decide whether billing
+ * must be recomputed, since creating an event never triggers billing itself.
  */
 export function planRegeneration(input: {
   sub: any; subId: string; type: "study" | "transport"; rate: number;
   today: Date; contractEnd: Date; windowEnd: Date; existing: ExistingEventLite[];
-}): { toCreate: { id: string; data: NewEvent }[]; toVoid: string[]; newPreStartAbsences: number } {
-  const { sub, subId, type, rate, today, contractEnd, windowEnd, existing } = input;
+  /** Club-wide closures (closureLogic.ts): their days are generated as system absences. */
+  closures?: Closure[];
+  /** yyyy-mm months, current or earlier, whose elapsed days follow the schedule (part 2). */
+  followMonths?: string[];
+  /** Transport schedule edits: old leg index -> new leg index (buildLegIndexMap). */
+  legIndexMap?: Map<number, number>;
+}): { toCreate: { id: string; data: NewEvent }[]; toVoid: string[]; newPreStartAbsences: number; newClosureAbsences: number; pastWrites: number } {
+  const { sub, subId, type, rate, today, contractEnd, windowEnd, existing, closures, legIndexMap } = input;
   const todayIso = isoDate(today);
+  const currentMonth = todayIso.slice(0, 7);
+  const follow = new Set((input.followMonths ?? []).filter(m => m <= currentMonth));
   const from = resolveGenerationWindowStart(sub, today);
   const preStart = resolvePreStartBackfillWindow(sub, today);
-  const rangeStart = preStart ? preStart.from : from;
-  if (windowEnd < rangeStart) return { toCreate: [], toVoid: [], newPreStartAbsences: 0 };
+  const followStart = resolveFollowStart(sub, [...follow], today);
+  let rangeStart = preStart ? preStart.from : from;
+  if (followStart && followStart < rangeStart) rangeStart = followStart;
+  const none = { toCreate: [], toVoid: [], newPreStartAbsences: 0, newClosureAbsences: 0, pastWrites: 0 };
+  if (windowEnd < rangeStart && !followStart) return none;
 
   const bounds: ContractBounds = { start: coerceStartDate(sub?.startDate), end: contractEnd };
-  const generated = type === "study"
-    ? generateStudyEvents(sub, subId, rate, rangeStart, windowEnd, bounds)
-    : generateTransportEvents(sub, subId, rate, rangeStart, windowEnd, bounds);
+  const generated = windowEnd < rangeStart ? [] : type === "study"
+    ? generateStudyEvents(sub, subId, rate, rangeStart, windowEnd, bounds, closures)
+    : generateTransportEvents(sub, subId, rate, rangeStart, windowEnd, bounds, closures);
   const existingIds = new Set(existing.map(e => e.id));
+  const scheduleKey = type === "transport" ? scheduleKeyOf(sub?.schedule) : undefined;
 
   // 1. Today onward. Clearing starts at today, not at `from`: anything already
   // written between today and a later startDate is exactly the bad data the
@@ -547,90 +761,177 @@ export function planRegeneration(input: {
   let future: { id: string; data: NewEvent }[] = [];
   let toVoid: string[] = [];
   if (windowEnd >= from) {
-    const split = splitRegenerationWrites(
+    const split = planWindow(
       generated.filter(e => e.data.date >= todayIso),
       existing.filter(e => e.date >= todayIso),
+      { subId, mode: "rewrite", legIndexMap, scheduleKey },
     );
     future = split.toCreate;
     toVoid = split.toVoid;
   }
 
-  // 2. Elapsed pre-start days of the current start month: create-only.
+  // 2. Elapsed days of the months whose bill is repriced.
+  const followed = (dateIso: string) => !!followStart && dateIso < todayIso && follow.has(dateIso.slice(0, 7));
+  let pastFollowed: { id: string; data: NewEvent }[] = [];
+  if (followStart) {
+    const split = planWindow(
+      generated.filter(e => followed(e.data.date)),
+      existing.filter(e => followed(e.date)),
+      { subId, mode: "fill", legIndexMap, scheduleKey },
+    );
+    pastFollowed = split.toCreate;
+    toVoid = [...split.toVoid, ...toVoid];
+  }
+
+  // 3. Elapsed pre-start days of the current start month: create-only.
   const backfillToIso = preStart ? isoDate(preStart.to) : "";
   const past = preStart
-    ? generated.filter(e => e.data.date < todayIso && e.data.date <= backfillToIso
+    ? generated.filter(e => e.data.date < todayIso && e.data.date <= backfillToIso && !followed(e.data.date)
         && isPreStartAbsence(e.data) && !existingIds.has(e.id))
     : [];
 
-  const newPreStartAbsences = past.length
-    + future.filter(e => isPreStartAbsence(e.data) && !existingIds.has(e.id)).length;
-  return { toCreate: [...past, ...future], toVoid, newPreStartAbsences };
+  const toCreate = [...past, ...pastFollowed, ...future];
+  const fresh = toCreate.filter(e => !existingIds.has(e.id));
+  return {
+    toCreate, toVoid,
+    newPreStartAbsences: fresh.filter(e => isPreStartAbsence(e.data)).length,
+    newClosureAbsences: fresh.filter(e => isClosureAbsence(e.data)).length,
+    pastWrites: pastFollowed.length,
+  };
 }
 
 // Where regenerateFutureEvents must start reading existing events so that
 // planRegeneration sees everything it may write over or must not duplicate.
-export function regenerationQueryStart(sub: any, today: Date): Date {
-  return resolvePreStartBackfillWindow(sub, today)?.from ?? today;
+export function regenerationQueryStart(sub: any, today: Date, followMonths: string[] = []): Date {
+  const currentMonth = isoDate(today).slice(0, 7);
+  const followStart = resolveFollowStart(sub, followMonths.filter(m => m <= currentMonth), today);
+  const start = resolvePreStartBackfillWindow(sub, today)?.from ?? today;
+  return followStart && followStart < start ? followStart : start;
 }
 
+const MONTHLY_BILLING_ID = /_(\d{4}-\d{2})$/;
+
+// The months whose elapsed days follow a schedule edit (repricedMonths.ts),
+// from the family's bills and active subscriptions as they are now.
+async function loadFollowMonths(familyId: string, today: Date): Promise<string[]> {
+  const [billSnap, studySnap, transportSnap] = await Promise.all([
+    appCol("billing").where("familyId", "==", familyId).get(),
+    appCol("studyroom").where("familyId", "==", familyId).where("status", "in", ["active", "confirmed"]).get(),
+    appCol("transportationSubscriptions").where("familyId", "==", familyId).where("status", "==", "active").get(),
+  ]);
+  const bills: MonthlyBillLite[] = [];
+  for (const d of billSnap.docs) {
+    const data = d.data() ?? {};
+    const period = d.id.match(MONTHLY_BILLING_ID)?.[1];
+    if (data.type || !period) continue; // party/camp/event bills aren't monthly
+    bills.push({
+      period, status: data.status, autoCancelled: data.autoCancelled,
+      serviceSubscriptionIds: (data.lineItems ?? [])
+        .filter((l: any) => l?.subscriptionId && (l.type === "study" || l.type === "transport"))
+        .map((l: any) => String(l.subscriptionId)),
+    });
+  }
+  return repricedMonths({
+    currentMonth: isoDate(today).slice(0, 7),
+    bills,
+    activeSubscriptionIds: [...studySnap.docs, ...transportSnap.docs].map(d => d.id),
+  });
+}
+
+interface GenerationConfigs { studyConfig: any; transportConfig: any; closures?: Closure[] }
+
+/**
+ * `edit` is set when an existing subscription's weekly schedule (days /
+ * schedule / weekPattern) changed: only then do the elapsed days of the
+ * repriced months follow (planRegeneration part 2). A creation, an approval, a
+ * reactivation or a change of dates alone rewrites from today onward only, as
+ * before.
+ */
 async function regenerateFutureEvents(
-  sub: any, subId: string, type: "study" | "transport", configs: { studyConfig: any; transportConfig: any },
+  sub: any, subId: string, type: "study" | "transport", configs: GenerationConfigs,
+  edit?: { beforeSchedule?: any[] },
 ): Promise<void> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const ends = await resolveGenerationEnd(sub, subId, type);
   if (!ends) return;
 
+  let followMonths: string[] = [];
+  if (edit && sub?.familyId) {
+    try {
+      followMonths = await loadFollowMonths(sub.familyId, today);
+    } catch (err) {
+      // Without the bills there is no telling which months are still open:
+      // leave the past alone rather than guess.
+      console.error(`[reservationEvents] ${type} subscription ${subId}: could not read family ${sub.familyId}'s bills; elapsed days left as they are.`, err);
+    }
+  }
+
   const existing = await appCol("reservationEvents")
     .where("subscriptionId", "==", subId)
-    .where("date", ">=", isoDate(regenerationQueryStart(sub, today)))
+    .where("date", ">=", isoDate(regenerationQueryStart(sub, today, followMonths)))
     .get();
-  const { toCreate, toVoid, newPreStartAbsences } = planRegeneration({
+  const { toCreate, toVoid, newPreStartAbsences, newClosureAbsences, pastWrites } = planRegeneration({
     sub, subId, type,
     rate: type === "study" ? studyPerDayRate(configs.studyConfig) : (configs.transportConfig?.flatRatePerTrip ?? 0),
     today, contractEnd: ends.contractEnd, windowEnd: ends.windowEnd,
-    existing: existing.docs.map(d => ({ id: d.id, date: String(d.data()?.date ?? ""), changedByRole: d.data()?.changedByRole })),
+    existing: existing.docs.map(d => {
+      const x = d.data() ?? {};
+      return { id: d.id, date: String(x.date ?? ""), changedByRole: x.changedByRole, status: x.status, reason: x.reason, changedBy: x.changedBy, changedAt: x.changedAt, scheduleKey: x.scheduleKey };
+    }),
+    closures: configs.closures,
+    followMonths,
+    legIndexMap: edit && type === "transport" ? buildLegIndexMap(edit.beforeSchedule, sub?.schedule) : undefined,
   });
+  // Voids first: with shifted leg indexes an id can be both an old trip's
+  // (stale) and a new trip's (rewritten); planWindow never voids an id it
+  // generates, so the order only matters for readability of the log.
   if (toVoid.length) await commitInChunks(toVoid.map(id => ({ id, status: "VOIDED" })), "setStatus");
   if (toCreate.length) await commitInChunks(toCreate, "create");
 
-  // New pre-start absences lower this family's bill, but nothing else will
-  // tell billing: onReservationEventBillingSync ignores event creation, and
-  // the subscription's own billing trigger runs in parallel with this one, so
-  // it may already have priced the month without them. One recompute, after
-  // every write above has committed, however many events were written. A
-  // rerun finds them all existing and doesn't recompute again, which is also
-  // what stops this from looping through the enrollmentFeeBilled update the
-  // recompute can make to the subscription.
-  if (newPreStartAbsences > 0 && sub?.familyId) {
+  // New system absences (pre-start, club closed) lower this family's bill,
+  // and new elapsed-day events can decide whether a month ran at all, but
+  // nothing else will tell billing: onReservationEventBillingSync ignores
+  // event creation, and the subscription's own billing trigger runs in
+  // parallel with this one, so it may already have priced the month without
+  // them. One recompute, after every write above has committed, however many
+  // events were written. A rerun finds them all existing and doesn't recompute
+  // again, which is also what stops this from looping through the
+  // enrollmentFeeBilled update the recompute can make to the subscription.
+  const moved = newPreStartAbsences + newClosureAbsences + pastWrites;
+  if (moved > 0 && sub?.familyId) {
     try {
       await autoCreateBillingSchedule(sub.familyId);
     } catch (err) {
       console.error(
-        `[reservationEvents] ${type} subscription ${subId}: wrote ${newPreStartAbsences} pre-start absence(s) `
+        `[reservationEvents] ${type} subscription ${subId}: wrote ${newPreStartAbsences} pre-start absence(s), `
+        + `${newClosureAbsences} closure day(s) and ${pastWrites} elapsed day(s) `
         + `but recomputing family ${sub.familyId}'s bills failed. They will apply on its next recompute.`, err,
       );
     }
   }
 }
 
-async function loadConfigs(): Promise<{ studyConfig: any; transportConfig: any }> {
-  const [s, t] = await Promise.all([
+async function loadConfigs(): Promise<GenerationConfigs> {
+  const [s, t, c] = await Promise.all([
     appCol("config").doc("studyCenter").get(),
     appCol("config").doc("transportation").get(),
+    appCol("config").doc("closures").get(),
   ]);
-  return { studyConfig: s.data() ?? {}, transportConfig: t.data() ?? {} };
+  return { studyConfig: s.data() ?? {}, transportConfig: t.data() ?? {}, closures: readClosures(c.data()?.closures) };
 }
 
 const CANCELLED_SUB_STATUSES = new Set(["cancelled", "canceled"]);
 
 // ── Triggers: keep ReservationEvents in sync with the blueprint ─────────────
-// Schedule/weekPattern/status changes only ever touch FUTURE events (see
-// voidFutureEvents above) — already-elapsed occurrences are immutable facts
-// once their date has passed, regardless of what happens to the subscription
-// afterward. The one past write is additive: a start month that is the
-// current month gets its missing pre-start days CREATED as system absences
-// (planRegeneration), never an existing event changed.
+// A status or date change only ever touches FUTURE events (see
+// voidFutureEvents above), plus one additive past write: a start month that is
+// the current month gets its missing pre-start days CREATED as system absences
+// (planRegeneration part 3), never an existing event changed.
+// An edit of the weekly pattern (days / schedule / weekPattern) of an existing
+// subscription goes further (since 2026-11-24): the elapsed days of every
+// month whose bill is repriced with the new pattern follow it as well
+// (planRegeneration part 2). Months whose bill is closed stay immutable.
 
 export const onStudyroomReservationEventsSync = onDocumentWritten(
   { document: "_apps/arcoiris/studyroom/{entryId}", region: REGION },
@@ -654,8 +955,12 @@ export const onStudyroomReservationEventsSync = onDocumentWritten(
       || before.endDate !== after.endDate
       || before.status !== after.status;
     if (!scheduleChanged) return;
+    // An edit of the weekly pattern itself: the elapsed days of the months
+    // whose bill is repriced follow it too (planRegeneration, part 2).
+    const patternEdited = !!before
+      && (JSON.stringify(before.days) !== JSON.stringify(after.days) || before.weekPattern !== after.weekPattern);
     const configs = await loadConfigs();
-    await regenerateFutureEvents(after, subId, "study", configs);
+    await regenerateFutureEvents(after, subId, "study", configs, patternEdited ? {} : undefined);
   }
 );
 
@@ -681,8 +986,10 @@ export const onTransportReservationEventsSync = onDocumentWritten(
       || before.endDate !== after.endDate
       || before.status !== after.status;
     if (!scheduleChanged) return;
+    const patternEdited = !!before
+      && (JSON.stringify(before.schedule) !== JSON.stringify(after.schedule) || before.weekPattern !== after.weekPattern);
     const configs = await loadConfigs();
-    await regenerateFutureEvents(after, subId, "transport", configs);
+    await regenerateFutureEvents(after, subId, "transport", configs, patternEdited ? { beforeSchedule: before.schedule } : undefined);
   }
 );
 
@@ -722,6 +1029,15 @@ export const setReservationEventStatus = onCall(
     // by removing a credit), so restoring it is refused — unlike a normal
     // absence, which anyone may undo. Re-cancelling it is a no-op, so only the
     // restore direction is blocked.
+    // A day the club is closed (closureLogic.ts) is nobody's to change: marking
+    // it "attending" would put a child on a run that doesn't happen and take
+    // the closure credit off the bill, and re-marking it absent would turn it
+    // into an ordinary absence and lose the closure credit. Refused both ways,
+    // for parents and staff alike; the closure itself is edited in the admin
+    // calendar.
+    if (isClosureAbsence(data)) {
+      throw new HttpsError("failed-precondition", "O KidClub está encerrado neste dia. O dia já está creditado e não pode ser alterado.");
+    }
     if (status === "EXPECTED" && data.changedByRole === "system"
         && (data.reason === REASON_BEFORE_START || data.reason === REASON_AFTER_END)) {
       throw new HttpsError(

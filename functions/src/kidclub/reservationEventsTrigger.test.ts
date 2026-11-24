@@ -67,7 +67,7 @@ vi.mock("firebase-admin", () => ({
 vi.mock("./db", () => ({ appCol: (c: string) => fake.collection(c) }));
 vi.mock("./billing", () => ({ autoCreateBillingSchedule: vi.fn() }));
 
-import { onStudyroomReservationEventsSync, setReservationEventStatus, REASON_BEFORE_START, REASON_AFTER_END } from "./reservationEvents";
+import { onStudyroomReservationEventsSync, onTransportReservationEventsSync, setReservationEventStatus, REASON_BEFORE_START, REASON_AFTER_END } from "./reservationEvents";
 import { autoCreateBillingSchedule } from "./billing";
 
 const { state } = fake;
@@ -210,5 +210,82 @@ describe("setReservationEventStatus — days stay changeable in a paid month", (
     state.docs["users/parentX"] = { roles: {} };
     state.docs["reservationEvents/s1_2026-10-19"] = ev();
     await expect(call("parentX", { eventId: "s1_2026-10-19", status: "CANCELLED" })).rejects.toThrow(/does not belong/);
+  });
+});
+
+// A schedule edit reaches the elapsed days of the current month only while
+// that month's bill can still be repriced (2026-11-24).
+describe("onTransportReservationEventsSync — elapsed days follow a schedule edit", () => {
+  const am = (dayOfWeek: string) => ({ dayOfWeek, direction: "pickup", pickupTime: "08:00" });
+  const pm = (dayOfWeek: string) => ({ dayOfWeek, direction: "dropoff", pickupTime: "17:00" });
+  const sub = (schedule: any[]) => ({ familyId: "famT", childId: "cT", status: "active", weekPattern: "all", schedule });
+  const BEFORE = sub([am("monday"), pm("monday"), am("tuesday")]);
+  const AFTER = sub([am("monday"), am("tuesday")]);
+  const runT = (before: any, after: any) => (onTransportReservationEventsSync as any).run({
+    data: { before: { data: () => before }, after: { data: () => after } },
+    params: { subId: "t1" },
+  });
+  const ev = (date: string, leg: number) => state.docs[`reservationEvents/t1_${date}_${leg}`];
+  const bill = (status: string) => {
+    state.docs["billing/famT_2026-11"] = { familyId: "famT", status, lineItems: [{ type: "transport", subscriptionId: "t1", amount: 48 }] };
+  };
+
+  beforeEach(async () => {
+    vi.setSystemTime(new Date(2026, 10, 2, 9, 0)); // Mon 2 Nov: created
+    state.docs["transportationSubscriptions/t1"] = { ...BEFORE };
+    await runT(undefined, BEFORE);
+    // A parent reports Tue 10 Nov (leg index 2 under the old schedule).
+    Object.assign(ev("2026-11-10", 2), { status: "CANCELLED", changedByRole: "parent", changedBy: "parentT" });
+    recompute.mockReset();
+    vi.setSystemTime(new Date(2026, 10, 24, 9, 0)); // Tue 24 Nov: the afternoon trip is removed
+    state.docs["transportationSubscriptions/t1"] = { ...AFTER };
+  });
+
+  it("bill still pending: the removed trip's elapsed records are voided, the absence moves with its trip", async () => {
+    bill("pending");
+    await runT(BEFORE, AFTER);
+
+    for (const d of ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]) {
+      expect(ev(d, 0)).toMatchObject({ status: "EXPECTED" });
+      expect(ev(d, 1)).toMatchObject({ status: "VOIDED" });
+    }
+    expect(ev("2026-11-10", 1)).toMatchObject({ status: "CANCELLED", changedByRole: "parent", changedBy: "parentT", legIndex: 1 });
+    expect(ev("2026-11-10", 2)).toMatchObject({ status: "VOIDED" });
+    expect(ev("2026-11-17", 1)).toMatchObject({ status: "EXPECTED" });
+    expect(ev("2026-11-17", 1).changedByRole).toBeUndefined();
+    expect(recompute).toHaveBeenCalledTimes(1);
+    expect(recompute).toHaveBeenCalledWith("famT");
+
+    // A second run of the same edit changes nothing and doesn't recompute again.
+    const snapshot = JSON.stringify(state.docs);
+    recompute.mockReset();
+    await runT(BEFORE, AFTER);
+    expect(JSON.stringify(state.docs)).toBe(snapshot);
+    expect(recompute).not.toHaveBeenCalled();
+  });
+
+  for (const status of ["paid", "invoiced", "processing"]) {
+    it(`bill ${status}: the elapsed records stay exactly as they are`, async () => {
+      bill(status);
+      const elapsed = () => JSON.stringify(Object.entries(state.docs)
+        .filter(([p, d]) => p.startsWith("reservationEvents/") && d.date < "2026-11-24").sort());
+      const before = elapsed();
+      await runT(BEFORE, AFTER);
+      expect(elapsed()).toBe(before);
+      // From today on the new schedule applies, as before.
+      expect(ev("2026-11-30", 1)).toMatchObject({ status: "VOIDED" });
+      expect(ev("2026-11-24", 1)).toMatchObject({ status: "EXPECTED" });
+    });
+  }
+
+  it("an approval or a date change alone never rewrites elapsed days", async () => {
+    bill("pending");
+    state.docs["transportationSubscriptions/t1"] = { ...BEFORE, endDate: "2027-06-30" };
+    const elapsed = () => JSON.stringify(Object.entries(state.docs)
+      .filter(([p, d]) => p.startsWith("reservationEvents/") && d.date < "2026-11-24").sort());
+    const before = elapsed();
+    await runT(BEFORE, { ...BEFORE, endDate: "2027-06-30" });
+    expect(elapsed()).toBe(before);
+    expect(recompute).not.toHaveBeenCalled();
   });
 });

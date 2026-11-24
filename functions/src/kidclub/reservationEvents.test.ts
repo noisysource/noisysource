@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { reconcileService } from "./reconciliation";
-import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart, resolveGenerationWindowStart, resolveGenerationWindowEnd, splitRegenerationWrites, REASON_BEFORE_START, REASON_AFTER_END, resolvePreStartBackfillWindow, planRegeneration, regenerationQueryStart, ExistingEventLite } from "./reservationEvents";
+import { isActiveThisWeek, weekOfMonthOccurrence, eventDocId, generateStudyEvents, generateTransportEvents, coerceEndDate, coerceStartDate, coerceDate, resolveGenerationStart, resolveGenerationWindowStart, resolveGenerationWindowEnd, splitRegenerationWrites, REASON_BEFORE_START, REASON_AFTER_END, resolvePreStartBackfillWindow, planRegeneration, regenerationQueryStart, ExistingEventLite, buildLegIndexMap } from "./reservationEvents";
 
 // Regression: StudyRoomEntry.endDate is a Firestore Timestamp while
 // TransportationSubscription.endDate is a "YYYY-MM-DD" string. Passing a
@@ -677,5 +677,276 @@ describe("pre-start days of a start month already under way", () => {
     const old = generateStudyEvents(laura, "s1", 6, resolveGenerationWindowStart(laura, today), SCHOOL_YEAR_END,
       { start: coerceStartDate(laura.startDate), end: SCHOOL_YEAR_END });
     expect(bill(old).finalCents).toBe(4800);
+  });
+});
+
+// ── Elapsed days follow a schedule edit (2026-11-24) ───────────────────────
+// Real case: a transport subscription went from 8 trips a week to 5 (the three
+// afternoon trips removed) on Tue 24 Nov 2026. November's pending bill was
+// repriced at 5 trips, but regeneration started at today, so 2-23 Nov kept two
+// EXPECTED trips on Mondays, Tuesdays and Thursdays: 10 records the bill no
+// longer charged for. Now the elapsed days of every month whose bill is
+// repriced (followMonths, from repricedMonths.ts) follow the new schedule too.
+//
+// November 2026: Nov 1 is a Sunday. Mon 2, 9, 16, 23, 30; Tue 3, 10, 17, 24;
+// Wed 4, 11, 18, 25; Thu 5, 12, 19, 26; Fri 6, 13, 20, 27.
+
+describe("buildLegIndexMap (the same trip across a schedule edit)", () => {
+  const am = (dayOfWeek: string) => ({ dayOfWeek, direction: "pickup", pickupTime: "08:00" });
+  const pm = (dayOfWeek: string) => ({ dayOfWeek, direction: "dropoff", pickupTime: "17:00" });
+
+  it("removing entries shifts the indexes of the ones that stay", () => {
+    const before = [am("monday"), pm("monday"), am("tuesday"), pm("tuesday"), am("wednesday")];
+    const after = [am("monday"), am("tuesday"), am("wednesday")];
+    expect([...buildLegIndexMap(before, after)]).toEqual([[0, 0], [2, 1], [4, 2]]);
+  });
+
+  it("removing the MORNING trip maps the afternoon one, not the first of the day", () => {
+    const map = buildLegIndexMap([am("tuesday"), pm("tuesday")], [pm("tuesday")]);
+    expect([...map]).toEqual([[1, 0]]);
+  });
+
+  it("an edited entry (new time) is still the same trip; an added one maps from nothing", () => {
+    const map = buildLegIndexMap(
+      [am("monday"), am("friday")],
+      [{ ...am("monday"), pickupTime: "08:30" }, pm("monday"), am("friday")],
+    );
+    expect([...map]).toEqual([[1, 2], [0, 0]]);
+  });
+
+  it("entries without a direction (old data) fall back to the time, then to the only one left that day", () => {
+    const map = buildLegIndexMap(
+      [{ dayOfWeek: "monday", pickupTime: "08:00" }, { dayOfWeek: "monday", pickupTime: "17:00" }, { dayOfWeek: "thursday" }],
+      [{ dayOfWeek: "monday", pickupTime: "17:30" }, { dayOfWeek: "thursday", pickupTime: "09:00" }],
+    );
+    expect(map.get(0)).toBeUndefined(); // the morning trip is gone
+    expect(map.get(1)).toBe(0);
+    expect(map.get(2)).toBe(1);
+  });
+});
+
+describe("elapsed days follow a schedule edit in the months whose bill is repriced", () => {
+  const SCHOOL_YEAR_END = new Date(2027, 6, 15, 23, 59, 59);
+  const TODAY = new Date(2026, 10, 24); // Tue 24 Nov 2026
+  const am = (dayOfWeek: string) => ({ dayOfWeek, direction: "pickup", pickupTime: "08:00" });
+  const pm = (dayOfWeek: string) => ({ dayOfWeek, direction: "dropoff", pickupTime: "17:00" });
+  const EIGHT = [am("monday"), pm("monday"), am("tuesday"), pm("tuesday"), am("wednesday"), am("thursday"), pm("thursday"), am("friday")];
+  const FIVE = [am("monday"), am("tuesday"), am("wednesday"), am("thursday"), am("friday")];
+  const transport = (schedule: any[]) => ({ familyId: "famT", childId: "cT", schedule, weekPattern: "all" });
+
+  // Every event the old schedule had on record from 1 Oct, all EXPECTED.
+  const recorded = (schedule: any[], from = new Date(2026, 9, 1)): ExistingEventLite[] =>
+    generateTransportEvents(transport(schedule), "t1", 4, from, SCHOOL_YEAR_END)
+      .map(e => ({ id: e.id, date: e.data.date, status: "EXPECTED" }));
+  const withHuman = (events: ExistingEventLite[], id: string, o: Partial<ExistingEventLite>) =>
+    events.map(e => e.id === id ? { ...e, ...o } : e);
+
+  const plan = (existing: ExistingEventLite[], followMonths: string[] | undefined, o: Record<string, any> = {}) => planRegeneration({
+    sub: transport(FIVE), subId: "t1", type: "transport", rate: 4, today: TODAY,
+    contractEnd: SCHOOL_YEAR_END, windowEnd: SCHOOL_YEAR_END, existing, followMonths,
+    legIndexMap: buildLegIndexMap(EIGHT, FIVE), ...o,
+  });
+
+  // The events as they stand after the plan is applied: id -> status.
+  const apply = (existing: ExistingEventLite[], p: ReturnType<typeof plan>) => {
+    const out = new Map<string, { date: string; status: string; changedByRole?: string }>(
+      existing.map(e => [e.id, { date: e.date, status: e.status ?? "EXPECTED", changedByRole: e.changedByRole }]));
+    for (const id of p.toVoid) out.set(id, { ...out.get(id)!, status: "VOIDED", changedByRole: "system" });
+    for (const c of p.toCreate) out.set(c.id, { date: c.data.date, status: c.data.status, changedByRole: c.data.changedByRole });
+    return out;
+  };
+  const liveOn = (state: ReturnType<typeof apply>, date: string) =>
+    [...state.values()].filter(e => e.date === date && e.status !== "VOIDED").length;
+
+  it("the real case: 8 trips -> 5 on 24 Nov, November's bill still open: 2-23 Nov end up with one trip a day", () => {
+    const existing = recorded(EIGHT);
+    const p = plan(existing, ["2026-11"]);
+    const state = apply(existing, p);
+
+    // The 10 records that were voided by hand: the second trip of every elapsed Mon, Tue, Thu.
+    const before = (date: string) => existing.filter(e => e.date === date).length;
+    const twoTripDays = ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23", "2026-11-03", "2026-11-10", "2026-11-17", "2026-11-05", "2026-11-12", "2026-11-19"];
+    for (const d of twoTripDays) { expect(before(d)).toBe(2); expect(liveOn(state, d)).toBe(1); }
+    for (const d of ["2026-11-04", "2026-11-11", "2026-11-18", "2026-11-06", "2026-11-13", "2026-11-20"]) expect(liveOn(state, d)).toBe(1);
+    // Exactly what a fresh generation of the new schedule gives for 1-23 Nov.
+    const fresh = generateTransportEvents(transport(FIVE), "t1", 4, new Date(2026, 10, 1), new Date(2026, 10, 23, 23, 59));
+    const liveIds = [...state].filter(([, e]) => e.date >= "2026-11-01" && e.date < "2026-11-24" && e.status !== "VOIDED").map(([id]) => id).sort();
+    expect(liveIds).toEqual(fresh.map(e => e.id).sort());
+    // From today on, as always.
+    expect(liveOn(state, "2026-11-24")).toBe(1);
+    expect(liveOn(state, "2026-11-30")).toBe(1);
+    // October's bill is not in the list (paid): its records are not read as "followed" and stay.
+    for (const d of ["2026-10-05", "2026-10-06", "2026-10-08"]) expect(liveOn(state, d)).toBe(2);
+    expect(p.toVoid.some(id => id.includes("_2026-10-"))).toBe(false);
+    expect(p.toCreate.some(c => c.data.date < "2026-11-01")).toBe(false);
+    expect(p.pastWrites).toBeGreaterThan(0);
+  });
+
+  it("an elapsed day that already agrees is never written (Monday morning keeps index 0)", () => {
+    const existing = recorded(EIGHT);
+    const p = plan(existing, ["2026-11"]);
+    for (const d of ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]) {
+      expect(p.toCreate.map(c => c.id)).not.toContain(`t1_${d}_0`);
+      expect(p.toVoid).not.toContain(`t1_${d}_0`);
+      expect(p.toVoid).toContain(`t1_${d}_1`);
+    }
+  });
+
+  it("a recorded absence on a trip that stays is kept, moved to the trip's new index", () => {
+    // Tue 10 Nov morning was index 2, is index 1 now. Mon 9 Nov morning stays index 0.
+    let existing = withHuman(recorded(EIGHT), "t1_2026-11-10_2", { status: "CANCELLED", changedByRole: "parent", changedBy: "parentT", changedAt: "T1", reason: "doente" });
+    existing = withHuman(existing, "t1_2026-11-09_0", { status: "CANCELLED", changedByRole: "staff", changedBy: "staff1" });
+    const p = plan(existing, ["2026-11"]);
+
+    const moved = p.toCreate.find(c => c.id === "t1_2026-11-10_1")!;
+    expect(moved.data).toMatchObject({ status: "CANCELLED", changedByRole: "parent", changedBy: "parentT", changedAt: "T1", reason: "doente", legIndex: 1 });
+    expect(p.toVoid).toContain("t1_2026-11-10_2");
+    expect(p.toVoid).toContain("t1_2026-11-10_3");
+    // Untouched in place.
+    expect(p.toCreate.map(c => c.id)).not.toContain("t1_2026-11-09_0");
+    expect(p.toVoid).not.toContain("t1_2026-11-09_0");
+  });
+
+  it("a recorded absence on a REMOVED trip is voided, and never lands on the trip that took over its id", () => {
+    // Remove the morning trips instead: Tuesday afternoon (old index 1) becomes index 0.
+    const before = [am("tuesday"), pm("tuesday")];
+    const after = [pm("tuesday")];
+    let existing: ExistingEventLite[] = generateTransportEvents(transport(before), "t1", 4, new Date(2026, 10, 1), SCHOOL_YEAR_END)
+      .map(e => ({ id: e.id, date: e.data.date, status: "EXPECTED" }));
+    existing = withHuman(existing, "t1_2026-11-10_0", { status: "CANCELLED", changedByRole: "parent" }); // the morning, now gone
+    const p = planRegeneration({
+      sub: transport(after), subId: "t1", type: "transport", rate: 4, today: TODAY, contractEnd: SCHOOL_YEAR_END, windowEnd: SCHOOL_YEAR_END,
+      existing, followMonths: ["2026-11"], legIndexMap: buildLegIndexMap(before, after),
+    });
+    const rewritten = p.toCreate.find(c => c.id === "t1_2026-11-10_0")!;
+    expect(rewritten.data.status).toBe("EXPECTED"); // the afternoon trip, attended
+    expect(rewritten.data.changedByRole).toBeUndefined();
+    expect(p.toVoid).toContain("t1_2026-11-10_1");
+  });
+
+  it("the same move applies from today on: a future absence survives the index shift", () => {
+    const existing = withHuman(recorded(EIGHT), "t1_2026-12-01_2", { status: "CANCELLED", changedByRole: "parent", changedBy: "parentT" });
+    const p = plan(existing, []);
+    expect(p.toCreate.find(c => c.id === "t1_2026-12-01_1")!.data).toMatchObject({ status: "CANCELLED", changedByRole: "parent", changedBy: "parentT" });
+    expect(p.toVoid).toContain("t1_2026-12-01_2");
+  });
+
+  it("no open month: nothing before today is read as stale or written (bill paid, invoiced or processing)", () => {
+    const existing = recorded(EIGHT);
+    for (const follow of [[], undefined]) {
+      const p = plan(existing, follow);
+      expect(p.toVoid.every(id => id.split("_")[1] >= "2026-11-24")).toBe(true);
+      expect(p.toCreate.every(c => c.data.date >= "2026-11-24")).toBe(true);
+      expect(p.pastWrites).toBe(0);
+    }
+  });
+
+  it("an earlier month still open follows too; the paid month between them does not", () => {
+    // September pending (unpaid), October paid, November pending.
+    const existing = recorded(EIGHT, new Date(2026, 8, 1));
+    const p = plan(existing, ["2026-09", "2026-11"]);
+    const state = apply(existing, p);
+    expect(liveOn(state, "2026-09-07")).toBe(1); // a Monday
+    expect(liveOn(state, "2026-10-05")).toBe(2); // October untouched
+    expect(liveOn(state, "2026-11-02")).toBe(1);
+    expect(regenerationQueryStart(transport(FIVE), TODAY, ["2026-09", "2026-11"]).getTime()).toBe(new Date(2026, 8, 1).getTime());
+    expect(regenerationQueryStart(transport(FIVE), TODAY, []).getTime()).toBe(TODAY.getTime());
+  });
+
+  it("never reaches before the subscription's own start month", () => {
+    const sub = { ...transport(FIVE), startDate: "2026-11-09" };
+    const p = planRegeneration({
+      sub, subId: "t1", type: "transport", rate: 4, today: TODAY, contractEnd: SCHOOL_YEAR_END, windowEnd: SCHOOL_YEAR_END,
+      existing: [], followMonths: ["2026-10", "2026-11"],
+    });
+    expect(p.toCreate.some(c => c.data.date < "2026-11-01")).toBe(false);
+    // Its own start month: 2-6 Nov are before-start absences, 9-23 Nov served.
+    expect(p.toCreate.filter(c => c.data.date < "2026-11-09").every(c => c.data.reason === REASON_BEFORE_START)).toBe(true);
+    expect(p.toCreate.filter(c => c.data.date >= "2026-11-09" && c.data.date < "2026-11-24").every(c => c.data.status === "EXPECTED")).toBe(true);
+  });
+
+  describe("study room", () => {
+    const study = (days: string[], o: Record<string, any> = {}) => ({ familyId: "famS", childId: "cS", days: days.map(day => ({ day, hour: "16:00" })), weekPattern: "all", ...o });
+    const planStudy = (sub: any, existing: ExistingEventLite[], followMonths: string[]) => planRegeneration({
+      sub, subId: "s1", type: "study", rate: 6, today: TODAY, contractEnd: SCHOOL_YEAR_END, windowEnd: SCHOOL_YEAR_END, existing, followMonths,
+    });
+    const on = (sub: any): ExistingEventLite[] => generateStudyEvents(sub, "s1", 6, new Date(2026, 10, 1), SCHOOL_YEAR_END)
+      .map(e => ({ id: e.id, date: e.data.date, status: "EXPECTED" }));
+
+    it("a removed day's elapsed records are voided; a kept day's recorded absence is not touched", () => {
+      let existing = on(study(["monday", "wednesday", "friday"]));
+      existing = withHuman(existing, "s1_2026-11-09", { status: "CANCELLED", changedByRole: "parent" });  // Monday, kept
+      existing = withHuman(existing, "s1_2026-11-11", { status: "CANCELLED", changedByRole: "parent" });  // Wednesday, removed
+      const p = planStudy(study(["monday", "friday"]), existing, ["2026-11"]);
+      expect(p.toVoid.filter(id => id < "s1_2026-11-24").sort()).toEqual(["s1_2026-11-04", "s1_2026-11-11", "s1_2026-11-18"]);
+      expect(p.toCreate.filter(c => c.data.date < "2026-11-24")).toEqual([]);
+    });
+
+    it("an added day's elapsed occurrences are created, so the month shows what its bill charges", () => {
+      const p = planStudy(study(["monday", "tuesday"]), on(study(["monday"])), ["2026-11"]);
+      const past = p.toCreate.filter(c => c.data.date < "2026-11-24");
+      expect(past.map(c => c.data.date)).toEqual(["2026-11-03", "2026-11-10", "2026-11-17"]);
+      expect(past.every(c => c.data.status === "EXPECTED")).toBe(true);
+      expect(p.pastWrites).toBe(3);
+    });
+
+    it("a day voided by an earlier edit comes back when the day is added again", () => {
+      const existing = on(study(["monday", "wednesday"])).map(e => e.date === "2026-11-04" ? { ...e, status: "VOIDED", changedByRole: "system" } : e);
+      const p = planStudy(study(["monday", "wednesday"]), existing, ["2026-11"]);
+      expect(p.toCreate.filter(c => c.data.date < "2026-11-24").map(c => c.id)).toEqual(["s1_2026-11-04"]);
+      expect(p.toVoid.filter(id => id < "s1_2026-11-24")).toEqual([]);
+    });
+
+    it("start month: the removed day's elapsed pre-start absences go, so the month is no longer over-credited", () => {
+      // Mon/Wed from Mon 16 Nov; Wednesday swapped for Friday on the 24th.
+      const old = study(["monday", "wednesday"], { startDate: "2026-11-16" });
+      const bounds = { start: coerceStartDate(old.startDate), end: SCHOOL_YEAR_END };
+      const existing: ExistingEventLite[] = generateStudyEvents(old, "s1", 6, new Date(2026, 10, 1), SCHOOL_YEAR_END, bounds)
+        .map(e => ({ id: e.id, date: e.data.date, status: e.data.status, changedByRole: e.data.changedByRole, reason: e.data.reason }));
+      const p = planStudy(study(["monday", "friday"], { startDate: "2026-11-16" }), existing, ["2026-11"]);
+      expect(p.toVoid.filter(id => id < "s1_2026-11-24").sort()).toEqual(["s1_2026-11-04", "s1_2026-11-11", "s1_2026-11-18"]);
+      const past = p.toCreate.filter(c => c.data.date < "2026-11-24");
+      expect(past.map(c => [c.data.date, c.data.status, c.data.reason ?? null])).toEqual([
+        ["2026-11-06", "CANCELLED", REASON_BEFORE_START], ["2026-11-13", "CANCELLED", REASON_BEFORE_START], ["2026-11-20", "EXPECTED", null],
+      ]);
+      expect(p.newPreStartAbsences).toBe(2);
+    });
+  });
+});
+
+// ── Club closures in generation (2026-11-24) ───────────────────────────────
+describe("generators know about club closures", () => {
+  const XMAS = [{ id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" }];
+  const YEAR_END = new Date(2027, 6, 15, 23, 59, 59);
+  const closed = (e: { data: any }) => e.data.status === "CANCELLED" && e.data.changedByRole === "system" && e.data.reason === "club closed";
+
+  it("study: days inside a closure are system absences, the rest EXPECTED", () => {
+    const sub = { familyId: "f", childId: "c", days: [{ day: "monday" }, { day: "friday" }], weekPattern: "all" };
+    const events = generateStudyEvents(sub, "s1", 6, new Date(2026, 11, 1), new Date(2027, 0, 10), undefined, XMAS);
+    expect(events.filter(closed).map(e => e.data.date)).toEqual(["2026-12-18", "2026-12-21", "2026-12-25", "2026-12-28"]);
+    expect(events.filter(e => !closed(e)).every(e => e.data.status === "EXPECTED" && e.data.changedByRole === undefined)).toBe(true);
+  });
+
+  it("transport: every trip of a closed day", () => {
+    const sub = { familyId: "f", childId: "c", schedule: [{ dayOfWeek: "monday" }, { dayOfWeek: "monday" }], weekPattern: "all" };
+    const events = generateTransportEvents(sub, "t1", 4, new Date(2026, 11, 14), new Date(2026, 11, 22), undefined, XMAS);
+    expect(events.map(e => [e.id, closed(e)])).toEqual([["t1_2026-12-14_0", false], ["t1_2026-12-14_1", false], ["t1_2026-12-21_0", true], ["t1_2026-12-21_1", true]]);
+  });
+
+  it("outside the contract wins over closed: a pre-start day stays 'before subscription start'", () => {
+    const sub = { familyId: "f", childId: "c", days: [{ day: "monday" }], weekPattern: "all", startDate: "2026-12-28" };
+    const events = generateStudyEvents(sub, "s1", 6, new Date(2026, 11, 1), new Date(2026, 11, 31), { start: coerceStartDate(sub.startDate) }, XMAS);
+    expect(events.find(e => e.data.date === "2026-12-21")!.data.reason).toBe(REASON_BEFORE_START);
+    expect(closed(events.find(e => e.data.date === "2026-12-28")!)).toBe(true);
+  });
+
+  it("planRegeneration counts the closure absences it creates, and none on a rerun", () => {
+    const sub = { familyId: "f", childId: "c", days: [{ day: "monday" }, { day: "friday" }], weekPattern: "all" };
+    const input = { sub, subId: "s1", type: "study" as const, rate: 6, today: new Date(2026, 10, 24), contractEnd: YEAR_END, windowEnd: YEAR_END, closures: XMAS };
+    const first = planRegeneration({ ...input, existing: [] });
+    expect(first.newClosureAbsences).toBe(4);
+    const again = planRegeneration({ ...input, existing: first.toCreate.map(e => ({ id: e.id, date: e.data.date, status: e.data.status, changedByRole: e.data.changedByRole, reason: e.data.reason })) });
+    expect(again.newClosureAbsences).toBe(0);
+    expect(again.toVoid).toEqual([]);
   });
 });

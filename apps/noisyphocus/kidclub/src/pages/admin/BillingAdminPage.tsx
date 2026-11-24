@@ -8,7 +8,8 @@ import MarkPaidModal from './billing/MarkPaidModal';
 import BankDetailsPanel from './billing/BankDetailsPanel';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
-import { carriedCreditText } from '../../lib/billingLines';
+import { carriedCreditText, closureCreditTexts } from '../../lib/billingLines';
+import { isClubClosedEvent } from '../../lib/closures';
 
 // Bills a payment can still be recorded on (markBillingPaid accepts these).
 const OPEN_STATUSES: BillingStatus[] = ['pending', 'processing', 'failed'];
@@ -90,7 +91,7 @@ const SERVICE_META = {
 // same ReservationEvents the client calendar and absence threshold read.
 function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
   const meta = lineItem.type ? SERVICE_META[lineItem.type] : null;
-  const hasBreakdown = !!(lineItem.multiTripDiscountAmount || lineItem.siblingDiscountAmount || lineItem.institutionalDiscountAmount || lineItem.absenceCreditAmount || lineItem.carriedAbsenceCredits?.length);
+  const hasBreakdown = !!(lineItem.multiTripDiscountAmount || lineItem.siblingDiscountAmount || lineItem.institutionalDiscountAmount || lineItem.absenceCreditAmount || lineItem.closureCount || lineItem.carriedAbsenceCredits?.length);
   return (
     <div className="py-1">
       <div className="flex justify-between text-xs text-gray-600">
@@ -107,6 +108,8 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           {!!lineItem.institutionalDiscountAmount && (
             <p>{lineItem.legacyPricing ? 'Tarifário antigo (descontos somados)' : 'Desconto escola/aluno repetente'}{lineItem.institutionalDiscountPct ? ` (${Math.round(lineItem.institutionalDiscountPct * 100)}%)` : ''}: −{fmtEur(lineItem.institutionalDiscountAmount)}</p>
           )}
+          {/* Days the club itself was closed: its own credit, not the family's absences. */}
+          {closureCreditTexts(lineItem).map(t => <p key={t} className="text-emerald-700">{t}</p>)}
           {/* Carried in from a paid month of this subscription (absenceCarryOver.ts). */}
           {lineItem.carriedAbsenceCredits?.map(c => (
             <p key={c.fromPeriod} className={c.amount >= 0 ? 'text-emerald-700' : 'text-amber-700'}>{carriedCreditText(c)}</p>
@@ -150,6 +153,8 @@ interface ReservationEventDoc {
   date: string;
   direction?: 'pickup' | 'dropoff' | 'both';
   status: 'EXPECTED' | 'CANCELLED' | 'VOIDED';
+  /** A day KidClub is closed for everyone (lib/closures.ts): credited, and not changeable here. */
+  clubClosed?: boolean;
 }
 
 // One line item's calendar, built directly from its real ReservationEvent
@@ -188,7 +193,8 @@ function ServiceCalendar({ li, events, onToggle, savingId }: {
     (byDate.get(ev.date) ?? byDate.set(ev.date, []).get(ev.date)!).push(ev);
   }
   const sortedDates = [...byDate.keys()].sort();
-  const markedCount = events.filter(e => e.status === 'CANCELLED').length;
+  const markedCount = events.filter(e => e.status === 'CANCELLED' && !e.clubClosed).length;
+  const closedCount = events.filter(e => e.clubClosed).length;
 
   return (
     <div className={`rounded-lg border ${accent.header.split(' ').pop()} overflow-hidden`}>
@@ -201,7 +207,10 @@ function ServiceCalendar({ li, events, onToggle, savingId }: {
           {meta.icon} {childNameOf(li) ?? meta.label}
           <span className="font-normal opacity-70">· {meta.label}</span>
         </p>
-        <p className="text-xs opacity-80">{markedCount > 0 ? `${markedCount} marcado(s)` : 'nenhum dia marcado'}</p>
+        <p className="text-xs opacity-80">
+          {markedCount > 0 ? `${markedCount} marcado(s)` : 'nenhum dia marcado'}
+          {closedCount > 0 ? ` · ${closedCount} com o KidClub encerrado` : ''}
+        </p>
       </div>
       {sortedDates.length === 0 ? (
         <p className="text-xs text-gray-400 px-3 py-3">Sem ocorrências geradas para este período.</p>
@@ -215,6 +224,18 @@ function ServiceCalendar({ li, events, onToggle, savingId }: {
                 {dayEvents.map(ev => {
                   const isMarked = ev.status === 'CANCELLED';
                   const legLabel = ev.direction === 'pickup' ? ' (manhã)' : ev.direction === 'dropoff' ? ' (tarde)' : '';
+                  // Closed for everyone: shown, never toggled. The closure is edited in the admin calendar.
+                  if (ev.clubClosed) {
+                    return (
+                      <span
+                        key={ev.id}
+                        title={`${dateLabel}${legLabel} — KidClub encerrado: creditado na fatura, não pode ser alterado aqui`}
+                        className="text-[11px] px-2 py-1 bg-gray-200 text-gray-500 line-through cursor-not-allowed"
+                      >
+                        {dateLabel}{ev.direction === 'pickup' ? ' M' : ev.direction === 'dropoff' ? ' T' : ''}
+                      </span>
+                    );
+                  }
                   return (
                     <button
                       key={ev.id}
@@ -286,7 +307,7 @@ function DayEditor({ record, onRefreshNeeded }: {
         snap.docs.forEach(d => {
           const data = d.data();
           const list = map.get(data.subscriptionId) ?? [];
-          list.push({ id: d.id, date: data.date, direction: data.direction, status: data.status });
+          list.push({ id: d.id, date: data.date, direction: data.direction, status: data.status, clubClosed: isClubClosedEvent(data) });
           map.set(data.subscriptionId, list);
         });
         setEventsBySub(map);

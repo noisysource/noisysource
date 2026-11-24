@@ -2,7 +2,96 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-18 (the promotion note just below; camp sections as of 2026-11-17; the rest is as of 2026-11-11), after the `staging` → `main` promotion #141 (the section just below and the state in each section heading; the sections' bodies were not re-checked and still read as written before the promotion)
+**Last updated:** 2026-11-24 (the section just below: schedule edits and club closures, PR #175). The rest is as of 2026-11-18 (promotion note), 2026-11-17 (camp sections) and 2026-11-11 (everything else); those sections were not re-checked.
+
+## 📅 2026-11-24: day records follow a schedule edit + club-wide closures — PR #175 → `staging`, OPEN, not merged, not in prod
+
+Branch `agent/kidclub-closures`, worktree `.claude/worktrees/kidclub-closures`. Two changes Renato decided on
+2026-11-24, in one PR. The PR body has the click-through test steps. **Nothing was clicked through and nothing ran
+against a real Firestore**; functions tests (572) and typecheck pass, the app builds.
+
+### 1. Elapsed days follow a schedule edit
+**Problem (prod, 2026-11-24).** A transport subscription went from 8 trips a week to 5. The pending November and
+December bills were repriced, but day records were only regenerated from today on, so 2-23 Nov kept two EXPECTED
+trips on Mon/Tue/Thu. Those 10 records were voided by hand in prod that day.
+**Rule now** (`planRegeneration` part 2, `functions/src/kidclub/reservationEvents.ts`; which months:
+`repricedMonths.ts`). When `days` / `schedule` / `weekPattern` of an existing subscription changes, the elapsed days
+also follow the new pattern in every month whose bill is repriced: the current month unless its bill is
+processing/paid/invoiced/failed/admin-cancelled, and an earlier month whose bill is still open and that the recompute
+would rewrite. There: stale records → `VOIDED`; days the pattern adds → created as attended; records that already
+agree are not written (a recorded absence on a kept day stays). Closed months keep their records. It does not apply to
+a creation, approval, reactivation, or a start/end date change alone.
+- **Transport trips are matched by trip, not by leg index** (`buildLegIndexMap`): removing trips shifts the indexes
+  in the event ids, and a recorded absence on a trip that stays is moved to the trip's new id. This applies from today
+  on as well (before, such an absence was lost on any edit that shifted indexes).
+- Transport events now carry `scheduleKey` (a fingerprint of the schedule they were generated from), so a trigger run
+  delivered twice doesn't apply the index mapping twice. Older events have none; that's handled.
+- Fixes the item "Changing days inside the start month … can over-credit that month" under "Still open (from A)" below.
+- **Not retroactive.** Other subscriptions edited before this ships may have elapsed records that disagree with an
+  open bill. A read-only prod scan would find them; not done (no prod access in that session).
+
+### 2. Club-wide closures, credited
+- **Stored** in `_apps/arcoiris/config/closures`: `{ closures: [{ id, from, to, label }] }` (dates inclusive), written
+  only by the callable `setClubClosures` (`functions/src/kidclub/closures.ts`; rules in `closureLogic.ts`).
+- **Admin UI:** Admin → Calendário, box "Encerramentos do KidClub" (`components/admin/ClosuresPanel.tsx`). Add, edit,
+  remove. Each save applies at once and reports what changed.
+- **A closed day** is a reservation event with `status: CANCELLED`, `changedByRole: system`, `reason: "club closed"`
+  (plus `closureSyncId`, and `preClosure` when a parent's absence was there before). Saving closes every event inside
+  a closure, reopens events of a removed/shortened closure, then recomputes each affected family's bills once (4 at a
+  time). `onReservationEventBillingSync` skips writes whose `closureSyncId` changed. New and edited subscriptions get
+  closed days from the generators.
+- **Credit** (Renato's second decision, 2026-11-24: "the admin types the percentage"; `closureCredit` in
+  `closureLogic.ts`, used by `reconcileService` step 4 and by the carry-over). Per line, per month, on the price after
+  discounts: a closure with `percent` credits that percentage to every subscription with at least one scheduled
+  day/trip inside it, whatever its days (16-31 Dec at 50 = half of December); with no percentage it credits closed
+  days ÷ the subscription's real scheduled days that calendar month (Mon-Fri over 16-31 Dec 2026 = 12/23; the notional
+  20-day month is NOT used for closures, only for ordinary absences). Nothing inside the closure → nothing. No
+  3-absence minimum, not counted in `absenceCount`. Several closures in a month add up; closure + absence credits are
+  capped at the month. On the line: `closureCount`, `closureDates`, `closureCreditAmount`, `closureLabel`,
+  `closureParts[{label, from, to, count, percent?, amount}]` (only when the month has closed days). Shown as
+  "KidClub encerrado (label), 16–31 Dez, N dias, 50%: −€X" in Faturação, Pagamentos and the notice email.
+- **Refused when saving:** a percentage on a closure that crosses two months (one closure per month instead), and
+  overlapping closures. **A change of percentage or label alone** changes no event but recomputes each family with a
+  day in that closure once.
+- **Start/end inside the month:** days outside the contract stay "not enrolled" absences (ordinary credit) and count
+  in the month's real days; with a percentage the subscription gets it in full if one in-contract day is inside.
+- **Month already paid/invoiced/processing:** the bill is not touched. `absenceCarryOver.ts` now carries what the
+  bill would have shown (same rule) onto the next open bill of the same subscription ("Crédito de Dezembro 2026 (KidClub encerrado)").
+  Before this it only carried when the month had ≥3 cancelled days.
+- **Nobody can change a closed day** (`setReservationEventStatus` refuses both directions, for staff too).
+- No rule or index change. Camps, parties, one-off events and enrollment fees are unaffected. The transport board is a
+  weekly plan and doesn't show closures; the admin calendar shows closed days as cancelled.
+
+**The real case (KidClub closed 16-31 Dec 2026, 50%) is NOT entered anywhere.** After this is in prod, Renato adds it
+in Admin → Calendário with 50 in "Crédito (% do mês)". On dev, saving a closure rewrites dev's December events and bills for every family (undone by
+removing the closure).
+
+### Next step
+Renato tests on dev with the steps in PR #175, answers the questions below, merges #175 into `staging`, then
+promotes `staging` → `main`. Then enters the December closure in prod and checks a few December bills. Remove the
+worktree after the merge.
+
+### Open questions for Renato (also in the PR)
+1. Confirm rule 1 as written, especially: an added day creates its elapsed records as attended; date-only changes are
+   left out.
+2. Closure credit is decided (see above). Left to confirm: a subscription that starts inside the closure gets the full
+   percentage; with a blank percentage, 25 Dec (a public holiday otherwise billed like any day) counts as a closed day.
+3. A closed month already paid with no later open bill of that subscription (it ended or was cancelled): the credit is
+   left unapplied and logged (`[billing] … has no open bill`). No refund flow was built. Wanted?
+4. Removing a closure after a credited month was paid charges it back on the next bill ("Acerto de faltas"). Keep?
+5. A parent's absence already recorded inside a closure becomes a closure day (full credit). OK?
+6. Saving a closure sends no email, and a notice already sent shows the old amount. Notify families?
+7. Root `CLAUDE.md` Cross-App Data Contracts was not edited. Suggested entry: billing lines may carry `closureCount` /
+   `closureDates` / `closureCreditAmount` / `closureLabel` (already in `amount`) and `carriedAbsenceCredits[].closure`.
+
+### Risky / worth knowing
+- `setClubClosures` is a new callable: don't add it to `local.callable_functions` in Terraform in the same PR.
+- The closure sync was not timed on real data (540 s limit; prod has some tens of families). If it is cut short,
+  saving the same list again finishes it; families whose recompute failed are listed in the result, and "Recalcular"
+  (Gestão de Dados) fixes their bills.
+- Voiding records in rule 1 still fires one billing recompute per voided record, as future voids always did.
+- Three older parent pages (subscription detail ×2, child page) show a closed day as cancelled with a "Restaurar"
+  button that is refused with an explanation. Only the family calendar and the admin day editor show "Encerrado".
 
 ## 🚀 2026-11-18: camps (#158, #162) and the timesheets removal (#161) are in prod (promotion #159). `main` = `staging`
 
@@ -385,6 +474,7 @@ child page links straight to the family calendar.
 - Changing days inside the start month leaves the old days' elapsed pre-start absences in place and adds the new
   ones' missing ones: removing or swapping days can over-credit that month. Fixing it means voiding past system
   events; Renato's call.
+  **Fixed in PR #175 (2026-11-24, not merged yet)** while the start month's bill is still open: see the top section.
 - Narrow race: the subscription's own billing trigger can still write a stale bill after A's recompute if it read
   events before they existed (needs a cold start in an unlucky spot).
 - `ManualEnrollForm` creates study subs with `familyId: ''`: no events until a family is linked, and if that's

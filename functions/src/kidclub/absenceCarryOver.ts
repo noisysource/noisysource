@@ -11,9 +11,12 @@
 // closed month M and a subscription S on M's bill:
 //   should(M)  the credit M's line would get with M's CURRENT events, on M's own
 //              stored price: net-before-absence = amount + absenceCreditAmount
-//              + whatever M itself received from earlier months; same >=3 gate
-//              and same formula as reconcileService step 4.
-//   granted(M) the credit M's line was actually given (absenceCreditAmount).
+//              + closureCreditAmount + whatever M itself received from earlier
+//              months; same formula as reconcileService step 4: the club's
+//              closure credit (typed percentage, or closed days / real
+//              scheduled days), then the family's absences behind the >=3 gate.
+//   granted(M) the credit M's line was actually given (absenceCreditAmount +
+//              closureCreditAmount).
 //   carried(M) what other closed bills already carry from M.
 //   outstanding = should - granted - carried
 // Positive: a credit, taken off the next open lines of S, never below EUR 0,
@@ -24,11 +27,15 @@
 //
 // Pure: billing.ts loads the bills and events and writes the result.
 
+import { Closure, closureCredit } from "./closureLogic";
+
 export interface CarriedAbsenceCredit {
   /** yyyy-mm of the closed month the credit comes from. */
   fromPeriod: string;
   /** Euros. Positive = credit (lowers this line), negative = charge (raises it). */
   amount: number;
+  /** The source month has days on which the club was closed, so (part of) this is a closure credit. */
+  closure?: boolean;
 }
 
 /** The subset of a billing line item the ledger reads and writes. */
@@ -39,6 +46,8 @@ export interface LedgerLine {
   grossAmount?: number;
   absenceCount?: number;
   absenceCreditAmount?: number;
+  /** Credit for days the club was closed (lines written from 2026-11-24). */
+  closureCreditAmount?: number;
   notionalOccurrences?: number;
   carriedAbsenceCredits?: CarriedAbsenceCredit[];
 }
@@ -54,7 +63,12 @@ export interface LedgerBill {
 export interface MonthEvents {
   /** Every event, any status. 0 means the month can't be evaluated. */
   total: number;
+  /** CANCELLED events that are NOT closure days: the family's absences and boundary-month ones. */
   cancelled: number;
+  /** Dates of the CANCELLED events on days the club was closed (closureLogic.ts), one per occurrence. */
+  closedDates?: string[];
+  /** Every event that is not VOIDED: the month's real scheduled days, the base of a closure's share. */
+  scheduled?: number;
   /** The frozen per-occurrence price (basePriceCents) of the month's events. */
   rateCents?: number;
 }
@@ -67,7 +81,7 @@ export interface MonthEvents {
  */
 export const CLOSED_STATUSES = new Set(["paid", "invoiced", "processing", "failed"]);
 
-export interface Outstanding { subscriptionId: string; fromPeriod: string; cents: number }
+export interface Outstanding { subscriptionId: string; fromPeriod: string; cents: number; closure?: boolean }
 export interface SkippedSource { subscriptionId: string; fromPeriod: string; reason: string }
 
 const cents = (eur: number | undefined) => Math.round((eur ?? 0) * 100);
@@ -83,6 +97,21 @@ export function absenceCreditCents(netBeforeCents: number, notional: number, can
   if (cancelled < 3 || notional <= 0 || netBeforeCents <= 0) return 0;
   const perOccurrenceRateCents = netBeforeCents / notional;
   return Math.min(netBeforeCents, Math.round(cancelled * perOccurrenceRateCents));
+}
+
+/**
+ * reconcileService step 4 in full, on cents: the closure credit first, always
+ * (the typed percentage, or closed days / real scheduled days: closureCredit),
+ * then the ordinary absence credit on what is left.
+ */
+export function monthCreditCents(
+  netBeforeCents: number, notional: number, cancelled: number,
+  closed: { dates: string[]; scheduled: number; closures: Closure[] | undefined },
+): { closure: number; absence: number } {
+  if (notional <= 0 || netBeforeCents <= 0) return { closure: 0, absence: 0 };
+  const closure = closureCredit(netBeforeCents, closed.scheduled, closed.dates, closed.closures).totalCents;
+  const absence = Math.min(netBeforeCents - closure, absenceCreditCents(netBeforeCents, notional, cancelled));
+  return { closure, absence };
 }
 
 /**
@@ -108,6 +137,7 @@ export function notionalFor(line: LedgerLine, ev: MonthEvents | undefined): numb
 export function outstandingCarryOver(
   bills: LedgerBill[],
   eventsFor: (period: string, subscriptionId: string) => MonthEvents | undefined,
+  closures?: Closure[],
 ): { outstanding: Outstanding[]; skipped: SkippedSource[] } {
   const delivered = new Map<string, number>();
   for (const b of bills) {
@@ -142,12 +172,15 @@ export function outstandingCarryOver(
       const notional = notionalFor(l, ev);
       if (!notional) { skip("notional occurrences unknown (rate changed since, or gross is 0)"); continue; }
 
-      const granted = cents(l.absenceCreditAmount);
+      const granted = cents(l.absenceCreditAmount) + cents(l.closureCreditAmount);
       const netBefore = cents(l.amount) + granted + carriedInCents(l);
-      const should = absenceCreditCents(netBefore, notional, ev.cancelled);
+      const credit = monthCreditCents(netBefore, notional, ev.cancelled,
+        { dates: ev.closedDates ?? [], scheduled: ev.scheduled ?? ev.total, closures });
+      const should = credit.closure + credit.absence;
       outstanding.push({
         subscriptionId, fromPeriod: b.period,
         cents: should - granted - (delivered.get(key(subscriptionId, b.period)) ?? 0),
+        ...(credit.closure > 0 ? { closure: true } : {}),
       });
     }
   }
@@ -196,7 +229,7 @@ export function createCarryApplier(outstanding: Outstanding[]) {
           amount -= take;
           r.cents -= take;
           deltaCents -= take;
-          entries.push({ fromPeriod: r.fromPeriod, amount: take / 100 });
+          entries.push({ fromPeriod: r.fromPeriod, amount: take / 100, ...(r.closure && take > 0 ? { closure: true } : {}) });
         }
         if (!entries.length) return base;
         entries.sort((a, b) => a.fromPeriod.localeCompare(b.fromPeriod));
