@@ -1032,7 +1032,7 @@ export const setReservationEventStatus = onCall(
     // A day the club is closed (closureLogic.ts) is nobody's to change: marking
     // it "attending" would put a child on a run that doesn't happen and take
     // the closure credit off the bill, and re-marking it absent would turn it
-    // into an ordinary absence and lose the full credit. Refused both ways,
+    // into an ordinary absence and lose the closure credit. Refused both ways,
     // for parents and staff alike; the closure itself is edited in the admin
     // calendar.
     if (isClosureAbsence(data)) {

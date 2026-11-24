@@ -30,9 +30,13 @@
 //          the real occurrence count is what keeps the value of one absence
 //          identical in every month, consistent with a flat price.
 //          CLUB CLOSURE days (events flagged `closed`, closureLogic.ts) are
-//          a separate credit at the same notional rate: always given, from
-//          the first day, and never counted among the family's own absences
-//          (so they neither help nor hinder the 3-absence gate).
+//          a separate credit, always given and never counted among the
+//          family's own absences (so they neither help nor hinder the
+//          3-absence gate). NOT at the notional rate: a closure credits the
+//          percentage typed on it, or else closed days / the real scheduled
+//          days of that calendar month (closureCredit in closureLogic.ts).
+
+import { Closure, ClosurePart, closureCredit } from "./closureLogic";
 
 export interface ReservationEventLite {
   date: string; // yyyy-mm-dd
@@ -40,8 +44,8 @@ export interface ReservationEventLite {
   status: "EXPECTED" | "CANCELLED" | "VOIDED";
   /**
    * A CANCELLED day on which the club itself was closed for everyone
-   * (system absence with REASON_CLOSED). Credited in full, outside the
-   * 3-absence rule.
+   * (system absence with REASON_CLOSED). Credited by the closure's own rule
+   * (closureCredit), outside the 3-absence rule.
    */
   closed?: boolean;
 }
@@ -103,6 +107,8 @@ export interface ReconciliationConfig {
   /** Rule ids, so a per-rule admin override can be matched to the step that implements it. */
   multiTripRuleId?: string;
   siblingRuleId?: string;
+  /** The club's closures (config/closures): which closure a closed day belongs to, and its percentage. */
+  closures?: Closure[];
 }
 
 export interface ReconciledLineItem {
@@ -124,6 +130,8 @@ export interface ReconciledLineItem {
   closureCount: number;
   closureCreditCents: number;
   closureDates: string[];
+  /** The credit per closure (label, days in the month, count, percentage if typed). */
+  closureParts: ClosurePart[];
   finalCents: number;
   /** scheduleLength x activeWeeks: the denominator behind gross and the per-absence credit. */
   notionalOccurrences: number;
@@ -381,8 +389,9 @@ export function reconcileService(
     // Closure first: it is owed whatever else happened that month. The
     // ordinary absence credit then takes what is left, so the two together
     // can never exceed the month.
-    const closureCreditCents = closureCount > 0
-      ? Math.min(item.netBeforeAbsence, Math.round(closureCount * perOccurrenceRateCents)) : 0;
+    // item.events is every non-VOIDED occurrence of the month: its real scheduled days.
+    const closure = closureCredit(item.netBeforeAbsence, item.events.length, closedDays.map(e => e.date), cfg.closures);
+    const closureCreditCents = closure.totalCents;
     const qualifies = absenceCount >= 3;
     const absenceCreditCents = qualifies
       ? Math.min(item.netBeforeAbsence - closureCreditCents, Math.round(absenceCount * perOccurrenceRateCents)) : 0;
@@ -407,6 +416,7 @@ export function reconcileService(
       closureCount,
       closureCreditCents,
       closureDates: closedDays.map(c => c.date),
+      closureParts: closure.parts,
       finalCents: Math.max(0, item.netBeforeAbsence - absenceCreditCents - closureCreditCents),
       notionalOccurrences: item.notionalOccurrences,
     };

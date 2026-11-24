@@ -7,7 +7,8 @@
 // only through the setClubClosures callable, which also applies it to every
 // family's days and recomputes their open bills). A closed day is a reservation
 // event with status CANCELLED, changedByRole "system" and reason REASON_CLOSED:
-// it is credited in full on the bill and nobody can change it.
+// it is credited on the bill (the closure's percentage, or the share of the
+// month's real days it closed) and nobody can change it.
 
 import { getDoc } from 'firebase/firestore';
 import { docRef } from './db';
@@ -23,6 +24,13 @@ export interface Closure {
   /** Last closed day, yyyy-mm-dd, inclusive. */
   to: string;
   label: string;
+  /**
+   * The share of the month's price this closure credits, in percent (above 0,
+   * up to 100), the same for every subscription with a day inside it. Absent:
+   * each subscription is credited its closed days over its real scheduled days
+   * that month. Only allowed when the closure stays inside one month.
+   */
+  percent?: number;
 }
 
 export interface ClosureSaveResult {

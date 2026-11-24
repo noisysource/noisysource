@@ -100,7 +100,7 @@ vi.mock("./vendus", async (importOriginal) => ({
   findOrCreateClientByNif: vi.fn(),
 }));
 
-import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId, onAdhocRegistrationBillingSync, eventChangeNeedsBillingSync, closureCreditText, carriedCreditText } from "./billing";
+import { issueVendusInvoice, createVendusInvoiceForBilling, easypayWebhook, retryVendusInvoice, invoiceReadyEmailId, onAdhocRegistrationBillingSync, eventChangeNeedsBillingSync, closureCreditTexts, carriedCreditText } from "./billing";
 import { createInvoice, createOrUpdateClient, findOrCreateClientByNif, PRODUCT_STUDY } from "./vendus";
 
 const { state } = fake;
@@ -569,16 +569,31 @@ describe("eventChangeNeedsBillingSync — which event writes recompute a family'
 });
 
 describe("closure wording on the bill", () => {
-  it("study counts days, transport counts trips", () => {
-    expect(closureCreditText({ type: "study", closureCount: 12, closureCreditAmount: 57.6, closureLabel: "Férias de Natal" }))
-      .toBe("KidClub encerrado (Férias de Natal), 12 dias: −€57.60");
-    expect(closureCreditText({ type: "transport", closureCount: 1, closureCreditAmount: 4 })).toBe("KidClub encerrado, 1 viagem: −€4.00");
-    expect(closureCreditText({ type: "study", closureCount: 1, closureCreditAmount: 6 })).toBe("KidClub encerrado, 1 dia: −€6.00");
+  const part = (o: Record<string, any> = {}) => ({ label: "Férias de Natal", from: "2026-12-16", to: "2026-12-31", count: 12, amount: 60, ...o });
+
+  it("always says which days and how many were closed; the percentage only when one was typed", () => {
+    expect(closureCreditTexts({ type: "study", closureCount: 12, closureCreditAmount: 60, closureParts: [part({ percent: 50 })] }))
+      .toEqual(["KidClub encerrado (Férias de Natal), 16–31 Dez, 12 dias, 50%: −€60.00"]);
+    expect(closureCreditTexts({ type: "study", closureCount: 12, closureCreditAmount: 62.61, closureParts: [part({ amount: 62.61 })] }))
+      .toEqual(["KidClub encerrado (Férias de Natal), 16–31 Dez, 12 dias: −€62.61"]);
   });
+
+  it("transport counts trips; a one-day closure shows one date", () => {
+    expect(closureCreditTexts({ type: "transport", closureCount: 1, closureCreditAmount: 4, closureParts: [part({ label: "Ponte", from: "2026-12-07", to: "2026-12-07", count: 1, amount: 4 })] }))
+      .toEqual(["KidClub encerrado (Ponte), 7 Dez, 1 viagem: −€4.00"]);
+  });
+
+  it("one text per closure in the month", () => {
+    expect(closureCreditTexts({ type: "study", closureCount: 13, closureCreditAmount: 65.22, closureParts: [
+      part({ label: "Ponte", from: "2026-12-07", to: "2026-12-07", count: 1, amount: 5.22 }), part({ percent: 50 }),
+    ] })).toHaveLength(2);
+  });
+
   it("nothing when the month has no closed day", () => {
-    expect(closureCreditText({ type: "study" })).toBe("");
-    expect(closureCreditText({ type: "study", closureCount: 0, closureCreditAmount: 0 })).toBe("");
+    expect(closureCreditTexts({ type: "study" })).toEqual([]);
+    expect(closureCreditTexts({ type: "study", closureCount: 0, closureCreditAmount: 0 })).toEqual([]);
   });
+
   it("a credit carried from a closed month says the club was closed; a charge-back keeps the old wording", () => {
     expect(carriedCreditText({ fromPeriod: "2026-12", amount: 24, closure: true })).toBe("Crédito de Dezembro 2026 (KidClub encerrado): −€24.00");
     expect(carriedCreditText({ fromPeriod: "2026-12", amount: -24 })).toBe("Acerto de faltas de Dezembro 2026: +€24.00");

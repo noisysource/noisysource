@@ -15,7 +15,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { appCol } from "./db";
 import { autoCreateBillingSchedule } from "./billing";
 import { REASON_AFTER_END, REASON_BEFORE_START, coerceEndDate, coerceStartDate } from "./reservationEvents";
-import { Closure, ClosureSyncEvent, ClosureSyncSub, REASON_CLOSED, closureSyncAction, validateClosures } from "./closureLogic";
+import { Closure, ClosureSyncEvent, ClosureSyncSub, REASON_CLOSED, closureSyncAction, isClosureAbsence, readClosures, validateClosures } from "./closureLogic";
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -64,7 +64,20 @@ async function loadSubs(collection: "studyroom" | "transportationSubscriptions",
   return out;
 }
 
-export async function syncClubClosures(closures: Closure[]): Promise<ClosureSyncResult> {
+// What a closure puts on a bill besides which days are closed: a change in any
+// of these reprices the families inside it even when no event changes.
+const sameTerms = (a: Closure, b: Closure) =>
+  a.from === b.from && a.to === b.to && a.label === b.label && (a.percent ?? null) === (b.percent ?? null);
+
+/**
+ * `previous` is the list being replaced. A closure that is new to it, or whose
+ * dates, label or percentage changed, has every family with a closed day in it
+ * recomputed, whether or not one of its events changes (a percentage edit
+ * changes none).
+ */
+export async function syncClubClosures(closures: Closure[], previous: Closure[] = closures): Promise<ClosureSyncResult> {
+  const repriced = closures.filter(c => !previous.some(p => sameTerms(p, c)));
+  const inRepriced = (date: string) => repriced.some(c => date >= c.from && date <= c.to);
   // Everything that might change: the events inside each closure, and the
   // events currently marked closed (to reopen the ones no longer covered).
   const snaps = await Promise.all([
@@ -93,6 +106,9 @@ export async function syncClubClosures(closures: Closure[]): Promise<ClosureSync
     const sub = (e.subscriptionType === "study" ? study : transport).get(String(e.subscriptionId));
     const action = closureSyncAction(e as ClosureSyncEvent, closures, subForClosureSync(sub),
       { beforeStart: REASON_BEFORE_START, afterEnd: REASON_AFTER_END });
+    if (e.familyId && inRepriced(String(e.date)) && (action.kind === "close" || (action.kind === "none" && isClosureAbsence(e)))) {
+      families.add(String(e.familyId));
+    }
     if (action.kind === "none") continue;
     if (action.kind === "close") {
       writes.push({
@@ -148,8 +164,9 @@ export async function syncClubClosures(closures: Closure[]): Promise<ClosureSync
 
 /**
  * Admin: replace the list of closures and apply it. Sending the list unchanged
- * is the "apply again" button: the sync is idempotent, and it is how a run that
- * was cut short is finished.
+ * applies the event changes again (the sync is idempotent), which is how a run
+ * that was cut short is finished; it recomputes only families whose events
+ * still needed changing.
  */
 export const setClubClosures = onCall(
   { region: REGION, invoker: "public", timeoutSeconds: 540, memory: "512MiB" },
@@ -163,12 +180,13 @@ export const setClubClosures = onCall(
     const checked = validateClosures(request.data?.closures);
     if ("error" in checked) throw new HttpsError("invalid-argument", checked.error);
 
+    const previous = readClosures((await appCol("config").doc("closures").get()).data()?.closures);
     await appCol("config").doc("closures").set({
       closures: checked.closures,
       updatedBy: uid,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    const result = await syncClubClosures(checked.closures);
+    const result = await syncClubClosures(checked.closures, previous);
     return { closures: checked.closures, ...result };
   }
 );

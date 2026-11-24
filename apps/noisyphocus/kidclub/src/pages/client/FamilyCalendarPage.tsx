@@ -369,7 +369,7 @@ export default function FamilyCalendarPage() {
 
       <p className="mt-3 text-xs text-gray-400">
         As faltas contam para o crédito mensal a partir de 3 faltas no mesmo serviço.
-        Os dias em que o KidClub está encerrado são sempre creditados e não contam como faltas.
+        Quando o KidClub está encerrado, o desconto é feito na fatura do mês e esses dias não contam como faltas.
         Se o mês já estiver pago, o crédito é descontado na fatura do mês seguinte.
         Precisa de alterar horários ou cancelar uma inscrição?{' '}
         <Link to="/client/subscriptions" className="text-blue-600 hover:underline">Ver inscrições</Link>.

@@ -64,7 +64,7 @@ vi.mock("firebase-admin", () => ({
 }));
 vi.mock("./db", () => ({ appCol: (c: string) => fake.collection(c) }));
 
-import { autoCreateBillingSchedule, carriedCreditText, closureCreditText } from "./billing";
+import { autoCreateBillingSchedule, carriedCreditText, closureCreditTexts } from "./billing";
 
 const { state, ts, clone } = fake;
 
@@ -176,17 +176,19 @@ describe("autoCreateBillingSchedule — absences in a paid month carry to the ne
 
 // ── Club closure on the bill (2026-11-24) ──────────────────────────────────
 // KidClub closes after 15 December 2026. Rita's December (Mon/Fri): Fri 4, 11,
-// 18, 25; Mon 7, 14, 21, 28. Closed 16-31 = 18, 21, 25, 28: 4 of a notional 8.
+// 18, 25; Mon 7, 14, 21, 28 = 8 real days. Closed 16-31 = 18, 21, 25, 28.
 describe("autoCreateBillingSchedule — a club closure is credited on the bill", () => {
   const DEC_DAYS = ["04", "07", "11", "14", "18", "21", "25", "28"].map(d => `2026-12-${d}`);
   const CLOSED = ["2026-12-18", "2026-12-21", "2026-12-25", "2026-12-28"];
+  const XMAS = { id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" };
+  const setClosures = (closures: any[]) => { state.docs["config/closures"] = { closures }; };
   const close = (dates: string[]) => {
     for (const d of dates) Object.assign(state.docs[`reservationEvents/s1_${d}`], { status: "CANCELLED", changedByRole: "system", reason: "club closed" });
   };
 
   beforeEach(() => {
     vi.setSystemTime(new Date(2026, 10, 24, 10, 0)); // 24 Nov 2026
-    state.docs["config/closures"] = { closures: [{ id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" }] };
+    setClosures([{ ...XMAS, percent: 50 }]);
     for (const date of DEC_DAYS) {
       state.docs[`reservationEvents/s1_${date}`] = {
         subscriptionId: "s1", subscriptionType: "study", familyId: "famA", childId: "c1", date, basePriceCents: 600, status: "EXPECTED",
@@ -194,7 +196,7 @@ describe("autoCreateBillingSchedule — a club closure is credited on the bill",
     }
   });
 
-  it("December still open: half the month off, shown as a closure and not as absences", async () => {
+  it("50% typed, December still open: half the month off, shown as a closure and not as absences", async () => {
     close(CLOSED);
     await autoCreateBillingSchedule("famA");
 
@@ -202,15 +204,35 @@ describe("autoCreateBillingSchedule — a club closure is credited on the bill",
     expect(studyLine("2026-12")).toMatchObject({
       amount: 24, grossAmount: 48,
       closureCount: 4, closureCreditAmount: 24, closureDates: CLOSED, closureLabel: "Férias de Natal",
+      closureParts: [{ label: "Férias de Natal", from: "2026-12-16", to: "2026-12-31", count: 4, percent: 50, amount: 24 }],
       absenceCount: 0, absenceCreditAmount: 0,
       title: "Sala de Estudo — Rita (2ª, 6ª) — Dezembro 2026", // unchanged: Vendus maps products by title
     });
     expect(studyLine("2026-12").absenceDates).toBeUndefined();
-    expect(closureCreditText(studyLine("2026-12"))).toBe("KidClub encerrado (Férias de Natal), 4 dias: −€24.00");
+    expect(closureCreditTexts(studyLine("2026-12"))).toEqual(["KidClub encerrado (Férias de Natal), 16–31 Dez, 4 dias, 50%: −€24.00"]);
     // Other months are untouched.
     expect(studyLine("2026-11").amount).toBe(48);
     expect(studyLine("2026-11").closureCount).toBeUndefined();
     expect(studyLine("2027-01").amount).toBe(48);
+  });
+
+  it("the percentage is what counts, not the days: 25% typed on the same four days is EUR 12", async () => {
+    setClosures([{ ...XMAS, percent: 25 }]);
+    close(CLOSED);
+    await autoCreateBillingSchedule("famA");
+    expect(studyLine("2026-12")).toMatchObject({ amount: 36, closureCount: 4, closureCreditAmount: 12 });
+    // Changing it and recomputing reprices the bill.
+    setClosures([{ ...XMAS, percent: 50 }]);
+    await autoCreateBillingSchedule("famA");
+    expect(studyLine("2026-12")).toMatchObject({ amount: 24, closureCreditAmount: 24 });
+  });
+
+  it("no percentage: closed days over the month's real scheduled days (1 of 8 here)", async () => {
+    setClosures([{ ...XMAS, from: "2026-12-28" }]);
+    close(["2026-12-28"]);
+    await autoCreateBillingSchedule("famA");
+    expect(studyLine("2026-12")).toMatchObject({ amount: 42, closureCount: 1, closureCreditAmount: 6 });
+    expect(closureCreditTexts(studyLine("2026-12"))).toEqual(["KidClub encerrado (Férias de Natal), 28–31 Dez, 1 dia: −€6.00"]);
   });
 
   it("an absence of the family's own in the same month is still just an absence (under 3: no credit)", async () => {
@@ -220,12 +242,14 @@ describe("autoCreateBillingSchedule — a club closure is credited on the bill",
     expect(studyLine("2026-12")).toMatchObject({ amount: 24, closureCount: 4, closureCreditAmount: 24, absenceCount: 1, absenceCreditAmount: 0 });
   });
 
-  it("December already paid when the closure is entered: the paid bill stays, January carries the credit", async () => {
+  it("December already paid when the closure is entered: the paid bill stays, January carries what the bill would have shown", async () => {
+    setClosures([]);
     await autoCreateBillingSchedule("famA");
     bill("2026-12").status = "paid";
     const decPaid = clone(bill("2026-12"));
     expect(decPaid.total).toBe(48);
 
+    setClosures([{ ...XMAS, percent: 50 }]);
     close(CLOSED);
     await autoCreateBillingSchedule("famA");
 
@@ -238,13 +262,21 @@ describe("autoCreateBillingSchedule — a club closure is credited on the bill",
     const snapshot = clone(state.docs);
     await autoCreateBillingSchedule("famA");
     expect(state.docs).toEqual(snapshot);
+
+    // The percentage is corrected afterwards: January follows.
+    setClosures([{ ...XMAS, percent: 25 }]);
+    await autoCreateBillingSchedule("famA");
+    expect(bill("2026-12")).toEqual(decPaid);
+    expect(studyLine("2027-01")).toMatchObject({ amount: 36, carriedAbsenceCredits: [{ fromPeriod: "2026-12", amount: 12, closure: true }] });
   });
 
   for (const status of ["invoiced", "processing"]) {
     it(`December ${status}: same, the bill is not touched`, async () => {
+      setClosures([]);
       await autoCreateBillingSchedule("famA");
       bill("2026-12").status = status;
       const before = clone(bill("2026-12"));
+      setClosures([{ ...XMAS, percent: 50 }]);
       close(CLOSED);
       await autoCreateBillingSchedule("famA");
       expect(bill("2026-12")).toEqual(before);
@@ -255,10 +287,12 @@ describe("autoCreateBillingSchedule — a club closure is credited on the bill",
   it("the closure is removed again while December is open: the bill goes back to the full month", async () => {
     close(CLOSED);
     await autoCreateBillingSchedule("famA");
+    setClosures([]);
     for (const d of CLOSED) state.docs[`reservationEvents/s1_${d}`] = { subscriptionId: "s1", subscriptionType: "study", familyId: "famA", childId: "c1", date: d, basePriceCents: 600, status: "EXPECTED" };
     await autoCreateBillingSchedule("famA");
     expect(studyLine("2026-12").amount).toBe(48);
     expect(studyLine("2026-12").closureCount).toBeUndefined();
     expect(studyLine("2026-12").closureCreditAmount).toBeUndefined();
+    expect(studyLine("2026-12").closureParts).toBeUndefined();
   });
 });

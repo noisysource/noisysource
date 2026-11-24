@@ -163,6 +163,41 @@ describe("setClubClosures — KidClub closes 16-31 December 2026", () => {
     expect(recompute).not.toHaveBeenCalled();
   });
 
+  it("changing only the percentage changes no event but recomputes every family with a day in that closure, once", async () => {
+    await save([XMAS]);
+    const events = JSON.stringify(Object.entries(state.docs).filter(([p]) => p.startsWith("reservationEvents/")));
+    recompute.mockReset();
+
+    const result = await save([{ ...XMAS, percent: 50 }]);
+    expect(result).toMatchObject({ closed: 0, reopened: 0, families: 2 });
+    expect(recompute).toHaveBeenCalledTimes(2);
+    expect(recompute.mock.calls.map(c => c[0]).sort()).toEqual(["famA", "famB"]);
+    expect(JSON.stringify(Object.entries(state.docs).filter(([p]) => p.startsWith("reservationEvents/")))).toBe(events);
+    expect(state.docs["config/closures"].closures).toEqual([{ ...XMAS, percent: 50 }]);
+
+    // Same again: nothing to do. Removing the percentage: recomputed again.
+    recompute.mockReset();
+    await save([{ ...XMAS, percent: 50 }]);
+    expect(recompute).not.toHaveBeenCalled();
+    await save([XMAS]);
+    expect(recompute).toHaveBeenCalledTimes(2);
+  });
+
+  it("a percentage change on one closure leaves the families of another alone", async () => {
+    const formation = { id: "w", from: "2026-12-09", to: "2026-12-09", label: "Formação" }; // a Wednesday: family B only
+    await save([formation, { ...XMAS, from: "2026-12-18", to: "2026-12-18" }]);          // a Friday: family A only
+    recompute.mockReset();
+    await save([{ ...formation, percent: 10 }, { ...XMAS, from: "2026-12-18", to: "2026-12-18" }]);
+    expect(recompute.mock.calls.map(c => c[0])).toEqual(["famB"]);
+  });
+
+  it("a bad percentage, or one on a closure across two months, is refused before anything is written", async () => {
+    await expect(save([{ ...XMAS, percent: 0 }])).rejects.toThrow(/percentagem/);
+    await expect(save([{ ...XMAS, percent: 120 }])).rejects.toThrow(/percentagem/);
+    await expect(save([{ id: "y", from: "2026-12-28", to: "2027-01-08", label: "Fim de ano", percent: 25 }])).rejects.toThrow(/um só mês/);
+    expect(state.docs["config/closures"]).toBeUndefined();
+  });
+
   it("a family whose recompute fails is reported; the others still go through", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     recompute.mockImplementation(async (familyId: string) => { if (familyId === "famA") throw new Error("boom"); });

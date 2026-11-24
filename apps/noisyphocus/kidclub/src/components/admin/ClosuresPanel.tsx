@@ -9,8 +9,10 @@ import { reportClientError } from '../../lib/clientErrors';
  *
  * Every change is saved at once through the setClubClosures callable, because
  * saving is what applies it: each study day and transport trip inside a
- * closure becomes a credited "closed" day for every family, their open bills
- * are recomputed, and days of a removed or shortened closure are put back.
+ * closure becomes a "closed" day for every family, their open bills are
+ * recomputed with the closure's credit (the typed percentage of the month, or
+ * the share of the month's real days), and days of a removed or shortened
+ * closure are put back.
  * That touches every family, so a save can take up to a minute; the panel
  * says so and then reports what changed.
  */
@@ -21,9 +23,18 @@ const fmtDay = (iso: string) =>
 const rangeText = (c: { from: string; to: string }) =>
   c.from === c.to ? fmtDay(c.from) : `${fmtDay(c.from)} a ${fmtDay(c.to)}`;
 
-interface Draft { id: string | null; from: string; to: string; label: string }
+interface Draft { id: string | null; from: string; to: string; label: string; percent: string }
 
-const EMPTY: Draft = { id: null, from: '', to: '', label: '' };
+const EMPTY: Draft = { id: null, from: '', to: '', label: '', percent: '' };
+
+// "50", "12,5" or blank. Returns undefined for blank, NaN for anything unusable.
+const parsePercent = (text: string): number | undefined => {
+  const t = text.trim().replace(',', '.');
+  return t === '' ? undefined : Number(t);
+};
+
+const creditText = (c: Closure) =>
+  c.percent !== undefined ? `crédito de ${c.percent}% do mês` : 'crédito pelos dias encerrados';
 
 function resultText(r: ClosureSaveResult): string {
   const parts: string[] = [];
@@ -79,6 +90,11 @@ export default function ClosuresPanel({ onChanged }: { onChanged?: () => void })
     if (!d.from || !d.to) return 'Indique as duas datas.';
     if (d.to < d.from) return 'A data de fim é anterior à de início.';
     if (!d.label.trim()) return 'Indique uma descrição (por exemplo, "Férias de Natal").';
+    const percent = parsePercent(d.percent);
+    if (percent !== undefined) {
+      if (!Number.isFinite(percent) || percent <= 0 || percent > 100) return 'A percentagem tem de ser um número acima de 0 e até 100 (ou fique em branco).';
+      if (d.from.slice(0, 7) !== d.to.slice(0, 7)) return 'Com percentagem, o encerramento tem de ficar dentro de um só mês. Crie um encerramento por mês.';
+    }
     return null;
   };
 
@@ -90,6 +106,8 @@ export default function ClosuresPanel({ onChanged }: { onChanged?: () => void })
       id: draft.id ?? `c${Date.now().toString(36)}`,
       from: draft.from, to: draft.to, label: draft.label.trim(),
     };
+    const percent = parsePercent(draft.percent);
+    if (percent !== undefined) entry.percent = percent;
     save(draft.id ? closures.map(c => (c.id === draft.id ? entry : c)) : [...closures, entry]);
   };
 
@@ -114,8 +132,9 @@ export default function ClosuresPanel({ onChanged }: { onChanged?: () => void })
         )}
       </div>
       <p className="text-xs text-amber-700/80 mt-0.5">
-        Dias em que o KidClub está fechado para todos. Os dias de sala de estudo e as viagens nesses dias
-        são creditados na fatura de cada família e não contam como faltas.
+        Dias em que o KidClub está fechado para todos. Cada inscrição com dias (ou viagens) no encerramento
+        recebe um crédito na fatura desse mês: a percentagem indicada, igual para todos, ou, em branco, os
+        dias encerrados a dividir pelos dias que teria nesse mês. Não contam como faltas.
       </p>
 
       {closures === null && <p className="text-xs text-gray-500 mt-2">A carregar…</p>}
@@ -127,10 +146,10 @@ export default function ClosuresPanel({ onChanged }: { onChanged?: () => void })
             <li key={c.id} className="flex items-center justify-between gap-2 bg-white/70 rounded px-2 py-1">
               <span className="text-gray-800">
                 <span className="font-semibold">{c.label}</span>
-                <span className="text-gray-500"> · {rangeText(c)}</span>
+                <span className="text-gray-500"> · {rangeText(c)} · {creditText(c)}</span>
               </span>
               <span className="flex items-center gap-2 shrink-0">
-                <button onClick={() => { setDraft({ id: c.id, from: c.from, to: c.to, label: c.label }); setError(null); }}
+                <button onClick={() => { setDraft({ id: c.id, from: c.from, to: c.to, label: c.label, percent: c.percent !== undefined ? String(c.percent) : '' }); setError(null); }}
                   disabled={saving} title="Editar" aria-label={`Editar ${c.label}`}
                   className="text-amber-500 hover:text-amber-700 disabled:opacity-50">
                   <Pencil className="w-3.5 h-3.5" />
@@ -163,6 +182,12 @@ export default function ClosuresPanel({ onChanged }: { onChanged?: () => void })
             Descrição
             <input type="text" value={draft.label} maxLength={60} placeholder="Férias de Natal" disabled={saving}
               onChange={e => setDraft({ ...draft, label: e.target.value })}
+              className="block w-full border border-gray-300 rounded px-2 py-0.5 text-sm text-gray-800" />
+          </label>
+          <label className="text-xs text-gray-600 w-28" title="Percentagem do valor do mês a creditar a cada inscrição com dias neste encerramento. Em branco: crédito proporcional aos dias encerrados.">
+            Crédito (% do mês)
+            <input type="text" inputMode="decimal" value={draft.percent} placeholder="em branco" disabled={saving}
+              onChange={e => setDraft({ ...draft, percent: e.target.value })}
               className="block w-full border border-gray-300 rounded px-2 py-0.5 text-sm text-gray-800" />
           </label>
           <button onClick={submitDraft} disabled={saving}

@@ -23,6 +23,33 @@ describe("validateClosures", () => {
     expect(validateClosures([])).toEqual({ closures: [] });
   });
 
+  it("an optional percentage: above 0, up to 100, kept as typed", () => {
+    const ok = (percent: unknown) => validateClosures([{ from: "2026-12-16", to: "2026-12-31", label: "x", percent }]) as { closures: Closure[] };
+    expect(ok(50).closures[0].percent).toBe(50);
+    expect(ok(100).closures[0].percent).toBe(100);
+    expect(ok(33.333).closures[0].percent).toBe(33.33);
+    expect("percent" in ok(undefined).closures[0]).toBe(false);
+    expect("percent" in ok(null).closures[0]).toBe(false);
+    for (const bad of [0, -5, 100.5, "50", NaN]) expect("error" in validateClosures([{ from: "2026-12-16", to: "2026-12-31", label: "x", percent: bad }])).toBe(true);
+  });
+
+  it("a percentage is 'of the month': refused on a closure that crosses two months, allowed without one", () => {
+    const across = { from: "2026-12-28", to: "2027-01-08", label: "Fim de ano" };
+    expect(validateClosures([{ ...across, percent: 25 }])).toMatchObject({ error: expect.stringContaining("um só mês") });
+    expect("closures" in validateClosures([across])).toBe(true);
+  });
+
+  it("closures may not overlap: a day belongs to one closure", () => {
+    expect(validateClosures([
+      { from: "2026-12-16", to: "2026-12-31", label: "Natal", percent: 50 },
+      { from: "2026-12-24", to: "2026-12-24", label: "Véspera" },
+    ])).toMatchObject({ error: expect.stringContaining("sobrepõem-se") });
+    expect("closures" in validateClosures([
+      { from: "2026-12-07", to: "2026-12-07", label: "Ponte" },
+      { from: "2026-12-16", to: "2026-12-31", label: "Natal", percent: 50 },
+    ])).toBe(true);
+  });
+
   it("refuses what it can't apply", () => {
     const bad = (c: unknown) => "error" in validateClosures(c as any);
     expect(bad(null)).toBe(true);
@@ -39,6 +66,8 @@ describe("readClosures / closureFor / closureLabelFor", () => {
   it("drops malformed stored entries instead of failing", () => {
     expect(readClosures(undefined)).toEqual([]);
     expect(readClosures([XMAS, { from: "nope", to: "2026-12-31" }, null])).toEqual([XMAS]);
+    expect(readClosures([{ ...XMAS, percent: 50 }])[0].percent).toBe(50);
+    expect("percent" in readClosures([{ ...XMAS, percent: 0 }])[0]).toBe(false);
   });
 
   it("both ends of a closure are closed days", () => {

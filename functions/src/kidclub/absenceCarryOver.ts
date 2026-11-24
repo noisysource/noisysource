@@ -13,8 +13,8 @@
 //              stored price: net-before-absence = amount + absenceCreditAmount
 //              + closureCreditAmount + whatever M itself received from earlier
 //              months; same formula as reconcileService step 4: the club's
-//              closure days in full, then the family's absences behind the
-//              >=3 gate.
+//              closure credit (typed percentage, or closed days / real
+//              scheduled days), then the family's absences behind the >=3 gate.
 //   granted(M) the credit M's line was actually given (absenceCreditAmount +
 //              closureCreditAmount).
 //   carried(M) what other closed bills already carry from M.
@@ -26,6 +26,8 @@
 // unapplied, and the caller logs it.
 //
 // Pure: billing.ts loads the bills and events and writes the result.
+
+import { Closure, closureCredit } from "./closureLogic";
 
 export interface CarriedAbsenceCredit {
   /** yyyy-mm of the closed month the credit comes from. */
@@ -63,8 +65,10 @@ export interface MonthEvents {
   total: number;
   /** CANCELLED events that are NOT closure days: the family's absences and boundary-month ones. */
   cancelled: number;
-  /** CANCELLED events on days the club was closed (closureLogic.ts). Credited without the >=3 gate. */
-  closed?: number;
+  /** Dates of the CANCELLED events on days the club was closed (closureLogic.ts), one per occurrence. */
+  closedDates?: string[];
+  /** Every event that is not VOIDED: the month's real scheduled days, the base of a closure's share. */
+  scheduled?: number;
   /** The frozen per-occurrence price (basePriceCents) of the month's events. */
   rateCents?: number;
 }
@@ -96,12 +100,16 @@ export function absenceCreditCents(netBeforeCents: number, notional: number, can
 }
 
 /**
- * reconcileService step 4 in full, on cents: closure days first, always, then
- * the ordinary absence credit on what is left.
+ * reconcileService step 4 in full, on cents: the closure credit first, always
+ * (the typed percentage, or closed days / real scheduled days: closureCredit),
+ * then the ordinary absence credit on what is left.
  */
-export function monthCreditCents(netBeforeCents: number, notional: number, cancelled: number, closed: number): { closure: number; absence: number } {
+export function monthCreditCents(
+  netBeforeCents: number, notional: number, cancelled: number,
+  closed: { dates: string[]; scheduled: number; closures: Closure[] | undefined },
+): { closure: number; absence: number } {
   if (notional <= 0 || netBeforeCents <= 0) return { closure: 0, absence: 0 };
-  const closure = closed > 0 ? Math.min(netBeforeCents, Math.round(closed * (netBeforeCents / notional))) : 0;
+  const closure = closureCredit(netBeforeCents, closed.scheduled, closed.dates, closed.closures).totalCents;
   const absence = Math.min(netBeforeCents - closure, absenceCreditCents(netBeforeCents, notional, cancelled));
   return { closure, absence };
 }
@@ -129,6 +137,7 @@ export function notionalFor(line: LedgerLine, ev: MonthEvents | undefined): numb
 export function outstandingCarryOver(
   bills: LedgerBill[],
   eventsFor: (period: string, subscriptionId: string) => MonthEvents | undefined,
+  closures?: Closure[],
 ): { outstanding: Outstanding[]; skipped: SkippedSource[] } {
   const delivered = new Map<string, number>();
   for (const b of bills) {
@@ -165,7 +174,8 @@ export function outstandingCarryOver(
 
       const granted = cents(l.absenceCreditAmount) + cents(l.closureCreditAmount);
       const netBefore = cents(l.amount) + granted + carriedInCents(l);
-      const credit = monthCreditCents(netBefore, notional, ev.cancelled, ev.closed ?? 0);
+      const credit = monthCreditCents(netBefore, notional, ev.cancelled,
+        { dates: ev.closedDates ?? [], scheduled: ev.scheduled ?? ev.total, closures });
       const should = credit.closure + credit.absence;
       outstanding.push({
         subscriptionId, fromPeriod: b.period,

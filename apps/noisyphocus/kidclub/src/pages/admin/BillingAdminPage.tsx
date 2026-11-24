@@ -8,7 +8,7 @@ import MarkPaidModal from './billing/MarkPaidModal';
 import BankDetailsPanel from './billing/BankDetailsPanel';
 import { PaymentProofList, PaymentProofUpload } from '../../components/billing/PaymentProofs';
 import { PAYMENT_PROOFS_ENABLED } from '../../lib/paymentProof';
-import { carriedCreditText, closureCreditText } from '../../lib/billingLines';
+import { carriedCreditText, closureCreditTexts } from '../../lib/billingLines';
 import { isClubClosedEvent } from '../../lib/closures';
 
 // Bills a payment can still be recorded on (markBillingPaid accepts these).
@@ -108,8 +108,8 @@ function LineItemRow({ lineItem }: { lineItem: BillingLineItem }) {
           {!!lineItem.institutionalDiscountAmount && (
             <p>{lineItem.legacyPricing ? 'Tarifário antigo (descontos somados)' : 'Desconto escola/aluno repetente'}{lineItem.institutionalDiscountPct ? ` (${Math.round(lineItem.institutionalDiscountPct * 100)}%)` : ''}: −{fmtEur(lineItem.institutionalDiscountAmount)}</p>
           )}
-          {/* Days the club itself was closed: credited in full, not the family's absences. */}
-          {!!lineItem.closureCount && <p className="text-emerald-700">{closureCreditText(lineItem)}</p>}
+          {/* Days the club itself was closed: its own credit, not the family's absences. */}
+          {closureCreditTexts(lineItem).map(t => <p key={t} className="text-emerald-700">{t}</p>)}
           {/* Carried in from a paid month of this subscription (absenceCarryOver.ts). */}
           {lineItem.carriedAbsenceCredits?.map(c => (
             <p key={c.fromPeriod} className={c.amount >= 0 ? 'text-emerald-700' : 'text-amber-700'}>{carriedCreditText(c)}</p>

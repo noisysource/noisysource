@@ -64,17 +64,38 @@ export function carriedCreditText(c: { fromPeriod: string; amount: number; closu
     : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
 }
 
+const MONTHS_SHORT_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+function closureRangeText(from: string | undefined, to: string | undefined): string {
+  if (!from || !to) return '';
+  const month = MONTHS_SHORT_PT[Number(from.slice(5, 7)) - 1] ?? '';
+  const a = Number(from.slice(8, 10)), b = Number(to.slice(8, 10));
+  return a === b ? `${a} ${month}` : `${a}–${b} ${month}`;
+}
+
+interface ClosureTextLine {
+  type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string;
+  closureParts?: { label: string; from?: string; to?: string; count: number; percent?: number; amount: number }[];
+}
+
 /**
- * "KidClub encerrado (Férias de Natal), 12 dias: −€57.60" — the credit for
- * days the club itself was closed, under the line it lowered. Transport counts
- * trips. Empty when the month had no closed day. Same wording as the payment
- * email (closureCreditText in functions/src/kidclub/billing.ts).
+ * One text per closure credited on a line, to show under it:
+ * "KidClub encerrado (Férias de Natal), 16–31 Dez, 4 dias, 50%: −€24.00".
+ * The days closed are always there (transport counts trips); the percentage
+ * only when one was typed on the closure. Empty when the month had no closed
+ * day. Same wording as the payment email (closureCreditTexts in
+ * functions/src/kidclub/billing.ts).
  */
-export function closureCreditText(li: { type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }): string {
-  const n = li.closureCount ?? 0;
-  if (!n) return '';
-  const unit = li.type === 'transport' ? (n === 1 ? 'viagem' : 'viagens') : (n === 1 ? 'dia' : 'dias');
-  return `KidClub encerrado${li.closureLabel ? ` (${li.closureLabel})` : ''}, ${n} ${unit}: −€${(li.closureCreditAmount ?? 0).toFixed(2)}`;
+export function closureCreditTexts(li: ClosureTextLine): string[] {
+  if (!li.closureCount) return [];
+  const parts: NonNullable<ClosureTextLine['closureParts']> = li.closureParts?.length
+    ? li.closureParts
+    : [{ label: li.closureLabel ?? '', count: li.closureCount, amount: li.closureCreditAmount ?? 0 }];
+  return parts.map(p => {
+    const unit = li.type === 'transport' ? (p.count === 1 ? 'viagem' : 'viagens') : (p.count === 1 ? 'dia' : 'dias');
+    const bits = [closureRangeText(p.from, p.to), `${p.count} ${unit}`, p.percent !== undefined ? `${p.percent}%` : ''].filter(Boolean);
+    return `KidClub encerrado${p.label ? ` (${p.label})` : ''}, ${bits.join(', ')}: −€${p.amount.toFixed(2)}`;
+  });
 }
 
 /** yyyy-mm of a billing doc, from periodStart (Timestamp/Date/string) or the `_yyyy-mm` id suffix. */

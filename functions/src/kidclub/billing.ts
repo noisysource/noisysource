@@ -11,7 +11,7 @@ import { familyInvoiceNif, realNif } from "./vendusClientLogic";
 import { retryInvoiceRefusal } from "./retryInvoiceLogic";
 import { eventLineId } from "./adhocEventLogic";
 import { isRecomputableBill } from "./repricedMonths";
-import { Closure, closureLabelFor, isClosureAbsence, readClosures } from "./closureLogic";
+import { Closure, ClosurePart, closureLabelFor, isClosureAbsence, readClosures } from "./closureLogic";
 import { CLOSED_STATUSES, CarriedAbsenceCredit, CarryApplier, MonthEvents, LedgerBill, createCarryApplier, isServiceLine, outstandingCarryOver, periodLabelPt } from "./absenceCarryOver";
 
 if (!admin.apps.length) admin.initializeApp();
@@ -426,12 +426,17 @@ export interface BillingLineItem {
   absenceCreditDates?: string[]; // ISO yyyy-mm-dd — every CANCELLED date credited once the 3-absence threshold was reached (uncapped, not just the first 3)
   notionalOccurrences?: number;  // scheduleLength x activeWeeks behind gross; lets a later carry-over price this month's absences on this line's own terms
   // Days the club itself was closed (config/closures, closureLogic.ts): always
-  // credited in full, apart from the family's own absences above. Only present
+  // credited (the closure's percentage, or closed days / the month's real
+  // scheduled days), apart from the family's own absences above. Only present
   // when the month has such days. Already included in `amount`.
   closureCount?: number;         // occurrences of this subscription on closed days
   closureDates?: string[];       // ISO yyyy-mm-dd, one per occurrence (a two-trip day appears twice)
   closureCreditAmount?: number;
   closureLabel?: string;         // the closure's label(s), e.g. "Férias de Natal"
+  // One entry per closure credited: its days inside this month, how many of
+  // this subscription's occurrences fell in it, the typed percentage if any,
+  // and its part of closureCreditAmount.
+  closureParts?: { label: string; from?: string; to?: string; count: number; percent?: number; amount: number }[];
   // Credit (or charge) carried in from a closed month of the SAME subscription
   // (absenceCarryOver.ts). Already included in `amount`; the title is never
   // changed, because Vendus products are mapped by title.
@@ -441,7 +446,7 @@ export interface BillingLineItem {
 interface BillingConfigs { studyConfig: any; transportConfig: any; discountRules: any[]; closures?: Closure[] }
 
 // The closure part of a study/transport line, empty when the month has no closed day.
-function closureFields(r: { closureCount: number; closureCreditCents: number; closureDates: string[] }, closures: Closure[] | undefined) {
+function closureFields(r: { closureCount: number; closureCreditCents: number; closureDates: string[]; closureParts: ClosurePart[] }, closures: Closure[] | undefined) {
   if (!r.closureCount) return {};
   const closureLabel = closureLabelFor(r.closureDates, closures);
   return {
@@ -449,6 +454,7 @@ function closureFields(r: { closureCount: number; closureCreditCents: number; cl
     closureDates: r.closureDates,
     closureCreditAmount: r.closureCreditCents / 100,
     ...(closureLabel ? { closureLabel } : {}),
+    closureParts: r.closureParts.map(({ cents, ...p }) => ({ ...p, amount: cents / 100 })),
   };
 }
 
@@ -614,7 +620,7 @@ async function computeLineItems(
     contractCoversPeriod(asDate(sub.startDate), asDate(sub.endDate), period.start, period.end);
 
   if (group.study.length) {
-    const cfg = buildReconciliationConfig("study", configs.discountRules, configs.studyConfig);
+    const cfg = { ...buildReconciliationConfig("study", configs.discountRules, configs.studyConfig), closures: configs.closures };
     const studyRate = studyPerDayRate(configs.studyConfig);
     const subsForRecon: SubscriptionForReconciliation[] = group.study.map(sub => ({
       id: sub.id, childId: sub.childId,
@@ -656,7 +662,7 @@ async function computeLineItems(
   }
 
   if (group.transport.length) {
-    const cfg = buildReconciliationConfig("transport", configs.discountRules, configs.transportConfig);
+    const cfg = { ...buildReconciliationConfig("transport", configs.discountRules, configs.transportConfig), closures: configs.closures };
     const tripRate: number = configs.transportConfig?.flatRatePerTrip ?? 0;
     const subsForRecon: SubscriptionForReconciliation[] = group.transport.map(sub => ({
       id: sub.id, childId: sub.childId,
@@ -728,7 +734,8 @@ async function loadBillingConfigs(): Promise<BillingConfigs> {
     studyConfig: studySnap.data() ?? {},
     transportConfig: transportSnap.data() ?? {},
     discountRules: discountsSnap.data()?.rules ?? [],
-    // Only for the label on the bill: which days are closed is read off the events.
+    // Which days are closed is read off the events; the list says which
+    // closure a closed day belongs to, its label and its percentage.
     closures: readClosures(closuresSnap.data()?.closures),
   };
 }
@@ -1421,12 +1428,15 @@ async function loadAbsenceCarryOver(familyId: string): Promise<CarryApplier> {
       events.set(`${b.period}|${subId}`, {
         total: list.length,
         cancelled: list.filter(e => e.status === "CANCELLED" && !e.closed).length,
-        closed: list.filter(e => e.status === "CANCELLED" && e.closed).length,
+        closedDates: list.filter(e => e.status === "CANCELLED" && e.closed).map(e => e.date),
+        scheduled: list.filter(e => e.status !== "VOIDED").length,
         rateCents: list.find(e => e.basePriceCents > 0)?.basePriceCents,
       });
     }
   }
-  const { outstanding, skipped } = outstandingCarryOver(bills, (period, subId) => events.get(`${period}|${subId}`));
+  const closuresSnap = await appCol("config").doc("closures").get();
+  const { outstanding, skipped } = outstandingCarryOver(
+    bills, (period, subId) => events.get(`${period}|${subId}`), readClosures(closuresSnap.data()?.closures));
   for (const x of skipped) {
     console.log(`[billing] ${familyId}: no absence carry-over from ${x.fromPeriod} for ${x.subscriptionId}: ${x.reason}`);
   }
@@ -1752,7 +1762,7 @@ function buildPaymentNoticeEmail(opts: {
   clientName: string;
   periodLabel: string;
   total: number;
-  lineItems: { title: string; amount: number; type?: string; carriedAbsenceCredits?: CarriedAbsenceCredit[]; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }[];
+  lineItems: ({ title: string; amount: number; carriedAbsenceCredits?: CarriedAbsenceCredit[] } & ClosureTextLine)[];
   billingId: string;
 }): string {
   const { clientName, periodLabel, total, lineItems } = opts;
@@ -1806,19 +1816,38 @@ export function carriedCreditText(c: CarriedAbsenceCredit): string {
     : `Acerto de faltas de ${label}: +€${(-c.amount).toFixed(2)}`;
 }
 
-// "KidClub encerrado (Férias de Natal), 12 dias: −€57.60" under the line it
-// lowered. Transport counts trips, not days. Exported for billing.test.ts;
-// the app has the same wording in lib/billingLines.ts.
-export function closureCreditText(li: { type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }): string {
-  const n = li.closureCount ?? 0;
-  if (!n) return "";
-  const unit = li.type === "transport" ? (n === 1 ? "viagem" : "viagens") : (n === 1 ? "dia" : "dias");
-  return `KidClub encerrado${li.closureLabel ? ` (${li.closureLabel})` : ""}, ${n} ${unit}: −€${(li.closureCreditAmount ?? 0).toFixed(2)}`;
+// One text per closure credited on a line, under the line it lowered:
+//   "KidClub encerrado (Férias de Natal), 16–31 Dez, 4 dias, 50%: −€24.00"
+// The days closed are always there (transport counts trips); the percentage
+// only when one was typed on the closure. Exported for the tests; the app has
+// the same wording in lib/billingLines.ts.
+const MONTHS_SHORT_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+function closureRangeText(from: string | undefined, to: string | undefined): string {
+  if (!from || !to) return "";
+  const month = MONTHS_SHORT_PT[Number(from.slice(5, 7)) - 1] ?? "";
+  const a = Number(from.slice(8, 10)), b = Number(to.slice(8, 10));
+  return a === b ? `${a} ${month}` : `${a}–${b} ${month}`;
 }
 
-function closureCreditHtml(li: { type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string }): string {
-  const text = closureCreditText(li);
-  return text ? `<br><span style="font-size:12px;color:#6b7280;">${escapeHtml(text)}</span>` : "";
+interface ClosureTextLine {
+  type?: string; closureCount?: number; closureCreditAmount?: number; closureLabel?: string;
+  closureParts?: { label: string; from?: string; to?: string; count: number; percent?: number; amount: number }[];
+}
+
+export function closureCreditTexts(li: ClosureTextLine): string[] {
+  if (!li.closureCount) return [];
+  const parts = li.closureParts?.length
+    ? li.closureParts
+    : [{ label: li.closureLabel ?? "", count: li.closureCount, amount: li.closureCreditAmount ?? 0 } as NonNullable<ClosureTextLine["closureParts"]>[number]];
+  return parts.map(p => {
+    const unit = li.type === "transport" ? (p.count === 1 ? "viagem" : "viagens") : (p.count === 1 ? "dia" : "dias");
+    const bits = [closureRangeText(p.from, p.to), `${p.count} ${unit}`, p.percent !== undefined ? `${p.percent}%` : ""].filter(Boolean);
+    return `KidClub encerrado${p.label ? ` (${p.label})` : ""}, ${bits.join(", ")}: −€${p.amount.toFixed(2)}`;
+  });
+}
+
+function closureCreditHtml(li: ClosureTextLine): string {
+  return closureCreditTexts(li).map(text => `<br><span style="font-size:12px;color:#6b7280;">${escapeHtml(text)}</span>`).join("");
 }
 
 function carriedCreditsHtml(credits: CarriedAbsenceCredit[] | undefined): string {

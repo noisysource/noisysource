@@ -773,75 +773,152 @@ describe("old pricing: legacyFlatPct bills the flat model the subscription card 
 });
 
 // ── Club closures (2026-11-24) ─────────────────────────────────────────────
-// A day the club itself is closed is credited in full, from the first day,
-// and is not one of the family's absences: it neither counts towards the
-// 3-absence minimum nor is held back by it.
-describe("club closure days are credited in full, apart from the family's absences", () => {
-  const closedOn = (count: number, startDay = 16): ReservationEventLite[] =>
-    Array.from({ length: count }, (_, i) => ({ date: `2026-12-${startDay + i}`, basePriceCents: 600, status: "CANCELLED" as const, closed: true }));
-  const one = (events: ReservationEventLite[], o: Partial<SubscriptionForReconciliation> = {}) =>
-    reconcileService([sub({ id: "s1", ...o })], new Map([["s1", events]]), NO_DISCOUNTS)[0];
+// A closure is credited whatever the family's own absences are: it neither
+// counts towards the 3-absence minimum nor is held back by it. How much:
+// the percentage typed on the closure, or else closed days / the real
+// scheduled days of that calendar month (NOT the notional 20-day month).
+describe("club closure credit: typed percentage, or the real-days share", () => {
+  const XMAS = { id: "x", from: "2026-12-16", to: "2026-12-31", label: "Férias de Natal" };
+  const day = (d: number, status: ReservationEventLite["status"] = "EXPECTED", closed = false): ReservationEventLite =>
+    ({ date: `2026-12-${String(d).padStart(2, "0")}`, basePriceCents: 600, status, ...(closed ? { closed: true } : {}) });
+  // December 2026, Mon-Fri: 23 working days, 11 before the 16th and 12 from it on.
+  const DEC = [1, 2, 3, 4, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 21, 22, 23, 24, 25, 28, 29, 30, 31];
+  const december = (o: { absent?: number[]; closedFrom?: number } = {}) => DEC.map(d =>
+    d >= (o.closedFrom ?? 16) ? day(d, "CANCELLED", true) : day(d, o.absent?.includes(d) ? "CANCELLED" : "EXPECTED"));
+  const one = (events: ReservationEventLite[], closures: any[] | undefined, o: Partial<SubscriptionForReconciliation> = {}) =>
+    reconcileService([sub({ id: "s1", ...o })], new Map([["s1", events]]), { ...NO_DISCOUNTS, closures })[0];
 
-  it("16-31 December, Mon-Fri: 12 closed days of a notional 20 take 60% off", () => {
-    const r = one([...occurrences(11), ...closedOn(12)]);
+  it("no percentage: 12 closed days of the month's 23 real ones, not of a notional 20", () => {
+    const r = one(december(), [XMAS]);
     expect(r.grossCents).toBe(12000);
     expect(r.closureCount).toBe(12);
-    expect(r.closureCreditCents).toBe(7200);
-    expect(r.closureDates).toHaveLength(12);
-    expect(r.finalCents).toBe(4800);
+    expect(r.closureCreditCents).toBe(Math.round(12000 * 12 / 23)); // 6261, not 7200
+    expect(r.closureParts).toEqual([{ label: "Férias de Natal", from: "2026-12-16", to: "2026-12-31", count: 12, cents: 6261 }]);
+    expect(r.finalCents).toBe(12000 - 6261);
     // Not absences.
     expect(r.absenceCount).toBe(0);
     expect(r.absenceDates).toEqual([]);
     expect(r.absenceCreditCents).toBe(0);
   });
 
+  it("50% typed: exactly half the month, whatever days the subscription has", () => {
+    const fiveDays = one(december(), [{ ...XMAS, percent: 50 }]);
+    expect(fiveDays.closureCreditCents).toBe(6000);
+    expect(fiveDays.closureParts[0]).toMatchObject({ count: 12, percent: 50, cents: 6000 });
+    // Wednesdays only (2, 9, 16, 23, 30): 3 of 5 closed, still 50%.
+    const wed = one([day(2), day(9), day(16, "CANCELLED", true), day(23, "CANCELLED", true), day(30, "CANCELLED", true)],
+      [{ ...XMAS, percent: 50 }], { scheduleWeekdays: ["wednesday"] });
+    expect(wed.grossCents).toBe(2400);
+    expect(wed.closureCreditCents).toBe(1200);
+    // One single trip inside the closure is enough.
+    const once = one([day(1), day(8), day(15), day(22, "CANCELLED", true)], [{ ...XMAS, from: "2026-12-22", to: "2026-12-22", percent: 50 }], { scheduleWeekdays: ["tuesday"] });
+    expect(once.closureCreditCents).toBe(1200);
+  });
+
+  it("nothing scheduled inside the closure: nothing, percentage or not", () => {
+    for (const closures of [[XMAS], [{ ...XMAS, percent: 50 }]]) {
+      const r = one([day(1), day(8), day(15)], closures, { scheduleWeekdays: ["tuesday"] });
+      expect(r.closureCount).toBe(0);
+      expect(r.closureCreditCents).toBe(0);
+      expect(r.closureParts).toEqual([]);
+      expect(r.finalCents).toBe(2400);
+    }
+  });
+
   it("a single closed day is credited: no 3-day minimum", () => {
-    const r = one([...occurrences(19), ...closedOn(1)]);
-    expect(r.closureCreditCents).toBe(600);
-    expect(r.finalCents).toBe(11400);
+    const r = one(december({ closedFrom: 31 }), [{ ...XMAS, from: "2026-12-31" }]);
+    expect(r.closureCreditCents).toBe(Math.round(12000 / 23));
   });
 
   it("closed days don't help the family reach its own 3 absences", () => {
-    const r = one([...occurrences(10), ...cancelledOn(2, 1), ...closedOn(5)]);
+    const r = one(december({ absent: [1, 2] }), [{ ...XMAS, percent: 50 }]);
     expect(r.absenceCount).toBe(2);
     expect(r.absenceCreditCents).toBe(0);
-    expect(r.closureCreditCents).toBe(3000);
-    expect(r.finalCents).toBe(9000);
+    expect(r.closureCreditCents).toBe(6000);
+    expect(r.finalCents).toBe(6000);
   });
 
-  it("with 3 own absences as well, both credits apply", () => {
-    const r = one([...occurrences(10), ...cancelledOn(3, 1), ...closedOn(5)]);
+  it("with 3 own absences as well, both credits apply (absences still at the notional rate)", () => {
+    const r = one(december({ absent: [1, 2, 3] }), [{ ...XMAS, percent: 50 }]);
     expect(r.absenceCreditCents).toBe(1800);
     expect(r.absenceCreditDates).toHaveLength(3);
-    expect(r.closureCreditCents).toBe(3000);
-    expect(r.finalCents).toBe(7200);
+    expect(r.closureCreditCents).toBe(6000);
+    expect(r.finalCents).toBe(4200);
   });
 
-  it("the credit is on the price after discounts, like any absence", () => {
-    const r = one([...occurrences(11), ...closedOn(12)], { manualDiscountPct: 0.5 });
+  it("the credit is on the price after discounts", () => {
+    const r = one(december(), [{ ...XMAS, percent: 50 }], { manualDiscountPct: 0.5 });
     expect(r.netBeforeAbsenceCents).toBe(6000);
-    expect(r.closureCreditCents).toBe(3600);
-    expect(r.finalCents).toBe(2400);
+    expect(r.closureCreditCents).toBe(3000);
+    expect(r.finalCents).toBe(3000);
   });
 
-  it("never below zero: a month closed throughout (23 working days) bills nothing", () => {
-    const r = one(closedOn(23, 1).map((e, i) => ({ ...e, date: `2026-12-${String(i + 1).padStart(2, "0")}` })));
+  it("two closures in one month add up, each on its own terms", () => {
+    const bridge = { id: "b", from: "2026-12-07", to: "2026-12-07", label: "Ponte" };
+    const events = DEC.map(d => (d === 7 || d >= 16) ? day(d, "CANCELLED", true) : day(d));
+    const r = one(events, [bridge, { ...XMAS, percent: 50 }]);
+    expect(r.closureParts).toEqual([
+      { label: "Ponte", from: "2026-12-07", to: "2026-12-07", count: 1, cents: Math.round(12000 / 23) },
+      { label: "Férias de Natal", from: "2026-12-16", to: "2026-12-31", count: 12, percent: 50, cents: 6000 },
+    ]);
+    expect(r.closureCreditCents).toBe(522 + 6000);
+  });
+
+  it("... and are capped at the month: 60% + 60% is the whole month, not more", () => {
+    const a = { id: "a", from: "2026-12-01", to: "2026-12-15", label: "A", percent: 60 };
+    const b = { id: "b", from: "2026-12-16", to: "2026-12-31", label: "B", percent: 60 };
+    const r = one(DEC.map(d => day(d, "CANCELLED", true)), [a, b]);
+    expect(r.closureParts.map(p => p.cents)).toEqual([7200, 4800]);
     expect(r.closureCreditCents).toBe(12000);
     expect(r.finalCents).toBe(0);
   });
 
   it("closure + absences together never exceed the month", () => {
-    const r = one([...closedOn(18, 1).map((e, i) => ({ ...e, date: `2026-12-${String(i + 1).padStart(2, "0")}` })), ...cancelledOn(5, 24)]);
+    const r = one(december({ absent: [1, 2, 3, 4, 7] }), [{ ...XMAS, percent: 90 }]);
     expect(r.closureCreditCents).toBe(10800);
     expect(r.absenceCreditCents).toBe(1200); // 5 absences would be 3000; only 1200 is left
     expect(r.finalCents).toBe(0);
   });
 
+  it("a month closed throughout bills nothing without a percentage", () => {
+    const r = one(DEC.map(d => day(d, "CANCELLED", true)), [{ ...XMAS, from: "2026-12-01" }]);
+    expect(r.closureCreditCents).toBe(12000);
+    expect(r.finalCents).toBe(0);
+  });
+
+  it("a closure across two months (no percentage): each month credits its own days over its own real days", () => {
+    const across = { id: "y", from: "2026-12-28", to: "2027-01-08", label: "Fim de ano" };
+    const r = one(DEC.map(d => d >= 28 ? day(d, "CANCELLED", true) : day(d)), [across]);
+    expect(r.closureParts).toEqual([{ label: "Fim de ano", from: "2026-12-28", to: "2026-12-31", count: 4, cents: Math.round(12000 * 4 / 23) }]);
+  });
+
+  it("a subscription that starts inside the month: its days before the start are absences, not closed days, and stay in the month's real days", () => {
+    // Starts Mon 21 Dec: 14 days before the start (system absences), 9 inside the closure.
+    const events = DEC.map(d => d < 21 ? day(d, "CANCELLED") : day(d, "CANCELLED", true));
+    const share = one(events, [XMAS]);
+    expect(share.closureCount).toBe(9);
+    expect(share.closureCreditCents).toBe(Math.round(12000 * 9 / 23)); // 4696
+    expect(share.absenceCount).toBe(14);
+    expect(share.absenceCreditCents).toBe(12000 - 4696); // 14 x 600 = 8400, capped at what is left
+    expect(share.finalCents).toBe(0);
+    const pct = one(events, [{ ...XMAS, percent: 50 }]);
+    expect(pct.closureCreditCents).toBe(6000);
+    expect(pct.absenceCreditCents).toBe(6000);
+    expect(pct.finalCents).toBe(0);
+  });
+
+  it("a closed day no closure in the list covers any more is still credited, by its real-days share", () => {
+    const r = one(december(), []);
+    expect(r.closureCreditCents).toBe(6261);
+    expect(r.closureParts).toEqual([{ label: "", count: 12, cents: 6261 }]);
+  });
+
   it("a month with no closed day is exactly as before", () => {
-    const r = one([...occurrences(16), ...cancelledOn(4)]);
+    const r = one([...occurrences(16), ...cancelledOn(4)], [XMAS]);
     expect(r.closureCount).toBe(0);
     expect(r.closureCreditCents).toBe(0);
     expect(r.closureDates).toEqual([]);
+    expect(r.closureParts).toEqual([]);
     expect(r.absenceCreditCents).toBe(2400);
     expect(r.finalCents).toBe(9600);
   });
