@@ -87,10 +87,15 @@ Each is its own session and its own PR(s); put them on the kanban (FinHub board)
      per-diem line, the bank lines): planned vs real per trip.
    - Rules: Atlas would need to propose trips (like `atlas_imports`, pending until his OK).
 3. **A FinHub MCP** (`mcp/finhub`, like `mcp/kanban`) so Claude Code and other agents can
-   use the book. Open question for Renato: read-only (entities, accounts, contracts,
-   payslips, cash-flow, a month's summary), or also proposing changes as pending imports
-   for his OK in FinHub's "From Atlas" tab. Needs a reader in the rules (`isBookReader()`
-   has Atlas only) and its own Firebase user; never direct writes to the real book.
+   use the book. **Decided (Renato, 2026-11-24): it reads and writes, but every write is a
+   proposal; the final approval is always his, in FinHub.**
+   - Reads: entities, accounts, contracts, payslips, statements, cash-flow, a month's summary.
+   - Writes: only as pending proposals in the book (the `atlas_imports` inbox, or a general
+     proposals collection if the shapes outgrow it), shown in FinHub's "From Atlas" tab to
+     review, edit, commit or set aside. Never a direct write to the real collections.
+   - Each agent signs in as its own Firebase user (Atlas `atlas@kidclub.pt`, Claude Code
+     `claude-code@kidclub.pt`); the rules let them read the book and create/update only their
+     own pending proposals; a proposal says who made it, shown in the tab.
 
 Facts learnt on the way (2026-11-24): every Noisy Source contract is 14 payments; only
 Bernardo gets a separate holiday-subsidy slip (`…_M06P2_…`, a second run); Marisa and
