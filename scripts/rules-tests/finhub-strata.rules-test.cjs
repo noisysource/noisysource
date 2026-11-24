@@ -120,6 +120,41 @@ async function expect(outcome, label, fn) {
     setDoc(doc(atlas, IMPORT), atlasImport()));
   await expect('denied', 'a verified stranger reads the import', () => getDoc(doc(stranger, IMPORT)));
 
+  // Contracts: the entity they belong to is looked up in the book (not under users/),
+  // and their terms can carry versions, each from a month on.
+  const ENTITY = `${BOOK}/entities/ent-noisysource`;
+  const CONTRACT = `${BOOK}/employmentContracts/ctr-marisa`;
+  const terms = {
+    paySchedule: '14_months', baseGrossMonthly: 950, irsRate: 16.1, employeeSsRate: 11, employerSsRate: 23.75,
+    mealAllowanceDaily: 0, mealPaymentMethod: 'none', childVoucherMonthly: 312.5,
+    childVoucherSubjectToIrs: false, childVoucherSubjectToSs: false,
+    otherBenefitName: '', otherBenefitMonthly: 0, otherBenefitSubjectToIrs: false, otherBenefitSubjectToSs: false,
+  };
+  const contract = (over = {}) => ({
+    userId: 'noisysource-group', entityId: 'ent-noisysource', fundingAccountId: '', workerName: 'Marisa',
+    roleTitle: 'Administrativa', isOwnerIncome: false, personalEntityId: '', ...terms, active: true,
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...over,
+  });
+  await expect('allowed', 'owner creates an entity in the book', () =>
+    setDoc(doc(owner, ENTITY), { userId: 'noisysource-group', name: 'Noisy Source', entityType: 'company', registrationCode: '517010585', colorHex: '#3366ff', archived: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+  await expect('allowed', 'owner creates a contract for that entity', () => setDoc(doc(owner, CONTRACT), contract()));
+  await expect('denied', 'owner creates a contract for an entity that isn\'t there', () =>
+    setDoc(doc(owner, `${BOOK}/employmentContracts/ctr-ghost`), contract({ entityId: 'ent-ghost' })));
+  await expect('allowed', 'owner adds versions to the contract (a raise from June)', () =>
+    updateDoc(doc(owner, CONTRACT), {
+      versions: [
+        { effectiveFrom: '2026-01', note: 'from the start', terms },
+        { effectiveFrom: '2026-06', note: 'raise', terms: { ...terms, baseGrossMonthly: 1000 } },
+      ],
+      baseGrossMonthly: 1000,
+      updatedAt: serverTimestamp(),
+    }));
+  await expect('denied', 'owner saves versions that aren\'t a list', () =>
+    updateDoc(doc(owner, CONTRACT), { versions: 'June', updatedAt: serverTimestamp() }));
+  await expect('denied', 'owner saves more than 36 versions', () =>
+    updateDoc(doc(owner, CONTRACT), { versions: Array.from({ length: 37 }, (_, i) => ({ effectiveFrom: `20${10 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`, note: '', terms })), updatedAt: serverTimestamp() }));
+  await expect('denied', 'Atlas writes a contract', () => setDoc(doc(atlas, `${BOOK}/employmentContracts/ctr-atlas`), contract()));
+
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {
     console.error(`\n${failures} rule test(s) failed`);

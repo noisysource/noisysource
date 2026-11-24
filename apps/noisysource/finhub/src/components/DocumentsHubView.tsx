@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { monthLabel } from '../utils/contractVersions';
 import { useTreasury } from '../contexts/TreasuryContext';
 import type {
   DriveFileItem,
@@ -2199,6 +2200,15 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                                 {c.employerName || 'Employer'}
                                 {c.isOwnerHint ? ' · Owner Income Link' : ''}
                               </p>
+                              {c.versions && c.versions.length > 0 && (
+                                <p className="text-[11px] text-blue-300 mt-0.5">
+                                  {c.versions.length} version{c.versions.length === 1 ? '' : 's'}:{' '}
+                                  {c.versions
+                                    .map((v) => `from ${monthLabel(v.effectiveFrom)} ${formatMoney(v.terms.baseGrossMonthly, currencyCode)}${v.note ? ` (${v.note})` : ''}`)
+                                    .join(' · ')}
+                                </p>
+                              )}
+                              {c.notes && <p className="text-[11px] text-slate-500 mt-0.5 max-w-md">{c.notes}</p>}
                             </td>
                             <td className="py-2.5 px-3 font-mono text-slate-300">{c.paySchedule}</td>
                             <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-100">
