@@ -359,6 +359,17 @@ service cloud.firestore {
         data.createdAt is timestamp && data.updatedAt is timestamp;
     }
 
+    // What he committed from an import (utils/committed.ts): the items he kept, with his edits.
+    function isValidCommitted(c) {
+      return c is map &&
+        c.keys().hasOnly(['contracts', 'subscriptions', 'facilities', 'payslips', 'statements']) &&
+        c.contracts is list && c.contracts.size() <= 20 &&
+        c.subscriptions is list && c.subscriptions.size() <= 200 &&
+        c.facilities is list && c.facilities.size() <= 20 &&
+        c.payslips is list && c.payslips.size() <= 60 &&
+        c.statements is list && c.statements.size() <= 20;
+    }
+
     function isValidWorkspaceProfile(data) {
       return data.keys().hasAll([
           'userId', 'currencyCode', 'currencySymbol', 'fiscalStartMonth',
@@ -868,8 +879,10 @@ service cloud.firestore {
             isValidAtlasImport(incoming()) && incoming().updatedAt == request.time) ||
           (isOwner(userId) && existing().status == 'pending' &&
             incoming().status in ['applied', 'dismissed'] &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'decidedAt']) &&
-            incoming().decidedAt == request.time);
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'decidedAt', 'committed']) &&
+            incoming().decidedAt == request.time &&
+            // What he committed (only on commit), for Atlas to learn from his corrections.
+            (!('committed' in incoming()) || (incoming().status == 'applied' && isValidCommitted(incoming().committed))));
         allow delete: if isOwner(userId);
       }
 
