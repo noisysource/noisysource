@@ -1609,7 +1609,7 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                       <div>
                         <div className="text-sm font-semibold text-slate-100">
                           {imp.entityHint || 'Unnamed entity'} · {imp.month}
-                          {!entity && (
+                          {!entity && hasDrafts(imp) && (
                             <span className="ml-2 text-xs font-normal text-amber-300">
                               no entity with this name: pick one in the workbench
                             </span>
