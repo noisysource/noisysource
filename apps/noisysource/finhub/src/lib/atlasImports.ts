@@ -349,14 +349,7 @@ export const decideAtlasImport = (id: string, status: 'applied' | 'dismissed') =
   updateDoc(doc(db, COLLECTION, id), { status, decidedAt: serverTimestamp() });
 
 /** The entity an import is for: by name, as Atlas named it. */
-export const entityForHint = <E extends { id: string; name: string }>(hint: string, entities: E[]): E | undefined => {
-  const h = hint.trim().toLowerCase();
-  if (!h) return undefined;
-  return (
-    entities.find((e) => e.name.trim().toLowerCase() === h) ??
-    entities.find((e) => e.name.toLowerCase().includes(h) || h.includes(e.name.toLowerCase()))
-  );
-};
+export { entityForHint, entityKey } from '../utils/entityMatch';
 
 /** What an import holds, in a line. */
 export const countsOf = (i: AtlasImport): string => {
