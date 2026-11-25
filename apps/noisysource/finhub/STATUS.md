@@ -87,6 +87,16 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
 5. Prod: `noisysource-prod-finhub` in `env/prod.tfvars`, its `.firebaserc` target,
    `.env.nsprod`, the app in `deploy-noisysource-prod.yml`, its authorised domain.
 
+## FinHub MCP and setups (2026-11-25, branch `agent/finhub-mcp`)
+- `mcp/finhub`: Claude Code reads the book and proposes (`finhub_read`, `finhub_get`,
+  `finhub_propose`); proposals land in "From Atlas", marked "by Claude Code".
+- An import can carry a **setup** (entities, accounts with a dated balance, loans): the card
+  lists them and **Create these** makes the missing ones, then marks it applied. IBANs are never
+  in a proposal: add them in Accounts.
+- The AI Studio banner "Create Noisysource & Import 6 Payslips" is gone (it created the wrong
+  company, "NOISYSOURCE - LDA", with sample payslips).
+- 2026-11-25: the book was wiped (Reset Workspace) to start over from Atlas's proposals.
+
 ## Risky / in flight
 - This PR changes `pnpm-lock.yaml` peer entries for other packages (Tailwind 4 brings
   `lightningcss`/`jiti@2`), root `package.json` and `.github/`, so its dev deploy is

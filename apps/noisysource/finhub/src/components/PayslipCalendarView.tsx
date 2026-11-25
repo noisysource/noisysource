@@ -86,7 +86,6 @@ export function PayslipCalendarView({
     toggleEmploymentContract,
     deleteEmploymentContract,
     generatePayslipsFromContracts,
-    importNoisysourceUploadedPayslips,
     pushToast,
   } = useTreasury();
 
@@ -136,24 +135,6 @@ export function PayslipCalendarView({
   const [batchFilename, setBatchFilename] = useState('');
   const [batchMarkPaid, setBatchMarkPaid] = useState(false);
   const [savingBatch, setSavingBatch] = useState(false);
-  const [importingNoisysource, setImportingNoisysource] = useState(false);
-
-  const importedNoisysourceCount = useMemo(() => {
-    const ids = new Set([
-      'pay_ns_2025_12_renato',
-      'pay_ns_2025_12_marisa',
-      'pay_ns_2025_12_bernardo',
-      'pay_ns_2026_01_renato',
-      'pay_ns_2026_01_marisa',
-      'pay_ns_2026_01_bernardo',
-    ]);
-    return payslips.filter(
-      (p) =>
-        ids.has(p.id) ||
-        p.sourceFilename === '517010585_RC_2025_M12P1_F_82845ab9.pdf' ||
-        p.sourceFilename === '517010585_RC_2026_M01P1_F_f214f177.pdf'
-    ).length;
-  }, [payslips]);
 
   // Employment Contract Modal State
   const [contractModalOpen, setContractModalOpen] = useState(false);
@@ -472,16 +453,6 @@ export function PayslipCalendarView({
     }
   };
 
-  const handleImportNoisysource = async () => {
-    setImportingNoisysource(true);
-    try {
-      await importNoisysourceUploadedPayslips();
-      setMonthKey('2026-01');
-      setSelectedDate('2026-01-30');
-    } finally {
-      setImportingNoisysource(false);
-    }
-  };
 
   const handleSavePayslip = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -786,33 +757,6 @@ export function PayslipCalendarView({
           </button>
         </div>
       </div>
-
-      {/* Uploaded Noisysource Payslips One-Click Import Banner */}
-      {importedNoisysourceCount < 6 && (
-        <div className="bg-[#0F172A] border border-blue-500/40 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <p className="text-sm font-semibold text-slate-100">
-              Uploaded Noisysource Payslips Ready (Dec 2025 &amp; Jan 2026)
-            </p>
-            <p className="text-xs text-slate-400">
-              NOISYSOURCE - LDA (NIPC 517010585) · 6 payslips across Renato, Marisa &amp; Bernardo + 3 employment contracts
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => void handleImportNoisysource()}
-            disabled={importingNoisysource}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <CalendarCheck className="w-4 h-4" />
-            <span>
-              {importingNoisysource
-                ? 'Creating Noisysource & Payslips...'
-                : 'Create Noisysource & Import 6 Payslips'}
-            </span>
-          </button>
-        </div>
-      )}
 
       {/* Month Cost KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
