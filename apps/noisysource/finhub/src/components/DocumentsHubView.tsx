@@ -90,6 +90,10 @@ interface DriveConfirmState {
   docCategory: string;
 }
 
+const hasSetup = (imp: AtlasImport): boolean => imp.setup.entities.length + imp.setup.accounts.length + imp.setup.loans.length > 0;
+const hasDrafts = (imp: AtlasImport): boolean =>
+  imp.statements.length + imp.payslips.length + imp.contracts.length + imp.subscriptions.length + imp.facilities.length > 0;
+
 export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
   const { workspaceToken, hasWorkspaceAccess, connectingWorkspace, connectGoogleWorkspace, clearWorkspaceToken } =
     useAuth();
@@ -107,6 +111,10 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     importStatementBatch,
     importDriveGeneratedBundle,
     addPayslip,
+    addEntity,
+    addAccount,
+    addCreditFacility,
+    creditFacilities,
     pushToast,
   } = useTreasury();
 
@@ -908,6 +916,64 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     );
   };
 
+  /**
+   * An agent's proposed setup, after his OK here: creates the entities, accounts and loans that
+   * aren't in the book yet (entities matched by name, ignoring case and "Lda"; accounts and loans
+   * by name within their entity). Account numbers are never part of it: he adds the IBANs.
+   */
+  const applyAtlasSetup = async (imp: AtlasImport) => {
+    setDecidingAtlasImport(imp.id);
+    try {
+      const entityIds = new Map<string, string>();
+      for (const e of imp.setup.entities) {
+        const found = entityForHint(e.name, entities);
+        const id = found?.id ?? (await addEntity({ name: e.name, entityType: e.entityType, registrationCode: e.registrationCode, colorHex: e.entityType === 'personal' ? '#10B981' : '#3B82F6' }));
+        if (!id) throw new Error(`couldn't create ${e.name}`);
+        entityIds.set(e.name, id);
+      }
+      const entityIdOf = (name: string) => entityIds.get(name) ?? entityForHint(name, entities)?.id ?? '';
+      const accountIds = new Map<string, string>();
+      for (const a of imp.setup.accounts) {
+        const entityId = entityIdOf(a.entityName);
+        if (!entityId) throw new Error(`no entity "${a.entityName}" for the account ${a.name}`);
+        const found = accounts.find((x) => x.entityId === entityId && x.name.trim().toLowerCase() === a.name.trim().toLowerCase());
+        const id =
+          found?.id ??
+          (await addAccount({ entityId, name: a.name, institution: a.institution, accountType: a.accountType, accountNumber: '', balance: a.balance, lastReconciledDate: a.balanceDate }));
+        if (!id) throw new Error(`couldn't create the account ${a.name}`);
+        accountIds.set(`${a.entityName}::${a.name}`, id);
+      }
+      for (const l of imp.setup.loans) {
+        const entityId = entityIdOf(l.entityName);
+        if (!entityId) throw new Error(`no entity "${l.entityName}" for the loan ${l.name}`);
+        if (creditFacilities.some((f) => f.entityId === entityId && f.name.trim().toLowerCase() === l.name.trim().toLowerCase())) continue;
+        const fundingAccountId =
+          accountIds.get(`${l.entityName}::${l.accountName}`) ??
+          accounts.find((x) => x.entityId === entityId && x.name.trim().toLowerCase() === l.accountName.trim().toLowerCase())?.id ??
+          '';
+        await addCreditFacility({
+          entityId,
+          fundingAccountId,
+          name: l.name,
+          lender: l.lender,
+          facilityType: l.facilityType,
+          principalOrLimit: l.principalOrLimit,
+          currentBalance: l.currentBalance,
+          apr: l.apr,
+          monthlyPayment: l.monthlyPayment,
+          dueDay: l.dueDay,
+          maturityDate: l.maturityDate,
+        });
+      }
+      await decideAtlasImport(imp.id, 'applied');
+      pushToast('Setup created', "Add each account's IBAN in Accounts: agents never write account numbers.", 'success');
+    } catch (err) {
+      pushToast('Setup stopped', `${err instanceof Error ? err.message : String(err)}. What was created stays; run it again to finish.`, 'error');
+    } finally {
+      setDecidingAtlasImport('');
+    }
+  };
+
   const dismissAtlasImport = async (imp: AtlasImport) => {
     setDecidingAtlasImport(imp.id);
     try {
@@ -1543,21 +1609,34 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                       <div>
                         <div className="text-sm font-semibold text-slate-100">
                           {imp.entityHint || 'Unnamed entity'} · {imp.month}
-                          {!entity && (
+                          {!entity && hasDrafts(imp) && (
                             <span className="ml-2 text-xs font-normal text-amber-300">
                               no entity with this name: pick one in the workbench
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-slate-400 mt-0.5">{countsOf(imp)}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {countsOf(imp)} · by {imp.createdBy === 'claude-code' ? 'Claude Code' : 'Atlas'}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        {hasSetup(imp) && (
+                          <button
+                            onClick={() => applyAtlasSetup(imp)}
+                            disabled={decidingAtlasImport === imp.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Create these
+                          </button>
+                        )}
+                        {hasDrafts(imp) && (
                         <button
                           onClick={() => openAtlasImport(imp)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 cursor-pointer"
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" /> Review in workbench
                         </button>
+                        )}
                         <button
                           onClick={() => dismissAtlasImport(imp)}
                           disabled={decidingAtlasImport === imp.id}
@@ -1568,6 +1647,30 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                       </div>
                     </div>
                     {imp.summary && <p className="text-xs text-slate-300 whitespace-pre-line">{imp.summary}</p>}
+                    {hasSetup(imp) && (
+                      <div className="text-xs text-slate-300 grid gap-1">
+                        {imp.setup.entities.map((e) => (
+                          <div key={`e-${e.name}`}>
+                            <span className="text-slate-500">Entity</span> {e.name} · {e.entityType === 'personal' ? 'Personal' : 'Company'}
+                            {e.registrationCode ? ` · ${e.registrationCode}` : ''}
+                            {entityForHint(e.name, entities) ? <span className="text-slate-500"> (already in the book)</span> : null}
+                          </div>
+                        ))}
+                        {imp.setup.accounts.map((a) => (
+                          <div key={`a-${a.entityName}-${a.name}`}>
+                            <span className="text-slate-500">Account</span> {a.name} ({a.institution}, {a.entityName}) ·{' '}
+                            {formatMoney(a.balance, currencyCode)}
+                            {a.balanceDate ? ` on ${a.balanceDate}` : ''}
+                          </div>
+                        ))}
+                        {imp.setup.loans.map((l) => (
+                          <div key={`l-${l.entityName}-${l.name}`}>
+                            <span className="text-slate-500">Loan</span> {l.name} ({l.lender}, {l.entityName}) · owed {formatMoney(l.currentBalance, currencyCode)} · {l.apr}% ·{' '}
+                            {formatMoney(l.monthlyPayment, currencyCode)}/month{l.maturityDate ? ` until ${l.maturityDate}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {imp.sources.length > 0 && (
                       <details className="text-xs text-slate-400">
                         <summary className="cursor-pointer">Read from {imp.sources.length} document{imp.sources.length === 1 ? '' : 's'}</summary>

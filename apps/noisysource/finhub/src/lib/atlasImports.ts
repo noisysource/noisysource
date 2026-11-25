@@ -19,7 +19,9 @@ import {
 import { db, FINHUB_BOOK_ID } from '../firebase';
 import { isMonthKey, MAX_CONTRACT_VERSIONS } from '../utils/contractVersions';
 import type {
+  AccountType,
   BillingFrequency,
+  EntityType,
   ContractTerms,
   ContractVersion,
   ContractPaySchedule,
@@ -70,7 +72,30 @@ export interface AtlasImport {
   contracts: SuggestedContractDraft[];
   subscriptions: SuggestedSubscriptionDraft[];
   facilities: SuggestedFacilityDraft[];
+  /** The book's setup an agent proposes from the documents: entities, accounts, loans. */
+  setup: AtlasSetup;
+  /** Which agent proposed it. */
+  createdBy: 'atlas' | 'claude-code';
   createdAtMs: number;
+}
+
+/** Entities, accounts and loans to create, matched by name (entities by entityKey). Never bank account numbers. */
+export interface AtlasSetup {
+  entities: { name: string; entityType: EntityType; registrationCode: string }[];
+  accounts: { entityName: string; name: string; institution: string; accountType: AccountType; balance: number; balanceDate: string }[];
+  loans: {
+    entityName: string;
+    accountName: string;
+    name: string;
+    lender: string;
+    facilityType: FacilityType;
+    principalOrLimit: number;
+    currentBalance: number;
+    apr: number;
+    monthlyPayment: number;
+    dueDay: number;
+    maturityDate: string;
+  }[];
 }
 
 type O = Record<string, unknown>;
@@ -239,6 +264,49 @@ const millis = (v: unknown): number => {
 };
 
 /** One import as the app may use it, whatever Atlas wrote. */
+const ACCOUNT_TYPES: readonly AccountType[] = ['checking', 'savings', 'treasury', 'cash', 'meal_voucher', 'child_voucher'];
+const DATE = /^20\d\d-\d\d-\d\d$/;
+
+export const setupOf = (raw: unknown): AtlasSetup => {
+  const d = obj(raw);
+  return {
+    entities: list(d.entities, 10).map((v) => {
+      const e = obj(v);
+      const entityType: EntityType = e.entityType === 'personal' ? 'personal' : 'company';
+      return { name: str(e.name, 100), entityType, registrationCode: str(e.registrationCode, 20).replace(/[^0-9A-Za-z]/g, '') };
+    }).filter((e) => e.name),
+    accounts: list(d.accounts, 20).map((v) => {
+      const a = obj(v);
+      const date = str(a.balanceDate, 10);
+      return {
+        entityName: str(a.entityName, 100),
+        name: str(a.name, 100),
+        institution: str(a.institution, 100),
+        accountType: oneOf(ACCOUNT_TYPES, a.accountType, 'checking'),
+        balance: num(a.balance),
+        balanceDate: DATE.test(date) ? date : '',
+      };
+    }).filter((a) => a.name && a.entityName),
+    loans: list(d.loans, 20).map((v) => {
+      const l = obj(v);
+      const date = str(l.maturityDate, 10);
+      return {
+        entityName: str(l.entityName, 100),
+        accountName: str(l.accountName, 100),
+        name: str(l.name, 100),
+        lender: str(l.lender, 100),
+        facilityType: oneOf(FACILITY_TYPES, l.facilityType, 'term_loan'),
+        principalOrLimit: num(l.principalOrLimit),
+        currentBalance: num(l.currentBalance),
+        apr: Math.min(100, num(l.apr)),
+        monthlyPayment: num(l.monthlyPayment),
+        dueDay: Math.min(28, Math.max(1, Math.round(num(l.dueDay)) || 1)),
+        maturityDate: DATE.test(date) ? date : '',
+      };
+    }).filter((l) => l.name && l.entityName),
+  };
+};
+
 export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
   const d = obj(raw);
   return {
@@ -252,6 +320,8 @@ export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
     contracts: list(d.contracts, 20).map(contractOf),
     subscriptions: list(d.subscriptions, 200).map(subscriptionOf),
     facilities: list(d.facilities, 20).map(facilityOf),
+    setup: setupOf(d.setup),
+    createdBy: d.createdBy === 'claude-code' ? 'claude-code' : 'atlas',
     createdAtMs: millis(d.createdAt),
   };
 };
@@ -292,6 +362,9 @@ export const entityForHint = <E extends { id: string; name: string }>(hint: stri
 export const countsOf = (i: AtlasImport): string => {
   const lines = i.statements.reduce((n, s) => n + s.lines.length, 0);
   const parts = [
+    i.setup.entities.length > 0 ? `${i.setup.entities.length} entit${i.setup.entities.length === 1 ? 'y' : 'ies'}` : '',
+    i.setup.accounts.length > 0 ? `${i.setup.accounts.length} account${i.setup.accounts.length === 1 ? '' : 's'}` : '',
+    i.setup.loans.length > 0 ? `${i.setup.loans.length} loan${i.setup.loans.length === 1 ? '' : 's'}` : '',
     i.statements.length > 0 ? `${i.statements.length} statement${i.statements.length === 1 ? '' : 's'} (${lines} lines)` : '',
     i.payslips.length > 0 ? `${i.payslips.length} payslip${i.payslips.length === 1 ? '' : 's'}` : '',
     i.contracts.length > 0 ? `${i.contracts.length} contract${i.contracts.length === 1 ? '' : 's'}` : '',
