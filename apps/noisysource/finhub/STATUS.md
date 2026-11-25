@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task.
 
-**Last updated:** 2026-11-24 (contract versions; rules path fix; dev only)
+**Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
 ## In progress (2026-11-24)
 - **Contracts have versions** (branch `agent/finhub-contract-versions`): a contract's terms
@@ -96,6 +96,35 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
 - The AI Studio banner "Create Noisysource & Import 6 Payslips" is gone (it created the wrong
   company, "NOISYSOURCE - LDA", with sample payslips).
 - 2026-11-25: the book was wiped (Reset Workspace) to start over from Atlas's proposals.
+
+## Planned (agreed 2026-11-24, after the contracts and month imports are settled)
+
+Each is its own session and its own PR(s); put them on the kanban (FinHub board) when one starts.
+
+1. **FinHub is the source of truth for Atlas.** Before the year pass or a month import,
+   Atlas reads the contracts already saved in the book and gives them to the extraction as
+   known facts; it proposes only what the payslips change. Merging flips: what Renato saved
+   wins over an import's version for the same month (today the import wins,
+   `mergeVersions` in `src/utils/contractVersions.ts`). So a correction made once in FinHub
+   (14 payments, per-diem rate, part-time hours) sticks, with no need to repeat it to Atlas.
+2. **Trips.** Per diems (ajudas de custo) are a fixed daily rate per person (Renato:
+   €175.42/day, from the Sep/Oct 2026 payslips: 3 and 4 days) times the days of a trip.
+   - The rate becomes a contract term (a version field, like the meal allowance).
+   - A trip in the book: who, entity, where, from–to, purpose, calendar event, expected
+     flight + hotel + per diem (days × rate), status planned → booked → paid → reconciled.
+   - The forecast shows flight/hotel when booked and the per diem in the next salary.
+   - Atlas plans it ("plan a trip to Brussels for Renato, 3–6 Dec": calendar event + a trip
+     draft for his OK) and reconciles it afterwards (invoices from Gmail, the payslip's
+     per-diem line, the bank lines): planned vs real per trip.
+   - Rules: Atlas would need to propose trips (like `atlas_imports`, pending until his OK).
+3. **A FinHub MCP**: built 2026-11-25 (#178), see "FinHub MCP and setups" above. Decided
+   (Renato, 2026-11-24): agents read and write, but every write is a proposal, and the final
+   approval is always his, in FinHub.
+
+Facts learnt on the way (2026-11-24): every Noisy Source contract is 14 payments; only
+Bernardo gets a separate holiday-subsidy slip (`…_M06P2_…`, a second run); Marisa and
+Bernardo are part-time (20h/week); Renato has a meal card (€10.20/day) and a €420 child
+voucher; Renato was on leave in January 2026.
 
 ## Risky / in flight
 - This PR changes `pnpm-lock.yaml` peer entries for other packages (Tailwind 4 brings
