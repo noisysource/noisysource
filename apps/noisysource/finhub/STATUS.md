@@ -2,7 +2,7 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task.
 
-**Last updated:** 2026-11-24 (contract versions; rules path fix; dev only)
+**Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
 ## In progress (2026-11-24)
 - **Contracts have versions** (branch `agent/finhub-contract-versions`): a contract's terms
