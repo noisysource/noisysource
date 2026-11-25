@@ -4,7 +4,14 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
-## In progress (2026-11-24)
+## In progress (2026-11-25)
+- **What he committed is kept** (branch `agent/finhub-committed`): committing an Atlas import in
+  the workbench also writes `committed` on the import (`src/utils/committed.ts`): the items he
+  kept, with his edits. Atlas compares it with its proposal and learns from the differences
+  (Atlas repo, "capture now" for its learning loop). Rules allow it on commit only. Run
+  `pnpm test:rules:finhub` before merging (not runnable in the cloud session).
+
+## Earlier (2026-11-24)
 - **Contracts have versions** (branch `agent/finhub-contract-versions`): a contract's terms
   are a list of versions, each from a month on (`src/utils/contractVersions.ts`, tests
   `pnpm --filter finhub test`). Payroll for a month uses the version in force; the top-level

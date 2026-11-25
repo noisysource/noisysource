@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { monthLabel } from '../utils/contractVersions';
+import { committedOf } from '../utils/committed';
 import { useTreasury } from '../contexts/TreasuryContext';
 import type {
   DriveFileItem,
@@ -871,8 +872,10 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
           })),
       });
       if (saved && loadedAtlasImport) {
-        // Committed: the import has done its job; Atlas won't overwrite it now.
-        await decideAtlasImport(loadedAtlasImport.id, 'applied').catch((err) =>
+        // Committed: the import has done its job; Atlas won't overwrite it now. What he kept,
+        // with his edits, goes beside the proposal: Atlas learns from the differences.
+        const committed = committedOf({ contracts: genContracts, subscriptions: genSubscriptions, facilities: genFacilities, payslips: genPayslips, statements: genStatements });
+        await decideAtlasImport(loadedAtlasImport.id, 'applied', committed).catch((err) =>
           pushToast('Saved, but the import stays pending', err instanceof Error ? err.message : String(err), 'info')
         );
         setLoadedAtlasImport(null);

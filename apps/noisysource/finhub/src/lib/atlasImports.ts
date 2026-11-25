@@ -6,6 +6,7 @@
 //
 // Atlas is trusted to write here, but not to be right: every draft is
 // coerced to its type and bounded before it reaches the workbench.
+import type { CommittedSnapshot } from '../utils/committed';
 import {
   collection,
   doc,
@@ -344,9 +345,13 @@ export const watchPendingAtlasImports = (
     onError
   );
 
-/** He committed it in the workbench, or set it aside. */
-export const decideAtlasImport = (id: string, status: 'applied' | 'dismissed') =>
-  updateDoc(doc(db, COLLECTION, id), { status, decidedAt: serverTimestamp() });
+/**
+ * He committed it in the workbench, or set it aside. On commit, what he actually committed
+ * (`committedOf`, utils/committed.ts) is kept beside Atlas's proposal, so Atlas can learn
+ * from his corrections.
+ */
+export const decideAtlasImport = (id: string, status: 'applied' | 'dismissed', committed?: CommittedSnapshot) =>
+  updateDoc(doc(db, COLLECTION, id), { status, decidedAt: serverTimestamp(), ...(status === 'applied' && committed ? { committed } : {}) });
 
 /** The entity an import is for: by name, as Atlas named it. */
 export { entityForHint, entityKey } from '../utils/entityMatch';

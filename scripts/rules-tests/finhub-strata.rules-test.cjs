@@ -115,6 +115,16 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'Atlas deletes its import', () => deleteDoc(doc(atlas, IMPORT)));
   await expect('denied', 'owner edits the drafts in the import', () =>
     updateDoc(doc(owner, IMPORT), { summary: 'mine' }));
+  // What he committed rides along on commit only (Atlas learns from his corrections).
+  await setDoc(doc(atlas, `${IMPORT}-c1`), atlasImport());
+  await setDoc(doc(atlas, `${IMPORT}-c2`), atlasImport());
+  const committed = { contracts: [], subscriptions: [{ name: 'Telecom', vendor: 'MEO', amount: 126.08 }], facilities: [], payslips: [], statements: [] };
+  await expect('denied', 'owner sets an import aside with a committed snapshot', () =>
+    updateDoc(doc(owner, `${IMPORT}-c1`), { status: 'dismissed', decidedAt: serverTimestamp(), committed }));
+  await expect('denied', 'owner commits with an odd committed snapshot', () =>
+    updateDoc(doc(owner, `${IMPORT}-c1`), { status: 'applied', decidedAt: serverTimestamp(), committed: { ...committed, notes: 'x' } }));
+  await expect('allowed', 'owner commits an import with what he committed', () =>
+    updateDoc(doc(owner, `${IMPORT}-c2`), { status: 'applied', decidedAt: serverTimestamp(), committed }));
   await expect('allowed', 'owner marks the import applied', () =>
     updateDoc(doc(owner, IMPORT), { status: 'applied', decidedAt: serverTimestamp() }));
   await expect('denied', 'Atlas rewrites an applied import', () =>
