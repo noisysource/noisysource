@@ -275,8 +275,20 @@ service cloud.firestore {
     }
 
     // Read access: the book's keepers, and Atlas.
+    // Claude Code (mcp/finhub), signed in as its own verified account.
+    function isClaudeCode() {
+      return isAuthenticated() &&
+        request.auth.token.email == 'claude-code@kidclub.pt' &&
+        request.auth.token.email_verified == true;
+    }
+
+    // The agents that read the book and propose changes to it (never write it).
+    function finhubAgent() {
+      return isAtlas() ? 'atlas' : isClaudeCode() ? 'claude-code' : '';
+    }
+
     function isBookReader(userId) {
-      return userId == finhubBook() && (isFinhubUser() || isAtlas());
+      return userId == finhubBook() && (isFinhubUser() || finhubAgent() != '');
     }
 
     function isValidId(id) {
@@ -304,18 +316,18 @@ service cloud.firestore {
     }
 
     function entityExists(userId, entityId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/entities/$(entityId)) ||
-        existsAfter(/databases/$(database)/documents/users/$(userId)/entities/$(entityId));
+      return exists(/databases/$(database)/documents/finhub_books/$(userId)/entities/$(entityId)) ||
+        existsAfter(/databases/$(database)/documents/finhub_books/$(userId)/entities/$(entityId));
     }
 
     function accountExists(userId, accountId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/accounts/$(accountId)) ||
-        existsAfter(/databases/$(database)/documents/users/$(userId)/accounts/$(accountId));
+      return exists(/databases/$(database)/documents/finhub_books/$(userId)/accounts/$(accountId)) ||
+        existsAfter(/databases/$(database)/documents/finhub_books/$(userId)/accounts/$(accountId));
     }
 
     function batchExists(userId, batchId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/statementBatches/$(batchId)) ||
-        existsAfter(/databases/$(database)/documents/users/$(userId)/statementBatches/$(batchId));
+      return exists(/databases/$(database)/documents/finhub_books/$(userId)/statementBatches/$(batchId)) ||
+        existsAfter(/databases/$(database)/documents/finhub_books/$(userId)/statementBatches/$(batchId));
     }
 
     // -------------------------------------------------------------------------
@@ -325,10 +337,10 @@ service cloud.firestore {
     // to its keys, types and sizes; always pending, always Atlas's.
     function isValidAtlasImport(data) {
       return data.keys().hasOnly(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
-          'contracts', 'subscriptions', 'facilities', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+          'contracts', 'subscriptions', 'facilities', 'setup', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
         data.keys().hasAll(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
           'contracts', 'subscriptions', 'facilities', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
-        data.status == 'pending' && data.createdBy == 'atlas' &&
+        data.status == 'pending' && data.createdBy == finhubAgent() &&
         data.entityHint is string && data.entityHint.size() <= 100 &&
         data.month is string && data.month.matches('^20[0-9]{2}-(0[1-9]|1[0-2])$') &&
         data.summary is string && data.summary.size() <= 4000 &&
@@ -338,6 +350,12 @@ service cloud.firestore {
         data.contracts is list && data.contracts.size() <= 20 &&
         data.subscriptions is list && data.subscriptions.size() <= 200 &&
         data.facilities is list && data.facilities.size() <= 20 &&
+        // A proposed setup: entities, accounts (never account numbers) and loans.
+        (!('setup' in data) || (data.setup is map &&
+          data.setup.keys().hasOnly(['entities', 'accounts', 'loans']) &&
+          (!('entities' in data.setup) || (data.setup.entities is list && data.setup.entities.size() <= 10)) &&
+          (!('accounts' in data.setup) || (data.setup.accounts is list && data.setup.accounts.size() <= 20)) &&
+          (!('loans' in data.setup) || (data.setup.loans is list && data.setup.loans.size() <= 20)))) &&
         data.createdAt is timestamp && data.updatedAt is timestamp;
     }
 
@@ -657,8 +675,11 @@ service cloud.firestore {
           'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
           'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
           'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'active',
-          'createdAt', 'updatedAt'
+          'createdAt', 'updatedAt', 'versions'
         ]) &&
+        // Terms over time (apps/noisysource/finhub/src/utils/contractVersions.ts): the app keeps
+        // them sorted, one per month, the latest's terms on top; the rules bound their number.
+        (!('versions' in data) || (data.versions is list && data.versions.size() <= 36)) &&
         isValidId(data.userId) &&
         data.userId == finhubBook() &&
         isValidId(data.entityId) &&
@@ -838,11 +859,12 @@ service cloud.firestore {
       // inner fields are re-checked and coerced by the app when it opens one.
       match /atlas_imports/{importId} {
         allow get, list: if isSignedIn() && isBookReader(userId);
-        allow create: if isAtlas() && userId == finhubBook() && isValidId(importId) &&
+        // An agent proposes (Atlas or Claude Code, each as itself); only he decides, in FinHub.
+        allow create: if finhubAgent() != '' && userId == finhubBook() && isValidId(importId) &&
           isValidAtlasImport(incoming()) &&
           incoming().createdAt == request.time && incoming().updatedAt == request.time;
-        allow update: if (isAtlas() && userId == finhubBook() &&
-            existing().status == 'pending' &&
+        allow update: if (finhubAgent() != '' && userId == finhubBook() &&
+            existing().status == 'pending' && existing().createdBy == finhubAgent() &&
             isValidAtlasImport(incoming()) && incoming().updatedAt == request.time) ||
           (isOwner(userId) && existing().status == 'pending' &&
             incoming().status in ['applied', 'dismissed'] &&
@@ -1093,7 +1115,7 @@ service cloud.firestore {
               'irsRate', 'employeeSsRate', 'employerSsRate', 'mealAllowanceDaily',
               'mealPaymentMethod', 'childVoucherMonthly', 'childVoucherSubjectToIrs',
               'childVoucherSubjectToSs', 'otherBenefitName', 'otherBenefitMonthly',
-              'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'updatedAt'
+              'otherBenefitSubjectToIrs', 'otherBenefitSubjectToSs', 'versions', 'updatedAt'
             ]) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt'])
           );

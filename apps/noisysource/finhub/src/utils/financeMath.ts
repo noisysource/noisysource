@@ -25,6 +25,7 @@ import type {
   StatementLine,
   TaxSetting,
 } from '../types/finance';
+import { termsAt } from './contractVersions';
 
 export function formatMoney(
   amount: number,
@@ -197,9 +198,11 @@ export function getNextMonthTaxDueDate(monthKey: string, dueDay = 20): string {
 }
 
 export function computeContractMonthlyBreakdown(
-  contract: EmploymentContract,
+  contractIn: EmploymentContract,
   monthKey: string
 ): ContractMonthlyCalculation {
+  // The terms in force that month (a contract's versions); the rest of the contract is who and where.
+  const contract = { ...contractIn, ...termsAt(contractIn, monthKey) };
   const [yStr, mStr] = monthKey.split('-');
   const year = Number(yStr);
   const month = Number(mStr);
@@ -311,7 +314,7 @@ export function computeContractAnnualTotals(
     annualEmployeeSs += b.employeeSs;
     annualEmployerSs += b.employerSs;
     annualNetCash += b.netDisbursement;
-    const mealCardThisMonth = contract.mealPaymentMethod === 'card' ? b.mealTotal : 0;
+    const mealCardThisMonth = termsAt(contract, mKey).mealPaymentMethod === 'card' ? b.mealTotal : 0;
     const childThisMonth = b.childTotal;
     annualMealCard += mealCardThisMonth;
     annualChildVoucher += childThisMonth;

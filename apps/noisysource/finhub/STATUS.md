@@ -2,7 +2,28 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task.
 
-**Last updated:** 2026-11-23 (step 2: Atlas's imports inbox and the "From Atlas" tab; dev only)
+**Last updated:** 2026-11-24 (contract versions; rules path fix; dev only)
+
+## In progress (2026-11-24)
+- **Contracts have versions** (branch `agent/finhub-contract-versions`): a contract's terms
+  are a list of versions, each from a month on (`src/utils/contractVersions.ts`, tests
+  `pnpm --filter finhub test`). Payroll for a month uses the version in force; the top-level
+  terms mirror the latest, so old code and old contracts work unchanged (a contract without
+  versions has the same terms every month). Editing asks "changes from which month" or "fix a
+  mistake in the latest terms"; the Contracts tab shows the terms in force in the selected
+  month and a history with Remove. Leave, bonuses and pro-rata months are not versions: they
+  go on that month's payslip (Renato was on leave in January 2026, which is why January's
+  payslip looked like a different contract).
+- **Rules fix in the same PR:** `entityExists` / `accountExists` / `batchExists` looked under
+  `users/{id}/...`, but the book is `finhub_books/{id}/...`, so every write that checks one
+  (contracts, accounts, statement imports) was refused. Now `finhub_books`.
+- **Rules tests not run here** (the emulator can't be downloaded in the cloud session): run
+  `pnpm test:rules:finhub` before merging.
+- **Next:** Atlas's year pass (`finhub_contracts`, Atlas repo) proposes each person's
+  contracts with versions from all the year's payslips; the import commit merges them into
+  contracts he already has (the import's months win). Then the monthly imports.
+- January 2026's first import (Noisy Source) is in "From Atlas": discard it and re-run after
+  the year pass.
 
 ## What this is
 FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google AI Studio
@@ -66,6 +87,16 @@ FinHub's new and only UI: the **Strata Treasury** app Renato generated in Google
 5. Prod: `noisysource-prod-finhub` in `env/prod.tfvars`, its `.firebaserc` target,
    `.env.nsprod`, the app in `deploy-noisysource-prod.yml`, its authorised domain.
 
+## FinHub MCP and setups (2026-11-25, branch `agent/finhub-mcp`)
+- `mcp/finhub`: Claude Code reads the book and proposes (`finhub_read`, `finhub_get`,
+  `finhub_propose`); proposals land in "From Atlas", marked "by Claude Code".
+- An import can carry a **setup** (entities, accounts with a dated balance, loans): the card
+  lists them and **Create these** makes the missing ones, then marks it applied. IBANs are never
+  in a proposal: add them in Accounts.
+- The AI Studio banner "Create Noisysource & Import 6 Payslips" is gone (it created the wrong
+  company, "NOISYSOURCE - LDA", with sample payslips).
+- 2026-11-25: the book was wiped (Reset Workspace) to start over from Atlas's proposals.
+
 ## Planned (agreed 2026-11-24, after the contracts and month imports are settled)
 
 Each is its own session and its own PR(s); put them on the kanban (FinHub board) when one starts.
@@ -86,16 +117,9 @@ Each is its own session and its own PR(s); put them on the kanban (FinHub board)
      draft for his OK) and reconciles it afterwards (invoices from Gmail, the payslip's
      per-diem line, the bank lines): planned vs real per trip.
    - Rules: Atlas would need to propose trips (like `atlas_imports`, pending until his OK).
-3. **A FinHub MCP** (`mcp/finhub`, like `mcp/kanban`) so Claude Code and other agents can
-   use the book. **Decided (Renato, 2026-11-24): it reads and writes, but every write is a
-   proposal; the final approval is always his, in FinHub.**
-   - Reads: entities, accounts, contracts, payslips, statements, cash-flow, a month's summary.
-   - Writes: only as pending proposals in the book (the `atlas_imports` inbox, or a general
-     proposals collection if the shapes outgrow it), shown in FinHub's "From Atlas" tab to
-     review, edit, commit or set aside. Never a direct write to the real collections.
-   - Each agent signs in as its own Firebase user (Atlas `atlas@kidclub.pt`, Claude Code
-     `claude-code@kidclub.pt`); the rules let them read the book and create/update only their
-     own pending proposals; a proposal says who made it, shown in the tab.
+3. **A FinHub MCP**: built 2026-11-25 (#178), see "FinHub MCP and setups" above. Decided
+   (Renato, 2026-11-24): agents read and write, but every write is a proposal, and the final
+   approval is always his, in FinHub.
 
 Facts learnt on the way (2026-11-24): every Noisy Source contract is 14 payments; only
 Bernardo gets a separate holiday-subsidy slip (`…_M06P2_…`, a second run); Marisa and

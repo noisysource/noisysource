@@ -77,6 +77,7 @@ async function expect(outcome, label, fn) {
   const ownerUnverified = client('owner-unverified', OWNER, false);
   const atlas = client('atlas', ATLAS, true);
   const atlasUnverified = client('atlas-unverified', ATLAS, false);
+  const claude = client('claude-code', 'claude-code@kidclub.pt', true);
   const stranger = client('stranger', 'someone@gmail.com', true);
   const anon = anonymous();
 
@@ -119,6 +120,62 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'Atlas rewrites an applied import', () =>
     setDoc(doc(atlas, IMPORT), atlasImport()));
   await expect('denied', 'a verified stranger reads the import', () => getDoc(doc(stranger, IMPORT)));
+
+  // Claude Code (mcp/finhub): reads the book and proposes, as itself; never writes the book.
+  const SETUP = `${'finhub_books/noisysource-group'}/atlas_imports/setup-2026`;
+  const setup = {
+    entities: [{ name: 'NoisySource, Lda', entityType: 'company', registrationCode: '517010585' }],
+    accounts: [{ entityName: 'NoisySource, Lda', name: 'BPI Negócios', institution: 'BPI', accountType: 'checking', balance: 16041.65, balanceDate: '2026-01-01' }],
+    loans: [],
+  };
+  await expect('allowed', 'Claude Code reads the import', () => getDoc(doc(claude, IMPORT)));
+  await expect('allowed', 'Claude Code proposes a setup, as itself', () =>
+    setDoc(doc(claude, SETUP), atlasImport({ createdBy: 'claude-code', statements: [], setup })));
+  await expect('denied', 'Claude Code proposes as Atlas', () =>
+    setDoc(doc(claude, `${SETUP}-b`), atlasImport({ createdBy: 'atlas' })));
+  await expect('denied', 'Atlas rewrites Claude Code\'s proposal', () =>
+    setDoc(doc(atlas, SETUP), atlasImport({ createdBy: 'atlas', setup })));
+  await expect('denied', 'a setup with unknown parts', () =>
+    setDoc(doc(claude, `${SETUP}-c`), atlasImport({ createdBy: 'claude-code', setup: { ...setup, ibans: [] } })));
+  await expect('allowed', 'Atlas proposes a setup too', () =>
+    setDoc(doc(atlas, `${SETUP}-d`), atlasImport({ setup })));
+  await expect('denied', 'Claude Code writes an entity directly', () =>
+    setDoc(doc(claude, `${'finhub_books/noisysource-group'}/entities/ent-x`), { userId: 'noisysource-group', name: 'X', entityType: 'company', registrationCode: '', colorHex: '#3366ff', archived: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+
+  // Contracts: the entity they belong to is looked up in the book (not under users/),
+  // and their terms can carry versions, each from a month on.
+  const ENTITY = `${BOOK}/entities/ent-noisysource`;
+  const CONTRACT = `${BOOK}/employmentContracts/ctr-marisa`;
+  const terms = {
+    paySchedule: '14_months', baseGrossMonthly: 950, irsRate: 16.1, employeeSsRate: 11, employerSsRate: 23.75,
+    mealAllowanceDaily: 0, mealPaymentMethod: 'none', childVoucherMonthly: 312.5,
+    childVoucherSubjectToIrs: false, childVoucherSubjectToSs: false,
+    otherBenefitName: '', otherBenefitMonthly: 0, otherBenefitSubjectToIrs: false, otherBenefitSubjectToSs: false,
+  };
+  const contract = (over = {}) => ({
+    userId: 'noisysource-group', entityId: 'ent-noisysource', fundingAccountId: '', workerName: 'Marisa',
+    roleTitle: 'Administrativa', isOwnerIncome: false, personalEntityId: '', ...terms, active: true,
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...over,
+  });
+  await expect('allowed', 'owner creates an entity in the book', () =>
+    setDoc(doc(owner, ENTITY), { userId: 'noisysource-group', name: 'Noisy Source', entityType: 'company', registrationCode: '517010585', colorHex: '#3366ff', archived: false, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+  await expect('allowed', 'owner creates a contract for that entity', () => setDoc(doc(owner, CONTRACT), contract()));
+  await expect('denied', 'owner creates a contract for an entity that isn\'t there', () =>
+    setDoc(doc(owner, `${BOOK}/employmentContracts/ctr-ghost`), contract({ entityId: 'ent-ghost' })));
+  await expect('allowed', 'owner adds versions to the contract (a raise from June)', () =>
+    updateDoc(doc(owner, CONTRACT), {
+      versions: [
+        { effectiveFrom: '2026-01', note: 'from the start', terms },
+        { effectiveFrom: '2026-06', note: 'raise', terms: { ...terms, baseGrossMonthly: 1000 } },
+      ],
+      baseGrossMonthly: 1000,
+      updatedAt: serverTimestamp(),
+    }));
+  await expect('denied', 'owner saves versions that aren\'t a list', () =>
+    updateDoc(doc(owner, CONTRACT), { versions: 'June', updatedAt: serverTimestamp() }));
+  await expect('denied', 'owner saves more than 36 versions', () =>
+    updateDoc(doc(owner, CONTRACT), { versions: Array.from({ length: 37 }, (_, i) => ({ effectiveFrom: `20${10 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`, note: '', terms })), updatedAt: serverTimestamp() }));
+  await expect('denied', 'Atlas writes a contract', () => setDoc(doc(atlas, `${BOOK}/employmentContracts/ctr-atlas`), contract()));
 
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {

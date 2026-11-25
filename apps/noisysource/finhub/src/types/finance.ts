@@ -211,6 +211,36 @@ export interface EmploymentContract {
   otherBenefitSubjectToIrs: boolean;
   otherBenefitSubjectToSs: boolean;
   active: boolean;
+  /** Terms over time, each from a month on (utils/contractVersions.ts). Absent: the same terms every month. */
+  versions?: ContractVersion[];
+}
+
+/** The part of a contract that changes over time. */
+export type ContractTerms = Pick<
+  EmploymentContract,
+  | 'paySchedule'
+  | 'baseGrossMonthly'
+  | 'irsRate'
+  | 'employeeSsRate'
+  | 'employerSsRate'
+  | 'mealAllowanceDaily'
+  | 'mealPaymentMethod'
+  | 'childVoucherMonthly'
+  | 'childVoucherSubjectToIrs'
+  | 'childVoucherSubjectToSs'
+  | 'otherBenefitName'
+  | 'otherBenefitMonthly'
+  | 'otherBenefitSubjectToIrs'
+  | 'otherBenefitSubjectToSs'
+>;
+
+/** A contract's terms from one month on, until the next version. */
+export interface ContractVersion {
+  /** YYYY-MM */
+  effectiveFrom: string;
+  /** Why it changed ("raise", "new IRS table"), or where it came from ("Atlas, from the March payslip"). */
+  note: string;
+  terms: ContractTerms;
 }
 
 export interface ContractMonthlyCalculation {
@@ -520,6 +550,8 @@ export interface SuggestedContractDraft {
   otherBenefitName: string;
   otherBenefitMonthly: number;
   notes: string;
+  /** From Atlas's year pass: the terms over time, each from a month on. */
+  versions?: ContractVersion[];
 }
 
 export interface SuggestedSubscriptionDraft {
