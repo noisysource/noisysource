@@ -15,6 +15,8 @@
 - **Rules:** `domotics_tesla` and `domotics_tesla_usage` owner-read, no client writes; test `scripts/rules-tests/domotics-tesla.rules-test.cjs` (added to `pnpm test:rules:domotics`; **not run in the session**: the emulator download is blocked there — run it on the Mac).
 - **App:** Carros shows battery/range/charge limit, charging state and current, lock, cabin/outside temperature, km, software, Sentry, position (OpenStreetMap link), and today's Tesla calls. `?demo` has two fake cars.
 
+**Incident 26/11 ~21:25:** Carros called `teslaVehicles` in a loop (App's `notify` was a new function every render → the screen's load effect re-ran after each error toast). The 100-calls/day cap stopped it at 100 Tesla calls; everything after got 429 from our own function, nothing reached Tesla. Fixed: `notify` is a stable callback, Carros loads once on open (ref-guarded, never auto-retries), and the function backs off a refused car for 5 minutes (`errorAt`). The underlying refusal was a 403 on `vehicle_data` (likely a scope not granted; reconnect with all permissions).
+
 **Left for Renato, in order (GitHub Actions is blocked by billing, so deploy by hand):**
 1. Deploy to prod from `firebase/noisysource`: `firebase deploy --only hosting:domotics,firestore:rules,functions:noisysource:teslaAuthStart,functions:noisysource:teslaAuthFinish,functions:noisysource:teslaRegisterPartner,functions:noisysource:teslaVehicles --project noisysource-prod` (after building/copying the app as in the PR).
 2. Check the key: `curl https://noisysource-prod-domotics.web.app/.well-known/appspecific/com.tesla.3p.public-key.pem`.

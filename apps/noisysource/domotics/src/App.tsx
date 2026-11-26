@@ -159,7 +159,9 @@ export default function App() {
   useEffect(() => watchAuth(u => { setUser(u); setAuthReady(true); }), []);
 
   const [notice, setNotice] = useState<Notice | null>(null);
-  const notify = (text: string) => setNotice({ id: Date.now(), text });
+  // Stable: screens put it in effect dependencies (a new one each render once
+  // made Carros call Tesla in a loop, 26/11).
+  const notify = useCallback((text: string) => setNotice({ id: Date.now(), text }), []);
   const clearNotice = useCallback(() => setNotice(null), []);
 
   // Back from a redirect sign-in (the installed app): success arrives through

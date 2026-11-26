@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BatteryCharging, Car, Lock, LockOpen, MapPin, Moon, RefreshCw, Thermometer } from 'lucide-react';
 import {
   teslaAuthStartFn, teslaRegisterPartnerFn, teslaVehiclesFn, type TeslaCar,
@@ -50,8 +50,16 @@ export default function CarrosScreen({ canUse, notify }: Props) {
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState(0);
 
+  // notify in a ref: load must not change identity when the parent re-renders,
+  // or the effect below runs again, calls again, notifies again… (26/11: a
+  // loop that used the whole day's Tesla budget in seconds).
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  const inFlight = useRef(false);
+
   const load = useCallback(async () => {
-    if (DEMO || !canUse) return;
+    if (DEMO || !canUse || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     try {
       const r = (await teslaVehiclesFn({})).data;
@@ -59,13 +67,21 @@ export default function CarrosScreen({ canUse, notify }: Props) {
       setCars(r.cars);
       if (r.callCap) setUsage({ calls: r.callsToday ?? 0, cap: r.callCap });
     } catch (err) {
-      notify(`Tesla: ${(err as Error).message}`);
+      notifyRef.current(`Tesla: ${(err as Error).message}`);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
-  }, [canUse, notify]);
+  }, [canUse]);
 
-  useEffect(() => { void load(); }, [load]);
+  // Once when the page opens (and when sign-in changes); never again on its
+  // own, failed or not. "Atualizar" is the only other way to call.
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (!canUse || autoLoaded.current) return;
+    autoLoaded.current = true;
+    void load();
+  }, [canUse, load]);
 
   async function connect() {
     try {
