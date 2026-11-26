@@ -2,7 +2,17 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-22
+**Last updated:** 2026-11-26
+
+## ▶️ Now (26/11): new navigation and home screen (branch `agent/domotics-ui-shell`, PR into `staging`)
+Step 1 of the UI redesign Renato approved on 26/11 (design canvas "Domotics — UI proposal"). **Merging the PR releases it to the live house** (`noisysource-prod`); its preview is `noisysource-dev-domotics.web.app`.
+- **What changed for the user:** sections instead of one 3D screen. Phone: bottom bar Casa · Divisões · Energia · Carro · 3D; Clima from the heating card on Casa, Mais from the menu button. Browser: top bar with all seven (Casa, Divisões, Clima, Energia, Carros, Planta 3D, Mais). The section is in the address (`#/energia`) and remembered per device (`domotics.tab`).
+  - **Casa** (`components/screens/CasaScreen.tsx`): inside temperature (the automation's `meanRoom`), what the heating is doing (`automation.doing`), solar / battery / grid, the main board's current against the 30 A limit (`data/supply.ts`, tested in `test/supply.test.cjs`: 6.9 kVA single-phase; only grid import counts, the inverter is headroom), shortcuts, rooms.
+  - **Divisões**: room list + the existing `RoomPanel` (lights, blinds, thermostat), plus whole-house "Apagar", "Fechar/Abrir estores" (one Netatmo call each, as before).
+  - **Clima**: `AutomationCard` + `ClimatePanel`. **Energia**: the existing page. **Planta 3D**: `HouseScreen` with `embedded` (no header; the side panel only opens for a room). **Mais**: Planta 2D, editing, Relatórios, Estado da ponte, sign in/out. **Carros**: placeholder until the Tesla work.
+- **Not changed:** every command path, the bridge, rules, functions, data shapes (Atlas's contract is untouched). Old `domotics.view` preference is ignored.
+- **Checked:** typecheck (only the old `main.tsx` error), `pnpm --filter domotics test`, demo screenshots on phone and desktop for each section, no page errors.
+- **Next:** Renato clicks through the dev preview; then step 2 (Tesla: needs the client secret, the Tesla account, a monthly cap, and whether the second car is a Tesla). Later: Shelly per-circuit amps in the "Quadro" card.
 
 ## ▶️ Now (22/11): the automation switches the pump again; the pump's module still reports only part of its data
 **Where things are**

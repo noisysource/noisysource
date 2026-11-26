@@ -15,7 +15,8 @@ interface Props {
   devices: Device[];
   /** Device tapped in the 3D view — scrolled to and highlighted here. */
   focusDeviceId: string | null;
-  onBack: () => void;
+  /** Absent: no back button (Divisões has its own room list beside it). */
+  onBack?: () => void;
   onLightCommand: (deviceId: string, command: LightCommand) => void;
   onLightsSet: (deviceIds: string[], on: boolean) => void;
   onBlindCommand: (deviceId: string, command: BlindCommand) => void;
@@ -51,12 +52,12 @@ export default function RoomPanel({
   return (
     <div ref={rootRef} className="flex flex-col gap-5">
       <div className="flex items-center gap-2">
-        <button
+        {onBack && <button
           onClick={onBack}
           className="flex items-center gap-0.5 pl-1.5 pr-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
         >
           <ChevronLeft size={16} /> Casa
-        </button>
+        </button>}
         <h2 className="flex-1 min-w-0 flex items-center gap-2 text-lg font-semibold text-zinc-50">
           <span aria-hidden="true">{room.icon}</span>
           <span className="truncate">{room.name}</span>

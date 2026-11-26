@@ -26,6 +26,13 @@ import type { User } from 'firebase/auth';
 import PlanScreen from './components/PlanScreen';
 import HouseScreen from './components/HouseScreen';
 import RoomDetail from './components/RoomDetail';
+import AppShell from './components/shell/AppShell';
+import { tabFromHash, type Tab } from './components/shell/tabs';
+import CasaScreen from './components/screens/CasaScreen';
+import DivisoesScreen from './components/screens/DivisoesScreen';
+import ClimaScreen from './components/screens/ClimaScreen';
+import CarrosScreen from './components/screens/CarrosScreen';
+import MaisScreen from './components/screens/MaisScreen';
 
 /** Opened rarely, and its charts and printout shouldn't weigh on the everyday screen. */
 const ReportsScreen = lazy(() => import('./components/reports/ReportsScreen'));
@@ -80,14 +87,16 @@ const BRIDGE_FAILS_BEFORE_OFFLINE = 2;
 /** Lights and blinds are re-read on return to the app, but no more often than this. */
 const LEGRAND_REFRESH_MIN_MS = 60_000;
 
-const VIEW_PREF = 'domotics.view';
-type View = '3d' | '2d';
+const TAB_PREF = 'domotics.tab';
 
-function initialView(): View {
+/** The address wins (a bookmark, a reload); else the section last used on this device; else Casa. */
+function initialTab(): Tab {
+  const fromHash = tabFromHash(window.location.hash);
+  if (fromHash) return fromHash;
   try {
-    return localStorage.getItem(VIEW_PREF) === '2d' ? '2d' : '3d';
+    return tabFromHash(localStorage.getItem(TAB_PREF) ?? '') ?? 'casa';
   } catch {
-    return '3d';
+    return 'casa';
   }
 }
 
@@ -114,8 +123,25 @@ export default function App() {
   const [editTarget, setEditTarget] = useState<EditTarget>('rooms');
   const [openRoomId, setOpenRoomId] = useState<string | null>(null);
   const [planSelectedId, setPlanSelectedId] = useState<string | null>(null);
-  /** The 3D house for everyday use; the 2D plan for editing and the detailed layers. */
-  const [view, setView] = useState<View>(initialView);
+  /** The section on screen (Casa, Divisões, …). */
+  const [tab, setTab] = useState<Tab>(initialTab);
+  /** The room open in Divisões; null = the list. */
+  const [roomsTabRoom, setRoomsTabRoom] = useState<string | null>(null);
+  /** The 2D plan, reached from Mais; editing always happens there. */
+  const [showPlan2D, setShowPlan2D] = useState(false);
+
+  function go(next: Tab) {
+    setTab(next);
+    try { localStorage.setItem(TAB_PREF, next); } catch { /* not persisted */ }
+    if (window.location.hash !== `#/${next}`) history.replaceState(null, '', `#/${next}`);
+  }
+
+  // Back/forward or an edited address.
+  useEffect(() => {
+    const onHash = () => { const t = tabFromHash(window.location.hash); if (t) setTab(t); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
   /**
    * Only needed for the relay — the LAN path works signed out, and being
    * unable to sign in should never stop you controlling the house from inside
@@ -679,41 +705,20 @@ export default function App() {
       );
     }
 
-    function showView(next: View) {
-      setView(next);
-      try { localStorage.setItem(VIEW_PREF, next); } catch { /* not persisted */ }
-    }
-
-    // Editing always happens on the 2D plan; when it ends, whichever view was
-    // in use comes back.
-    if (view === '3d' && !editMode) {
+    if (!editMode && !showPlan2D) {
+      const account = (
+        <button
+          onClick={() => (user ? signOutUser() : requestSignIn())}
+          className="text-xs px-3 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors max-w-[9rem] truncate"
+          title={user ? `Sessão: ${user.email}` : 'Entrar para aceder fora de casa'}
+        >
+          {user ? (user.email?.split('@')[0] ?? 'sessão') : 'Entrar'}
+        </button>
+      );
       return (
-        <HouseScreen
-          plan={activePlan}
-          devices={effectiveDevices}
-          placements={activeCustom.devicePositions}
-          deviceStatus={deviceStatus}
-          bridgeStatus={bridgeStatus}
-          bridgeUpdatedAt={bridgeUpdatedAt}
-          energy={energy}
-          user={user}
-          onSignIn={requestSignIn}
-          onSignOut={signOutUser}
-          onOpenAdmin={() => setShowAdmin(true)}
-          onOpenReports={() => setShowReports(true)}
-          onOpenEnergy={user || DEMO ? () => setShowEnergy(true) : undefined}
-          onShow2D={() => showView('2d')}
-          onStartEdit={startEdit}
-          onLightCommand={handleLightCommand}
-          onLightsSet={handleLightsSet}
-          onBlindCommand={handleBlindCommand}
-          onBlindsSet={handleBlindsSet}
-          onThermostatCommand={handleThermostatCommand}
-          onHeatPumpCommand={handleHeatPumpCommand}
-          automation={automation}
-          // The settings document is the owner's alone; on the LAN nobody can sign in.
-          canEditAutomation={!!user && !isLanOrigin()}
-        />
+        <AppShell tab={tab} onTab={go} account={account}>
+          {renderTab()}
+        </AppShell>
       );
     }
 
@@ -732,7 +737,7 @@ export default function App() {
         onOpenAdmin={() => setShowAdmin(true)}
         onOpenReports={() => setShowReports(true)}
         onOpenEnergy={user || DEMO ? () => setShowEnergy(true) : undefined}
-        onShow3D={() => showView('3d')}
+        onShow3D={() => { setShowPlan2D(false); go('planta'); }}
         editMode={editMode}
         editTarget={editTarget}
         selectedId={planSelectedId}
@@ -753,5 +758,106 @@ export default function App() {
         onSaveEdit={saveEdit}
       />
     );
+  }
+
+  function renderTab() {
+    switch (tab) {
+      case 'casa':
+        return (
+          <CasaScreen
+            plan={activePlan}
+            devices={effectiveDevices}
+            deviceStatus={deviceStatus}
+            bridgeStatus={bridgeStatus}
+            bridgeUpdatedAt={bridgeUpdatedAt}
+            energy={energy}
+            automation={automation}
+            onSignIn={requestSignIn}
+            onTab={go}
+            onOpenRoom={id => { setRoomsTabRoom(id); go('divisoes'); }}
+            onLightsSet={handleLightsSet}
+          />
+        );
+      case 'divisoes':
+        return (
+          <DivisoesScreen
+            plan={activePlan}
+            devices={effectiveDevices}
+            roomId={roomsTabRoom}
+            onRoom={setRoomsTabRoom}
+            onLightCommand={handleLightCommand}
+            onLightsSet={handleLightsSet}
+            onBlindCommand={handleBlindCommand}
+            onBlindsSet={handleBlindsSet}
+            onThermostatCommand={handleThermostatCommand}
+            onHeatPumpCommand={handleHeatPumpCommand}
+          />
+        );
+      case 'clima':
+        return (
+          <ClimaScreen
+            plan={activePlan}
+            devices={effectiveDevices}
+            automation={automation}
+            canEditAutomation={!!user && !isLanOrigin()}
+            onThermostatCommand={handleThermostatCommand}
+            onHeatPumpCommand={handleHeatPumpCommand}
+          />
+        );
+      case 'energia':
+        return (
+          <Suspense fallback={<div className="p-6 text-sm text-zinc-500">A carregar…</div>}>
+            <EnergyScreen
+              onBack={() => go('casa')}
+              canRead={DEMO || (!!user && !isLanOrigin())}
+              live={energy}
+              automation={automation}
+            />
+          </Suspense>
+        );
+      case 'carros':
+        return <CarrosScreen />;
+      case 'planta':
+        return (
+          <HouseScreen
+            embedded
+            plan={activePlan}
+            devices={effectiveDevices}
+            placements={activeCustom.devicePositions}
+            deviceStatus={deviceStatus}
+            bridgeStatus={bridgeStatus}
+            bridgeUpdatedAt={bridgeUpdatedAt}
+            energy={energy}
+            user={user}
+            onSignIn={requestSignIn}
+            onSignOut={signOutUser}
+            onOpenAdmin={() => setShowAdmin(true)}
+            onOpenReports={() => setShowReports(true)}
+            onOpenEnergy={() => go('energia')}
+            onShow2D={() => setShowPlan2D(true)}
+            onStartEdit={startEdit}
+            onLightCommand={handleLightCommand}
+            onLightsSet={handleLightsSet}
+            onBlindCommand={handleBlindCommand}
+            onBlindsSet={handleBlindsSet}
+            onThermostatCommand={handleThermostatCommand}
+            onHeatPumpCommand={handleHeatPumpCommand}
+            automation={automation}
+            canEditAutomation={!!user && !isLanOrigin()}
+          />
+        );
+      case 'mais':
+        return (
+          <MaisScreen
+            user={user}
+            onSignIn={requestSignIn}
+            onSignOut={signOutUser}
+            onOpenPlan2D={() => setShowPlan2D(true)}
+            onStartEdit={startEdit}
+            onOpenReports={() => setShowReports(true)}
+            onOpenAdmin={() => setShowAdmin(true)}
+          />
+        );
+    }
   }
 }

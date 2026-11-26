@@ -54,6 +54,11 @@ interface Props {
   onHeatPumpCommand: (deviceId: string, command: HeatPumpCommand) => void;
   automation?: AutomationStatus;
   canEditAutomation: boolean;
+  /**
+   * Inside the app shell (the Planta 3D section): no header of its own, the
+   * shell's navigation is above, and the side panel only opens for a room.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -100,7 +105,7 @@ export default function HouseScreen({
   plan, devices, placements, deviceStatus, bridgeStatus, bridgeUpdatedAt, energy, user,
   onSignIn, onSignOut, onOpenAdmin, onOpenReports, onOpenEnergy, onShow2D, onStartEdit,
   onLightCommand, onLightsSet, onBlindCommand, onBlindsSet, onThermostatCommand, onHeatPumpCommand,
-  automation, canEditAutomation,
+  automation, canEditAutomation, embedded = false,
 }: Props) {
   /**
    * Outdoor temperature from the heat pump's own sensor. Here it reads colder
@@ -150,8 +155,8 @@ export default function HouseScreen({
   }
 
   return (
-    <div className="h-[100dvh] bg-zinc-950 text-zinc-50 flex flex-col overflow-hidden">
-      <header
+    <div className={`${embedded ? 'h-full' : 'h-[100dvh]'} bg-zinc-950 text-zinc-50 flex flex-col overflow-hidden`}>
+      {!embedded && <header
         className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 sm:px-6 pb-3 border-b border-zinc-800/60 shrink-0"
         style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
       >
@@ -211,12 +216,12 @@ export default function HouseScreen({
             {user ? (user.email?.split('@')[0] ?? 'sessão') : 'Entrar'}
           </button>
         </div>
-      </header>
+      </header>}
 
       <FaultBanner devices={devices} />
 
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-        <section className="relative basis-[52%] shrink-0 grow-0 min-h-0 lg:basis-auto lg:grow lg:shrink">
+        <section className={`relative min-h-0 ${embedded && !selectedRoom ? 'flex-1' : 'basis-[52%] shrink-0 grow-0 lg:basis-auto lg:grow lg:shrink'}`}>
           <SceneBoundary
             fallback={
               <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-zinc-400 p-6 text-center">
@@ -290,7 +295,7 @@ export default function HouseScreen({
           </div>
         </section>
 
-        <aside
+        {(!embedded || selectedRoom) && <aside
           className="flex-1 min-h-0 lg:flex-none lg:w-[24rem] xl:w-[26rem] overflow-y-auto overscroll-contain border-t lg:border-t-0 lg:border-l border-zinc-800/60 p-4"
           style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
         >
@@ -323,7 +328,7 @@ export default function HouseScreen({
               onHeatPumpCommand={onHeatPumpCommand}
             />
           )}
-        </aside>
+        </aside>}
       </div>
     </div>
   );
