@@ -115,7 +115,11 @@ async function accessToken(): Promise<string> {
 async function api(path: string, token: string): Promise<any> {
   const resp = await teslaFetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } });
   if (resp.status === 408) return { asleep: true };
-  if (!resp.ok) throw new HttpsError("internal", `Tesla respondeu ${resp.status} a ${path.split("?")[0]}.`);
+  if (!resp.ok) {
+    // Tesla says why in the body ({"error": "..."}); keep it, it's the only clue (e.g. a scope not granted).
+    const body = (await resp.text().catch(() => "")).slice(0, 300);
+    throw new HttpsError("failed-precondition", `Tesla respondeu ${resp.status} a ${path.split("?")[0]}: ${body}`);
+  }
   return resp.json();
 }
 
@@ -207,9 +211,18 @@ export const teslaVehicles = onCall<{ refresh?: boolean }>(async request => {
   for (const v of listed) {
     const ref = db().collection(CARS).doc(String(v.vin));
     const cached = (await ref.get()).data() as CarSummary | undefined;
-    if (shouldReadCar(v.state, cached?.readAt, now)) {
+    // A failed read waits as long as a good one before the next try, so a
+    // refused car doesn't cost a call every time the page is opened.
+    const lastTry = Math.max(cached?.readAt ?? 0, (cached as { errorAt?: number } | undefined)?.errorAt ?? 0) || undefined;
+    if (shouldReadCar(v.state, lastTry, now)) {
       token ??= await accessToken();
-      const r = await api(`/api/1/vehicles/${v.vin}/vehicle_data?endpoints=${encodeURIComponent(VEHICLE_DATA_ENDPOINTS)}`, token);
+      let r: any;
+      try {
+        r = await api(`/api/1/vehicles/${v.vin}/vehicle_data?endpoints=${encodeURIComponent(VEHICLE_DATA_ENDPOINTS)}`, token);
+      } catch (err) {
+        await ref.set({ ...(cached ?? summarize(v)), errorAt: now, error: (err as Error).message }, { merge: true });
+        throw err;
+      }
       if (!r.asleep && r.response) {
         const s = summarize(v, r.response, now);
         await ref.set(s);
