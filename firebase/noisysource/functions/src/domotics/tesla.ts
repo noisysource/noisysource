@@ -24,6 +24,18 @@ import {
  * is saved at once.
  */
 const CLIENT_SECRET = defineSecret("TESLA_CLIENT_SECRET");
+/**
+ * The functions that read the secret name their runtime account in full. The
+ * global "functions-runtime@" shorthand (options.ts) is fine for running a
+ * function, but `firebase deploy` grants a secret to the account exactly as
+ * written, and Secret Manager rejects the shorthand (400 "Invalid service
+ * account", first prod deploy, 26/11/2026). The CLI sets GCLOUD_PROJECT both
+ * when it reads the functions and when they run.
+ */
+const WITH_SECRET = {
+  secrets: [CLIENT_SECRET],
+  serviceAccount: `functions-runtime@${process.env.GCLOUD_PROJECT}.iam.gserviceaccount.com`,
+};
 const TOKEN_DOC = "domotics_config/tesla";
 const STATE_DOC = "domotics_config/tesla_oauth";
 const USAGE = "domotics_tesla_usage";
@@ -118,7 +130,7 @@ export const teslaAuthStart = onCall<{ redirectUri: string }>(async request => {
 });
 
 /** Step 2: Tesla sent the browser back with a code; trade it for tokens. */
-export const teslaAuthFinish = onCall<{ code: string; state: string }>({ secrets: [CLIENT_SECRET] }, async request => {
+export const teslaAuthFinish = onCall<{ code: string; state: string }>(WITH_SECRET, async request => {
   requireOwner(request.auth);
   const { code, state } = request.data ?? {};
   if (typeof code !== "string" || typeof state !== "string") throw new HttpsError("invalid-argument", "Falta o código.");
@@ -150,7 +162,7 @@ export const teslaAuthFinish = onCall<{ code: string; state: string }>({ secrets
  * public key is hosted on PARTNER_DOMAIN. Needs the "allowed origin" in the
  * Tesla dashboard to be that domain. Two calls.
  */
-export const teslaRegisterPartner = onCall({ secrets: [CLIENT_SECRET] }, async request => {
+export const teslaRegisterPartner = onCall(WITH_SECRET, async request => {
   requireOwner(request.auth);
   const t = await tokenRequest({
     grant_type: "client_credentials",
