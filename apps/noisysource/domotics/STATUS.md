@@ -4,6 +4,26 @@
 
 **Last updated:** 2026-11-26
 
+## ▶️ Now (26/11, evening): Tesla, step 1 — read-only (branch `agent/domotics-tesla`, PR into `staging`)
+**Cars:** Model X 2020 (takes plain REST commands) and a Model 3 (needs signed commands → a small proxy, later). Charging at home: Mobile Connector on a Schuko, 6–13 A (~3 kW).
+
+**What's in it**
+- **Public key hosted** at `https://noisysource-prod-domotics.web.app/.well-known/appspecific/com.tesla.3p.public-key.pem` (`apps/noisysource/domotics/public/.well-known/…`). The domotics hosting target no longer ignores dotfiles (`firebase/noisysource/firebase.json`), or `.well-known` would be dropped. Private key: on Renato's Mac only (`~/.tesla/private-key.pem`), not in the repo.
+- **Callables** (`firebase/noisysource/functions/src/domotics/tesla.ts`, pure parts + tests in `teslaLogic.ts`), owner only: `teslaAuthStart` / `teslaAuthFinish` (OAuth login; the app's root is the redirect, `App.tsx` finishes it), `teslaRegisterPartner` (one-off EU partner registration), `teslaVehicles` (the cars + last data).
+- **Secrets & tokens:** client secret = Firebase secret `TESLA_CLIENT_SECRET` (set by Renato in both projects, 26/11; the first value was exposed in a terminal and rotated). Tokens in `domotics_config/tesla` (no client can read it; refresh tokens are single-use, so refreshing is leased and the new one saved at once).
+- **Cost guards (new-metered-api-checklist):** every call counted first in `domotics_tesla_usage/{Lisbon day}`, **hard cap 100 calls/day** (`DAILY_CALL_CAP`), no retries; car list re-read ≤ every 2 min, a car's data ≤ every 5 min, **an asleep car is never woken** (last reading shown). Provider side: **Renato to set the monthly cap in the Tesla dashboard** (proposed: the $10 credit) — not confirmed yet.
+- **Rules:** `domotics_tesla` and `domotics_tesla_usage` owner-read, no client writes; test `scripts/rules-tests/domotics-tesla.rules-test.cjs` (added to `pnpm test:rules:domotics`; **not run in the session**: the emulator download is blocked there — run it on the Mac).
+- **App:** Carros shows battery/range/charge limit, charging state and current, lock, cabin/outside temperature, km, software, Sentry, position (OpenStreetMap link), and today's Tesla calls. `?demo` has two fake cars.
+
+**Left for Renato, in order (GitHub Actions is blocked by billing, so deploy by hand):**
+1. Deploy to prod from `firebase/noisysource`: `firebase deploy --only hosting:domotics,firestore:rules,functions:noisysource:teslaAuthStart,functions:noisysource:teslaAuthFinish,functions:noisysource:teslaRegisterPartner,functions:noisysource:teslaVehicles --project noisysource-prod` (after building/copying the app as in the PR).
+2. Check the key: `curl https://noisysource-prod-domotics.web.app/.well-known/appspecific/com.tesla.3p.public-key.pem`.
+3. Tesla dashboard: allowed origin `https://noisysource-prod-domotics.web.app`; redirect URIs add `https://noisysource-prod-domotics.web.app/` (and the dev one); set the monthly cap.
+4. In the app (Carros): "Registar a app na Tesla (uma vez)", then "Ligar à Tesla".
+5. Pair the key with each car (for step 2, commands): open `https://tesla.com/_ak/noisysource-prod-domotics.web.app` on the phone next to the car.
+
+**Next (step 2):** commands (lock, climate, charge port, charging current) — REST for the Model X, a signing proxy for the Model 3 (Tesla's `tesla-http-proxy`, Cloud Run, scale to zero; private key as a secret). Then solar charging from the bridge, and the car costs on Energia.
+
 ## ▶️ Now (26/11): new navigation and home screen (branch `agent/domotics-ui-shell`, PR into `staging`)
 Step 1 of the UI redesign Renato approved on 26/11 (design canvas "Domotics — UI proposal"). **Merging the PR releases it to the live house** (`noisysource-prod`); its preview is `noisysource-dev-domotics.web.app`.
 - **What changed for the user:** sections instead of one 3D screen. Phone: bottom bar Casa · Divisões · Energia · Carro · 3D; Clima from the heating card on Casa, Mais from the menu button. Browser: top bar with all seven (Casa, Divisões, Clima, Energia, Carros, Planta 3D, Mais). The section is in the address (`#/energia`) and remembered per device (`domotics.tab`).
