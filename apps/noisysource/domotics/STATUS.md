@@ -2,9 +2,22 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-22
+**Last updated:** 2026-11-26
 
-## ▶️ Now (22/11): the automation switches the pump again; the pump's module still reports only part of its data
+## ▶️ Now (26/11): the pump reports everything again; next is the UI, then Tesla and Shelly
+**Checked 26/11 14:21 on the LAN (`/state`, read-only):**
+- **The pump's module sends all 19 datapoints again**: `mode` Heating, `p02_heating` **46** (was 44 on 19/11; who changed it isn't known), and every fault bitmap at 0. So "Open: get the pump's module to report everything again" below is closed without anyone touching it. When it came back isn't known.
+- **The automation switches the pump by the plan**: off 25/11 23:00, on 26/11 05:30 (warm-up for 06:00), off 08:00. `switchOns24h` 2, `dryRun` false. That's the check the 22/11 note asked for.
+- 7/7 devices online, inverter online. The Pi still runs the 21/11 build (`guard` is still in `/state`, switched off): the bridge deploy from 22/11 is still pending.
+
+**What the pump draws (asked 26/11):** nothing in the pump reports electrical power. The datapoint called `power_consumption` is the coil temperature (`domotics-bridge/src/dpmap.ts`). Only estimates exist: flat out at 70 Hz the whole house drew ~3.4 kW (30/10 20:15–01:00, 16.2 kWh in 4.75 h), so the pump is ~3.0–3.3 kW, ~13–14 A at 238 V (what `solar.pumpW` 3300 assumes). Renato is installing Shelly meters on the main board; they give real kW/A per circuit.
+
+**Next, in this order (Renato, 26/11):**
+1. **UI redesign.** Proposal on a design canvas (Claude artifact "Domotics — UI proposal"): status-first home (temperature, what the heating does next, solar, battery, € today), a main-board amps bar, shortcuts, rooms as a list, one bottom tab bar (Casa / Clima / Energia / Carro / Mais), the 3D plan one tap away instead of the home screen. Waiting for Renato's comments.
+2. **Tesla.** Charge on spare sun (amps follow the surplus), modes Só sol / Sol + vazio / Agora / Parar, "pronto até", monthly kWh and Supercharger invoices. Needs the key-hosting site, a new key pair and the client secret (root `CLAUDE.md`, Shared Integrations), and `new-metered-api-checklist`.
+3. **Shelly metering.** Per-circuit kW/A read by the bridge locally (Gen2 RPC, no cloud), main-board load against the contracted limit, the car throttled first before the breaker trips.
+
+## ▶️ 22/11: the automation switches the pump again; the pump's module still reports only part of its data
 **Where things are**
 - **The fix is live on the Pi since 21/11 00:09** and merged (PR #164 → `staging`, 22/11). The bridge finds the pump by its device type, so the automation switches it by the plan again. Checked right after the restart: 7/7 devices, `automation.doing` = "Bomba desligada — de dia só com sol…", no `pumpHold`.
 - **Not yet seen: the automation actually switching the pump** (the 05:30 and 17:00 starts). Nobody has looked since the deploy; Renato was away from the house on 22/11. Look in the app (Clima → Automação), or on the LAN: `curl http://192.168.1.125:8787/state` → `automation.actions`, `switchOns24h`.
