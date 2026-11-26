@@ -169,8 +169,8 @@ export default function App() {
   }, []);
 
   /**
-   * Back from the Tesla login: the address carries ?code=…&state=… (Tesla's
-   * redirect to this site's root). Finish it once signed in, then clean the
+   * Back from the Tesla login: /tesla/callback?code=…&state=… (Tesla's
+   * redirect; hosting serves the app there). Finish it once signed in, then clean the
    * address and show Carros.
    */
   useEffect(() => {
@@ -180,7 +180,7 @@ export default function App() {
     const state = q.get('state');
     // Our state is 32 hex characters (teslaAuthStart); anything else isn't a Tesla return.
     if (!code || !state || !/^[0-9a-f]{32}$/.test(state)) return;
-    history.replaceState(null, '', `${window.location.pathname}#/carros`);
+    history.replaceState(null, '', '/#/carros');
     setTab('carros');
     teslaAuthFinishFn({ code, state })
       .then(() => notify('Conta Tesla ligada.'))

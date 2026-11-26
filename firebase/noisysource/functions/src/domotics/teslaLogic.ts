@@ -13,10 +13,16 @@ export const TOKEN_URL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/to
 export const API_BASE = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
 export const SCOPES = "openid offline_access vehicle_device_data vehicle_location vehicle_cmds vehicle_charging_cmds";
 
-/** Where Tesla may send the login back to: the house app, prod and dev. Must also be registered in the Tesla dashboard. */
+/**
+ * Where Tesla may send the login back to: the house app, prod and dev. Must
+ * also be registered in the Tesla dashboard, which refuses a bare "/" (26/11),
+ * hence a path. Hosting serves the app there (the SPA rewrite); App.tsx
+ * finishes the login and moves to /#/carros.
+ */
+export const REDIRECT_PATH = "/tesla/callback";
 export const REDIRECT_URIS = [
-  "https://noisysource-prod-domotics.web.app/",
-  "https://noisysource-dev-domotics.web.app/",
+  `https://noisysource-prod-domotics.web.app${REDIRECT_PATH}`,
+  `https://noisysource-dev-domotics.web.app${REDIRECT_PATH}`,
 ];
 /** The site that hosts our public key (/.well-known/appspecific/com.tesla.3p.public-key.pem). */
 export const PARTNER_DOMAIN = "noisysource-prod-domotics.web.app";

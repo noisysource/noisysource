@@ -5,7 +5,7 @@ describe("buildAuthUrl", () => {
   it("asks for offline access and the car scopes, with our redirect and state", () => {
     const u = new URL(buildAuthUrl(REDIRECT_URIS[0], "abc"));
     expect(u.origin + u.pathname).toBe("https://auth.tesla.com/oauth2/v3/authorize");
-    expect(u.searchParams.get("redirect_uri")).toBe("https://noisysource-prod-domotics.web.app/");
+    expect(u.searchParams.get("redirect_uri")).toBe("https://noisysource-prod-domotics.web.app/tesla/callback");
     expect(u.searchParams.get("state")).toBe("abc");
     expect(u.searchParams.get("scope")).toContain("offline_access");
     expect(u.searchParams.get("scope")).toContain("vehicle_location");

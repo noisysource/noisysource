@@ -13,7 +13,7 @@ interface Props {
 
 /** Where Tesla sends the browser back after login; must be one of REDIRECT_URIS in the function. */
 function redirectUri() {
-  return `${window.location.origin}/`;
+  return `${window.location.origin}/tesla/callback`;
 }
 
 const card = 'rounded-2xl bg-zinc-900 border border-zinc-800';
