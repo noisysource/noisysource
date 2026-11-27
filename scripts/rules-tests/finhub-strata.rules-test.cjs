@@ -217,6 +217,8 @@ async function expect(outcome, label, fn) {
   await expect('allowed', 'Atlas proposes client contracts', () => setDoc(doc(atlas, `${IMPORT}-cc`), { ...atlasImport(), clientContracts: [{ entityHint: 'Noisy Source', clientName: 'Malt', reference: '30557', startDate: '2026-03-26', endDate: '2027-01-26', daysAllowed: 189, dailyRate: 594.24, vatRate: 0, paymentTermsDays: 10, warnMonths: 3, amendments: [], active: true, notes: '' }] }));
   await expect('denied', 'Atlas proposes client contracts as something else', () => setDoc(doc(atlas, `${IMPORT}-cc2`), { ...atlasImport(), clientContracts: 'malt' }));
   await expect('allowed', 'Atlas proposes days worked', () => setDoc(doc(atlas, `${IMPORT}-dw`), { ...atlasImport(), daysWorked: [{ contractId: 'cc1', reference: '30557', clientName: 'Malt', month: '2026-11', days: 4, mode: 'add' }] }));
+  await expect('allowed', 'Atlas proposes days off and a trip', () => setDoc(doc(atlas, `${IMPORT}-cal`), { ...atlasImport(), daysOff: [{ from: '2026-12-22', to: '2027-01-02', kind: 'vacation', label: 'Christmas' }], trips: [{ title: 'Brussels', startDate: '2026-12-09', endDate: '2026-12-11', entityHint: 'Noisy Source' }] }));
+  await expect('denied', 'Atlas proposes trips as something else', () => setDoc(doc(atlas, `${IMPORT}-cal2`), { ...atlasImport(), trips: 'Brussels' }));
   await expect('denied', 'Atlas proposes days worked as something else', () => setDoc(doc(atlas, `${IMPORT}-dw2`), { ...atlasImport(), daysWorked: 4 }));
 
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);

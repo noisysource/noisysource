@@ -8,6 +8,7 @@
 // coerced to its type and bounded before it reaches the workbench.
 import type { CommittedSnapshot } from '../utils/committed';
 import type { ClientContract, DaysWorked } from '../utils/clientContracts';
+import type { DaysOffDraft, TripDraft } from '../utils/financialCalendar';
 import {
   collection,
   doc,
@@ -80,6 +81,9 @@ export interface AtlasImport {
   clientContracts: AtlasClientContract[];
   /** Days worked on a client contract ("this week I worked 4 days"), from Atlas. */
   daysWorked: DaysWorked[];
+  /** Plans for the financial calendar ("I'm off 22 Dec to 2 Jan", "a trip to Brussels"), from Atlas. */
+  daysOff: DaysOffDraft[];
+  trips: TripDraft[];
   /** Which agent proposed it. */
   createdBy: 'atlas' | 'claude-code';
   createdAtMs: number;
@@ -356,6 +360,35 @@ export const daysWorkedOf = (raw: unknown): DaysWorked[] =>
     })
     .filter((d) => (d.contractId || d.reference) && /^20\d{2}-(0[1-9]|1[0-2])$/.test(d.month));
 
+const DAY = /^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const DAY_OFF_KINDS = ['vacation', 'day_off', 'client_closure', 'public_holiday'] as const;
+
+export const daysOffOf = (raw: unknown): DaysOffDraft[] =>
+  list(raw, 20)
+    .map((v) => {
+      const x = obj(v);
+      const kind = DAY_OFF_KINDS.find((k) => k === x.kind) ?? 'day_off';
+      return { from: str(x.from, 10), to: str(x.to, 10) || str(x.from, 10), kind, label: str(x.label, 120) };
+    })
+    .filter((d) => DAY.test(d.from) && DAY.test(d.to));
+
+export const tripsOf = (raw: unknown): TripDraft[] =>
+  list(raw, 20)
+    .map((v) => {
+      const x = obj(v);
+      return {
+        title: str(x.title, 120),
+        destination: str(x.destination, 120),
+        startDate: str(x.startDate, 10),
+        endDate: str(x.endDate, 10) || str(x.startDate, 10),
+        traveller: str(x.traveller, 120),
+        entityHint: str(x.entityHint, 120),
+        perDiemDaily: Math.min(10000, Math.max(0, num(x.perDiemDaily))),
+        perDiemDays: Math.min(366, Math.max(0, Math.round(num(x.perDiemDays)))),
+      };
+    })
+    .filter((t) => t.title && DAY.test(t.startDate) && DAY.test(t.endDate));
+
 export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
   const d = obj(raw);
   return {
@@ -372,6 +405,8 @@ export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
     setup: setupOf(d.setup),
     clientContracts: clientContractsOf(d.clientContracts),
     daysWorked: daysWorkedOf(d.daysWorked),
+    daysOff: daysOffOf(d.daysOff),
+    trips: tripsOf(d.trips),
     createdBy: d.createdBy === 'claude-code' ? 'claude-code' : 'atlas',
     createdAtMs: millis(d.createdAt),
   };
@@ -411,6 +446,8 @@ export const countsOf = (i: AtlasImport): string => {
   const lines = i.statements.reduce((n, s) => n + s.lines.length, 0);
   const days = i.daysWorked.reduce((n, d) => n + d.days, 0);
   const parts = [
+    i.daysOff.length > 0 ? `${i.daysOff.length} day${i.daysOff.length === 1 ? '' : 's'}-off span${i.daysOff.length === 1 ? '' : 's'}` : '',
+    i.trips.length > 0 ? `${i.trips.length} trip${i.trips.length === 1 ? '' : 's'}` : '',
     i.daysWorked.length > 0 ? `${days} day${days === 1 ? '' : 's'} worked` : '',
     i.clientContracts.length > 0 ? `${i.clientContracts.length} client contract${i.clientContracts.length === 1 ? '' : 's'}` : '',
     i.setup.entities.length > 0 ? `${i.setup.entities.length} entit${i.setup.entities.length === 1 ? 'y' : 'ies'}` : '',

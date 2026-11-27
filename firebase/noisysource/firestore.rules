@@ -337,7 +337,7 @@ service cloud.firestore {
     // to its keys, types and sizes; always pending, always Atlas's.
     function isValidAtlasImport(data) {
       return data.keys().hasOnly(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
-          'contracts', 'subscriptions', 'facilities', 'setup', 'clientContracts', 'daysWorked', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+          'contracts', 'subscriptions', 'facilities', 'setup', 'clientContracts', 'daysWorked', 'daysOff', 'trips', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
         data.keys().hasAll(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
           'contracts', 'subscriptions', 'facilities', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
         data.status == 'pending' && data.createdBy == finhubAgent() &&
@@ -360,6 +360,9 @@ service cloud.firestore {
         (!('clientContracts' in data) || (data.clientContracts is list && data.clientContracts.size() <= 20)) &&
         // Days worked on a client contract; he adds them to the month's handover in FinHub.
         (!('daysWorked' in data) || (data.daysWorked is list && data.daysWorked.size() <= 60)) &&
+        // Plans for the financial calendar; he adds them in FinHub, its master.
+        (!('daysOff' in data) || (data.daysOff is list && data.daysOff.size() <= 20)) &&
+        (!('trips' in data) || (data.trips is list && data.trips.size() <= 20)) &&
         data.createdAt is timestamp && data.updatedAt is timestamp;
     }
 

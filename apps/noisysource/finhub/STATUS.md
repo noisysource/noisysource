@@ -4,6 +4,12 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
+## In progress (2026-11-27, late): calendar balance + plans from Atlas (branch `agent/finhub-calendar-plans`)
+- Financial calendar: a company picker (or All); "balance now" = that company's accounts' `balance`, then the balance after each movement (`withBalance`), in red below zero. Every money item carries its `entityId`.
+- Atlas proposes days off and trips (`daysOff[]`, `trips[]` on an import); "Add to the calendar" in From Atlas runs `calendarPlanOf`: weekdays only, days already off kept, the trip's company matched by name.
+- Rules: `isValidAtlasImport` allows `daysOff` and `trips` (lists ≤ 20). Rules tests added, **not run here**: run `pnpm test:rules:finhub`.
+- Atlas side: `finhub_calendar_plans` in the Atlas repo.
+
 ## In progress (2026-11-27, night): days worked from Atlas (branch `agent/finhub-days-worked`, stacked on the paste branch)
 - Renato tells Atlas "this week I worked 4 days"; Atlas sends an import with `daysWorked[{contractId, reference, clientName, month, days, mode: add|set}]`; the From Atlas card gets "Add these days", which runs `daysWorkedPlan` (`utils/clientContracts.ts`): adds to (or sets) the month's handover, a new handover replacing the old one (handovers have no update rule), the old one's handover date and invoice number kept.
 - Rules: `isValidAtlasImport` allows `daysWorked` (list ≤ 60); rules tests added but **not run here** (no emulator download): run `pnpm test:rules:finhub`.

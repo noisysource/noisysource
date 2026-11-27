@@ -3,7 +3,7 @@ import { CalendarDays, Pencil, Plane, Plus, Trash2, X } from 'lucide-react';
 import { useTreasury } from '../contexts/TreasuryContext';
 import { formatMoney } from '../utils/financeMath';
 import { addDays, isoDay } from '../utils/clientContracts';
-import { financialCalendar, perDiemOf, type CalendarItem, type CalendarKind, type Trip, type TripCost, type TripCostKind, type TripStatus } from '../utils/financialCalendar';
+import { financialCalendar, perDiemOf, withBalance, type CalendarItem, type CalendarKind, type Trip, type TripCost, type TripCostKind, type TripStatus } from '../utils/financialCalendar';
 import { deleteTrip, newId, saveTrip, useClientContracts } from '../lib/clientContracts';
 
 interface FinancialCalendarViewProps {
@@ -32,7 +32,9 @@ const STATUSES: TripStatus[] = ['planned', 'booked', 'done', 'cancelled'];
 const daysBetween = (a: string, b: string) => Math.max(1, Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000) + 1);
 
 export const FinancialCalendarView: React.FC<FinancialCalendarViewProps> = ({ createModalOpen, onOpenCreateModal, onCloseCreateModal }) => {
-  const { entities, currencyCode, pushToast, payslips, recurringExpenses, creditFacilities } = useTreasury();
+  const { entities, accounts, currencyCode, pushToast, payslips, recurringExpenses, creditFacilities } = useTreasury();
+  // Whose money the balance follows: one company's accounts, or all of them.
+  const [entityId, setEntityId] = useState('all');
   const { contracts, handovers, daysOff, trips, error } = useClientContracts();
   const [span, setSpan] = useState(60);
   const [hidden, setHidden] = useState<Set<CalendarKind>>(new Set());
@@ -57,7 +59,15 @@ export const FinancialCalendarView: React.FC<FinancialCalendarViewProps> = ({ cr
       }),
     [today, span, daysOff, trips, contracts, handovers, payslips, recurringExpenses, creditFacilities],
   );
-  const shown = items.filter((i) => !hidden.has(i.kind));
+  const mine = (id?: string) => entityId === 'all' || id === entityId;
+  const startBalance = accounts.filter((a) => mine(a.entityId)).reduce((n, a) => n + (Number(a.balance) || 0), 0);
+  const reconciled = accounts.filter((a) => mine(a.entityId)).map((a) => a.lastReconciledDate).filter(Boolean).sort()[0];
+  // Days off and trips belong to no one's money: always shown. Hidden kinds stay out of the balance too.
+  const shown = withBalance(
+    items.filter((i) => !hidden.has(i.kind) && (typeof i.amount !== 'number' || mine(i.entityId))),
+    startBalance,
+  );
+  const endBalance = [...shown].reverse().find((i) => typeof i.balance === 'number')?.balance ?? startBalance;
   const byDay = new Map<string, CalendarItem[]>();
   for (const i of shown) {
     const d = i.date < today ? today : i.date;
@@ -87,6 +97,12 @@ export const FinancialCalendarView: React.FC<FinancialCalendarViewProps> = ({ cr
         <p className="text-sm text-slate-300 flex-1">
           The dates that involve money. FinHub is their master: Atlas puts your days off and trips in a "FinHub" Google calendar and shows all of this beside your other calendars.
         </p>
+        <select className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-slate-100" value={entityId} onChange={(e) => setEntityId(e.target.value)}>
+          <option value="all">All companies</option>
+          {entities.map((e) => (
+            <option key={e.id} value={e.id}>{e.name}</option>
+          ))}
+        </select>
         <select className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-slate-100" value={span} onChange={(e) => setSpan(Number(e.target.value))}>
           <option value={30}>Next 30 days</option>
           <option value={60}>Next 60 days</option>
@@ -101,7 +117,10 @@ export const FinancialCalendarView: React.FC<FinancialCalendarViewProps> = ({ cr
             <span className={`w-2 h-2 rounded-full ${KIND[k].dot}`} /> {KIND[k].label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-slate-400 font-mono tabular-nums self-center">in {money(inflow)} · out {money(outflow)}</span>
+        <span className="ml-auto text-xs text-slate-400 font-mono tabular-nums self-center">
+          balance now {money(startBalance)}{reconciled ? ` (accounts as of ${reconciled})` : ''} · in {money(inflow)} · out {money(outflow)} ·{' '}
+          <span className={endBalance < 0 ? 'text-rose-400' : 'text-slate-200'}>after {money(endBalance)}</span>
+        </span>
       </div>
 
       <div className="grid xl:grid-cols-3 gap-6">
@@ -120,6 +139,9 @@ export const FinancialCalendarView: React.FC<FinancialCalendarViewProps> = ({ cr
                     </span>
                     {typeof i.amount === 'number' && (
                       <span className={`font-mono tabular-nums text-xs ${i.amount > 0 ? 'text-emerald-400' : 'text-slate-300'}`}>{i.amount > 0 ? '+' : ''}{money(i.amount)}</span>
+                    )}
+                    {typeof i.balance === 'number' && (
+                      <span className={`w-28 text-right font-mono tabular-nums text-xs ${i.balance < 0 ? 'text-rose-400' : 'text-slate-500'}`}>→ {money(i.balance)}</span>
                     )}
                   </li>
                 ))}
