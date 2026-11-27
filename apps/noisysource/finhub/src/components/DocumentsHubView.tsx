@@ -24,7 +24,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { monthLabel } from '../utils/contractVersions';
-import { newId as newClientContractId, saveContract, useClientContracts } from '../lib/clientContracts';
+import { deleteHandover, newId as newClientContractId, saveContract, saveHandover, useClientContracts } from '../lib/clientContracts';
+import { daysWorkedPlan } from '../utils/clientContracts';
 import { committedOf } from '../utils/committed';
 import { useTreasury } from '../contexts/TreasuryContext';
 import type {
@@ -94,6 +95,7 @@ interface DriveConfirmState {
 
 const hasSetup = (imp: AtlasImport): boolean => imp.setup.entities.length + imp.setup.accounts.length + imp.setup.loans.length > 0;
 const hasClientContracts = (imp: AtlasImport): boolean => imp.clientContracts.length > 0;
+const hasDaysWorked = (imp: AtlasImport): boolean => imp.daysWorked.length > 0;
 const hasDrafts = (imp: AtlasImport): boolean =>
   imp.statements.length + imp.payslips.length + imp.contracts.length + imp.subscriptions.length + imp.facilities.length > 0;
 
@@ -121,7 +123,7 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     pushToast,
   } = useTreasury();
   // Client contracts already in the book: an agent's proposal skips them.
-  const { contracts: clientContracts } = useClientContracts();
+  const { contracts: clientContracts, handovers: contractHandovers } = useClientContracts();
 
   // Document reading is Atlas's (STATUS.md): what it imported comes first.
   const [activeTab, setActiveTab] = useState<HubTab>('atlas');
@@ -950,6 +952,30 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
   };
 
   /**
+   * Days worked Atlas proposed ("this week I worked 4 days"), after his OK here: each month's
+   * handover gets the new total. A month that had one gets a new handover first, then the old one
+   * goes (handovers aren't edited in place), so a failure never loses days.
+   */
+  const applyAtlasDaysWorked = async (imp: AtlasImport) => {
+    const plan = daysWorkedPlan(clientContracts, contractHandovers, imp.daysWorked);
+    if (plan.problems.length > 0) {
+      pushToast('Not added', `${plan.problems.join('; ')}. Fix the contract in Client Contracts, or set this one aside.`, 'error');
+      return;
+    }
+    setDecidingAtlasImport(imp.id);
+    try {
+      for (const h of plan.create) await saveHandover({ ...h, id: newClientContractId('ho'), userId: '' });
+      for (const id of plan.replace) await deleteHandover(id);
+      await decideAtlasImport(imp.id, 'applied');
+      pushToast('Days added', plan.lines.length > 0 ? plan.lines.join(' · ') : 'Those months already had these days.', 'success');
+    } catch (err) {
+      pushToast('Stopped', `${err instanceof Error ? err.message : String(err)}. Check the month in Client Contracts before running it again.`, 'error');
+    } finally {
+      setDecidingAtlasImport(null);
+    }
+  };
+
+  /**
    * An agent's proposed setup, after his OK here: creates the entities, accounts and loans that
    * aren't in the book yet (entities matched by name, ignoring case and "Lda"; accounts and loans
    * by name within their entity). Account numbers are never part of it: he adds the IBANs.
@@ -1653,6 +1679,15 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        {hasDaysWorked(imp) && (
+                          <button
+                            onClick={() => applyAtlasDaysWorked(imp)}
+                            disabled={decidingAtlasImport === imp.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Add these days
+                          </button>
+                        )}
                         {hasClientContracts(imp) && (
                           <button
                             onClick={() => applyAtlasClientContracts(imp)}

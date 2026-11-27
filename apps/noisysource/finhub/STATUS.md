@@ -4,6 +4,11 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
+## In progress (2026-11-27, night): days worked from Atlas (branch `agent/finhub-days-worked`, stacked on the paste branch)
+- Renato tells Atlas "this week I worked 4 days"; Atlas sends an import with `daysWorked[{contractId, reference, clientName, month, days, mode: add|set}]`; the From Atlas card gets "Add these days", which runs `daysWorkedPlan` (`utils/clientContracts.ts`): adds to (or sets) the month's handover, a new handover replacing the old one (handovers have no update rule), the old one's handover date and invoice number kept.
+- Rules: `isValidAtlasImport` allows `daysWorked` (list ≤ 60); rules tests added but **not run here** (no emulator download): run `pnpm test:rules:finhub`.
+- Atlas side: `finhub_days_worked` in the Atlas repo.
+
 ## In progress (2026-11-27, night): paste past handovers (branch `agent/finhub-paste-handovers`)
 - Contracts → a contract's Handovers → "Paste from Malt": paste the order's Invoice tab (copied as text); `parseHandovers` (`utils/clientContracts.ts`) reads month, days and billed amount, takes the year from the contract's start (a month that goes backwards is the next year), hands each month over on the 1st of the next and expects pay `paymentTermsDays` later. Months already there are skipped; a billed amount ≠ days × rate is kept as billed and shown in amber.
 - Expected after pasting Renato's three orders: 017436 150/162 days, 26089 120/120, 30557 135/189 (54 left).
