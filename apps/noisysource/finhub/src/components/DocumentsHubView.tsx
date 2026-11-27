@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { monthLabel } from '../utils/contractVersions';
+import { newId as newClientContractId, saveContract, useClientContracts } from '../lib/clientContracts';
 import { committedOf } from '../utils/committed';
 import { useTreasury } from '../contexts/TreasuryContext';
 import type {
@@ -92,6 +93,7 @@ interface DriveConfirmState {
 }
 
 const hasSetup = (imp: AtlasImport): boolean => imp.setup.entities.length + imp.setup.accounts.length + imp.setup.loans.length > 0;
+const hasClientContracts = (imp: AtlasImport): boolean => imp.clientContracts.length > 0;
 const hasDrafts = (imp: AtlasImport): boolean =>
   imp.statements.length + imp.payslips.length + imp.contracts.length + imp.subscriptions.length + imp.facilities.length > 0;
 
@@ -118,6 +120,8 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     creditFacilities,
     pushToast,
   } = useTreasury();
+  // Client contracts already in the book: an agent's proposal skips them.
+  const { contracts: clientContracts } = useClientContracts();
 
   // Document reading is Atlas's (STATUS.md): what it imported comes first.
   const [activeTab, setActiveTab] = useState<HubTab>('atlas');
@@ -920,6 +924,32 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
   };
 
   /**
+   * Client contracts an agent read (the Malt orders), after his OK here: each one not in the book
+   * yet (same client and reference) is created for its entity, matched by name.
+   */
+  const applyAtlasClientContracts = async (imp: AtlasImport) => {
+    setDecidingAtlasImport(imp.id);
+    try {
+      let made = 0;
+      for (const c of imp.clientContracts) {
+        const entityId = entityForHint(c.entityHint, entities)?.id;
+        if (!entityId) throw new Error(`no entity "${c.entityHint}" in the book for ${c.clientName} ${c.reference}`);
+        const known = clientContracts.some((x) => x.clientName.trim().toLowerCase() === c.clientName.trim().toLowerCase() && x.reference.trim() === c.reference.trim());
+        if (known) continue;
+        const { entityHint: _hint, ...fields } = c;
+        await saveContract({ ...fields, id: newClientContractId('cc'), userId: '', entityId }, true);
+        made += 1;
+      }
+      await decideAtlasImport(imp.id, 'applied');
+      pushToast('Client contracts created', `${made} created; add each month's handover in Client Contracts.`, 'success');
+    } catch (err) {
+      pushToast('Stopped', `${err instanceof Error ? err.message : String(err)}. What was created stays; run it again to finish.`, 'error');
+    } finally {
+      setDecidingAtlasImport(null);
+    }
+  };
+
+  /**
    * An agent's proposed setup, after his OK here: creates the entities, accounts and loans that
    * aren't in the book yet (entities matched by name, ignoring case and "Lda"; accounts and loans
    * by name within their entity). Account numbers are never part of it: he adds the IBANs.
@@ -1623,6 +1653,15 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        {hasClientContracts(imp) && (
+                          <button
+                            onClick={() => applyAtlasClientContracts(imp)}
+                            disabled={decidingAtlasImport === imp.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Create these
+                          </button>
+                        )}
                         {hasSetup(imp) && (
                           <button
                             onClick={() => applyAtlasSetup(imp)}
@@ -1650,6 +1689,20 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                       </div>
                     </div>
                     {imp.summary && <p className="text-xs text-slate-300 whitespace-pre-line">{imp.summary}</p>}
+                    {hasClientContracts(imp) && (
+                      <div className="text-xs text-slate-300 grid gap-1">
+                        {imp.clientContracts.map((c) => (
+                          <div key={`cc-${c.clientName}-${c.reference}`}>
+                            <span className="text-slate-500">Client contract</span> {c.clientName} {c.reference} · {c.startDate} → {c.endDate} · {c.daysAllowed} days ×{' '}
+                            {formatMoney(c.dailyRate, currencyCode)} · VAT {c.vatRate}% · paid {c.paymentTermsDays} days after · {c.entityHint}
+                            {!c.active ? <span className="text-slate-500"> (ended)</span> : null}
+                            {clientContracts.some((x) => x.clientName.trim().toLowerCase() === c.clientName.trim().toLowerCase() && x.reference.trim() === c.reference.trim()) ? (
+                              <span className="text-slate-500"> (already in the book)</span>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {hasSetup(imp) && (
                       <div className="text-xs text-slate-300 grid gap-1">
                         {imp.setup.entities.map((e) => (

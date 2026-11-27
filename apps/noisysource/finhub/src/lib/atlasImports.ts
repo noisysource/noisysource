@@ -7,6 +7,7 @@
 // Atlas is trusted to write here, but not to be right: every draft is
 // coerced to its type and bounded before it reaches the workbench.
 import type { CommittedSnapshot } from '../utils/committed';
+import type { ClientContract } from '../utils/clientContracts';
 import {
   collection,
   doc,
@@ -75,10 +76,15 @@ export interface AtlasImport {
   facilities: SuggestedFacilityDraft[];
   /** The book's setup an agent proposes from the documents: entities, accounts, loans. */
   setup: AtlasSetup;
+  /** Client contracts (the Malt orders) an agent read from the contracts folder. */
+  clientContracts: AtlasClientContract[];
   /** Which agent proposed it. */
   createdBy: 'atlas' | 'claude-code';
   createdAtMs: number;
 }
+
+/** A client contract as an agent proposes it: FinHub's fields, the entity by name. */
+export type AtlasClientContract = Omit<ClientContract, 'id' | 'userId' | 'entityId'> & { entityHint: string };
 
 /** Entities, accounts and loans to create, matched by name (entities by entityKey). Never bank account numbers. */
 export interface AtlasSetup {
@@ -308,6 +314,30 @@ export const setupOf = (raw: unknown): AtlasSetup => {
   };
 };
 
+export const clientContractsOf = (raw: unknown): AtlasClientContract[] =>
+  list(raw, 20)
+    .map((v) => {
+      const c = obj(v);
+      const start = str(c.startDate, 10);
+      const end = str(c.endDate, 10);
+      return {
+        entityHint: str(c.entityHint, 100),
+        clientName: str(c.clientName, 100),
+        reference: str(c.reference, 100),
+        startDate: DATE.test(start) ? start : '',
+        endDate: DATE.test(end) ? end : '',
+        daysAllowed: Math.min(2000, Math.max(0, num(c.daysAllowed))),
+        dailyRate: Math.min(100000, Math.max(0, num(c.dailyRate))),
+        vatRate: Math.min(23, Math.max(0, num(c.vatRate))),
+        paymentTermsDays: Math.min(365, Math.max(0, Math.round(num(c.paymentTermsDays)))),
+        warnMonths: Math.min(24, Math.max(0, Math.round(num(c.warnMonths)) || 3)),
+        amendments: [],
+        active: c.active !== false,
+        notes: str(c.notes, 1000),
+      };
+    })
+    .filter((c) => c.clientName && c.startDate && c.endDate && c.endDate >= c.startDate && c.daysAllowed > 0 && c.dailyRate > 0);
+
 export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
   const d = obj(raw);
   return {
@@ -322,6 +352,7 @@ export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
     subscriptions: list(d.subscriptions, 200).map(subscriptionOf),
     facilities: list(d.facilities, 20).map(facilityOf),
     setup: setupOf(d.setup),
+    clientContracts: clientContractsOf(d.clientContracts),
     createdBy: d.createdBy === 'claude-code' ? 'claude-code' : 'atlas',
     createdAtMs: millis(d.createdAt),
   };
@@ -360,6 +391,7 @@ export { entityForHint, entityKey } from '../utils/entityMatch';
 export const countsOf = (i: AtlasImport): string => {
   const lines = i.statements.reduce((n, s) => n + s.lines.length, 0);
   const parts = [
+    i.clientContracts.length > 0 ? `${i.clientContracts.length} client contract${i.clientContracts.length === 1 ? '' : 's'}` : '',
     i.setup.entities.length > 0 ? `${i.setup.entities.length} entit${i.setup.entities.length === 1 ? 'y' : 'ies'}` : '',
     i.setup.accounts.length > 0 ? `${i.setup.accounts.length} account${i.setup.accounts.length === 1 ? '' : 's'}` : '',
     i.setup.loans.length > 0 ? `${i.setup.loans.length} loan${i.setup.loans.length === 1 ? '' : 's'}` : '',
