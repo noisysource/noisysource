@@ -18,3 +18,9 @@ automation-state.json
 # kWh history recorder state (see src/energy.ts, src/energy-store.ts).
 energy-state.json
 energy-registers.jsonl
+# TV, Roomba and cameras (see src/media/): the device list with passwords, the TV's client key, learnt MACs, go2rtc's config.
+media-cache.json
+media-state.json
+tv-*.mac.json
+deploy/media-devices.json
+go2rtc.yaml

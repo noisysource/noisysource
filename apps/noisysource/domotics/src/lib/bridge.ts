@@ -189,3 +189,15 @@ export async function announceWatching() {
     // Signed out or offline: nothing to announce, and nothing to retry.
   }
 }
+
+/**
+ * For lib/media.ts (the TV, Roomba and cameras): the same direct-or-relay
+ * choice the heating makes, so both agree on whether the LAN bridge answers.
+ */
+export const BRIDGE_BASE = BRIDGE_URL;
+export const directPath = {
+  enabled: DIRECT_ENABLED,
+  works: () => directWorks,
+  set: (works: boolean) => { directWorks = works && DIRECT_ENABLED; },
+};
+export { request as bridgeRequest };

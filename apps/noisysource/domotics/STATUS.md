@@ -2,7 +2,16 @@
 
 > Read this first when you start a session on this app. Update it before you sign off, even mid-task — this is Renato's re-entry point after a context switch, not a changelog.
 
-**Last updated:** 2026-11-26
+**Last updated:** 2026-11-27
+
+## ▶️ Now (27/11): TV, Roomba and cameras (branch `agent/house-media-devices`, PR into `staging`)
+Renato asked to add the smart TV (LG webOS), the Roomba and the Tapo cameras. Built, **not yet tried against the real devices**: nobody had their IPs or passwords, and the session couldn't reach the house's LAN.
+- **What's there:** a new Aparelhos tab (browser top bar; phone: Mais → "Televisor, Roomba e câmaras"). TV: on/off (off over the socket, on with Wake-on-LAN), volume, mute, inputs, apps, arrows/OK/back/home, play/pause, channel. Roomba: battery, what it's doing, bin full, errors; Aspirar / Pausar / Retomar / Voltar à base / Tocar. Cameras: online, snapshot, live view on the LAN, pan/tilt on PTZ models.
+- **How:** all in the bridge, `domotics-bridge/src/media/`, on a loop of its own that runs only while Aparelhos is open, so it can't slow the heating or count towards the bridge's restart rule. Relay state in its own document (`domotics_state/media`), not in `domotics_state/tuya`, so Atlas's contract is unchanged. Video never goes through the bridge: go2rtc, a separate service on the Pi with its own memory limit.
+- **Rules:** `domotics_config/media_devices` readable by the bridge only; camera snapshots (`domotics_state/snap_*`) owner only, not Atlas. Tested by `scripts/rules-tests/domotics-media.rules-test.cjs` (in `pnpm test:rules:domotics`).
+- **Left for Renato, in order** (`domotics-bridge/deploy/README.md`, "Televisor, Roomba e câmaras"): DHCP reservations for the TV, Roomba and cameras; Roomba credentials (`deploy/roomba-credentials.js`); a Camera account in the Tapo app for each camera; `deploy/media-devices.json` + `sync-media-devices.js --write`; bridge deploy **with `npm install`** (two new dependencies, lgtv2 and mqtt); pair the TV from Aparelhos; go2rtc + `GO2RTC_URL`/`GO2RTC_LAN_URL` in `bridge.env` for the cameras.
+- **Not verified, check on first use:** the Roomba's TLS against this robot's firmware (cipher override: `ROOMBA_CIPHERS` in `bridge.env`); whether the robot still gives its password locally; ONVIF pan/tilt on these Tapo models; go2rtc's memory on the Pi 1 during a snapshot (it has 70 MB; the bridge keeps its 140 MB).
+- **Known limits, by design:** no live video in the hosted (`https://`) app, snapshots only; while the bridge talks to the Roomba (a few seconds per read, only while Aparelhos is open) the iRobot app uses the cloud instead; no Tapo privacy mode switch (not in ONVIF).
 
 ## ▶️ Now (26/11, evening): Tesla, step 1 — read-only (branch `agent/domotics-tesla`, PR into `staging`)
 **Cars:** Model X 2020 (takes plain REST commands) and a Model 3 (needs signed commands → a small proxy, later). Charging at home: Mobile Connector on a Schuko, 6–13 A (~3 kW).

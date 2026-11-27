@@ -41,6 +41,10 @@ service cloud.firestore {
       // exactly as it is: rules are permissive-OR, so this grants the bridge one
       // more document and widens nothing for anyone else.
       allow read: if isBridge() && docId == 'tuya_devices';
+      // Likewise the TV, Roomba and cameras (domotics-bridge/src/media/config.ts),
+      // with the cameras' and the Roomba's passwords: the bridge reads it, nobody
+      // writes it from a client (deploy/sync-media-devices.js, with gcloud).
+      allow read: if isBridge() && docId == 'media_devices';
       // Heating automation settings (domotics-bridge/src/automation.ts). Unlike
       // the display documents above, this one decides how the house is heated,
       // so only the owner may read or change it; the bridge reads it to act on.
@@ -134,7 +138,11 @@ service cloud.firestore {
     }
 
     match /domotics_state/{docId} {
-      allow read: if isDomoticsOwner() || isAtlas();
+      // `media` is the TV, Roomba and cameras' state; `snap_<camera>` a camera's
+      // last snapshot, taken when the owner asks for one from away. Atlas sees
+      // the house's state, the TV and the Roomba included, but not what the
+      // cameras see.
+      allow read: if isDomoticsOwner() || (isAtlas() && !docId.matches('snap_.*'));
       allow write: if isBridge();
     }
 

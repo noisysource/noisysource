@@ -19,6 +19,7 @@ import {
 import { createEnergyStore } from './energy-store';
 import { createClimateStore } from './climate-store';
 import { isControllerTimer } from './climate';
+import { createMedia, isMediaId } from './media';
 
 /**
  * Domotics bridge.
@@ -131,6 +132,21 @@ const db = process.env.FIREBASE_API_KEY && process.env.BRIDGE_EMAIL && process.e
 const energy = createEnergyStore(RELAY ? db : undefined, join(__dirname, '..', 'energy-state.json'));
 /** Room and pump temperatures per 15-min slot, and people's interventions (climate.ts). Like the energy history. */
 const climate = createClimateStore(RELAY ? db : undefined, join(__dirname, '..', 'climate-state.json'));
+
+/**
+ * The TV, the Roomba and the cameras (media/). Their own loop and their own
+ * relay document (`domotics_state/media`), so nothing about them can delay the
+ * heating or change `domotics_state/tuya`.
+ * GO2RTC_URL is how the bridge reaches go2rtc (normally on the Pi itself);
+ * GO2RTC_LAN_URL how a browser on the LAN does, for live view.
+ */
+const media = createMedia({
+  db,
+  relay: RELAY,
+  dir: join(__dirname, '..'),
+  go2rtcLocal: process.env.GO2RTC_URL || null,
+  liveBase: process.env.GO2RTC_LAN_URL || null,
+});
 
 let devices: DeviceConfig[] = [];
 /** Last time a client asked for state — drives the polling rate. */
@@ -603,6 +619,8 @@ async function commandLoop() {
   setTimeout(() => void commandLoop(), COMMAND_POLL_MS);
 }
 
+const mediaInFlight = new Set<string>();
+
 async function handleRelayCommand(docId: string, data: Record<string, unknown>) {
   const path = `${COMMANDS}/${docId}`;
   const createdAt = data.createdAt;
@@ -616,6 +634,11 @@ async function handleRelayCommand(docId: string, data: Record<string, unknown>) 
   // reach getState, so without this a phone outside the house never counts as
   // watching and its climate readings lag by the idle interval (5 min). Treated
   // exactly like a LAN /state request.
+  if (data.watch === true && data.scope === 'media') {
+    await db!.deleteDoc(path).catch(() => {});
+    media.watch();
+    return;
+  }
   if (data.watch === true) {
     await db!.deleteDoc(path).catch(() => {});
     lastClientAt = Date.now();
@@ -624,6 +647,29 @@ async function handleRelayCommand(docId: string, data: Record<string, unknown>) 
       await poll(stale > ACTIVE_WINDOW_MS);
       await publish();
     }
+    return;
+  }
+  // Media commands run beside the queue, not in it: a Roomba takes up to fifteen
+  // seconds, and a heating command queued behind one must not wait for it. The
+  // document stays until it's done, so the in-flight set keeps the next poll
+  // from running it twice.
+  if (typeof data.deviceId === 'string' && isMediaId(data.deviceId)) {
+    if (mediaInFlight.has(docId)) return;
+    mediaInFlight.add(docId);
+    const deviceId = data.deviceId;
+    const commands = (Array.isArray(data.commands) ? data.commands : []) as Array<{ code: string; value: unknown }>;
+    void (async () => {
+      try {
+        if (commands.some(c => c?.code === 'snapshot')) await media.relaySnapshot(deviceId);
+        else await media.command(deviceId, commands);
+        await db!.deleteDoc(path);
+      } catch (err) {
+        console.warn('[relay] media command failed:', (err as Error).message);
+        await db!.setDoc(path, { error: (err as Error).message }).catch(() => {});
+      } finally {
+        mediaInFlight.delete(docId);
+      }
+    })();
     return;
   }
   try {
@@ -809,7 +855,11 @@ async function main() {
     },
     sendCommand: runCommand,
     refresh: poll,
+    media,
   });
+
+  // After the heating is up: a slow or missing media device must never hold it back.
+  void media.start().catch(err => console.warn('[media] not started:', (err as Error).message));
 
   if (RELAY && db) {
     void commandLoop();

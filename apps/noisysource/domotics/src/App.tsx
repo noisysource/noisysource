@@ -33,6 +33,7 @@ import DivisoesScreen from './components/screens/DivisoesScreen';
 import ClimaScreen from './components/screens/ClimaScreen';
 import CarrosScreen from './components/screens/CarrosScreen';
 import MaisScreen from './components/screens/MaisScreen';
+import AparelhosScreen from './components/screens/AparelhosScreen';
 
 /** Opened rarely, and its charts and printout shouldn't weigh on the everyday screen. */
 const ReportsScreen = lazy(() => import('./components/reports/ReportsScreen'));
@@ -836,6 +837,8 @@ export default function App() {
             />
           </Suspense>
         );
+      case 'aparelhos':
+        return <AparelhosScreen demo={DEMO} notify={notify} />;
       case 'carros':
         return <CarrosScreen canUse={!!user && !isLanOrigin()} notify={notify} />;
       case 'planta':
@@ -877,6 +880,7 @@ export default function App() {
             onStartEdit={startEdit}
             onOpenReports={() => setShowReports(true)}
             onOpenAdmin={() => setShowAdmin(true)}
+            onOpenDevices={() => go('aparelhos')}
           />
         );
     }

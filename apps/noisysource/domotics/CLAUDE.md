@@ -8,6 +8,8 @@ Home automation for Renato's house: lights, blinds, and climate control, plus a 
 - **Tuya/SmartLife** (thermostats, heat pump) — via the **Tuya Cloud API**, EU data centre (`firebase/noisysource/functions/src/domotics/tuya.ts`)
   - The heat pump (Zantia Vancouver 13) is **dedicated to underfloor heating**. Domestic hot water (AQS) comes from a separate heat pump that is not integrated, so this pump's DHW tank reading and DHW setpoint mean nothing — mode "Heating" is correct, and a cold DHW tank is not a fault (Renato, 2026-10-19).
 
+Plus, since 2026-11-27, the **LG TV, the Roomba and the Tapo cameras** (Aparelhos tab; on a phone under Mais), all over the LAN through the bridge (`../domotics-bridge/src/media/`, setup in `../domotics-bridge/deploy/README.md`, "Televisor, Roomba e câmaras"): LG webOS's local socket (lgtv2) and Wake-on-LAN, the Roomba's local MQTT, ONVIF pan/tilt, and video/snapshots through go2rtc, a separate service on the Pi. App side: `src/components/screens/AparelhosScreen.tsx`, `src/components/media/`, `src/lib/media.ts`, `src/data/mediaData.ts` (types mirrored from the bridge's `src/media/types.ts`; keep them in step).
+
 There is no Shelly integration and no per-circuit (amps/watts) monitoring — despite earlier planning docs, those were never built. Energy comes from the RENAC inverter alone: the bridge reads it over local Modbus (read-only) for the live figures, and records kWh history in 15-minute slots for the **Energia** page (`src/components/energy/`, cost maths in `packages/shared/lib/energyBill.ts`, mirrored in `functions/src/domotics/energyBill.ts`). That history only exists from when a bridge with `src/energy.ts` runs on the Pi. The page's "Custos" chart (`components/energy/CostChart.tsx`, logic in `costTimeline.ts`) shows what varies with the energy bought as € bars, and adds up to the bill's total to the cent; the pump strip under it says when the pump ran, not what it used, since the inverter only measures the whole house.
 
 ## Visibility & Access
@@ -43,7 +45,10 @@ Prefixed `domotics_`:
 - `domotics_config/automation` — heating automation settings, incl. the app's "Pausar" (`pauseUntil`, ms) (owner read/write, bridge read). The plan: warm hours (`windows`; 17:00–23:00 and 06:00–08:00 at 24 °C as of 2026-11-22), by day only on spare sun; see `HANDOFF-heating-automation.md` and, for how the windows came about, `HANDOFF-comfort-experiment.md`. The live values are in this document and in `STATUS.md`, not here
 - `domotics_config/guard` — **unused since 2026-11-22**: the E13 guard was removed from the bridge (Renato: the E13 problem is fixed). The document and its rule may still exist; nothing reads it
 - `domotics_state/tuya` — last known device/inverter state, published by the bridge (incl. the automation's status; `guard` is `null` once the Pi runs a build without the guard)
-- `domotics_commands` — command queue the bridge drains when off-LAN
+- `domotics_config/media_devices` — the TV, Roomba and cameras with their passwords; **bridge read only**, written from the Mac by `domotics-bridge/deploy/sync-media-devices.js`
+- `domotics_state/media` — their state, published by the bridge only while someone has Aparelhos open (owner and Atlas read)
+- `domotics_state/snap_<camera>` — a camera's last snapshot (base64 JPEG), written when the owner asks from the hosted app; **owner only, not Atlas**
+- `domotics_commands` — command queue the bridge drains when off-LAN. Media commands use `tv:` / `roomba:` / `cam:` ids and `{watch: true, scope: 'media'}` keeps the media devices being read
 - `domotics_incidents` — heat pump faults and on/off transitions (older records include switches made by the guard), written by the bridge, read by the Reports page and the heating timeline (owner read, bridge create/update, no deletes)
 - `domotics_energy/{yyyy-mm-dd}` — kWh per 15-minute slot (`q00`…), written by the bridge, read by the Energia page (owner read, bridge create/update under date ids, no deletes)
 - `domotics_config/tariff` — electricity prices for the Energia page (owner read/write; the bridge never reads it)
