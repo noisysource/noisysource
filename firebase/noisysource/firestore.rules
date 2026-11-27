@@ -337,7 +337,7 @@ service cloud.firestore {
     // to its keys, types and sizes; always pending, always Atlas's.
     function isValidAtlasImport(data) {
       return data.keys().hasOnly(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
-          'contracts', 'subscriptions', 'facilities', 'setup', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+          'contracts', 'subscriptions', 'facilities', 'setup', 'clientContracts', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
         data.keys().hasAll(['entityHint', 'month', 'summary', 'sources', 'statements', 'payslips',
           'contracts', 'subscriptions', 'facilities', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
         data.status == 'pending' && data.createdBy == finhubAgent() &&
@@ -356,6 +356,8 @@ service cloud.firestore {
           (!('entities' in data.setup) || (data.setup.entities is list && data.setup.entities.size() <= 10)) &&
           (!('accounts' in data.setup) || (data.setup.accounts is list && data.setup.accounts.size() <= 20)) &&
           (!('loans' in data.setup) || (data.setup.loans is list && data.setup.loans.size() <= 20)))) &&
+        // Proposed client contracts (the Malt orders); he creates them in FinHub.
+        (!('clientContracts' in data) || (data.clientContracts is list && data.clientContracts.size() <= 20)) &&
         data.createdAt is timestamp && data.updatedAt is timestamp;
     }
 

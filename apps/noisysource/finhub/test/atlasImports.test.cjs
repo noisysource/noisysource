@@ -14,3 +14,4 @@ assert.equal(entityForHint('Noisy Phocus', entities)?.id, 'phocus');
 assert.equal(entityForHint('Household', entities)?.id, 'home');
 assert.equal(entityForHint('Someone else', entities), undefined);
 console.log('ok  entity for an import: names match without case, spacing or "Lda"; archived ones are skipped');
+

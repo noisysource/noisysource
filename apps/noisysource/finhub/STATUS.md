@@ -4,6 +4,13 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
+## In progress (2026-11-27, evening)
+- **Client contracts from Atlas** (branch `agent/finhub-client-contracts-import`, stacked on
+  `agent/finhub-calendar`): Atlas's `finhub_client_contracts` reads the contracts folder (the
+  Malt orders 017436, 26089, 30557) and proposes them; the From Atlas tab lists them and
+  "Create these" makes each one not in the book yet (same client and reference), for its entity.
+  Rules: an import may carry `clientContracts` (a list, at most 20).
+
 ## In progress (2026-11-27, later)
 - **Financial Calendar page and trips** (branch `agent/finhub-calendar`, stacked on
   `agent/finhub-client-contracts`): one list of the dates that involve money (days off as spans,
