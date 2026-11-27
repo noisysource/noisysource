@@ -187,6 +187,25 @@ async function expect(outcome, label, fn) {
     updateDoc(doc(owner, CONTRACT), { versions: Array.from({ length: 37 }, (_, i) => ({ effectiveFrom: `20${10 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`, note: '', terms })), updatedAt: serverTimestamp() }));
   await expect('denied', 'Atlas writes a contract', () => setDoc(doc(atlas, `${BOOK}/employmentContracts/ctr-atlas`), contract()));
 
+  // Client contracts, handovers and days off (the Malt-style pot of days).
+  const clientContract = (over = {}) => ({
+    userId: 'noisysource-group', entityId: 'ent-noisysource', clientName: 'Malt', reference: '', startDate: '2026-01-01', endDate: '2027-12-31',
+    daysAllowed: 200, dailyRate: 500, vatRate: 23, paymentTermsDays: 10, warnMonths: 3, amendments: [], active: true, notes: '',
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...over,
+  });
+  await expect('allowed', 'owner adds a client contract', () => setDoc(doc(owner, `${BOOK}/clientContracts/cc1`), clientContract()));
+  await expect('denied', 'owner adds a client contract with no days', () => setDoc(doc(owner, `${BOOK}/clientContracts/cc2`), clientContract({ daysAllowed: 0 })));
+  await expect('denied', 'Atlas writes a client contract', () => setDoc(doc(atlas, `${BOOK}/clientContracts/cc3`), clientContract()));
+  const handover = { userId: 'noisysource-group', contractId: 'cc1', month: '2026-03', days: 18.5, dailyRate: 500, amount: 9250, handedOverAt: '2026-04-02', expectedPayDate: '2026-04-12', invoiceNumber: '', createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+  await expect('allowed', 'owner records a handover', () => setDoc(doc(owner, `${BOOK}/contractHandovers/h1`), handover));
+  await expect('denied', 'owner records a handover for a contract that isn\'t there', () => setDoc(doc(owner, `${BOOK}/contractHandovers/h2`), { ...handover, contractId: 'ghost' }));
+  const dayOff = { userId: 'noisysource-group', date: '2026-08-10', kind: 'vacation', label: 'Summer', source: 'manual', createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+  await expect('allowed', 'owner enters a vacation', () => setDoc(doc(owner, `${BOOK}/daysOff/manual_2026-08-10_vacation`), dayOff));
+  await expect('allowed', 'owner enters a client closure', () => setDoc(doc(owner, `${BOOK}/daysOff/manual_2026-12-24_client_closure`), { ...dayOff, date: '2026-12-24', kind: 'client_closure' }));
+  await expect('denied', 'owner enters a day off with an odd source', () => setDoc(doc(owner, `${BOOK}/daysOff/x1`), { ...dayOff, source: 'google' }));
+  await expect('denied', 'Atlas writes a day off (FinHub is their master)', () => setDoc(doc(atlas, `${BOOK}/daysOff/x2`), dayOff));
+  await expect('denied', 'Atlas deletes a day off', () => deleteDoc(doc(atlas, `${BOOK}/daysOff/manual_2026-08-10_vacation`)));
+
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {
     console.error(`\n${failures} rule test(s) failed`);

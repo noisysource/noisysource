@@ -87,6 +87,7 @@ export type NavSection =
   | 'accounts'
   | 'expenses'
   | 'personal_income'
+  | 'client_contracts'
   | 'taxes'
   | 'credits'
   | 'forecast'
