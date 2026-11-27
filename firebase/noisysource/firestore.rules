@@ -537,6 +537,49 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    // Client contracts (finhub/src/utils/clientContracts.ts): a pot of days at a daily rate.
+    function isValidClientContract(data) {
+      let keys = ['userId', 'entityId', 'clientName', 'reference', 'startDate', 'endDate',
+        'daysAllowed', 'dailyRate', 'vatRate', 'paymentTermsDays', 'warnMonths', 'amendments',
+        'active', 'notes', 'createdAt', 'updatedAt'];
+      return data.keys().hasAll(keys) && data.keys().hasOnly(keys) &&
+        data.userId == finhubBook() && isValidId(data.entityId) &&
+        data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
+        data.reference is string && data.reference.size() <= 100 &&
+        isValidDateStr(data.startDate) && isValidDateStr(data.endDate) && data.endDate >= data.startDate &&
+        data.daysAllowed is number && data.daysAllowed > 0 && data.daysAllowed <= 2000 &&
+        data.dailyRate is number && data.dailyRate > 0 && data.dailyRate <= 100000 &&
+        data.vatRate is number && data.vatRate >= 0 && data.vatRate <= 23 &&
+        data.paymentTermsDays is number && data.paymentTermsDays >= 0 && data.paymentTermsDays <= 365 &&
+        data.warnMonths is number && data.warnMonths >= 0 && data.warnMonths <= 24 &&
+        data.amendments is list && data.amendments.size() <= 24 &&
+        data.active is bool &&
+        data.notes is string && data.notes.size() <= 1000;
+    }
+
+    function isValidContractHandover(data) {
+      let keys = ['userId', 'contractId', 'month', 'days', 'dailyRate', 'amount', 'handedOverAt',
+        'expectedPayDate', 'invoiceNumber', 'createdAt', 'updatedAt'];
+      return data.keys().hasAll(keys) && data.keys().hasOnly(keys) &&
+        data.userId == finhubBook() && isValidId(data.contractId) &&
+        isValidMonthStr(data.month) &&
+        data.days is number && data.days > 0 && data.days <= 31 &&
+        data.dailyRate is number && data.dailyRate > 0 &&
+        data.amount is number && data.amount >= 0 && data.amount <= 10000000 &&
+        isValidDateStr(data.handedOverAt) && isValidDateStr(data.expectedPayDate) &&
+        data.invoiceNumber is string && data.invoiceNumber.size() <= 60;
+    }
+
+    // A day he won't work: from his Google Calendar (Atlas keeps those in step) or entered here.
+    function isValidDayOff(data) {
+      let keys = ['userId', 'date', 'kind', 'label', 'source', 'createdAt', 'updatedAt'];
+      return data.keys().hasAll(keys) && data.keys().hasOnly(keys) &&
+        data.userId == finhubBook() && isValidDateStr(data.date) &&
+        data.kind in ['vacation', 'day_off', 'client_closure', 'public_holiday'] &&
+        data.label is string && data.label.size() <= 120 &&
+        data.source in ['google', 'manual'];
+    }
+
     function isValidForecastItem(data) {
       return data.keys().hasAll([
           'userId', 'entityId', 'name', 'direction', 'category',
@@ -1003,6 +1046,45 @@ service cloud.firestore {
             ])
           );
         allow delete: if isVerified() && isValidId(userId) && isValidId(payslipId) && isOwner(userId);
+      }
+
+      match /clientContracts/{contractId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(contractId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId) &&
+          isValidClientContract(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId) &&
+          isValidClientContract(incoming()) &&
+          incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow delete: if isVerified() && isValidId(userId) && isValidId(contractId) && isOwner(userId);
+      }
+
+      match /contractHandovers/{handoverId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(handoverId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(handoverId) && isOwner(userId) &&
+          isValidContractHandover(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/finhub_books/$(userId)/clientContracts/$(incoming().contractId));
+        allow delete: if isVerified() && isValidId(userId) && isValidId(handoverId) && isOwner(userId);
+      }
+
+      // His days off: the keeper enters his (source manual); Atlas keeps Google Calendar's in
+      // step (source google, and only those).
+      match /daysOff/{dayId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(dayId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create, update: if isValidId(userId) && isValidId(dayId) && userId == finhubBook() &&
+          isValidDayOff(incoming()) &&
+          incoming().updatedAt == request.time &&
+          (resource == null ? incoming().createdAt == request.time : incoming().createdAt == existing().createdAt) &&
+          ((isVerified() && isFinhubUser() && incoming().source == 'manual') ||
+           (isAtlas() && incoming().source == 'google' && (resource == null || existing().source == 'google')));
+        allow delete: if isValidId(userId) && isValidId(dayId) && userId == finhubBook() &&
+          ((isVerified() && isFinhubUser()) || (isAtlas() && existing().source == 'google'));
       }
 
       match /forecastItems/{itemId} {

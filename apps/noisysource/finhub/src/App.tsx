@@ -20,6 +20,7 @@ import { OverviewView } from './components/OverviewView';
 import { PayslipCalendarView } from './components/PayslipCalendarView';
 import { PersonalIncomeView } from './components/PersonalIncomeView';
 import { ReconciliationView } from './components/ReconciliationView';
+import { ClientContractsView } from './components/ClientContractsView';
 import { TaxesView } from './components/TaxesView';
 import { ToastContainer } from './components/ToastContainer';
 import type { NavSection } from './types/finance';
@@ -31,6 +32,7 @@ function CockpitRouter() {
   const [activeSection, setActiveSection] = useState<NavSection>('overview');
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [expenseSubModalOpen, setExpenseSubModalOpen] = useState(false);
+  const [clientContractModalOpen, setClientContractModalOpen] = useState(false);
   const [personalIncomeModalOpen, setPersonalIncomeModalOpen] = useState(false);
   const [taxSettingsModalOpen, setTaxSettingsModalOpen] = useState(false);
   const [creditModalOpen, setCreditModalOpen] = useState(false);
@@ -77,6 +79,8 @@ function CockpitRouter() {
       ? 'Add Subscription'
       : activeSection === 'personal_income'
       ? 'Add Job / Income'
+      : activeSection === 'client_contracts'
+      ? 'Add Client Contract'
       : activeSection === 'taxes'
       ? 'Tax Parameters'
       : activeSection === 'credits'
@@ -98,6 +102,8 @@ function CockpitRouter() {
       setExpenseSubModalOpen(true);
     } else if (activeSection === 'personal_income') {
       setPersonalIncomeModalOpen(true);
+    } else if (activeSection === 'client_contracts') {
+      setClientContractModalOpen(true);
     } else if (activeSection === 'taxes') {
       setTaxSettingsModalOpen(true);
     } else if (activeSection === 'credits') {
@@ -147,6 +153,13 @@ function CockpitRouter() {
           onOpenCreateModal={() => setPersonalIncomeModalOpen(true)}
           onCloseCreateModal={() => setPersonalIncomeModalOpen(false)}
           onNavigate={navigateTo}
+        />
+      )}
+      {activeSection === 'client_contracts' && (
+        <ClientContractsView
+          createModalOpen={clientContractModalOpen}
+          onOpenCreateModal={() => setClientContractModalOpen(true)}
+          onCloseCreateModal={() => setClientContractModalOpen(false)}
         />
       )}
       {activeSection === 'taxes' && (

@@ -4,6 +4,18 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
+## In progress (2026-11-27)
+- **Client contracts** (branch `agent/finhub-client-contracts`), new "Client Contracts" page: a
+  contract is a pot of days at a daily rate over a period (the Malt contract), with
+  renegotiations (new rate, more days, later end, from a month on), monthly handovers (days ×
+  rate, paid N days later), and **days off** (`daysOff`: his vacations from Google Calendar,
+  kept in step by Atlas, `source: google`; the client's closures entered here). The projection
+  (`src/utils/clientContracts.ts`, tested) counts weekdays minus days off to the day the days
+  run out, and warns N months before. Collections `clientContracts`, `contractHandovers`,
+  `daysOff`, with rules; **run `pnpm test:rules:finhub` before merging**.
+- Next: Atlas brings in the Google Calendar days off; then proposes the contract from its PDF
+  and checks each Malt payment against its handover.
+
 ## In progress (2026-11-25)
 - **What he committed is kept** (branch `agent/finhub-committed`): committing an Atlas import in
   the workbench also writes `committed` on the import (`src/utils/committed.ts`): the items he
