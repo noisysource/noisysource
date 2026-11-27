@@ -21,6 +21,7 @@ import { PayslipCalendarView } from './components/PayslipCalendarView';
 import { PersonalIncomeView } from './components/PersonalIncomeView';
 import { ReconciliationView } from './components/ReconciliationView';
 import { ClientContractsView } from './components/ClientContractsView';
+import { FinancialCalendarView } from './components/FinancialCalendarView';
 import { TaxesView } from './components/TaxesView';
 import { ToastContainer } from './components/ToastContainer';
 import type { NavSection } from './types/finance';
@@ -33,6 +34,7 @@ function CockpitRouter() {
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [expenseSubModalOpen, setExpenseSubModalOpen] = useState(false);
   const [clientContractModalOpen, setClientContractModalOpen] = useState(false);
+  const [tripModalOpen, setTripModalOpen] = useState(false);
   const [personalIncomeModalOpen, setPersonalIncomeModalOpen] = useState(false);
   const [taxSettingsModalOpen, setTaxSettingsModalOpen] = useState(false);
   const [creditModalOpen, setCreditModalOpen] = useState(false);
@@ -81,6 +83,8 @@ function CockpitRouter() {
       ? 'Add Job / Income'
       : activeSection === 'client_contracts'
       ? 'Add Client Contract'
+      : activeSection === 'financial_calendar'
+      ? 'Plan a Trip'
       : activeSection === 'taxes'
       ? 'Tax Parameters'
       : activeSection === 'credits'
@@ -104,6 +108,8 @@ function CockpitRouter() {
       setPersonalIncomeModalOpen(true);
     } else if (activeSection === 'client_contracts') {
       setClientContractModalOpen(true);
+    } else if (activeSection === 'financial_calendar') {
+      setTripModalOpen(true);
     } else if (activeSection === 'taxes') {
       setTaxSettingsModalOpen(true);
     } else if (activeSection === 'credits') {
@@ -160,6 +166,13 @@ function CockpitRouter() {
           createModalOpen={clientContractModalOpen}
           onOpenCreateModal={() => setClientContractModalOpen(true)}
           onCloseCreateModal={() => setClientContractModalOpen(false)}
+        />
+      )}
+      {activeSection === 'financial_calendar' && (
+        <FinancialCalendarView
+          createModalOpen={tripModalOpen}
+          onOpenCreateModal={() => setTripModalOpen(true)}
+          onCloseCreateModal={() => setTripModalOpen(false)}
         />
       )}
       {activeSection === 'taxes' && (

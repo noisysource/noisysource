@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { db, FINHUB_BOOK_ID } from '../firebase';
 import type { ClientContract, ContractHandover, DayOff } from '../utils/clientContracts';
+import type { Trip } from '../utils/financialCalendar';
 
 const path = (c: string) => `finhub_books/${FINHUB_BOOK_ID}/${c}`;
 export const newId = (prefix: string) => `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -28,6 +29,7 @@ export const useClientContracts = () => {
   const [contracts, setContracts] = useState<ClientContract[]>([]);
   const [handovers, setHandovers] = useState<ContractHandover[]>([]);
   const [daysOff, setDaysOff] = useState<DayOff[]>([]);
+  const [trips, setTrips] = useState<Trip[]>([]);
   const [error, setError] = useState('');
   useEffect(() => {
     const failed = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
@@ -35,10 +37,11 @@ export const useClientContracts = () => {
       live<ClientContract>('clientContracts', (xs) => setContracts(xs.sort((a, b) => a.clientName.localeCompare(b.clientName))), failed),
       live<ContractHandover>('contractHandovers', (xs) => setHandovers(xs.sort((a, b) => b.month.localeCompare(a.month))), failed),
       live<DayOff>('daysOff', (xs) => setDaysOff(xs.sort((a, b) => a.date.localeCompare(b.date))), failed),
+      live<Trip>('trips', (xs) => setTrips(xs.sort((a, b) => a.startDate.localeCompare(b.startDate))), failed),
     ];
     return () => stops.forEach((s) => s());
   }, []);
-  return { contracts, handovers, daysOff, error };
+  return { contracts, handovers, daysOff, trips, error };
 };
 
 const save = async (name: string, id: string, data: object, isNew: boolean) =>
@@ -51,3 +54,5 @@ export const deleteHandover = (id: string) => deleteDoc(doc(db, path('contractHa
 /** A day off: vacation, day off, the client's closure, a public holiday. */
 export const saveDayOff = (d: DayOff) => save('daysOff', d.id, { ...d, source: 'manual' }, true);
 export const deleteDayOff = (id: string) => deleteDoc(doc(db, path('daysOff'), id));
+export const saveTrip = (t: Trip, isNew: boolean) => save('trips', t.id, t, isNew);
+export const deleteTrip = (id: string) => deleteDoc(doc(db, path('trips'), id));

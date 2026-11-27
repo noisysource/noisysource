@@ -16,6 +16,7 @@ import {
   Wallet,
   X,
   Handshake,
+  CalendarRange,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTreasury } from '../contexts/TreasuryContext';
@@ -35,6 +36,7 @@ const NAV_ITEMS: Array<{ id: NavSection; label: string; icon: React.ComponentTyp
   { id: 'expenses', label: 'Expenses & Subs', icon: Repeat },
   { id: 'personal_income', label: 'Personal Income', icon: Briefcase },
   { id: 'client_contracts', label: 'Client Contracts', icon: Handshake },
+  { id: 'financial_calendar', label: 'Financial Calendar', icon: CalendarRange },
   { id: 'taxes', label: 'Taxes (IVA · IRS · IRC)', icon: Calculator },
   { id: 'credits', label: 'Credits & Loans', icon: Landmark },
   { id: 'forecast', label: '12-Month Forecast', icon: TrendingUp },
