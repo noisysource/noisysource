@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertTriangle, CalendarOff, Handshake, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useTreasury } from '../contexts/TreasuryContext';
 import { formatMoney } from '../utils/financeMath';
-import { addDays, endDateOf, handoverOf, isoDay, projectContract, rateAt, type ClientContract, type ContractAmendment, type DayOff, type DayOffKind } from '../utils/clientContracts';
+import { addDays, endDateOf, handoverOf, isoDay, parseHandovers, projectContract, rateAt, type ClientContract, type ContractAmendment, type DayOff, type DayOffKind } from '../utils/clientContracts';
 import { deleteContract, deleteDayOff, deleteHandover, newId, saveContract, saveDayOff, saveHandover, useClientContracts } from '../lib/clientContracts';
 
 interface ClientContractsViewProps {
@@ -159,6 +159,17 @@ const Handovers: React.FC<{ contract: ClientContract; rows: ReturnType<typeof us
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const n = Number(days.replace(',', '.'));
   const preview = n > 0 ? handoverOf(contract, month, n, handedOverAt) : undefined;
+  // Pasted from the client's invoice list (Malt's Invoice tab): the months not here yet.
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState('');
+  const known = new Set(rows.map((r) => r.month));
+  const found = pasted.trim() ? parseHandovers(contract, pasted) : [];
+  const toAdd = found.filter((h) => !known.has(h.month));
+  const addPasted = async () => {
+    for (const h of toAdd) await saveHandover({ id: newId('ho'), userId: '', contractId: contract.id, month: h.month, days: h.days, dailyRate: h.dailyRate, amount: h.amount, handedOverAt: h.handedOverAt, expectedPayDate: h.expectedPayDate, invoiceNumber: '' });
+    setPasted('');
+    setPasting(false);
+  };
   const add = () => {
     if (!preview) return;
     void saveHandover({ id: newId('ho'), userId: '', contractId: contract.id, month, days: n, ...preview, handedOverAt, invoiceNumber: invoiceNumber.trim() })
@@ -170,7 +181,30 @@ const Handovers: React.FC<{ contract: ClientContract; rows: ReturnType<typeof us
   };
   return (
     <div>
-      <h3 className="text-sm font-medium text-slate-200 mb-2">Handovers</h3>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-slate-200">Handovers</h3>
+        <button onClick={() => setPasting((p) => !p)} className="text-xs text-blue-400 hover:text-blue-300">{pasting ? 'Close' : `Paste from ${contract.clientName || 'the invoice list'}`}</button>
+      </div>
+      {pasting && (
+        <div className="mb-3 space-y-2">
+          <p className="text-xs text-slate-400">On the order's Invoice tab, select the whole table, copy it and paste it here. The months not here yet are added; the year comes from the contract's start.</p>
+          <textarea className={input} rows={5} value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder={'August\n4 days\npaid\n€2,274.32\n…'} />
+          {found.length > 0 && (
+            <div className="text-xs text-slate-300 space-y-0.5 font-mono tabular-nums">
+              {found.map((h) => (
+                <div key={h.month} className={known.has(h.month) ? 'text-slate-500' : h.rateDiffers ? 'text-amber-300' : ''}>
+                  {monthName(h.month)} · {h.days} days · {money(h.amount)} · paid by {h.expectedPayDate}
+                  {known.has(h.month) ? ' (already here)' : h.rateDiffers ? ` (not ${money(rateAt(contract, h.month))}/day: kept as billed)` : ''}
+                </div>
+              ))}
+              <p className="font-sans text-slate-400 pt-1">{found.reduce((d, h) => d + h.days, 0)} days in all · the handover date is taken as the 1st of the next month</p>
+            </div>
+          )}
+          <button onClick={() => void addPasted().catch(fail('add them'))} disabled={toAdd.length === 0} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-sm text-white">
+            Add {toAdd.length} month{toAdd.length === 1 ? '' : 's'}
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
         <div><label className={label}>Month worked</label><input type="month" className={input} value={month} onChange={(e) => setMonth(e.target.value)} /></div>
         <div><label className={label}>Days</label><input inputMode="decimal" className={input} value={days} onChange={(e) => setDays(e.target.value)} placeholder="18.5" /></div>

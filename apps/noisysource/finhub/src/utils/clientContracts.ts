@@ -179,3 +179,66 @@ export const handoverOf = (c: ClientContract, month: string, days: number, hande
   const dailyRate = rateAt(c, month);
   return { dailyRate, amount: Math.round(days * dailyRate * 100) / 100, expectedPayDate: addDays(handedOverAt, c.paymentTermsDays || 0) };
 };
+
+// ── Handovers pasted from the client's invoice list (Malt's "Invoice" tab) ─────
+
+const MONTHS: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  janeiro: 1, fevereiro: 2, marco: 3, abril: 4, maio: 5, junho: 6, julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+  janvier: 1, fevrier: 2, mars: 3, avril: 4, mai: 5, juin: 6, juillet: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12,
+};
+
+export interface PastedHandover {
+  /** YYYY-MM. */
+  month: string;
+  days: number;
+  /** As billed, when the paste shows it (else days × the month's rate). */
+  amount: number;
+  dailyRate: number;
+  /** The 1st of the next month: the handover itself isn't on the invoice list. */
+  handedOverAt: string;
+  expectedPayDate: string;
+  /** Billed differs from days × the contract's rate for that month. */
+  rateDiffers: boolean;
+}
+
+const plain = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+/** "€11,940.18", "11.940,18 €", "€2,274.32" → 11940.18. */
+const euros = (s: string): number => {
+  const t = s.replace(/[^\d.,]/g, '');
+  const lastComma = t.lastIndexOf(',');
+  const lastDot = t.lastIndexOf('.');
+  const decimal = lastComma > lastDot && t.length - lastComma === 3 ? ',' : '.';
+  const n = Number(decimal === ',' ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, ''));
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+};
+
+/**
+ * The months in a pasted invoice list, in order: a month name, then "N days", then (if shown)
+ * the amount billed. The year comes from the contract: the first month on or after its start,
+ * then counting on (a month that comes round again is the next year). Copy the table, any layout.
+ */
+export const parseHandovers = (c: ClientContract, text: string): PastedHandover[] => {
+  const words = plain(text);
+  const re = new RegExp(`\\b(${Object.keys(MONTHS).join('|')})\\b[^\\d€]{0,40}?(\\d+(?:[.,]5)?)\\s*(?:days?|dias?|jours?)\\b([^€\\d]{0,40}(?:€\\s*[\\d.,]+|[\\d.,]+\\s*€))?`, 'g');
+  const out: PastedHandover[] = [];
+  let year = Number(c.startDate.slice(0, 4));
+  let last = 0;
+  for (const m of words.matchAll(re)) {
+    const mo = MONTHS[m[1]];
+    if (!mo) continue;
+    if (out.length === 0) {
+      if (mo < Number(c.startDate.slice(5, 7))) year += 1;
+    } else if (mo <= last) year += 1;
+    last = mo;
+    const month = `${year}-${String(mo).padStart(2, '0')}`;
+    const days = Number(m[2].replace(',', '.'));
+    if (!(days > 0 && days <= 31)) continue;
+    const rate = rateAt(c, month);
+    const billed = m[3] ? euros(m[3]) : 0;
+    const amount = billed > 0 ? billed : Math.round(days * rate * 100) / 100;
+    const handedOverAt = `${month === `${year}-12` ? year + 1 : year}-${String(mo === 12 ? 1 : mo + 1).padStart(2, '0')}-01`;
+    out.push({ month, days, amount, dailyRate: Math.round((amount / days) * 100) / 100, handedOverAt, expectedPayDate: addDays(handedOverAt, c.paymentTermsDays || 0), rateDiffers: billed > 0 && Math.abs(billed - days * rate) > 0.05 });
+  }
+  return out;
+};
