@@ -5,7 +5,7 @@ import * as admin from "firebase-admin";
 import { requireOwner } from "../auth";
 import {
   API_BASE, CLIENT_ID, DAILY_CALL_CAP, LIST_MIN_INTERVAL_MS, OAUTH_STATE_TTL_MS, PARTNER_DOMAIN, REDIRECT_URIS,
-  SCOPES, TOKEN_URL, VEHICLE_DATA_ENDPOINTS, buildAuthUrl, lisbonDay, shouldReadCar, summarize, type CarSummary,
+  SCOPES, TOKEN_URL, VEHICLE_DATA_ENDPOINTS, buildAuthUrl, firestoreSafe, lisbonDay, shouldReadCar, summarize, type CarSummary,
 } from "./teslaLogic";
 
 /**
@@ -204,7 +204,7 @@ export const teslaVehicles = onCall<{ refresh?: boolean }>(async request => {
     token = await accessToken();
     const r = await api("/api/1/vehicles", token);
     listed = (r.response ?? []).map((v: any) => ({ id_s: v.id_s, vin: v.vin, display_name: v.display_name, state: v.state }));
-    await db().doc(LIST_DOC).set({ vehicles: listed, fetchedAt: now });
+    await db().doc(LIST_DOC).set(firestoreSafe({ vehicles: listed, fetchedAt: now }));
   }
 
   const cars: CarSummary[] = [];
@@ -220,12 +220,12 @@ export const teslaVehicles = onCall<{ refresh?: boolean }>(async request => {
       try {
         r = await api(`/api/1/vehicles/${v.vin}/vehicle_data?endpoints=${encodeURIComponent(VEHICLE_DATA_ENDPOINTS)}`, token);
       } catch (err) {
-        await ref.set({ ...(cached ?? summarize(v)), errorAt: now, error: (err as Error).message }, { merge: true });
+        await ref.set(firestoreSafe({ ...(cached ?? summarize(v)), errorAt: now, error: (err as Error).message }), { merge: true });
         throw err;
       }
       if (!r.asleep && r.response) {
         const s = summarize(v, r.response, now);
-        await ref.set(s);
+        await ref.set(firestoreSafe(s));
         cars.push(s);
         continue;
       }

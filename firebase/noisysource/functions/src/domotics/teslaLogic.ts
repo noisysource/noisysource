@@ -156,4 +156,23 @@ function prettyModel(carType: string): string {
 }
 
 /** The endpoints asked for in one vehicle_data call. location_data is needed for the position since 2024. */
+/**
+ * The document as Firestore will take it. A car Tesla reports without some
+ * reading (no charge state, no location) leaves those fields `undefined`, and
+ * the Admin SDK refuses to save a document holding `undefined`: every save of
+ * such a car threw, and `teslaVehicles` answered a bare 500 (27/11). Dropped,
+ * recursively; nulls, zeros and empty strings are kept.
+ */
+export function firestoreSafe<T>(value: T): T {
+  if (Array.isArray(value)) return value.filter(v => v !== undefined).map(firestoreSafe) as T;
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) out[k] = firestoreSafe(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 export const VEHICLE_DATA_ENDPOINTS = "charge_state;climate_state;drive_state;location_data;vehicle_state;vehicle_config";

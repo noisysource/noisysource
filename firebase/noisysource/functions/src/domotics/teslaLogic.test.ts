@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildAuthUrl, lisbonDay, shouldReadCar, summarize, DATA_MIN_INTERVAL_MS, REDIRECT_URIS } from "./teslaLogic";
+import { buildAuthUrl, firestoreSafe, lisbonDay, shouldReadCar, summarize, DATA_MIN_INTERVAL_MS, REDIRECT_URIS } from "./teslaLogic";
 
 describe("buildAuthUrl", () => {
   it("asks for offline access and the car scopes, with our redirect and state", () => {
@@ -57,5 +57,23 @@ describe("summarize", () => {
       software: "2026.44.1", readAt: 1000,
     });
     expect(s.speedKmh).toBeUndefined();
+  });
+});
+
+describe("firestoreSafe", () => {
+  const hasUndefined = (v: unknown): boolean =>
+    v === undefined || (typeof v === "object" && v !== null && Object.values(v).some(hasUndefined));
+
+  it("leaves nothing Firestore would refuse in a car Tesla reported without data", () => {
+    const bare = summarize({ vin: "5YJ", id_s: "1", display_name: "X", state: "asleep" });
+    expect(hasUndefined(bare)).toBe(true); // what used to reach ref.set
+    const safe = firestoreSafe({ ...bare, errorAt: 1, error: "403" });
+    expect(hasUndefined(safe)).toBe(false);
+    expect(safe).toMatchObject({ vin: "5YJ", name: "X", state: "asleep", errorAt: 1, error: "403" });
+  });
+
+  it("keeps null, zero, false and empty strings, and works inside arrays and nested maps", () => {
+    expect(firestoreSafe({ a: null, b: 0, c: false, d: "", e: undefined, f: { g: undefined, h: 1 }, i: [1, undefined, { j: undefined }] }))
+      .toEqual({ a: null, b: 0, c: false, d: "", f: { h: 1 }, i: [1, {}] });
   });
 });
