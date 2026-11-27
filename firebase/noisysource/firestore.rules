@@ -580,6 +580,23 @@ service cloud.firestore {
         data.source == 'manual';
     }
 
+    // A trip (finhub/src/utils/financialCalendar.ts): the costs it should bring and its per diem.
+    function isValidTrip(data) {
+      let keys = ['userId', 'entityId', 'title', 'destination', 'startDate', 'endDate', 'traveller',
+        'status', 'perDiemDaily', 'perDiemDays', 'costs', 'notes', 'createdAt', 'updatedAt'];
+      return data.keys().hasAll(keys) && data.keys().hasOnly(keys) &&
+        data.userId == finhubBook() && isValidId(data.entityId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.destination is string && data.destination.size() <= 120 &&
+        isValidDateStr(data.startDate) && isValidDateStr(data.endDate) && data.endDate >= data.startDate &&
+        data.traveller is string && data.traveller.size() <= 120 &&
+        data.status in ['planned', 'booked', 'done', 'cancelled'] &&
+        data.perDiemDaily is number && data.perDiemDaily >= 0 && data.perDiemDaily <= 10000 &&
+        data.perDiemDays is number && data.perDiemDays >= 0 && data.perDiemDays <= 366 &&
+        data.costs is list && data.costs.size() <= 30 &&
+        data.notes is string && data.notes.size() <= 1000;
+    }
+
     function isValidForecastItem(data) {
       return data.keys().hasAll([
           'userId', 'entityId', 'name', 'direction', 'category',
@@ -1083,6 +1100,21 @@ service cloud.firestore {
           isValidDayOff(incoming()) &&
           incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
         allow delete: if isVerified() && isValidId(userId) && isValidId(dayId) && isOwner(userId);
+      }
+
+      // Trips: part of FinHub's financial calendar (Atlas reads them; only the keeper writes).
+      match /trips/{tripId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(tripId) && isBookReader(userId);
+        allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
+        allow create: if isVerified() && isValidId(userId) && isValidId(tripId) && isOwner(userId) &&
+          isValidTrip(incoming()) &&
+          incoming().createdAt == request.time && incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow update: if isVerified() && isValidId(userId) && isValidId(tripId) && isOwner(userId) &&
+          isValidTrip(incoming()) &&
+          incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time &&
+          entityExists(userId, incoming().entityId);
+        allow delete: if isVerified() && isValidId(userId) && isValidId(tripId) && isOwner(userId);
       }
 
       match /forecastItems/{itemId} {

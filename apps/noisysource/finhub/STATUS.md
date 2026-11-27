@@ -4,6 +4,14 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
+## In progress (2026-11-27, later)
+- **Financial Calendar page and trips** (branch `agent/finhub-calendar`, stacked on
+  `agent/finhub-client-contracts`): one list of the dates that involve money (days off as spans,
+  trips and their per diem, client payments received and projected, salaries, taxes,
+  subscriptions, loan instalments), filters per kind, totals in and out; trips with their
+  expected costs and per diem (`trips`, with rules). Pure `src/utils/financialCalendar.ts`,
+  tested. Atlas side: the "FinHub" Google calendar and the unified calendar card.
+
 ## In progress (2026-11-27)
 - **Client contracts** (branch `agent/finhub-client-contracts`), new "Client Contracts" page: a
   contract is a pot of days at a daily rate over a period (the Malt contract), with

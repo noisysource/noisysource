@@ -206,6 +206,13 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'Atlas writes a day off (FinHub is their master)', () => setDoc(doc(atlas, `${BOOK}/daysOff/x2`), dayOff));
   await expect('denied', 'Atlas deletes a day off', () => deleteDoc(doc(atlas, `${BOOK}/daysOff/manual_2026-08-10_vacation`)));
 
+  // Trips (FinHub's financial calendar).
+  const trip = { userId: 'noisysource-group', entityId: 'ent-noisysource', title: 'Brussels', destination: 'BE', startDate: '2026-09-14', endDate: '2026-09-17', traveller: 'Renato Lopes', status: 'booked', perDiemDaily: 175.42, perDiemDays: 4, costs: [{ kind: 'flight', label: 'TAP', amount: 320 }], notes: '', createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+  await expect('allowed', 'owner plans a trip', () => setDoc(doc(owner, `${BOOK}/trips/t1`), trip));
+  await expect('denied', 'owner plans a trip that ends before it starts', () => setDoc(doc(owner, `${BOOK}/trips/t2`), { ...trip, endDate: '2026-09-01' }));
+  await expect('denied', 'Atlas writes a trip', () => setDoc(doc(atlas, `${BOOK}/trips/t3`), trip));
+  await expect('allowed', 'Atlas reads a trip', () => getDoc(doc(atlas, `${BOOK}/trips/t1`)));
+
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {
     console.error(`\n${failures} rule test(s) failed`);
