@@ -570,14 +570,14 @@ service cloud.firestore {
         data.invoiceNumber is string && data.invoiceNumber.size() <= 60;
     }
 
-    // A day he won't work: from his Google Calendar (Atlas keeps those in step) or entered here.
+    // A day he won't work, entered in FinHub (its master; Atlas puts it in his Google Calendar).
     function isValidDayOff(data) {
       let keys = ['userId', 'date', 'kind', 'label', 'source', 'createdAt', 'updatedAt'];
       return data.keys().hasAll(keys) && data.keys().hasOnly(keys) &&
         data.userId == finhubBook() && isValidDateStr(data.date) &&
         data.kind in ['vacation', 'day_off', 'client_closure', 'public_holiday'] &&
         data.label is string && data.label.size() <= 120 &&
-        data.source in ['google', 'manual'];
+        data.source == 'manual';
     }
 
     function isValidForecastItem(data) {
@@ -1072,19 +1072,17 @@ service cloud.firestore {
         allow delete: if isVerified() && isValidId(userId) && isValidId(handoverId) && isOwner(userId);
       }
 
-      // His days off: the keeper enters his (source manual); Atlas keeps Google Calendar's in
-      // step (source google, and only those).
+      // His days off: FinHub is their master (Atlas shows them in his calendars, never writes them here).
       match /daysOff/{dayId} {
         allow get: if isSignedIn() && isValidId(userId) && isValidId(dayId) && isBookReader(userId);
         allow list: if isSignedIn() && isBookReader(userId) && resource.data.userId == finhubBook();
-        allow create, update: if isValidId(userId) && isValidId(dayId) && userId == finhubBook() &&
+        allow create: if isVerified() && isValidId(userId) && isValidId(dayId) && isOwner(userId) &&
           isValidDayOff(incoming()) &&
-          incoming().updatedAt == request.time &&
-          (resource == null ? incoming().createdAt == request.time : incoming().createdAt == existing().createdAt) &&
-          ((isVerified() && isFinhubUser() && incoming().source == 'manual') ||
-           (isAtlas() && incoming().source == 'google' && (resource == null || existing().source == 'google')));
-        allow delete: if isValidId(userId) && isValidId(dayId) && userId == finhubBook() &&
-          ((isVerified() && isFinhubUser()) || (isAtlas() && existing().source == 'google'));
+          incoming().createdAt == request.time && incoming().updatedAt == request.time;
+        allow update: if isVerified() && isValidId(userId) && isValidId(dayId) && isOwner(userId) &&
+          isValidDayOff(incoming()) &&
+          incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+        allow delete: if isVerified() && isValidId(userId) && isValidId(dayId) && isOwner(userId);
       }
 
       match /forecastItems/{itemId} {

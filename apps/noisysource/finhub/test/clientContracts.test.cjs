@@ -6,7 +6,7 @@ const contract = (over = {}) => ({
   id: 'malt', userId: 'b', entityId: 'ns', clientName: 'Malt', reference: '', startDate: '2026-01-01', endDate: '2027-12-31',
   daysAllowed: 60, dailyRate: 500, vatRate: 23, paymentTermsDays: 10, warnMonths: 3, amendments: [], active: true, notes: '', ...over,
 });
-const off = (date, kind = 'vacation') => ({ id: date, userId: 'b', date, kind, label: '', source: 'google' });
+const off = (date, kind = 'vacation') => ({ id: date, userId: 'b', date, kind, label: '', source: 'manual' });
 const handover = (month, days) => ({ id: month, userId: 'b', contractId: 'malt', month, days, dailyRate: 500, amount: days * 500, handedOverAt: '', expectedPayDate: '', invoiceNumber: '' });
 
 // 60 days, Jan + Feb handed over (20 + 20): 20 left from 1 March 2026, a Sunday.

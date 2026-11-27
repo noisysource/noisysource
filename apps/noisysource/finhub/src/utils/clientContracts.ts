@@ -1,8 +1,8 @@
 // Client contracts (the income side): a pot of days at a daily rate over a period, like the
 // Malt contract. Each month he hands over the days worked; the client pays N days later. The
-// calendar decides how fast the pot empties: weekdays, minus his days off (vacations from his
-// Google Calendar, brought in by Atlas) and the client's closures (the Commission's holidays,
-// entered once a year). The projection counts forward to the day the days run out, so a
+// calendar decides how fast the pot empties: weekdays, minus his days off (vacations, days off)
+// and the client's closures (the Commission's holidays, entered once a year). FinHub is the
+// master of this financial calendar; Atlas shows it beside his other calendars. The projection counts forward to the day the days run out, so a
 // vacation in August moves the end date, and warns when it's time to renegotiate. Pure.
 
 export type DayOffKind = 'vacation' | 'day_off' | 'client_closure' | 'public_holiday';
@@ -14,8 +14,8 @@ export interface DayOff {
   date: string;
   kind: DayOffKind;
   label: string;
-  /** google: from his Google Calendar (Atlas keeps these in step); manual: entered here. */
-  source: 'google' | 'manual';
+  /** Entered in FinHub, the master of the financial calendar. */
+  source: 'manual';
 }
 
 /** A renegotiation from a month on: a new rate, more days, a new end date (any of them). */

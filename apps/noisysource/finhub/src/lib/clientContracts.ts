@@ -1,7 +1,7 @@
 // Client contracts, their monthly handovers, and the days off that drive the projection
 // (utils/clientContracts.ts). Its own small module beside TreasuryContext: three collections
-// of the one book, read live; written by the book's keeper. Days off from his Google Calendar
-// are kept in step by Atlas (source "google"); he enters the rest here (source "manual").
+// of the one book, read live; written by the book's keeper. FinHub is the master of these
+// days off; Atlas shows them beside his other calendars.
 
 import { useEffect, useState } from 'react';
 import { collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
@@ -48,6 +48,6 @@ export const saveContract = (c: ClientContract, isNew: boolean) => save('clientC
 export const deleteContract = (id: string) => deleteDoc(doc(db, path('clientContracts'), id));
 export const saveHandover = (h: ContractHandover) => save('contractHandovers', h.id, h, true);
 export const deleteHandover = (id: string) => deleteDoc(doc(db, path('contractHandovers'), id));
-/** A day off he enters here (Google Calendar's are Atlas's to keep in step). */
+/** A day off: vacation, day off, the client's closure, a public holiday. */
 export const saveDayOff = (d: DayOff) => save('daysOff', d.id, { ...d, source: 'manual' }, true);
 export const deleteDayOff = (id: string) => deleteDoc(doc(db, path('daysOff'), id));

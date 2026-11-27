@@ -200,7 +200,7 @@ const Handovers: React.FC<{ contract: ClientContract; rows: ReturnType<typeof us
 const DaysOff: React.FC<{ days: DayOff[]; fail: (w: string) => (e: unknown) => void }> = ({ days, fail }) => {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [kind, setKind] = useState<DayOffKind>('client_closure');
+  const [kind, setKind] = useState<DayOffKind>('vacation');
   const [text, setText] = useState('');
   const add = async () => {
     if (!from) return;
@@ -213,7 +213,7 @@ const DaysOff: React.FC<{ days: DayOff[]; fail: (w: string) => (e: unknown) => v
   return (
     <section className={`${card} p-6`}>
       <h2 className="flex items-center gap-2 text-base font-semibold text-slate-50"><CalendarOff className="w-4 h-4" /> Days off ahead</h2>
-      <p className="text-xs text-slate-400 mt-1">Your vacations come from your Google Calendar (Atlas keeps them in step). Add the client's closures here, once a year from their published list.</p>
+      <p className="text-xs text-slate-400 mt-1">Your vacations and days off, and the client's closures (once a year, from their published list). FinHub is the master: Atlas shows them beside your other calendars.</p>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2 items-end mt-4">
         <div><label className={label}>From</label><input type="date" className={input} value={from} onChange={(e) => setFrom(e.target.value)} /></div>
         <div><label className={label}>To (optional)</label><input type="date" className={input} value={to} onChange={(e) => setTo(e.target.value)} /></div>
@@ -233,11 +233,7 @@ const DaysOff: React.FC<{ days: DayOff[]; fail: (w: string) => (e: unknown) => v
             <span className="font-mono tabular-nums w-36">{longDate(d.date)}</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{KIND_LABEL[d.kind]}</span>
             <span className="flex-1 truncate">{d.label}</span>
-            {d.source === 'google' ? (
-              <span className="text-xs text-slate-500">Google Calendar</span>
-            ) : (
-              <button onClick={() => deleteDayOff(d.id).catch(fail('delete it'))} className="p-1 text-slate-500 hover:text-rose-300" title="Delete"><X className="w-3.5 h-3.5" /></button>
-            )}
+            <button onClick={() => deleteDayOff(d.id).catch(fail('delete it'))} className="p-1 text-slate-500 hover:text-rose-300" title="Delete"><X className="w-3.5 h-3.5" /></button>
           </li>
         ))}
       </ul>

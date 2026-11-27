@@ -199,14 +199,12 @@ async function expect(outcome, label, fn) {
   const handover = { userId: 'noisysource-group', contractId: 'cc1', month: '2026-03', days: 18.5, dailyRate: 500, amount: 9250, handedOverAt: '2026-04-02', expectedPayDate: '2026-04-12', invoiceNumber: '', createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
   await expect('allowed', 'owner records a handover', () => setDoc(doc(owner, `${BOOK}/contractHandovers/h1`), handover));
   await expect('denied', 'owner records a handover for a contract that isn\'t there', () => setDoc(doc(owner, `${BOOK}/contractHandovers/h2`), { ...handover, contractId: 'ghost' }));
-  const dayOff = (source) => ({ userId: 'noisysource-group', date: '2026-08-10', kind: 'vacation', label: 'Summer', source, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-  await expect('allowed', 'owner enters a day off', () => setDoc(doc(owner, `${BOOK}/daysOff/manual_2026-12-24`), { ...dayOff('manual'), date: '2026-12-24', kind: 'client_closure' }));
-  await expect('denied', 'owner enters a day off as if from Google', () => setDoc(doc(owner, `${BOOK}/daysOff/x1`), dayOff('google')));
-  await expect('allowed', 'Atlas brings in a vacation from Google Calendar', () => setDoc(doc(atlas, `${BOOK}/daysOff/google_2026-08-10`), dayOff('google')));
-  await expect('denied', 'Atlas enters a manual day off', () => setDoc(doc(atlas, `${BOOK}/daysOff/x2`), dayOff('manual')));
-  await expect('denied', 'Atlas overwrites a day he entered', () => setDoc(doc(atlas, `${BOOK}/daysOff/manual_2026-12-24`), { ...dayOff('google'), date: '2026-12-24' }));
-  await expect('denied', 'Atlas deletes a day he entered', () => deleteDoc(doc(atlas, `${BOOK}/daysOff/manual_2026-12-24`)));
-  await expect('allowed', 'Atlas removes a vacation that left Google Calendar', () => deleteDoc(doc(atlas, `${BOOK}/daysOff/google_2026-08-10`)));
+  const dayOff = { userId: 'noisysource-group', date: '2026-08-10', kind: 'vacation', label: 'Summer', source: 'manual', createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+  await expect('allowed', 'owner enters a vacation', () => setDoc(doc(owner, `${BOOK}/daysOff/manual_2026-08-10_vacation`), dayOff));
+  await expect('allowed', 'owner enters a client closure', () => setDoc(doc(owner, `${BOOK}/daysOff/manual_2026-12-24_client_closure`), { ...dayOff, date: '2026-12-24', kind: 'client_closure' }));
+  await expect('denied', 'owner enters a day off with an odd source', () => setDoc(doc(owner, `${BOOK}/daysOff/x1`), { ...dayOff, source: 'google' }));
+  await expect('denied', 'Atlas writes a day off (FinHub is their master)', () => setDoc(doc(atlas, `${BOOK}/daysOff/x2`), dayOff));
+  await expect('denied', 'Atlas deletes a day off', () => deleteDoc(doc(atlas, `${BOOK}/daysOff/manual_2026-08-10_vacation`)));
 
   for (const db of [owner, ownerUnverified, atlas, atlasUnverified, stranger, anon]) await terminate(db);
   if (failures) {
