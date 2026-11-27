@@ -4,6 +4,11 @@
 
 **Last updated:** 2026-11-25 (FinHub MCP and setups merged; book wiped to start over; planned: Atlas uses FinHub as truth, trips)
 
+## In progress (2026-11-27, night): paste past handovers (branch `agent/finhub-paste-handovers`)
+- Contracts → a contract's Handovers → "Paste from Malt": paste the order's Invoice tab (copied as text); `parseHandovers` (`utils/clientContracts.ts`) reads month, days and billed amount, takes the year from the contract's start (a month that goes backwards is the next year), hands each month over on the 1st of the next and expects pay `paymentTermsDays` later. Months already there are skipped; a billed amount ≠ days × rate is kept as billed and shown in amber.
+- Expected after pasting Renato's three orders: 017436 150/162 days, 26089 120/120, 30557 135/189 (54 left).
+- Next: Atlas proposes handovers itself (Malt invoices or the bank's Malt payments), so this stays a fallback.
+
 ## In progress (2026-11-27, evening)
 - **Client contracts from Atlas** (branch `agent/finhub-client-contracts-import`, stacked on
   `agent/finhub-calendar`): Atlas's `finhub_client_contracts` reads the contracts folder (the
