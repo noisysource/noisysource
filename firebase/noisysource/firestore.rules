@@ -154,6 +154,17 @@ service cloud.firestore {
     // slot. Like the incidents: the owner reads, only the bridge writes, nobody
     // deletes. The bridge patches one slot at a time, so create + update is all
     // it needs, and only under a date id; it never reads them back.
+    // Tesla (functions/src/domotics/tesla.ts): the cars' last readings and the
+    // daily call counter. Written only by the functions (admin SDK); the owner
+    // reads them. The tokens are in domotics_config/tesla, which the allowlist
+    // above keeps from every client.
+    match /domotics_tesla/{docId} {
+      allow read: if isDomoticsOwner();
+    }
+    match /domotics_tesla_usage/{docId} {
+      allow read: if isDomoticsOwner();
+    }
+
     match /domotics_energy/{docId} {
       allow read: if isDomoticsOwner() || isAtlas();
       allow create, update: if isBridge() && docId.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');

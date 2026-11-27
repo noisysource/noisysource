@@ -11,6 +11,7 @@ export { legrandGetHome, legrandGetStatus, legrandSetState } from "./domotics/le
 export { tuyaGetDevices, tuyaSetState } from "./domotics/tuya";
 export { domoticsWarmBy } from "./domotics/warmBy";
 export { domoticsEnergyBill } from "./domotics/energyBillCallable";
+export { teslaAuthStart, teslaAuthFinish, teslaRegisterPartner, teslaVehicles } from "./domotics/tesla";
 export { kanbanList, kanbanGet, kanbanCreate, kanbanUpdate, kanbanComment } from "./tasks/callables";
 export { kanbanPrs, kanbanMergePr, kanbanSetGithubToken, kanbanGithubInfo } from "./tasks/github";
 export { atlasGate } from "./website/atlasGate";

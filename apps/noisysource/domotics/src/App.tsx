@@ -13,7 +13,7 @@ import { buildTuyaDevices, toTuyaTemp } from './data/tuyaData';
 import type { EnergyReading } from './data/energy';
 import { announceWatching, fetchBridgeState, sendBridgeCommand } from './lib/bridge';
 import { defaultFloorPlan } from './data/houseLayout';
-import { db, getStatusFn, setStateFn } from './lib/firebase';
+import { db, getStatusFn, setStateFn, teslaAuthFinishFn } from './lib/firebase';
 import {
   watchAuth, signIn, signOutUser, requiresSignIn, redirectSignInError, describeSignInError,
   LAN_NO_SIGN_IN,
@@ -159,7 +159,9 @@ export default function App() {
   useEffect(() => watchAuth(u => { setUser(u); setAuthReady(true); }), []);
 
   const [notice, setNotice] = useState<Notice | null>(null);
-  const notify = (text: string) => setNotice({ id: Date.now(), text });
+  // Stable: screens put it in effect dependencies (a new one each render once
+  // made Carros call Tesla in a loop, 26/11).
+  const notify = useCallback((text: string) => setNotice({ id: Date.now(), text }), []);
   const clearNotice = useCallback(() => setNotice(null), []);
 
   // Back from a redirect sign-in (the installed app): success arrives through
@@ -167,6 +169,25 @@ export default function App() {
   useEffect(() => {
     void redirectSignInError().then(err => { if (err) notify(describeSignInError(err)); });
   }, []);
+
+  /**
+   * Back from the Tesla login: /tesla/callback?code=…&state=… (Tesla's
+   * redirect; hosting serves the app there). Finish it once signed in, then clean the
+   * address and show Carros.
+   */
+  useEffect(() => {
+    if (!user) return;
+    const q = new URLSearchParams(window.location.search);
+    const code = q.get('code');
+    const state = q.get('state');
+    // Our state is 32 hex characters (teslaAuthStart); anything else isn't a Tesla return.
+    if (!code || !state || !/^[0-9a-f]{32}$/.test(state)) return;
+    history.replaceState(null, '', '/#/carros');
+    setTab('carros');
+    teslaAuthFinishFn({ code, state })
+      .then(() => notify('Conta Tesla ligada.'))
+      .catch(err => notify(`Tesla: ${(err as Error).message}`));
+  }, [user]);
 
   /** Sign-in from the header and chips. Says why instead of failing silently. */
   async function requestSignIn() {
@@ -816,7 +837,7 @@ export default function App() {
           </Suspense>
         );
       case 'carros':
-        return <CarrosScreen />;
+        return <CarrosScreen canUse={!!user && !isLanOrigin()} notify={notify} />;
       case 'planta':
         return (
           <HouseScreen

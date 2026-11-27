@@ -55,3 +55,20 @@ export const warmByFn = httpsCallable<
   { time?: string; target?: number | null; clear?: boolean; source?: 'app' | 'chat' },
   { cleared: boolean; at?: string; target?: number | null; local?: string; day?: string }
 >(fns, 'domoticsWarmBy');
+
+/** Tesla (functions/src/domotics/tesla.ts). Owner only. */
+export interface TeslaCar {
+  vin: string; id: string; name: string; model?: string; state: string;
+  soc?: number; rangeKm?: number; chargeLimit?: number; chargingState?: string;
+  chargeAmps?: number; chargeAmpsMax?: number; chargerPowerKw?: number; energyAddedKwh?: number; minutesToFull?: number;
+  locked?: boolean; sentry?: boolean; insideC?: number; outsideC?: number; climateOn?: boolean;
+  odometerKm?: number; lat?: number; lon?: number; shiftState?: string | null; speedKmh?: number; software?: string;
+  readAt?: number;
+}
+export const teslaAuthStartFn = httpsCallable<{ redirectUri: string }, { url: string }>(fns, 'teslaAuthStart');
+export const teslaAuthFinishFn = httpsCallable<{ code: string; state: string }, { ok: boolean }>(fns, 'teslaAuthFinish');
+export const teslaRegisterPartnerFn = httpsCallable<void, { ok: boolean }>(fns, 'teslaRegisterPartner');
+export const teslaVehiclesFn = httpsCallable<
+  { refresh?: boolean },
+  { connected: boolean; cars: TeslaCar[]; callsToday?: number; callCap?: number }
+>(fns, 'teslaVehicles');
