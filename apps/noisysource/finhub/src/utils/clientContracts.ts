@@ -242,3 +242,59 @@ export const parseHandovers = (c: ClientContract, text: string): PastedHandover[
   }
   return out;
 };
+
+/**
+ * Days worked an agent proposed ("this week I worked 4 days"): add to a month, or set a month.
+ * Atlas names the contract; FinHub works out the month's handover from what's already there.
+ */
+export interface DaysWorked {
+  contractId: string;
+  reference: string;
+  clientName: string;
+  /** YYYY-MM: the month worked. */
+  month: string;
+  days: number;
+  /** add: on top of what the month already has; set: the month's total. */
+  mode: 'add' | 'set';
+}
+
+export interface DaysWorkedPlan {
+  /** New handovers to create (a month that had one gets a new one with the new total). */
+  create: Omit<ContractHandover, 'id' | 'userId'>[];
+  /** The handovers they replace, deleted once the new ones are written. */
+  replace: string[];
+  /** One line per month, for the toast. */
+  lines: string[];
+  problems: string[];
+}
+
+export const daysWorkedPlan = (contracts: readonly ClientContract[], handovers: readonly ContractHandover[], drafts: readonly DaysWorked[]): DaysWorkedPlan => {
+  const plan: DaysWorkedPlan = { create: [], replace: [], lines: [], problems: [] };
+  // Several drafts for one month add up, in order.
+  const totals = new Map<string, { c: ClientContract; month: string; days: number; before?: ContractHandover }>();
+  for (const d of drafts) {
+    const c = contracts.find((x) => x.id === d.contractId) ?? contracts.find((x) => d.reference && x.reference.trim() === d.reference.trim());
+    if (!c) {
+      plan.problems.push(`${d.clientName || 'Client'} ${d.reference}: no such contract in the book`);
+      continue;
+    }
+    const key = `${c.id}|${d.month}`;
+    const before = handovers.find((h) => h.contractId === c.id && h.month === d.month);
+    const now = totals.get(key) ?? { c, month: d.month, days: before?.days ?? 0, ...(before ? { before } : {}) };
+    now.days = d.mode === 'set' ? d.days : now.days + d.days;
+    totals.set(key, now);
+  }
+  for (const { c, month, days, before } of totals.values()) {
+    const label = `${c.clientName} ${c.reference} ${month}`.replace(/\s+/g, ' ');
+    if (!(days >= 0 && days <= 31)) {
+      plan.problems.push(`${label}: ${days} days is more than a month has`);
+      continue;
+    }
+    if (before && before.days === days) continue;
+    const handedOverAt = before?.handedOverAt || `${nextMonth(month)}-01`;
+    if (days > 0) plan.create.push({ contractId: c.id, month, days, ...handoverOf(c, month, days, handedOverAt), handedOverAt, invoiceNumber: before?.invoiceNumber ?? '' });
+    if (before) plan.replace.push(before.id);
+    plan.lines.push(`${label}: ${before ? `${before.days} → ` : ''}${days} days`);
+  }
+  return plan;
+};

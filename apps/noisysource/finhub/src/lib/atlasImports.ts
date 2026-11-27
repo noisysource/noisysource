@@ -7,7 +7,7 @@
 // Atlas is trusted to write here, but not to be right: every draft is
 // coerced to its type and bounded before it reaches the workbench.
 import type { CommittedSnapshot } from '../utils/committed';
-import type { ClientContract } from '../utils/clientContracts';
+import type { ClientContract, DaysWorked } from '../utils/clientContracts';
 import {
   collection,
   doc,
@@ -78,6 +78,8 @@ export interface AtlasImport {
   setup: AtlasSetup;
   /** Client contracts (the Malt orders) an agent read from the contracts folder. */
   clientContracts: AtlasClientContract[];
+  /** Days worked on a client contract ("this week I worked 4 days"), from Atlas. */
+  daysWorked: DaysWorked[];
   /** Which agent proposed it. */
   createdBy: 'atlas' | 'claude-code';
   createdAtMs: number;
@@ -338,6 +340,22 @@ export const clientContractsOf = (raw: unknown): AtlasClientContract[] =>
     })
     .filter((c) => c.clientName && c.startDate && c.endDate && c.endDate >= c.startDate && c.daysAllowed > 0 && c.dailyRate > 0);
 
+export const daysWorkedOf = (raw: unknown): DaysWorked[] =>
+  list(raw, 60)
+    .map((v) => {
+      const x = obj(v);
+      const days = num(x.days);
+      return {
+        contractId: str(x.contractId, 100),
+        reference: str(x.reference, 100),
+        clientName: str(x.clientName, 100),
+        month: str(x.month, 7),
+        days: Math.round(Math.min(31, Math.max(0, days)) * 2) / 2,
+        mode: x.mode === 'set' ? ('set' as const) : ('add' as const),
+      };
+    })
+    .filter((d) => (d.contractId || d.reference) && /^20\d{2}-(0[1-9]|1[0-2])$/.test(d.month));
+
 export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
   const d = obj(raw);
   return {
@@ -353,6 +371,7 @@ export const atlasImportOf = (id: string, raw: unknown): AtlasImport => {
     facilities: list(d.facilities, 20).map(facilityOf),
     setup: setupOf(d.setup),
     clientContracts: clientContractsOf(d.clientContracts),
+    daysWorked: daysWorkedOf(d.daysWorked),
     createdBy: d.createdBy === 'claude-code' ? 'claude-code' : 'atlas',
     createdAtMs: millis(d.createdAt),
   };
@@ -390,7 +409,9 @@ export { entityForHint, entityKey } from '../utils/entityMatch';
 /** What an import holds, in a line. */
 export const countsOf = (i: AtlasImport): string => {
   const lines = i.statements.reduce((n, s) => n + s.lines.length, 0);
+  const days = i.daysWorked.reduce((n, d) => n + d.days, 0);
   const parts = [
+    i.daysWorked.length > 0 ? `${days} day${days === 1 ? '' : 's'} worked` : '',
     i.clientContracts.length > 0 ? `${i.clientContracts.length} client contract${i.clientContracts.length === 1 ? '' : 's'}` : '',
     i.setup.entities.length > 0 ? `${i.setup.entities.length} entit${i.setup.entities.length === 1 ? 'y' : 'ies'}` : '',
     i.setup.accounts.length > 0 ? `${i.setup.accounts.length} account${i.setup.accounts.length === 1 ? '' : 's'}` : '',
