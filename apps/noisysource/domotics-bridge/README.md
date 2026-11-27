@@ -38,6 +38,16 @@ pnpm build && pnpm start
 
 - `GET /state` → `{ devices: [{ id, name, category, online, status: [{code, value}] }], updatedAt }`
 - `POST /command` → `{ deviceId, commands: [{ code, value }] }`, answers with freshly read state
+- `GET /media` → the TV, Roomba and cameras (`src/media/types.ts`, `MediaState`). Asking is what
+  makes the bridge read them: they are polled every 30 s for two minutes after a request, and
+  not at all otherwise
+- `POST /command` with a `tv:` / `roomba:` / `cam:` id goes to those devices instead and answers
+  `{ ok, media }`. Codes: TV `power`, `volume`, `volume_step`, `mute`, `input`, `app`,
+  `channel_step`, `media`, `button`, `pair`, `unpair`; Roomba `action` (`start`, `pause`,
+  `resume`, `stop`, `dock`, `find`); camera `ptz` (`left`, `right`, `up`, `down`). Anything else
+  is refused
+- `GET /media/snapshot?id=cam:<id>` → a JPEG, through go2rtc (`deploy/README.md`, "Televisor,
+  Roomba e câmaras")
 
 `status` deliberately uses the **same `{code, value}` shape the Tuya Cloud API
 returned**, so the app's `tuyaData.ts` is identical whether state came from the

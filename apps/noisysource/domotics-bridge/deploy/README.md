@@ -205,6 +205,112 @@ make each other worse.
 pkill -f "lib/index.js"
 ```
 
+## Televisor, Roomba e câmaras (the LG TV, the Roomba, the Tapo cameras)
+
+Optional: without a `domotics_config/media_devices` document the bridge logs
+"no TV, Roomba or cameras configured" and runs exactly as before. Everything
+here is on the LAN; no vendor cloud, nothing metered. The code is
+`src/media/`, the app's screen is Aparelhos (Mais → "Televisor, Roomba e
+câmaras" on a phone).
+
+**First, a DHCP reservation for each device** on the MEO router (LAN → Leases
+estáticas), as for the Tuya devices: the bridge finds them by IP.
+
+### 1. Gather what each device needs
+
+- **LG TV**: its IP and MAC (router's lease list). On the TV turn on
+  *Settings → General → Devices → TV Management → "Turn on via Wi-Fi"* (the
+  name varies by year; older sets call it "Mobile TV On"), or the TV can't be
+  switched on from the app; it can still be switched off.
+- **Roomba**: its BLID and local password. On the house network:
+  `node deploy/roomba-credentials.js` lists robots, then
+  `node deploy/roomba-credentials.js <ip>` and follow it (hold HOME on the
+  docked robot until it plays tones). Some newer robots no longer give the
+  password locally; the script says so, and then it comes from the iRobot
+  cloud (dorita980's `get-roomba-password-cloud`).
+- **Tapo cameras**: in the Tapo app, each camera → Settings → Advanced
+  settings → **Camera account**: create a user and password (this is not the
+  TP-Link login). The same account serves RTSP (video) and ONVIF (pan/tilt).
+  Mark `"ptz": true` on pan/tilt models (C200, C210, C225, C500…).
+
+### 2. Write the list to Firestore
+
+```bash
+cd apps/noisysource/domotics-bridge
+cp deploy/media-devices.example.json deploy/media-devices.json   # gitignored, holds passwords
+# edit it
+pnpm build
+node deploy/sync-media-devices.js           # checks it, prints it without passwords
+node deploy/sync-media-devices.js --write   # writes domotics_config/media_devices
+```
+
+Only the bridge can read that document (`firebase/noisysource/firestore.rules`);
+the owner can't, from the app or anywhere else. To change a password or add a
+device, edit the file, run `--write` again, restart the bridge.
+
+### 3. Deploy the bridge with its two new dependencies
+
+`lgtv2` and `mqtt` (both pure JavaScript, a few MB) join `tuyapi`, so this
+update needs an `npm install` on the Pi, not only the usual rsync:
+
+```bash
+ssh pi@192.168.1.125 'cd ~/domotics-bridge && cp -a lib lib.bak-$(date +%Y%m%d)'
+rsync -a --exclude 'bridge.env*' --exclude 'media-devices.json' package.json lib deploy pi@192.168.1.125:~/domotics-bridge/
+ssh pi@192.168.1.125 'cd ~/domotics-bridge && npm install --omit=dev && sudo systemctl restart domotics-bridge'
+ssh pi@192.168.1.125 'sleep 90; journalctl -u domotics-bridge -n 40 --no-pager | grep -E "media|devices"'
+```
+
+Expect `[media] 1 TV, 1 Roomba, N cameras`. The thermostats must still read
+7/7: the media devices have their own loop and never delay them.
+
+**lgtv2 needs Node ≥ 22.12** (it is ESM, loaded with `require`). The Pi has
+v22.23.2; don't downgrade it.
+
+### 4. Pair the TV (once)
+
+Switch the TV on, open Aparelhos on the LAN, press **Emparelhar** and accept
+the prompt on the TV with the remote within a minute. The bridge keeps the
+key in `media-state.json` (0600, next to `lib/`). After a TV factory reset,
+press Emparelhar again.
+
+### 5. Cameras: go2rtc for video and snapshots
+
+The bridge doesn't touch video (no room in its 140 MB). go2rtc runs beside it
+as its own service: it hands the cameras' streams to the browser without
+transcoding and makes the JPEG snapshots (with ffmpeg, for a second or two).
+
+```bash
+# On the Mac: the ARMv6 build from https://github.com/AlexxIT/go2rtc/releases (go2rtc_linux_armv6)
+scp go2rtc_linux_armv6 pi@192.168.1.125:/tmp/go2rtc
+ssh pi@192.168.1.125 'sudo install -m 755 /tmp/go2rtc /usr/local/bin/go2rtc && sudo apt-get install -y ffmpeg'
+# On the Pi, after the bridge has started once with the cameras (it caches the list in media-cache.json):
+ssh pi@192.168.1.125 'cd ~/domotics-bridge && node deploy/go2rtc-config.js \
+  && sudo cp deploy/go2rtc.service /etc/systemd/system/ && sudo systemctl daemon-reload \
+  && sudo systemctl enable --now go2rtc'
+```
+
+Then tell the bridge where go2rtc is, in the Pi's `bridge.env`, and restart it:
+
+```
+GO2RTC_URL=http://127.0.0.1:1984
+GO2RTC_LAN_URL=http://192.168.1.125:1984
+```
+
+What works where:
+- **On the LAN** (the app from a dev server or the computer's address, plain
+  `http://`): live view in the card (go2rtc's player, sub-stream), snapshots,
+  pan/tilt.
+- **Hosted app** (`noisysource-prod-domotics.web.app`), at home or away:
+  snapshots on request (the bridge puts a JPEG in `domotics_state/snap_<id>`,
+  at most one per camera every 10 s and 200 a day) and pan/tilt. No live view:
+  an `https://` page can't load go2rtc's `http://` player, the same mixed-content
+  limit as the bridge itself (`../../domotics/CLAUDE.md`, "Visibility & Access").
+- **Privacy:** go2rtc's port 1984 has no password by default, so anyone on
+  the house Wi-Fi can open the cameras through it (they can reach the cameras'
+  RTSP directly anyway). To require one, add `username`/`password` under `api:`
+  in `go2rtc.yaml`. Snapshots in Firestore are readable by the owner only:
+  not by Atlas.
+
 ## Afterwards
 
 - `journalctl -u domotics-bridge -n 50` — recent logs

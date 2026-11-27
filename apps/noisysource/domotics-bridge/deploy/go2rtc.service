@@ -1,0 +1,28 @@
+[Unit]
+Description=go2rtc (camera streams for the domotics app)
+Documentation=https://github.com/AlexxIT/go2rtc
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/domotics-bridge
+# go2rtc_linux_armv6 from the go2rtc releases, copied to /usr/local/bin/go2rtc (deploy/README.md, "Cameras").
+ExecStart=/usr/local/bin/go2rtc -config /home/pi/domotics-bridge/go2rtc.yaml
+Restart=always
+RestartSec=10
+# Its own budget, apart from the bridge's 140M: a snapshot runs ffmpeg for a
+# second or two, and if anything has to be killed for memory it must be this,
+# never the heating.
+MemoryMax=70M
+# Lower priority than the bridge when the 700 MHz core is busy.
+Nice=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=go2rtc
+
+[Install]
+WantedBy=multi-user.target

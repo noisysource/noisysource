@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to deploy/media-devices.json (gitignored), fill in, then: node deploy/sync-media-devices.js --write. Ids: lower case, digits, - and _. Give each device a DHCP reservation on the router first.",
+  "tvs": [
+    { "id": "sala", "name": "TV da sala", "ip": "192.168.1.140", "mac": "aa:bb:cc:dd:ee:ff" }
+  ],
+  "roombas": [
+    { "id": "roomba", "name": "Roomba", "ip": "192.168.1.141", "blid": "from deploy/roomba-credentials.js", "password": "from deploy/roomba-credentials.js" }
+  ],
+  "cameras": [
+    { "id": "entrada", "name": "Entrada", "ip": "192.168.1.150", "username": "camera account from the Tapo app", "password": "its password", "ptz": true }
+  ]
+}
