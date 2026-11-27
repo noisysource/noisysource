@@ -99,9 +99,15 @@ if printf '%s' "$RESULT" | grep -q EMAIL_EXISTS; then
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
         const c=JSON.parse(s);console.log((c.userInfo||[])[0]?.localId||"");});')
   [ -n "$EXISTING" ] || { echo "   could not locate the account"; exit 1; }
-  curl -s --max-time 30 "${AUTH[@]}" -X PATCH \
-    "https://identitytoolkit.googleapis.com/v1/projects/$PROJECT/accounts" \
-    -d "$(node -e 'console.log(JSON.stringify({localId:process.argv[1],password:process.argv[2]}))' "$EXISTING" "$PASSWORD")" >/dev/null
+  # accounts:update (POST) is the admin update; a PATCH on /accounts isn't an
+  # endpoint, and its answer was thrown away, so a reset silently did nothing.
+  curl -s --max-time 30 "${AUTH[@]}" -X POST \
+    "https://identitytoolkit.googleapis.com/v1/projects/$PROJECT/accounts:update" \
+    -d "$(node -e 'console.log(JSON.stringify({localId:process.argv[1],password:process.argv[2]}))' "$EXISTING" "$PASSWORD")" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+        let c; try { c = JSON.parse(s); } catch { console.error("   unexpected answer from the API"); process.exit(1); }
+        if (c.error) { console.error("   error: " + c.error.message); process.exit(1); }});'
+
   UID_OUT="$EXISTING"
 else
   UID_OUT=$(printf '%s' "$RESULT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{

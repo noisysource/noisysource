@@ -61,6 +61,18 @@ local_id='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
   if (c.error) { console.error("   error: " + c.error.message); process.exit(1); }
   console.log(c.localId || "");});'
 
+# Email/password sign-in must be on in the project, or Google refuses the
+# agent's sign-in with a 400 (noisysource-dev never had it: only the bridge's
+# script turned it on, in noisysource-prod). Turning it on is idempotent.
+echo "0. email/password sign-in in $PROJECT"
+curl -s --max-time 30 "${AUTH[@]}" -X PATCH \
+  "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT/config?updateMask=signIn.email.enabled,signIn.email.passwordRequired" \
+  -d '{"signIn":{"email":{"enabled":true,"passwordRequired":true}}}' \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+      let c; try { c = JSON.parse(s); } catch { console.error("   unexpected answer from the API"); process.exit(1); }
+      if (c.error) { console.error("   error: " + c.error.message); process.exit(1); }
+      console.log("   " + (c.signIn?.email?.enabled ? "on" : "still off"));});'
+
 echo "1. looking for $EMAIL in $PROJECT"
 EXISTING=$(curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts:query" \
   -d "$(node -e 'console.log(JSON.stringify({expression:[{email:process.argv[1]}]}))' "$EMAIL")" \
@@ -71,7 +83,9 @@ EXISTING=$(curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts:query" \
 
 if [ -n "$EXISTING" ]; then
   echo "2. it exists: setting its password and marking it verified"
-  UID_OUT=$(body "$EXISTING" | curl -s --max-time 30 "${AUTH[@]}" -X PATCH "$API/accounts" -d @- | node -e "$local_id")
+  # accounts:update (POST) is the admin update. A PATCH on /accounts isn't an
+  # endpoint: Google answers with an HTML 404, so the password was never set.
+  UID_OUT=$(body "$EXISTING" | curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts:update" -d @- | node -e "$local_id")
 else
   echo "2. creating it, verified"
   UID_OUT=$(body "" | curl -s --max-time 30 "${AUTH[@]}" -X POST "$API/accounts" -d @- | node -e "$local_id")
