@@ -24,8 +24,9 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { monthLabel } from '../utils/contractVersions';
-import { deleteHandover, newId as newClientContractId, saveContract, saveHandover, useClientContracts } from '../lib/clientContracts';
+import { deleteHandover, newId as newClientContractId, saveContract, saveDayOff, saveHandover, saveTrip, useClientContracts } from '../lib/clientContracts';
 import { daysWorkedPlan } from '../utils/clientContracts';
+import { calendarPlanOf } from '../utils/financialCalendar';
 import { committedOf } from '../utils/committed';
 import { useTreasury } from '../contexts/TreasuryContext';
 import type {
@@ -96,6 +97,7 @@ interface DriveConfirmState {
 const hasSetup = (imp: AtlasImport): boolean => imp.setup.entities.length + imp.setup.accounts.length + imp.setup.loans.length > 0;
 const hasClientContracts = (imp: AtlasImport): boolean => imp.clientContracts.length > 0;
 const hasDaysWorked = (imp: AtlasImport): boolean => imp.daysWorked.length > 0;
+const hasCalendarPlans = (imp: AtlasImport): boolean => imp.daysOff.length > 0 || imp.trips.length > 0;
 const hasDrafts = (imp: AtlasImport): boolean =>
   imp.statements.length + imp.payslips.length + imp.contracts.length + imp.subscriptions.length + imp.facilities.length > 0;
 
@@ -123,7 +125,7 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     pushToast,
   } = useTreasury();
   // Client contracts already in the book: an agent's proposal skips them.
-  const { contracts: clientContracts, handovers: contractHandovers } = useClientContracts();
+  const { contracts: clientContracts, handovers: contractHandovers, daysOff: bookDaysOff, trips: bookTrips } = useClientContracts();
 
   // Document reading is Atlas's (STATUS.md): what it imported comes first.
   const [activeTab, setActiveTab] = useState<HubTab>('atlas');
@@ -951,6 +953,26 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
     }
   };
 
+  /** Days off and trips Atlas proposed, after his OK here: into the financial calendar. */
+  const applyAtlasCalendarPlans = async (imp: AtlasImport) => {
+    const plan = calendarPlanOf({ daysOff: imp.daysOff, trips: imp.trips }, { entities, daysOff: bookDaysOff, trips: bookTrips });
+    if (plan.problems.length > 0) {
+      pushToast('Not added', `${plan.problems.join('; ')}. Set this one aside and tell Atlas.`, 'error');
+      return;
+    }
+    setDecidingAtlasImport(imp.id);
+    try {
+      for (const d of plan.daysOff) await saveDayOff({ ...d, id: newClientContractId('off'), userId: '', source: 'manual' });
+      for (const t of plan.trips) await saveTrip({ ...t, id: newClientContractId('trip'), userId: '' }, true);
+      await decideAtlasImport(imp.id, 'applied');
+      pushToast('In the calendar', plan.lines.join(' · ') || 'Nothing new: those were already there.', 'success');
+    } catch (err) {
+      pushToast('Stopped', `${err instanceof Error ? err.message : String(err)}. Check the financial calendar before running it again.`, 'error');
+    } finally {
+      setDecidingAtlasImport(null);
+    }
+  };
+
   /**
    * Days worked Atlas proposed ("this week I worked 4 days"), after his OK here: each month's
    * handover gets the new total. A month that had one gets a new handover first, then the old one
@@ -1679,6 +1701,15 @@ export function DocumentsHubView({ initialTabNonce }: DocumentsHubViewProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        {hasCalendarPlans(imp) && (
+                          <button
+                            onClick={() => applyAtlasCalendarPlans(imp)}
+                            disabled={decidingAtlasImport === imp.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Add to the calendar
+                          </button>
+                        )}
                         {hasDaysWorked(imp) && (
                           <button
                             onClick={() => applyAtlasDaysWorked(imp)}
