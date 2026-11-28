@@ -201,6 +201,13 @@ export default function CarrosScreen({ canUse, notify }: Props) {
       {usage && (
         <p className="text-xs text-zinc-500">Chamadas à Tesla hoje: {usage.calls} de {usage.cap}. Um carro a dormir não é acordado: mostra a última leitura.</p>
       )}
+      {canUse && connected && (
+        // A new login, for a permission (scope) the current one lacks: Tesla says so as
+        // "missing scopes …" in the error, and a token keeps the scopes it was given.
+        <button onClick={() => void connect()} className="self-start text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200">
+          Ligar de novo à Tesla (para dar permissões em falta)
+        </button>
+      )}
     </div>
   );
 }
