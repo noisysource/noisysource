@@ -9,6 +9,7 @@ describe("buildAuthUrl", () => {
     expect(u.searchParams.get("state")).toBe("abc");
     expect(u.searchParams.get("scope")).toContain("offline_access");
     expect(u.searchParams.get("scope")).toContain("vehicle_location");
+    expect(u.searchParams.get("prompt_missing_scopes")).toBe("true");
   });
 });
 

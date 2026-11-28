@@ -51,6 +51,10 @@ export function buildAuthUrl(redirectUri: string, state: string): string {
     state,
     locale: "pt-PT",
     prompt: "login",
+    // Ask again for any scope the account hasn't granted this app yet: a scope
+    // switched on in the dashboard after the first login (vehicle_location,
+    // 28/11) never reaches the token otherwise.
+    prompt_missing_scopes: "true",
   });
   return `${AUTH_URL}?${q.toString()}`;
 }
