@@ -95,3 +95,13 @@ export interface TeslaChargingResult {
   error?: string | null;
 }
 export const teslaChargingFn = httpsCallable<{ refresh?: boolean }, TeslaChargingResult>(fns, 'teslaCharging');
+
+/** One command to one car (functions/src/domotics/teslaCommands.ts has the list and the limits). */
+export type TeslaAction =
+  | 'lock' | 'unlock' | 'climate_on' | 'climate_off' | 'set_temp'
+  | 'charge_start' | 'charge_stop' | 'charge_limit' | 'charging_amps'
+  | 'port_open' | 'port_close' | 'flash' | 'honk' | 'wake';
+export const teslaCommandFn = httpsCallable<
+  { vin: string; action: TeslaAction; value?: number },
+  { ok: boolean; message?: string }
+>(fns, 'teslaCommand');
