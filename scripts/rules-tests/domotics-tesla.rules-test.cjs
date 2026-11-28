@@ -39,6 +39,8 @@ async function expect(outcome, label, fn) {
   await seed('domotics_tesla/5YJXTEST', { soc: { integerValue: '68' } });
   await seed('domotics_tesla_usage/2026-11-26', { calls: { integerValue: '3' } });
   await seed('domotics_config/tesla', { refreshToken: { stringValue: 'secret' } });
+  await seed('domotics_tesla_charging/123', { kwh: { doubleValue: 75.9 } });
+  await seed('domotics_tesla_readings/5YJXTEST_1', { soc: { integerValue: '92' } });
 
   const owner = client('owner', { sub: 'owner-uid', user_id: 'owner-uid', email: OWNER_EMAIL, email_verified: true });
   const unverified = client('unverified', { sub: 'u2', user_id: 'u2', email: OWNER_EMAIL, email_verified: false });
@@ -57,6 +59,13 @@ async function expect(outcome, label, fn) {
   await expect('denied', 'bridge reads a car', () => getDoc(doc(bridge, 'domotics_tesla', '5YJXTEST')));
   await expect('denied', 'bridge reads the Tesla tokens', () => getDoc(doc(bridge, 'domotics_config', 'tesla')));
   await expect('denied', 'anonymous reads a car', () => getDoc(doc(anon, 'domotics_tesla', '5YJXTEST')));
+  // Charging sessions and readings (teslaCharging.ts): the owner reads, nobody writes from a client.
+  for (const [col, id] of [['domotics_tesla_charging', '123'], ['domotics_tesla_readings', '5YJXTEST_1']]) {
+    await expect('allowed', `owner reads ${col}`, () => getDoc(doc(owner, col, id)));
+    await expect('denied', `owner writes ${col}`, () => setDoc(doc(owner, col, id), { x: 1 }));
+    await expect('denied', `Atlas reads ${col}`, () => getDoc(doc(atlas, col, id)));
+    await expect('denied', `bridge reads ${col}`, () => getDoc(doc(bridge, col, id)));
+  }
 
   console.log(failures ? `\n${failures} FAILED` : '\nall passed');
   process.exit(failures ? 1 : 0);

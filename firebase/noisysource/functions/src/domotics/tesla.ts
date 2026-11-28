@@ -7,6 +7,11 @@ import {
   API_BASE, CLIENT_ID, DAILY_CALL_CAP, LIST_MIN_INTERVAL_MS, OAUTH_STATE_TTL_MS, PARTNER_DOMAIN, REDIRECT_URIS,
   SCOPES, TOKEN_URL, VEHICLE_DATA_ENDPOINTS, buildAuthUrl, firestoreSafe, lisbonDay, shouldReadCar, summarize, type CarSummary,
 } from "./teslaLogic";
+import {
+  CHARGING_LOOKBACK_DAYS, CHARGING_MAX_PAGES, CHARGING_MIN_INTERVAL_MS, CHARGING_PAGE_SIZE, CHARGING_REFRESH_MIN_MS,
+  capacityKwh, consumption, fullRangeByMonth, fullRangeKm, monthTotals, parseChargingHistory,
+  type CarReading, type ChargingSession,
+} from "./teslaCharging";
 
 /**
  * Tesla Fleet API (EU). Read-only for now: the cars, their battery,
@@ -41,6 +46,11 @@ const STATE_DOC = "domotics_config/tesla_oauth";
 const USAGE = "domotics_tesla_usage";
 const CARS = "domotics_tesla";
 const LIST_DOC = "domotics_tesla/_list";
+/** Tesla's charging history, one document per session (teslaCharging.ts), and when it was last fetched. */
+const CHARGING = "domotics_tesla_charging";
+const CHARGING_META = "domotics_tesla/_charging";
+/** One document per car data read: battery %, range, odometer, energy added. For consumption and the battery estimate. */
+const READINGS = "domotics_tesla_readings";
 
 const db = () => admin.firestore();
 
@@ -226,6 +236,11 @@ export const teslaVehicles = onCall<{ refresh?: boolean }>(async request => {
       if (!r.asleep && r.response) {
         const s = summarize(v, r.response, now);
         await ref.set(firestoreSafe(s));
+        // A reading for the history: no extra Tesla call, it's the data just read.
+        await db().collection(READINGS).doc(`${s.vin}_${now}`).set(firestoreSafe({
+          vin: s.vin, t: now, soc: s.soc, rangeKm: s.rangeKm, odometerKm: s.odometerKm,
+          energyAddedKwh: s.energyAddedKwh, chargingState: s.chargingState,
+        } satisfies CarReading));
         cars.push(s);
         continue;
       }
@@ -235,4 +250,81 @@ export const teslaVehicles = onCall<{ refresh?: boolean }>(async request => {
   }
   const usage = (await db().collection(USAGE).doc(lisbonDay(now)).get()).data()?.calls ?? 0;
   return { connected: true, cars, callsToday: usage, callCap: DAILY_CALL_CAP };
+});
+
+/** Lisbon-offset ISO time, as the charging history wants it (with an offset, no milliseconds). */
+const isoWithOffset = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "+00:00");
+
+/**
+ * Charging sessions (Tesla-billed: Superchargers), month totals, consumption
+ * and a battery estimate, per car. The history is fetched from Tesla at most
+ * every 6 h (CHARGING_MIN_INTERVAL_MS), or on "Atualizar" at most every
+ * 15 min; up to 4 pages of 50. Everything else is computed from Firestore.
+ */
+export const teslaCharging = onCall<{ refresh?: boolean }>(async request => {
+  requireOwner(request.auth);
+  const now = Date.now();
+  if (!(await db().doc(TOKEN_DOC).get()).data()?.refreshToken) {
+    return { connected: false, sessions: [], cars: [] };
+  }
+
+  const meta = (await db().doc(CHARGING_META).get()).data() as { fetchedAt?: number; error?: string } | undefined;
+  const age = now - (meta?.fetchedAt ?? 0);
+  let fetchError: string | undefined;
+  let fetchedAt = meta?.fetchedAt ?? null;
+  if (age >= CHARGING_MIN_INTERVAL_MS || (request.data?.refresh === true && age >= CHARGING_REFRESH_MIN_MS)) {
+    // Since the last fetch (a day of overlap for late invoices), or a year back the first time.
+    const since = meta?.fetchedAt ? meta.fetchedAt - 24 * 3600_000 : now - CHARGING_LOOKBACK_DAYS * 24 * 3600_000;
+    try {
+      const token = await accessToken();
+      const found: ChargingSession[] = [];
+      for (let page = 1; page <= CHARGING_MAX_PAGES; page++) {
+        const q = new URLSearchParams({
+          startTime: isoWithOffset(since), endTime: isoWithOffset(now),
+          pageNo: String(page), pageSize: String(CHARGING_PAGE_SIZE),
+        });
+        const got = parseChargingHistory(await api(`/api/1/dx/charging/history?${q}`, token));
+        found.push(...got);
+        if (got.length < CHARGING_PAGE_SIZE) break;
+      }
+      const batch = db().batch();
+      for (const sess of found) batch.set(db().collection(CHARGING).doc(sess.id), firestoreSafe(sess));
+      batch.set(db().doc(CHARGING_META), { fetchedAt: now, found: found.length, error: null });
+      await batch.commit();
+      fetchedAt = now;
+    } catch (err) {
+      // Kept, and shown; the next try waits like a good one would, so a refusal costs one call per interval.
+      fetchError = (err as Error).message;
+      await db().doc(CHARGING_META).set({ fetchedAt: now, error: fetchError }, { merge: true });
+    }
+  }
+
+  const sessions = (await db().collection(CHARGING).orderBy("start", "desc").limit(300).get())
+    .docs.map(d => d.data() as ChargingSession);
+  const yearAgo = now - 365 * 24 * 3600_000;
+  const readings = (await db().collection(READINGS).where("t", ">=", yearAgo).orderBy("t", "asc").limit(3000).get())
+    .docs.map(d => d.data() as CarReading);
+  const vins = [...new Set([...sessions.map(x => x.vin), ...readings.map(r => r.vin)].filter(Boolean))];
+
+  const cars = vins.map(vin => {
+    const mine = readings.filter(r => r.vin === vin);
+    const latest = [...mine].reverse().find(r => fullRangeKm(r) !== undefined);
+    return {
+      vin,
+      months: monthTotals(sessions, vin),
+      consumption: consumption(sessions, readings, vin) ?? null,
+      fullRangeKm: latest ? fullRangeKm(latest) : null,
+      fullRangeByMonth: fullRangeByMonth(readings, vin),
+      capacityKwh: capacityKwh(mine) ?? null,
+      readings: mine.length,
+    };
+  });
+  return {
+    connected: true,
+    sessions: sessions.slice(0, 100),
+    cars,
+    fetchedAt,
+    // Only a fresh failure, or the last fetch's if nothing was fetched now.
+    error: fetchError ?? (fetchedAt === meta?.fetchedAt ? meta?.error ?? null : null),
+  };
 });

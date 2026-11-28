@@ -172,6 +172,15 @@ service cloud.firestore {
     match /domotics_tesla_usage/{docId} {
       allow read: if isDomoticsOwner();
     }
+    // Charging sessions from Tesla's history and our own readings of the cars
+    // (functions/src/domotics/teslaCharging.ts): written by the functions
+    // only (Admin SDK), read by the owner through the `teslaCharging` callable.
+    match /domotics_tesla_charging/{docId} {
+      allow read: if isDomoticsOwner();
+    }
+    match /domotics_tesla_readings/{docId} {
+      allow read: if isDomoticsOwner();
+    }
 
     match /domotics_energy/{docId} {
       allow read: if isDomoticsOwner() || isAtlas();

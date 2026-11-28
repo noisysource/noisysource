@@ -72,3 +72,26 @@ export const teslaVehiclesFn = httpsCallable<
   { refresh?: boolean },
   { connected: boolean; cars: TeslaCar[]; callsToday?: number; callCap?: number }
 >(fns, 'teslaVehicles');
+
+/** Charging sessions, month totals, consumption and battery estimate (functions/src/domotics/teslaCharging.ts). */
+export interface TeslaChargingSession {
+  id: string; vin: string; site: string; start: number; end?: number;
+  kwh: number; cost: number; energyCost: number; otherFees: number; currency: string; invoiceIds: string[];
+}
+export interface TeslaChargingCar {
+  vin: string;
+  months: Array<{ month: string; sessions: number; kwh: number; cost: number; perKwh?: number }>;
+  consumption: { from: number; to: number; km: number; kwh: number; whPerKm: number; cost: number; per100Km: number } | null;
+  fullRangeKm: number | null;
+  fullRangeByMonth: Array<{ month: string; km: number }>;
+  capacityKwh: number | null;
+  readings: number;
+}
+export interface TeslaChargingResult {
+  connected: boolean;
+  sessions: TeslaChargingSession[];
+  cars: TeslaChargingCar[];
+  fetchedAt?: number | null;
+  error?: string | null;
+}
+export const teslaChargingFn = httpsCallable<{ refresh?: boolean }, TeslaChargingResult>(fns, 'teslaCharging');

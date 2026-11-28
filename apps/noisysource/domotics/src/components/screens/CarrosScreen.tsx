@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BatteryCharging, Car, Lock, LockOpen, MapPin, Moon, RefreshCw, Thermometer } from 'lucide-react';
 import {
-  teslaAuthStartFn, teslaRegisterPartnerFn, teslaVehiclesFn, type TeslaCar,
+  teslaAuthStartFn, teslaChargingFn, teslaRegisterPartnerFn, teslaVehiclesFn, type TeslaCar, type TeslaChargingResult,
 } from '../../lib/firebase';
+import ChargingSection from '../cars/ChargingSection';
 import { DEMO } from '../../data/demoData';
 
 interface Props {
@@ -37,6 +38,27 @@ const DEMO_CARS: TeslaCar[] = [
   { vin: 'DEMO2', id: '2', name: 'Model 3', model: 'Model 3', state: 'asleep', soc: 41, rangeKm: 190, chargeLimit: 90, chargingState: 'Disconnected', locked: true, insideC: 15, odometerKm: 31800, lat: 40.21, lon: -8.43, readAt: Date.now() - 40 * 60_000 },
 ];
 
+const DAY = 24 * 3600_000;
+const DEMO_CHARGING: TeslaChargingResult = {
+  connected: true,
+  fetchedAt: Date.now(),
+  error: null,
+  sessions: [
+    { id: 's1', vin: 'DEMO1', site: 'Coimbra, Portugal', start: Date.now() - 2 * 3600_000, end: Date.now() - 3600_000 * 1.2, kwh: 75.9, cost: 31.86, energyCost: 30.36, otherFees: 1.5, currency: 'EUR', invoiceIds: [] },
+    { id: 's2', vin: 'DEMO1', site: 'Pombal, Portugal', start: Date.now() - 9 * DAY, end: Date.now() - 9 * DAY + 35 * 60_000, kwh: 52.3, cost: 20.4, energyCost: 20.4, otherFees: 0, currency: 'EUR', invoiceIds: [] },
+    { id: 's3', vin: 'DEMO1', site: 'Mealhada, Portugal', start: Date.now() - 40 * DAY, end: Date.now() - 40 * DAY + 28 * 60_000, kwh: 44.1, cost: 18.08, energyCost: 18.08, otherFees: 0, currency: 'EUR', invoiceIds: [] },
+  ],
+  cars: [{
+    vin: 'DEMO1',
+    months: [{ month: '2026-11', sessions: 2, kwh: 128.2, cost: 52.26, perKwh: 0.408 }, { month: '2026-10', sessions: 1, kwh: 44.1, cost: 18.08, perKwh: 0.41 }],
+    consumption: { from: Date.now() - 9 * DAY, to: Date.now() - 2 * 3600_000, km: 342, kwh: 75.9, whPerKm: 222, cost: 31.86, per100Km: 9.32 },
+    fullRangeKm: 527,
+    fullRangeByMonth: [{ month: '2026-10', km: 531 }, { month: '2026-11', km: 527 }],
+    capacityKwh: null,
+    readings: 14,
+  }],
+};
+
 /**
  * The cars: battery, range, charging, lock, cabin, position. Read through the
  * Tesla callables, which cap the calls per day and never wake a sleeping car,
@@ -49,6 +71,8 @@ export default function CarrosScreen({ canUse, notify }: Props) {
   const [usage, setUsage] = useState<{ calls: number; cap: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState(0);
+  const [charging, setCharging] = useState<TeslaChargingResult | null>(DEMO ? DEMO_CHARGING : null);
+  const [chargingBusy, setChargingBusy] = useState(false);
 
   // notify in a ref: load must not change identity when the parent re-renders,
   // or the effect below runs again, calls again, notifies again… (26/11: a
@@ -57,20 +81,25 @@ export default function CarrosScreen({ canUse, notify }: Props) {
   notifyRef.current = notify;
   const inFlight = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (manual = false) => {
     if (DEMO || !canUse || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
+    setChargingBusy(true);
     try {
       const r = (await teslaVehiclesFn({})).data;
       setConnected(r.connected);
       setCars(r.cars);
       if (r.callCap) setUsage({ calls: r.callsToday ?? 0, cap: r.callCap });
+      // After the cars, so a reading taken just now counts. The function fetches
+      // Tesla's history at most every 6 h (15 min on "Atualizar"); the rest is Firestore.
+      if (r.connected) setCharging((await teslaChargingFn({ refresh: manual })).data);
     } catch (err) {
       notifyRef.current(`Tesla: ${(err as Error).message}`);
     } finally {
       inFlight.current = false;
       setBusy(false);
+      setChargingBusy(false);
     }
   }, [canUse]);
 
@@ -123,7 +152,7 @@ export default function CarrosScreen({ canUse, notify }: Props) {
           </div>
         )}
         {connected && (
-          <button onClick={() => void load()} disabled={busy} className="ml-auto flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg bg-zinc-800 text-sm text-zinc-200 disabled:opacity-50">
+          <button onClick={() => void load(true)} disabled={busy} className="ml-auto flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg bg-zinc-800 text-sm text-zinc-200 disabled:opacity-50">
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Atualizar
           </button>
         )}
@@ -148,7 +177,7 @@ export default function CarrosScreen({ canUse, notify }: Props) {
         <div className="grid gap-4 lg:grid-cols-12">
           <section className={`${card} p-5 flex flex-col gap-3 lg:col-span-5`}>
             <div className="flex justify-between items-baseline text-sm">
-              <span className="font-semibold text-zinc-100">{car.model ?? car.name}</span>
+              <span className="font-semibold text-zinc-100">{car.name}{car.model && car.model !== car.name && <span className="font-normal text-zinc-400"> · {car.model}</span>}</span>
               <span className="text-zinc-400 flex items-center gap-1">
                 {car.state === 'online' ? 'Acordado' : car.state === 'asleep' ? <><Moon size={13} /> A dormir</> : 'Sem ligação'} · {ago(car.readAt)}
               </span>
@@ -197,6 +226,8 @@ export default function CarrosScreen({ canUse, notify }: Props) {
           </section>
         </div>
       )}
+
+      {car && <ChargingSection vin={car.vin} data={charging} loading={chargingBusy} />}
 
       {usage && (
         <p className="text-xs text-zinc-500">Chamadas à Tesla hoje: {usage.calls} de {usage.cap}. Um carro a dormir não é acordado: mostra a última leitura.</p>
