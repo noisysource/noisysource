@@ -4,6 +4,7 @@ import {
   teslaAuthStartFn, teslaChargingFn, teslaRegisterPartnerFn, teslaVehiclesFn, type TeslaCar, type TeslaChargingResult,
 } from '../../lib/firebase';
 import ChargingSection from '../cars/ChargingSection';
+import CarControls from '../cars/CarControls';
 import { DEMO } from '../../data/demoData';
 
 interface Props {
@@ -225,6 +226,15 @@ export default function CarrosScreen({ canUse, notify }: Props) {
             </div>
           </section>
         </div>
+      )}
+
+      {car && (
+        <CarControls
+          key={car.vin}
+          car={car}
+          notify={notify}
+          onPatch={patch => setCars(cs => cs.map(c => (c.vin === car.vin ? { ...c, ...patch } : c)))}
+        />
       )}
 
       {car && <ChargingSection vin={car.vin} data={charging} loading={chargingBusy} />}

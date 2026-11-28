@@ -8,6 +8,9 @@ import {
   SCOPES, TOKEN_URL, VEHICLE_DATA_ENDPOINTS, buildAuthUrl, firestoreSafe, lisbonDay, shouldReadCar, summarize, type CarSummary,
 } from "./teslaLogic";
 import {
+  CHARGING_PER_CAR_PER_DAY, WAKES_PER_CAR_PER_DAY, buildCommand, commandOutcome, counterField, reasonText,
+} from "./teslaCommands";
+import {
   CHARGING_LOOKBACK_DAYS, CHARGING_MAX_PAGES, CHARGING_MIN_INTERVAL_MS, CHARGING_PAGE_SIZE, CHARGING_REFRESH_MIN_MS,
   capacityKwh, consumption, fullRangeByMonth, fullRangeKm, monthTotals, parseChargingHistory,
   type CarReading, type ChargingSession,
@@ -327,4 +330,67 @@ export const teslaCharging = onCall<{ refresh?: boolean }>(async request => {
     // Only a fresh failure, or the last fetch's if nothing was fetched now.
     error: fetchError ?? (fetchedAt === meta?.fetchedAt ? meta?.error ?? null : null),
   };
+});
+
+/**
+ * One command to one car (teslaCommands.ts has the whitelist and the limits).
+ * Owner only. Checks, in order: the action is known and its value clamped;
+ * the per-car daily limit for charging commands and wakes; then the call
+ * itself, which also counts against the daily cap. An asleep car is refused
+ * with a message, never woken unless "wake" was the command.
+ */
+export const teslaCommand = onCall<{ vin?: string; action?: string; value?: unknown }>(async request => {
+  requireOwner(request.auth);
+  const vin = String(request.data?.vin ?? "");
+  if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) throw new HttpsError("invalid-argument", "Carro desconhecido.");
+  let cmd;
+  try {
+    cmd = buildCommand(request.data?.action, request.data?.value);
+  } catch (err) {
+    throw new HttpsError("invalid-argument", (err as Error).message);
+  }
+  // Only a car on this account (the cached list), so a VIN typed in elsewhere goes nowhere.
+  const listed = ((await db().doc(LIST_DOC).get()).data()?.vehicles ?? []) as Array<{ vin?: string }>;
+  if (!listed.some(v => v.vin === vin)) throw new HttpsError("not-found", "Carro desconhecido.");
+
+  if (cmd.charging || cmd.wake) {
+    const kind = cmd.wake ? "wake" : "charging";
+    const limit = cmd.wake ? WAKES_PER_CAR_PER_DAY : CHARGING_PER_CAR_PER_DAY;
+    const field = counterField(vin, kind);
+    const ref = db().collection(USAGE).doc(lisbonDay(Date.now()));
+    await db().runTransaction(async tx => {
+      const used = ((await tx.get(ref)).data()?.[field] as number | undefined) ?? 0;
+      if (used >= limit) {
+        throw new HttpsError("resource-exhausted", cmd.wake
+          ? `Já acordou este carro ${limit} vezes hoje (limite da app).`
+          : `Já foram ${limit} comandos de carregamento a este carro hoje (limite da Tesla).`);
+      }
+      tx.set(ref, { [field]: used + 1, updatedAt: Date.now() }, { merge: true });
+    });
+  }
+
+  const token = await accessToken();
+  const resp = await teslaFetch(`${API_BASE}/api/1/vehicles/${vin}/${cmd.path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cmd.body ?? {}),
+  });
+  if (resp.status === 408) {
+    throw new HttpsError("failed-precondition", "O carro está a dormir. Acorde-o primeiro (custa mais que um comando).");
+  }
+  const text = await resp.text().catch(() => "");
+  let json: unknown = undefined;
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  if (!resp.ok) {
+    const reason = (json as { error?: string } | undefined)?.error ?? text.slice(0, 200);
+    throw new HttpsError("failed-precondition", reasonText(`${reason}`));
+  }
+  if (cmd.wake) return { ok: true, message: "A acordar: o carro responde em 10 a 60 segundos. Depois carregue em Atualizar." };
+
+  const outcome = commandOutcome(json);
+  if (!outcome.ok) throw new HttpsError("failed-precondition", outcome.message);
+  if (cmd.patch) {
+    await db().collection(CARS).doc(vin).set(firestoreSafe({ ...cmd.patch, commandAt: Date.now() }), { merge: true });
+  }
+  return { ok: true };
 });
